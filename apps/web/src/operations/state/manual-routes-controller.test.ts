@@ -605,6 +605,63 @@ describe("Agregar entrega by guía (UI-PHASE3-ROUTES-NO-IDS-2026-10-12)", () => 
     expect(malformed.state().guide).toBe("");
   });
 
+  it("asks to pick a route only while none is open, whether the route or the guía comes first", async () => {
+    const prefilled = { tone: "info", text: routeOrderPrefilledMessage, stepUpHref: null };
+    // The route first: ?routeId= opened a listed route before the guía arrived; no cue to pick one.
+    const both = setup(new FakeRoutesApi([routeA]), `routeId=${routeA.id}&orderId=${orderOf(9)}`);
+    await both.controller.start();
+    expect(both.state().selected?.id).toBe(routeA.id);
+    expect(both.state().guide).toBe(guideOf(9));
+    expect(both.state().notice).toBeNull();
+
+    // The route opened while getOrder still reads the guía: no cue either.
+    const slowApi = new FakeRoutesApi([routeA]);
+    const slowGuide = deferred<string>();
+    slowApi.guideAnswers = { [orderOf(9)]: () => slowGuide.promise };
+    const opened = setup(slowApi, `orderId=${orderOf(9)}`);
+    const starting = opened.controller.start();
+    await flush();
+    await opened.controller.select(routeA.id);
+    slowGuide.resolve(guideOf(9));
+    await starting;
+    expect(opened.state().guide).toBe(guideOf(9));
+    expect(opened.state().notice).toBeNull();
+
+    // The guía arrives while a route is being opened: no cue, and none once it is open.
+    const openingApi = new FakeRoutesApi([routeA]);
+    const guide = deferred<string>();
+    const detail = deferred<ManualRouteDetail>();
+    openingApi.guideAnswers = { [orderOf(9)]: () => guide.promise };
+    const opening = setup(openingApi, `orderId=${orderOf(9)}`);
+    const startingToo = opening.controller.start();
+    await flush();
+    openingApi.detailAnswers = [() => detail.promise];
+    const selecting = opening.controller.select(routeA.id);
+    guide.resolve(guideOf(9));
+    await startingToo;
+    expect(opening.state().selected).toBeNull();
+    expect(opening.state().notice).toBeNull();
+    detail.resolve(routeA);
+    await selecting;
+    expect(opening.state().selected?.id).toBe(routeA.id);
+    expect(opening.state().notice).toBeNull();
+
+    // The guía first: the cue shows until a route is open, and the guía stays in the field.
+    const later = setup(new FakeRoutesApi([routeA]), `orderId=${orderOf(9)}`);
+    await later.controller.start();
+    expect(later.state().notice).toEqual(prefilled);
+    await later.controller.select(routeA.id);
+    expect(later.state().notice).toBeNull();
+    expect(later.state().guide).toBe(guideOf(9));
+    // A new route opened from "Crear ruta" drops the cue too (it says the change was saved).
+    const created = setup(new FakeRoutesApi([routeA]), `orderId=${orderOf(9)}`);
+    await created.controller.start();
+    expect(created.state().notice).toEqual(prefilled);
+    await created.controller.create({ driverId, cityId, serviceAreaId: null, scheduledFor: "2026-10-12" });
+    expect(created.state().selected?.id).toBe(syntheticUuid(0x87f));
+    expect(created.state().notice).toEqual({ tone: "info", text: routeSavedMessage, stepUpHref: null });
+  });
+
   it("does not overwrite a guía already typed, and starts from empty after a session change", async () => {
     const api = new FakeRoutesApi([routeA]);
     const slow = deferred<string>();

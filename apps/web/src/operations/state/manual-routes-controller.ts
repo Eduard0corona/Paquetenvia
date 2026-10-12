@@ -486,13 +486,17 @@ export class ManualRoutesController extends ExternalStore<ManualRoutesState> {
   /** Shows an authoritative detail of the route shown or being opened; an older version is never shown over a newer one. */
   private applyDetail(detail: ManualRouteDetail): void {
     if (detail.id !== this.targetRouteId) return;
-    const shown = this.getSnapshot().selected;
+    const { selected: shown, notice } = this.getSnapshot();
     if (shown !== null && shown.id === detail.id && shown.version > detail.version) return;
-    this.update({ selected: detail });
+    // A route is open now: the ?orderId= cue to pick one no longer applies, whenever the guía arrived.
+    this.update(notice?.text === routeOrderPrefilledMessage ? { selected: detail, notice: null } : { selected: detail });
     this.requestGuides(detail);
   }
 
-  /** `?orderId=`: that order's guía, read with getOrder, fills an empty field; an order that cannot be read leaves it empty. */
+  /**
+   * `?orderId=`: that order's guía, read with getOrder, fills an empty field; an order that cannot be read leaves it
+   * empty. The cue "Selecciona una ruta…" is shown only while no route is open nor being opened.
+   */
   private async prefill(api: RoutesApi, orderId: string | null, generation: number): Promise<void> {
     if (orderId === null || !isCanonicalUuid(orderId)) return;
     let publicId: string;
@@ -505,7 +509,12 @@ export class ManualRoutesController extends ExternalStore<ManualRoutesState> {
     this.guideCache.set(orderId, publicId);
     const state = this.getSnapshot();
     if (state.guide !== "") return;
-    this.update({ guide: publicId, notice: state.notice ?? info(routeOrderPrefilledMessage) });
+    const choosing = state.selected === null && this.targetRouteId === null;
+    this.update(
+      choosing && state.notice === null
+        ? { guide: publicId, notice: info(routeOrderPrefilledMessage) }
+        : { guide: publicId },
+    );
   }
 
   /**

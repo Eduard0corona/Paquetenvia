@@ -104,8 +104,10 @@ el patrón de `listOrders.public_id` en AI-05), el mismo valor que pide "Buscar 
   nuevo."). Con la orden encontrada, `addRouteStop` con su id y la `expected_version` actual de la ruta. Si mientras se
   buscaba se abrió otra ruta, no se manda nada. Al guardarse, el campo se vacía.
 - `?orderId=` (el enlace "Agregar a ruta" del tablero) sigue funcionando sin mostrar el id: se lee esa orden con
-  `getOrder` y el campo se llena con su guía, con el aviso de siempre "Selecciona una ruta para agregar la orden
-  indicada."; si no se puede leer, el campo queda vacío.
+  `getOrder` y el campo se llena con su guía; si no se puede leer, el campo queda vacío. El aviso de siempre
+  "Selecciona una ruta para agregar la orden indicada." sale solo si no hay una ruta abierta ni abriéndose (por ejemplo
+  con `?routeId=` en la misma dirección no sale) y se quita al abrir una, llegue antes la guía o la ruta (hallazgo de
+  la revisión automática del PR #227).
 - Detalle sin IDs:
   - Encabezado: el nombre por fecha de la ruta, "Repartidor DRV-…" (de `listOrganizationDrivers`, la misma lectura del
     formulario, con cualquier estado; un repartidor que esa lectura no trae, por ejemplo uno inactivo, es "Repartidor no
