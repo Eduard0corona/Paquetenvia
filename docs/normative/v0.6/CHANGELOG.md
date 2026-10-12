@@ -14,9 +14,12 @@
   número de órdenes.
 - `addRouteStop` se envía una orden tras otra, cada una con su Idempotency-Key reutilizada al reenviar, con el
   `expected_version` recién leído y después el de cada respuesta. Un VERSION_CONFLICT detiene el envío, vuelve a leer
-  la ruta y pide confirmar de nuevo; los demás 409 y el 404 responden solo por su orden, con mensaje en español; un
-  403 MFA_REQUIRED ofrece "Verificar identidad". Resultado por fila, resumen sin ocultar fallas parciales y nueva
-  lectura de la cola y los conteos. Es una secuencia de una operación existente, no un flujo atómico nuevo de AI-13 §4.
+  la ruta y pide confirmar de nuevo. DRIVER_INELIGIBLE e INVALID_REQUEST responden solo por su orden. Un CONFLICT
+  genérico o el 404 también, pero el servidor los usa además para una ruta que dejó el borrador, así que antes de la
+  siguiente orden `getRoute` debe mostrar la misma ruta en borrador y la misma versión; si no, el envío se detiene como
+  con VERSION_CONFLICT. Un 403 MFA_REQUIRED ofrece "Verificar identidad". Resultado por fila con mensaje en español,
+  resumen sin ocultar fallas parciales y nueva lectura de la cola y los conteos. Es una secuencia de una operación
+  existente, no un flujo atómico nuevo de AI-13 §4.
 - La bandeja no crea rutas: si el repartidor no tiene una en borrador, la pantalla indica crearla en Rutas. Sin
   cambios en AI-04, AI-05, AI-06, AI-18, backend, roles, capacidades ni migraciones.
 

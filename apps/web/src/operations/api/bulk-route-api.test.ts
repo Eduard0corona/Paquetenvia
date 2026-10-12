@@ -89,6 +89,27 @@ describe("bulk route api (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11)", () => 
     });
   });
 
+  it("reads one route to check it and refuses an answer for another route", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, detail({ status: "PLANNED" })));
+    vi.stubGlobal("fetch", fetchMock);
+    // Whatever its status: the controller decides whether it is still the DRAFT route it used.
+    const result = await createBulkRouteApi(base, bearerSession()).getRoute(routeId);
+    const [url, init] = lastCall(fetchMock);
+    expect(url.pathname).toBe(`/api/v1/routes/${routeId}`);
+    expect(url.search).toBe("");
+    expect(init.method).toBe("GET");
+    expect((init.headers as Record<string, string>)["X-Organization-Id"]).toBe(bearerSession().organizationId);
+    expect(result.status).toBe("PLANNED");
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, detail({ id: syntheticUuid(0x802) }))));
+    await expect(createBulkRouteApi(base, bearerSession()).getRoute(routeId)).rejects.toMatchObject({
+      category: "invalid",
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(problem(404)));
+    await expect(createBulkRouteApi(base, bearerSession()).getRoute(routeId)).rejects.toMatchObject({
+      category: "not_found",
+    });
+  });
+
   it("adds one stop with expected_version and the Idempotency-Key and checks the authoritative answer", async () => {
     const fetchMock = vi.fn().mockResolvedValue(jsonResponse(201, detail()));
     vi.stubGlobal("fetch", fetchMock);
@@ -144,6 +165,7 @@ describe("bulk route api (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11)", () => 
     const api = createBulkRouteApi(base, bearerSession());
     await expect(api.listDraftRoutes("not-an-id", null)).rejects.toBeInstanceOf(TenantApiError);
     await expect(api.listDraftRoutes(driverId, "a cursor?")).rejects.toBeInstanceOf(TenantApiError);
+    await expect(api.getRoute("not-an-id")).rejects.toBeInstanceOf(TenantApiError);
     await expect(api.addRouteStop("not-an-id", orderId, 1, key)).rejects.toBeInstanceOf(TenantApiError);
     await expect(api.addRouteStop(routeId, "not-an-id", 1, key)).rejects.toBeInstanceOf(TenantApiError);
     for (const version of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1])

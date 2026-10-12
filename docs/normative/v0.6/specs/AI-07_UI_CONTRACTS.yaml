@@ -337,8 +337,8 @@ screen_contracts:
         delivery_zone_id and cursor
       assign: the /ops/orders/:id assignment_picker sources (listAssignableDrivers, assignDriver), for one order and
         for bulk_assignment
-      route: GET /routes (listRoutes) and POST /routes/{routeId}/stops (addRouteStop), only for bulk_add_to_route
-        (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11)
+      route: GET /routes (listRoutes), GET /routes/{routeId} (getRoute) and POST /routes/{routeId}/stops
+        (addRouteStop), only for bulk_add_to_route (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11)
     roles: [DISPATCHER, PLATFORM_ADMIN with MFA]
     excluded_roles: VIEWER and every other role, exactly as for the operations dashboard and the queue counts; the
       shell does not offer the inbox to them and the API answers 403
@@ -437,6 +437,7 @@ screen_contracts:
         routes: GET /routes (listRoutes) with status=DRAFT and driver_id of the batch's driver, every page (at most 5),
           one after another; a route outside that request fails the read closed
         add: POST /routes/{routeId}/stops (addRouteStop) for one order after another
+        check: GET /routes/{routeId} (getRoute) after a generic CONFLICT or the uniform 404, before the next order
       flow: a sequence of the existing single-order operation, never a new cross-module flow (AI-13 §4) and never a
         status change; the backend and RLS decide every stop again (DRAFT route, OWN ACCEPTED or ACTIVE assignment of
         the route's driver, DSP-001 compatibility)
@@ -460,10 +461,13 @@ screen_contracts:
         server answers definitively and reused when that order is sent again
       concurrency: expected_version is the version just listed, then the version of each authoritative answer; a
         VERSION_CONFLICT stops the run, the routes are read again and the orders not added need a new confirmation
-      execution: one order after another; any other 409 or the uniform 404 answers for that order only and the next
-        order is sent; session, role, MFA, network, server or an unexpected answer stops the run and the rest stay "Sin
-        enviar"; "Reintentar las pendientes" resends, with the same keys and payloads, only the orders a network or
-        server failure left without an answer
+      execution: one order after another; DRIVER_INELIGIBLE and INVALID_REQUEST answer for that order only and the
+        next order is sent; a generic CONFLICT (or an unknown code) or the uniform 404 also answers for that order, but
+        the server uses them for a route that left DRAFT or is gone too, so before the next order getRoute must show
+        the driver's same DRAFT route at the same version - otherwise, or when it cannot be read, the run stops like a
+        VERSION_CONFLICT and a route no longer DRAFT receives nothing more; session, role, MFA, network, server or an
+        unexpected answer stops the run and the rest stay "Sin enviar"; "Reintentar las pendientes" resends, with the
+        same keys and payloads, only the orders a network or server failure left without an answer
       results: every row shows its own result - added to the route, or the es-MX message of its RoutingConflict code
         (DRIVER_INELIGIBLE, VERSION_CONFLICT, CONFLICT, INVALID_REQUEST) or of the uniform 404; a summary says how many
         were added; a partial failure is never hidden

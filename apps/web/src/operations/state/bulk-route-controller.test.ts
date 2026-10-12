@@ -70,8 +70,9 @@ interface AddCall {
 }
 
 /**
- * Answers listDraftRoutes per cursor and addRouteStop per order, recording every call in order.
- * An addRouteStop without a scripted answer succeeds like the server: the route one version later.
+ * Answers listDraftRoutes per cursor, getRoute and addRouteStop per order, recording every call in
+ * order. An addRouteStop without a scripted answer succeeds like the server (the route one version
+ * later) and a getRoute without one returns the route at the last version the fake answered.
  */
 class FakeApi implements BulkRouteApi {
   public readonly calls: string[] = [];
@@ -79,12 +80,22 @@ class FakeApi implements BulkRouteApi {
   public readonly signals: AbortSignal[] = [];
   public lists: Record<string, () => Promise<ManualRoutePage>> = {};
   public addAnswers: Record<string, (() => Promise<ManualRouteDetail>)[]> = {};
+  public routeAnswers: (() => Promise<ManualRouteDetail>)[] = [];
+  private serverVersion = target.version;
 
   public listDraftRoutes(driverId: string, cursor: string | null, signal?: AbortSignal): Promise<ManualRoutePage> {
     this.calls.push(`list ${driverId}${cursor === null ? "" : `@${cursor}`}`);
     if (signal !== undefined) this.signals.push(signal);
     const answer = this.lists[cursor ?? ""];
     return answer === undefined ? Promise.resolve(page([target, otherRoute])) : answer();
+  }
+
+  public getRoute(routeId: string, signal?: AbortSignal): Promise<ManualRouteDetail> {
+    this.calls.push(`get ${routeId}`);
+    if (signal !== undefined) this.signals.push(signal);
+    const answer = this.routeAnswers.shift();
+    if (answer !== undefined) return answer();
+    return Promise.resolve(detail(routeId, this.serverVersion, target.stop_count + this.serverVersion - target.version));
   }
 
   public addRouteStop(
@@ -101,6 +112,7 @@ class FakeApi implements BulkRouteApi {
     if (answer !== undefined) return answer();
     // Every version after the one listed added one stop.
     const version = expectedVersion + 1;
+    this.serverVersion = version;
     return Promise.resolve(detail(routeId, version, target.stop_count + version - target.version));
   }
 }
@@ -263,7 +275,90 @@ describe("bulk add to route controller (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-1
       routeStopConflictMessages.INVALID_REQUEST,
       "La orden no se pudo agregar a esta ruta.",
     ]);
+    // The generic CONFLICT may be the route's: it is read (still DRAFT, same version) before the next
+    // order. INVALID_REQUEST answers for the order alone, and after the last order nothing is read.
+    expect(api.calls.slice(1)).toEqual([
+      `add ${first.orderId}`,
+      `get ${target.id}`,
+      `add ${second.orderId}`,
+      `add ${third.orderId}`,
+    ]);
+    expect(api.addCalls.map((call) => call.expectedVersion)).toEqual([3, 3, 3]);
+    expect(controller.current.phase).toBe("done");
     expect(controller.current.message).toBe("No se agregó ninguna orden a la ruta. Revisa el motivo en cada fila.");
+  });
+
+  it("stops when a generic conflict hides a route that left DRAFT and sends nothing more", async () => {
+    const api = new FakeApi();
+    api.addAnswers = { [second.orderId]: [() => Promise.reject(new TenantApiError("conflict", "CONFLICT"))] };
+    // Someone planned the route while the batch was sending.
+    api.routeAnswers = [() => Promise.resolve({ ...detail(target.id, 4, 2), status: "PLANNED" })];
+    const { controller, onChanged } = setup(api);
+    await controller.loadRoutes();
+    api.lists = { "": () => Promise.resolve(page([otherRoute])) };
+    await controller.execute(target.id);
+
+    expect(api.calls.filter((call) => !call.startsWith("list"))).toEqual([
+      `add ${first.orderId}`,
+      `add ${second.orderId}`,
+      `get ${target.id}`,
+    ]);
+    expect(controller.current.results).toEqual({
+      [first.orderId]: { kind: "added" },
+      [second.orderId]: { kind: "failed", message: routeStopConflictMessages.CONFLICT, retryable: false },
+      [third.orderId]: { kind: "not_sent" },
+    });
+    expect(controller.current.phase).toBe("choosing");
+    expect(controller.current.message).toBe(
+      `Se agregó 1 de 3 órdenes a la ruta. Revisa el motivo de las demás en su fila. ${bulkRouteChangedMessage}`,
+    );
+    // The routes were read again and the route is no longer among the DRAFT ones: nothing is sent.
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [otherRoute] });
+    expect(sendableRouteOrders(controller.current)).toEqual([third]);
+    await controller.execute(target.id);
+    await controller.execute(otherRoute.id);
+    expect(api.addCalls).toHaveLength(2);
+    expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("stops after a 404 when the route changed meanwhile, and sends the rest after a new confirmation", async () => {
+    const api = new FakeApi();
+    api.addAnswers = { [first.orderId]: [() => Promise.reject(new TenantApiError("not_found"))] };
+    api.routeAnswers = [() => Promise.resolve(detail(target.id, 9, 5))];
+    const { controller } = setup(api);
+    await controller.loadRoutes();
+    api.lists = { "": () => Promise.resolve(page([{ ...target, version: 9, stop_count: 5 }])) };
+    await controller.execute(target.id);
+    expect(controller.current.results).toEqual({
+      [first.orderId]: { kind: "failed", message: routeStopNotFoundMessage, retryable: false },
+      [second.orderId]: { kind: "not_sent" },
+      [third.orderId]: { kind: "not_sent" },
+    });
+    expect(controller.current.phase).toBe("choosing");
+    expect(controller.current.route).toMatchObject({ id: target.id, version: 9 });
+
+    // The order the server refused is not sent again; the others go with the version read.
+    await controller.execute(target.id);
+    expect(api.addCalls.slice(1).map((call) => [call.orderId, call.expectedVersion])).toEqual([
+      [second.orderId, 9],
+      [third.orderId, 10],
+    ]);
+    expect(controller.current.phase).toBe("done");
+    expect(controller.current.message).toBe("Se agregaron 2 de 3 órdenes a la ruta. Revisa el motivo de las demás en su fila.");
+  });
+
+  it("stops when the route cannot be read after a generic conflict", async () => {
+    const api = new FakeApi();
+    api.addAnswers = { [first.orderId]: [() => Promise.reject(new TenantApiError("conflict", "CONFLICT"))] };
+    api.routeAnswers = [() => Promise.reject(new TenantApiError("network"))];
+    const { controller } = setup(api);
+    await controller.loadRoutes();
+    await controller.execute(target.id);
+    expect(api.addCalls.map((call) => call.orderId)).toEqual([first.orderId]);
+    expect(controller.current.results[second.orderId]).toEqual({ kind: "not_sent" });
+    expect(controller.current.results[third.orderId]).toEqual({ kind: "not_sent" });
+    expect(controller.current.phase).toBe("choosing");
+    expect(controller.current.message).toContain(bulkRouteChangedMessage);
   });
 
   it("stops when the route changed, reads it again and sends the rest only after a new confirmation", async () => {

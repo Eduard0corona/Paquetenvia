@@ -137,8 +137,13 @@ repartidor de la ruta que aún no está en otra ruta; además revisa ciudad, ár
   - VERSION_CONFLICT (alguien más cambió la ruta): se detiene el envío, se vuelve a leer la ruta y las órdenes que no
     se agregaron esperan una nueva confirmación con la versión nueva (llaves nuevas, porque cambió el cuerpo). Si la
     ruta ya no está en borrador, no se envía nada más.
-  - Otros 409 (DRIVER_INELIGIBLE, CONFLICT, INVALID_REQUEST) o el 404 uniforme responden solo por esa orden, con su
-    mensaje en español, y se sigue con la siguiente.
+  - DRIVER_INELIGIBLE e INVALID_REQUEST responden solo por esa orden, con su mensaje en español, y se sigue con la
+    siguiente.
+  - Un CONFLICT genérico (o un código desconocido) o el 404 uniforme también responden por esa orden, pero el servidor
+    los usa además para una ruta que dejó el borrador o ya no existe (`RouteStateConflict` sale como CONFLICT). Por
+    eso, antes de la siguiente orden, `getRoute` debe mostrar la misma ruta en borrador del repartidor con la misma
+    versión; si no, o si no se puede leer, el envío se detiene como con VERSION_CONFLICT (hallazgo de la revisión
+    automática del PR #225).
   - Sesión, rol, MFA (403 MFA_REQUIRED ofrece "Verificar identidad" de regreso a la bandeja), red, servidor o una
     respuesta inesperada detienen el envío y las demás quedan "Sin enviar". "Reintentar las pendientes" reenvía, con
     las mismas llaves y cuerpos, solo lo que una falla de red o servidor dejó sin respuesta.

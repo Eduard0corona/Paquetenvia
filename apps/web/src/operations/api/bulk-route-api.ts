@@ -10,13 +10,15 @@ import { assertUuid, createTenantRequester, readJson, TenantApiError } from "./t
 
 /**
  * UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11: the AI-05 Routing operations "Agregar estas
- * órdenes a una ruta…" uses - listRoutes, asked only for the DRAFT routes of one driver, and
- * addRouteStop. Unlike routes-api (the route planner), failures are {@link TenantApiError}s that
- * carry the problem code (VERSION_CONFLICT, DRIVER_INELIGIBLE…) and MFA_REQUIRED, so each order gets
- * its own es-MX result and the MFA step-up. An answer outside the request fails closed.
+ * órdenes a una ruta…" uses - listRoutes, asked only for the DRAFT routes of one driver, getRoute,
+ * to check the route after a generic conflict, and addRouteStop. Unlike routes-api (the route
+ * planner), failures are {@link TenantApiError}s that carry the problem code (VERSION_CONFLICT,
+ * DRIVER_INELIGIBLE…) and MFA_REQUIRED, so each order gets its own es-MX result and the MFA step-up.
+ * An answer outside the request fails closed.
  */
 export interface BulkRouteApi {
   listDraftRoutes(driverId: string, cursor: string | null, signal?: AbortSignal): Promise<ManualRoutePage>;
+  getRoute(routeId: string, signal?: AbortSignal): Promise<ManualRouteDetail>;
   addRouteStop(
     routeId: string,
     orderId: string,
@@ -53,6 +55,14 @@ export function createBulkRouteApi(baseUrl: string, session: OperationsSession):
       )
         throw new TenantApiError("invalid");
       return page;
+    },
+    async getRoute(routeId, signal) {
+      assertUuid(routeId);
+      const response = await send({ method: "GET", path: `/api/v1/routes/${encodeURIComponent(routeId)}`, signal });
+      if (response.status !== 200) throw new TenantApiError("invalid");
+      const detail = (await readJson(response, parseManualRouteDetail)) as ManualRouteDetail;
+      if (detail.id !== routeId) throw new TenantApiError("invalid");
+      return detail;
     },
     async addRouteStop(routeId, orderId, expectedVersion, idempotencyKey, signal) {
       assertUuid(routeId);

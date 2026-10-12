@@ -62,12 +62,14 @@ describe("work inbox page policy (UI-PHASE3-INBOX-2026-10-10)", () => {
     expect(bulkController).toContain("this.api.listAssignableDrivers(orderId, cursor, this.abort.signal)");
     expect(bulkController).toContain("await this.api.assignDriver(");
     expect(bulkController).not.toMatch(/Promise\.all|transitionOrder|routes/);
-    // UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11: the existing listRoutes (the driver's DRAFT routes)
-    // and addRouteStop, one order at a time; it never creates a route nor touches another operation.
+    // UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11: the existing listRoutes (the driver's DRAFT routes),
+    // getRoute (to check the route after a generic conflict) and addRouteStop, one order at a time; it
+    // never creates a route nor touches another operation.
     const routeStep = read("src/operations/components/operations-bulk-route.tsx");
     expect(routeStep).toContain("createBulkRouteApi(apiBaseUrl, session)");
     const routeController = read("src/operations/state/bulk-route-controller.ts");
     expect(routeController).toContain("this.api.listDraftRoutes(this.driver.driverId, cursor, this.abort.signal)");
+    expect(routeController).toContain("this.api.getRoute(route.id, this.abort.signal)");
     expect(routeController).toContain("await this.api.addRouteStop(");
     expect(routeController).not.toMatch(/Promise\.all|transitionOrder|assignDriver|createRoute|removeStop|reorder/);
     const api = read(bulkRouteApi);
@@ -75,6 +77,7 @@ describe("work inbox page policy (UI-PHASE3-INBOX-2026-10-10)", () => {
     expect(api).toContain('new URLSearchParams({ status: "DRAFT", driver_id: driverId })');
     expect(api.match(/path: [`"]\/api\/v1\/[^`"]*[`"]/g)).toEqual([
       'path: "/api/v1/routes"',
+      "path: `/api/v1/routes/${encodeURIComponent(routeId)}`",
       "path: `/api/v1/routes/${encodeURIComponent(routeId)}/stops`",
     ]);
     expect(api).not.toMatch(/\bfetch\(|"PUT"|"DELETE"/);

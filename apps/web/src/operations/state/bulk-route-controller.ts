@@ -23,9 +23,11 @@ import { describeFailure } from "./tenant-error-messages";
  * retry after a network or server failure resends that key. expected_version is the version just
  * read and then the version of each authoritative answer. A VERSION_CONFLICT means someone else
  * changed the route: the run stops, the routes are read again and the remaining orders need a new
- * confirmation. The first run fixes the route for the rest of the batch. Each order keeps its own
- * result, a stop is never hidden, and the inbox reads REST again after every run. Nothing is
- * stored in the browser and nothing is logged.
+ * confirmation. The generic CONFLICT and the uniform 404 also cover a route that left DRAFT or is
+ * gone, so after one of them getRoute must show the same DRAFT route at the same version before the
+ * next order is sent; otherwise the run stops the same way. The first run fixes the route for the
+ * rest of the batch. Each order keeps its own result, a stop is never hidden, and the inbox reads
+ * REST again after every run. Nothing is stored in the browser and nothing is logged.
  */
 export type BulkRoutesLoad =
   | { readonly kind: "loading" }
@@ -106,11 +108,30 @@ interface SendFailure {
   readonly retryable: boolean;
   /** No later order is sent: the failure is not about this order alone. */
   readonly stop: boolean;
-  /** VERSION_CONFLICT: the route must be read and confirmed again. */
+  /** VERSION_CONFLICT, or a route found changed: the route must be read and confirmed again. */
   readonly routeChanged: boolean;
+  /**
+   * A generic CONFLICT (or an unknown code) or the uniform 404: the server uses them for this order
+   * and also for a route that left DRAFT or is gone, so the route is read before the next order.
+   */
+  readonly checkRoute: boolean;
   readonly message: string;
   readonly stepUpHref: string | null;
 }
+
+/** 409 codes that answer for the order alone (AI-05 RoutingConflict); any other one may be the route's. */
+const orderConflictCodes: ReadonlySet<string> = new Set(["DRIVER_INELIGIBLE", "INVALID_REQUEST"]);
+
+/** The run stops because the route changed or cannot be confirmed unchanged: read it again, confirm again. */
+const routeChangedStop: SendFailure = {
+  result: { kind: "route_changed" },
+  retryable: false,
+  stop: true,
+  routeChanged: true,
+  checkRoute: false,
+  message: bulkRouteChangedMessage,
+  stepUpHref: null,
+};
 
 export class BulkRouteController {
   private state: BulkRouteState;
@@ -194,7 +215,7 @@ export class BulkRouteController {
 
   private async send(orderIds: readonly string[]): Promise<void> {
     let stopped: SendFailure | null = null;
-    for (const orderId of orderIds) {
+    for (const [index, orderId] of orderIds.entries()) {
       if (this.disposed) return;
       const route = this.state.route;
       if (route === null) return;
@@ -231,7 +252,15 @@ export class BulkRouteController {
         const failure = this.sendFailure(error);
         if (!failure.retryable) this.keys.settle(orderId);
         this.setResult(orderId, failure.result);
-        if (failure.stop) stopped = failure;
+        if (failure.stop) {
+          stopped = failure;
+        } else if (failure.checkRoute && index < orderIds.length - 1) {
+          // The answer may hide a route that left DRAFT, is gone or changed: before sending another
+          // order, the route must still be the driver's DRAFT route at the version just used.
+          const unchanged = await this.isUnchanged(route);
+          if (this.disposed) return;
+          if (!unchanged) stopped = routeChangedStop;
+        }
       }
     }
     if (this.disposed) return;
@@ -239,7 +268,8 @@ export class BulkRouteController {
     const added = this.state.orders.filter((order) => results[order.orderId]?.kind === "added").length;
     const summary = bulkRouteRunSummary(added, this.state.orders.length);
     if (stopped?.routeChanged === true) {
-      // Someone else changed the route: read it again and ask for a new confirmation.
+      // Someone else changed the route (or it cannot be confirmed unchanged): read it again and ask
+      // for a new confirmation; a route no longer listed as DRAFT receives nothing more.
       this.set({ ...this.state, phase: "choosing", message: `${summary} ${bulkRouteChangedMessage}`, stepUpHref: null, canRetry: false });
       this.onChanged();
       await this.loadRoutes();
@@ -263,22 +293,23 @@ export class BulkRouteController {
 
   private sendFailure(error: unknown): SendFailure {
     if (error instanceof TenantApiError) {
-      if (error.category === "conflict" && error.code === "VERSION_CONFLICT")
-        return {
-          result: { kind: "route_changed" },
-          retryable: false,
-          stop: true,
-          routeChanged: true,
-          message: bulkRouteChangedMessage,
-          stepUpHref: null,
-        };
-      // Any other 409 or the uniform 404 answers for this order only; the next order is sent.
+      if (error.category === "conflict" && error.code === "VERSION_CONFLICT") return routeChangedStop;
+      // Any other 409 or the uniform 404 answers for this order and the next order is sent; all but
+      // DRIVER_INELIGIBLE and INVALID_REQUEST may also be the route's, so the route is checked first.
       if (error.category === "conflict" || error.category === "not_found") {
         const message =
           error.category === "not_found"
             ? routeStopNotFoundMessage
             : ((error.code === null ? undefined : routeStopConflictMessages[error.code]) ?? routeStopDefaultConflictMessage);
-        return { result: { kind: "failed", message, retryable: false }, retryable: false, stop: false, routeChanged: false, message, stepUpHref: null };
+        return {
+          result: { kind: "failed", message, retryable: false },
+          retryable: false,
+          stop: false,
+          routeChanged: false,
+          checkRoute: error.category === "not_found" || error.code === null || !orderConflictCodes.has(error.code),
+          message,
+          stepUpHref: null,
+        };
       }
       if (error.category === "invalid")
         return {
@@ -286,6 +317,7 @@ export class BulkRouteController {
           retryable: false,
           stop: true,
           routeChanged: false,
+          checkRoute: false,
           message: bulkRouteUnexpectedAnswerMessage,
           stepUpHref: null,
         };
@@ -298,9 +330,24 @@ export class BulkRouteController {
       retryable,
       stop: true,
       routeChanged: false,
+      checkRoute: false,
       message: view.message,
       stepUpHref: view.stepUpHref,
     };
+  }
+
+  /**
+   * getRoute after a generic conflict: true only when the route is still the driver's DRAFT route at
+   * the version the failed order used. A route that left DRAFT, is gone, changed or cannot be read
+   * counts as changed.
+   */
+  private async isUnchanged(route: ManualRoute): Promise<boolean> {
+    try {
+      const current = await this.api.getRoute(route.id, this.abort.signal);
+      return isDraftRouteOf(current, this.driver.driverId) && current.version === route.version;
+    } catch {
+      return false;
+    }
   }
 
   /** Every page of the driver's DRAFT routes; a repeated cursor or too many pages leave it incomplete. */
