@@ -501,6 +501,7 @@ function schedulerFor(
       createProofUploadSession: vi.fn(),
       finalizeProof: vi.fn(),
       recordCodCollection: vi.fn(),
+      openFailedDeliveryIncident: vi.fn(),
       ...apiOverrides,
     },
     refreshStops,

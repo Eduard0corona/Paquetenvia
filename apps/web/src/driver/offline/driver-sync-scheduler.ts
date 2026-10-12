@@ -9,7 +9,9 @@ import {
 } from "./driver-sync-api";
 import type {
   DriverOfflineOperation,
+  DriverOperationSafeError,
 } from "./operation-contract";
+import { driverFailedReportCashHold } from "./failed-delivery-policy";
 import {
   isOfflineOperationExpired,
   isOfflineOperationExpiredCode,
@@ -21,9 +23,13 @@ import {
 } from "./operation-projection";
 import {
   codRejectionCodeToKeep,
+  incidentRejectionCodeToKeep,
   transitionRejectionCodeToKeep,
   type DriverRejectionCode,
 } from "./rejection-codes";
+
+/** The request a queued action was making when it failed. */
+type DriverSyncFailurePhase = "proof" | "incident" | "transition" | "cod";
 
 export const DriverSyncBackoffMilliseconds = [
   1_000, 2_000, 5_000, 10_000, 30_000,
@@ -98,6 +104,8 @@ export class DriverSyncScheduler {
   private started = false;
   private leaseLost = false;
   private disposed = false;
+  /** Pauses in force (see pause); no pass runs while it is above zero. */
+  private pauseCount = 0;
   /**
    * Orders whose delivery waits for its cash in the current pass
    * (driverDeliveryAwaitsCash): it is not tried again until a collection for
@@ -130,6 +138,7 @@ export class DriverSyncScheduler {
   public async requestSync(manual = true): Promise<void> {
     if (
       this.disposed ||
+      this.pauseCount > 0 ||
       !this.isOnline() ||
       !this.isVisible()
     ) {
@@ -140,6 +149,26 @@ export class DriverSyncScheduler {
       this.active = null;
     });
     return this.active;
+  }
+
+  /**
+   * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: stops syncing until resume.
+   * The running pass is aborted and awaited; an action in flight stays as it
+   * was last persisted and is resumed later with the same keys. The controller
+   * pauses around a discard, so an action the driver discards (for example a
+   * saved collection, which may still be pending) is neither sent nor written
+   * back by a pass that was already running.
+   */
+  public async pause(): Promise<void> {
+    this.pauseCount += 1;
+    this.clearTimer();
+    this.abortController?.abort();
+    await this.active?.catch(() => undefined);
+  }
+
+  /** Ends one pause; the last one lets the next sync request run. */
+  public resume(): void {
+    if (this.pauseCount > 0) this.pauseCount -= 1;
   }
 
   public async dispose(): Promise<void> {
@@ -188,6 +217,7 @@ export class DriverSyncScheduler {
     try {
       while (
         !this.disposed &&
+        this.pauseCount === 0 &&
         !this.leaseLost &&
         !pass.signal.aborted &&
         this.isOnline() &&
@@ -246,7 +276,7 @@ export class DriverSyncScheduler {
     signal: AbortSignal,
   ): Promise<void> {
     let current = operation;
-    let failurePhase: "proof" | "transition" | "cod" =
+    let failurePhase: DriverSyncFailurePhase =
       operation.kind === "COD_COLLECTION" ? "cod" : "transition";
     // A collection of an order lets its waiting delivery be tried again.
     if (current.kind === "COD_COLLECTION") {
@@ -287,6 +317,34 @@ export class DriverSyncScheduler {
         this.telemetry.syncDeferred("cod-required");
         return;
       }
+      // UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: cash is recorded only at
+      // the door. A collection whose stop REST shows outside DELIVERING (for
+      // example after a failed attempt) is held, never sent: the server would
+      // still accept it in FAILED_ATTEMPT, and a collection and a failed
+      // report are never both sent.
+      if (
+        current.kind === "COD_COLLECTION" &&
+        initial.stop !== null &&
+        initial.stop.status !== "DELIVERING"
+      ) {
+        if (signal.aborted) return;
+        await this.markAttentionAndBlock(current, "VERSION_CONFLICT");
+        return;
+      }
+      // Owner answer "No, llama a despacho (Recommended)": a failed-delivery
+      // report is never sent while its order has a collection saved on the
+      // phone or recorded on the server.
+      if (
+        current.kind === "FAILED_DELIVERY" &&
+        (await this.holdFailedReportForCash(
+          current,
+          initial.stop,
+          operations,
+          signal,
+        ))
+      ) {
+        return;
+      }
 
       current = await this.persist(current, {
         status: "PROCESSING",
@@ -305,7 +363,10 @@ export class DriverSyncScheduler {
           throw new DriverSyncApiError("invalid-contract");
         }
       } else {
+        // Whether a request went out since the cash was last checked.
+        let sentSinceCashCheck = false;
         if (isProofOperation(current)) {
+          sentSinceCashCheck = current.proofId === null;
           try {
             current = await this.processProof(current, signal);
           } catch (error) {
@@ -313,6 +374,45 @@ export class DriverSyncScheduler {
             throw error;
           }
           if (current.status !== "PROCESSING") return;
+        }
+        if (current.kind === "FAILED_DELIVERY") {
+          // UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: steps 4 and 5 of the
+          // AI-05 sequence. The cash is checked again right before each step
+          // that follows a request, so a collection recorded meanwhile (for
+          // example by dispatch) still holds the report.
+          if (
+            sentSinceCashCheck &&
+            (await this.recheckFailedReportForCash(current, signal))
+          ) {
+            return;
+          }
+          const report = current.failedDelivery;
+          if (report === null) throw new DriverSyncApiError("invalid-contract");
+          if (report.incidentId === null) {
+            failurePhase = "incident";
+            const incident = await this.options.api.openFailedDeliveryIncident(
+              current,
+              signal,
+            );
+            if (
+              incident.orderId !== current.orderId ||
+              incident.reasonCode !== report.reasonCode ||
+              incident.nextAction !== null ||
+              incident.occurredAt !== current.clientOccurredAt ||
+              incident.evidenceProofIds.length !== 1 ||
+              incident.evidenceProofIds[0] !== current.proofId
+            ) {
+              throw new DriverSyncApiError("invalid-contract");
+            }
+            current = await this.persist(current, {
+              failedDelivery: Object.freeze({
+                ...report,
+                incidentId: incident.id,
+              }),
+            });
+            failurePhase = "transition";
+            if (await this.recheckFailedReportForCash(current, signal)) return;
+          }
         }
         const receipt = await this.options.api.transitionOrder(current, signal);
         if (
@@ -462,11 +562,44 @@ export class DriverSyncScheduler {
     }
   }
 
+  /**
+   * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 (owner answer "No, llama a
+   * despacho (Recommended)"): holds a failed-delivery report for the driver's
+   * attention, unsent, when REST reports its order's cash recorded or the
+   * queue holds a collection of the same order. Resolves whether it held it.
+   */
+  private async holdFailedReportForCash(
+    report: DriverOfflineOperation,
+    stop: DriverStop | null,
+    operations: readonly DriverOfflineOperation[],
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    if (driverFailedReportCashHold(report, stop, operations) === null) {
+      return false;
+    }
+    if (signal.aborted) return true;
+    await this.markAttentionAndBlock(report, "COD_COLLECTED");
+    return true;
+  }
+
+  /** The same check with a fresh REST read and the queue as it is now. */
+  private async recheckFailedReportForCash(
+    report: DriverOfflineOperation,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    const { stop } = await this.confirmationByRest(report, signal);
+    if (signal.aborted) return true;
+    const operations = await this.options.queue.listOperations(
+      this.options.partition,
+    );
+    return this.holdFailedReportForCash(report, stop, operations, signal);
+  }
+
   private async handleFailure(
     operation: DriverOfflineOperation,
     error: unknown,
     signal: AbortSignal,
-    phase: "proof" | "transition" | "cod",
+    phase: DriverSyncFailurePhase,
   ): Promise<void> {
     if (signal.aborted) return;
     if (!(error instanceof DriverSyncApiError)) {
@@ -551,16 +684,22 @@ export class DriverSyncScheduler {
       this.telemetry.syncDeferred("cod-required");
       return;
     }
-    await this.markAttentionAndBlock(
-      operation,
-      phase === "proof" ? "EVIDENCE_REJECTED" : "VERSION_CONFLICT",
+    const rejectionCode =
       error.category !== "conflict"
         ? null
         : phase === "cod"
           ? codRejectionCodeToKeep(error.publicCode)
           : phase === "transition"
             ? transitionRejectionCodeToKeep(error.publicCode)
-            : null,
+            : phase === "incident"
+              ? incidentRejectionCodeToKeep(error.publicCode)
+              : null;
+    await this.markAttentionAndBlock(
+      operation,
+      phase === "proof" || rejectionCode === "EVIDENCE_NOT_AVAILABLE"
+        ? "EVIDENCE_REJECTED"
+        : "VERSION_CONFLICT",
+      rejectionCode,
     );
   }
 
@@ -619,7 +758,10 @@ export class DriverSyncScheduler {
 
   private async markAttentionAndBlock(
     operation: DriverOfflineOperation,
-    safeError: "VERSION_CONFLICT" | "EVIDENCE_REJECTED",
+    safeError: Extract<
+      DriverOperationSafeError,
+      "VERSION_CONFLICT" | "EVIDENCE_REJECTED" | "COD_COLLECTED"
+    >,
     rejectionCode: DriverRejectionCode | null = null,
   ): Promise<void> {
     const operations = orderDriverOperations(
@@ -869,7 +1011,9 @@ export function selectRunnableOperation(
 function isProofOperation(operation: DriverOfflineOperation): boolean {
   return (
     operation.kind === "PICKUP_PROOF" ||
-    operation.kind === "DELIVERY_PROOF"
+    operation.kind === "DELIVERY_PROOF" ||
+    // UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: "Foto del lugar".
+    operation.kind === "FAILED_DELIVERY"
   );
 }
 

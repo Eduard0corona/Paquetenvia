@@ -11,7 +11,9 @@ import {
 import { createExternalOffersApi } from "../api/external-offers-api";
 import { createDriverVoiceApi, type DriverVoiceApi } from "../api/voice-api";
 import { IndexedDbDriverStopsCache } from "../cache/driver-stops-cache";
+import type { DriverFailedDeliveryReason } from "../contracts/failed-delivery";
 import {
+  driverConfirmedStatusLabel,
   driverOperationLabel,
   driverStopStatusLabel,
   driverStopTypeLabel,
@@ -21,6 +23,10 @@ import {
   createDriverSyncApi,
   DriverSyncApiError,
 } from "../offline/driver-sync-api";
+import {
+  driverFailedReportHoldMessage,
+  driverFailedReportHoldState,
+} from "../offline/failed-delivery-policy";
 import {
   nextDriverOperationKind,
   projectDriverOperations,
@@ -62,6 +68,7 @@ import { formatMxnCents } from "../../operations/contracts/money";
 import { useConfirmDialog } from "../../components/confirm-dialog";
 import { DriverAccount } from "./driver-account";
 import { DriverCodCollection } from "./driver-cod-collection";
+import { DriverFailedDelivery } from "./driver-failed-delivery";
 import { DriverProofCapture } from "./driver-proof-capture";
 import {
   NavigationLink,
@@ -379,6 +386,20 @@ export function DriverStopsExperience() {
                 })
               : Promise.resolve(false)
           }
+          onReportFailedDelivery={(reason, photo) =>
+            stop && operationsControllerRef.current
+              ? operationsControllerRef.current.enqueueFailedDelivery(
+                  {
+                    orderId: stop.order_id,
+                    reasonCode: reason,
+                    projectedStatus: stop.projectedStatus,
+                    projectedVersion: stop.projectedVersion,
+                    cod: stop.cod,
+                  },
+                  photo,
+                )
+              : Promise.resolve(false)
+          }
           onDiscard={(id, status, version) =>
             void operationsControllerRef.current?.discard(id, status, version)
           }
@@ -425,6 +446,7 @@ export function DriverStopsExperience() {
           mutating={operationsState.mutating}
           onEnqueue={() => Promise.resolve(false)}
           onCollectCod={() => Promise.resolve(false)}
+          onReportFailedDelivery={() => Promise.resolve(false)}
           onDiscard={() => undefined}
           onNewSession={() => undefined}
           onRetrySame={() => undefined}
@@ -638,7 +660,7 @@ function StopList({
             <dl className={styles.stopFacts}>
               <div>
                 <dt>Estado</dt>
-                <dd>{driverStopStatusLabel(stop.confirmedStatus)}</dd>
+                <dd>{driverConfirmedStatusLabel(stop.confirmedStatus)}</dd>
               </div>
               <div>
                 <dt>Dirección</dt>
@@ -681,6 +703,7 @@ function StopDetail({
   mutating,
   onEnqueue,
   onCollectCod,
+  onReportFailedDelivery,
   onDiscard,
   onNewSession,
   onRetrySame,
@@ -696,6 +719,10 @@ function StopDetail({
   mutating: boolean;
   onEnqueue: (kind: DriverOperationKind, blob?: Blob) => Promise<boolean>;
   onCollectCod: () => Promise<boolean>;
+  onReportFailedDelivery: (
+    reason: DriverFailedDeliveryReason,
+    photo: Blob,
+  ) => Promise<boolean>;
   onDiscard: (
     operationId: string,
     status: DriverOperationalStatus | null,
@@ -749,7 +776,7 @@ function StopDetail({
             <dt>Estado confirmado</dt>
             <dd>
               <span className={styles.badge}>
-                {driverStopStatusLabel(stop.confirmedStatus)}
+                {driverConfirmedStatusLabel(stop.confirmedStatus)}
               </span>
             </dd>
           </div>
@@ -785,6 +812,21 @@ function StopDetail({
           stopType={stop.stop_type}
           confirmedStatus={stop.confirmedStatus}
           offline={offline}
+        />
+        {/* UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: last of the delivery screen, as designed. */}
+        <DriverFailedDelivery
+          key={stop.order_id}
+          stop={stop}
+          operations={operations}
+          disabled={mutating}
+          onReport={onReportFailedDelivery}
+          onDiscardCollection={(operationId) =>
+            onDiscard(
+              operationId,
+              toOperationalStatus(stop.confirmedStatus),
+              stop.confirmedVersion,
+            )
+          }
         />
         <ConflictResolution
           stop={stop}
@@ -945,6 +987,15 @@ function ConflictResolution({
     (operation) => operation.status === "BLOCKED",
   ).length;
   const confirmedOperationalStatus = toOperationalStatus(stop.confirmedStatus);
+  // UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: a report held for the cash
+  // explains the cash as it is now; with the cash recorded only discarding
+  // it remains (the driver calls dispatch), and a held report is never
+  // rebuilt (its version did not change).
+  const cashHold =
+    attention.kind === "FAILED_DELIVERY" &&
+    attention.safeError === "COD_COLLECTED"
+      ? driverFailedReportHoldState(stop, operations)
+      : null;
   const closeConfirmation = () => {
     confirmationDialogRef.current?.close();
     setConfirmation(null);
@@ -981,7 +1032,11 @@ function ConflictResolution({
   return (
     <section className={styles.conflict} aria-labelledby="conflict-heading">
       <h3 id="conflict-heading">Acción que requiere atención</h3>
-      <p>{driverRejectionMessage(attention.kind, attention.rejectionCode)}</p>
+      <p>
+        {cashHold !== null
+          ? driverFailedReportHoldMessage(stop, operations)
+          : driverRejectionMessage(attention.kind, attention.rejectionCode)}
+      </p>
       <dl>
         <div>
           <dt>Hora registrada en el dispositivo</dt>
@@ -1016,22 +1071,25 @@ function ConflictResolution({
             Crear nueva sesión
           </button>
         ) : null}
-        <button
-          type="button"
-          disabled={disabled || confirmedOperationalStatus === null}
-          onClick={() =>
-            confirmedOperationalStatus
-              ? onRetrySame(
-                  attention.id,
-                  confirmedOperationalStatus,
-                  stop.confirmedVersion,
-                )
-              : undefined
-          }
-        >
-          Reintentar la misma acción
-        </button>
-        {driverOperationDefinitions[attention.kind].transition ? (
+        {cashHold === "recorded" ? null : (
+          <button
+            type="button"
+            disabled={disabled || confirmedOperationalStatus === null}
+            onClick={() =>
+              confirmedOperationalStatus
+                ? onRetrySame(
+                    attention.id,
+                    confirmedOperationalStatus,
+                    stop.confirmedVersion,
+                  )
+                : undefined
+            }
+          >
+            Reintentar la misma acción
+          </button>
+        )}
+        {driverOperationDefinitions[attention.kind].transition &&
+        cashHold === null ? (
           <button
             type="button"
             disabled={disabled || confirmedOperationalStatus === null}

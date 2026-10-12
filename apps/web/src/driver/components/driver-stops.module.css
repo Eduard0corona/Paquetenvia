@@ -808,3 +808,145 @@
   margin: 0;
   font-size: 1rem;
 }
+
+/*
+ * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: "No se pudo entregar". Every
+ * control is a 44 px target; the reasons are radio rows, never a text field.
+ */
+.failedDelivery {
+  display: grid;
+  gap: 0.75rem;
+  margin: 0 0 1rem;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  padding: 1rem;
+  background: var(--surface-2);
+  color: var(--ink);
+}
+
+.failedDelivery h3 {
+  margin: 0;
+  font-size: var(--text-lg);
+}
+
+.failedDelivery h3:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.failedDelivery button {
+  min-width: 44px;
+  min-height: 44px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  padding: 0.65rem 1rem;
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+}
+
+.failedDelivery button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
+.failedDelivery button:focus-visible,
+.failedDelivery input:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}
+
+.failedDelivery input[type="file"] {
+  width: 100%;
+  min-height: 44px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.55rem;
+  background: var(--surface);
+}
+
+.failedDelivery .failedDeliveryOpen,
+.failedDelivery .secondaryAction {
+  width: 100%;
+  border: 2px solid var(--crit);
+  background: var(--surface);
+  color: var(--crit);
+}
+
+.failedDelivery .retakeButton {
+  border: 2px solid var(--accent);
+  background: var(--surface);
+  color: var(--accent-strong);
+}
+
+.failedDeliveryNote {
+  margin: 0;
+  font-weight: 700;
+  line-height: 1.45;
+}
+
+.reasonGroup,
+.otherReasons {
+  display: grid;
+  gap: 0.5rem;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.reasonGroup > legend {
+  padding: 0;
+  font-size: var(--text-lg);
+  font-weight: 800;
+}
+
+.otherReasons {
+  margin-left: 1.5rem;
+}
+
+.otherReasons > legend {
+  padding: 0;
+  color: var(--muted);
+  font-weight: 800;
+}
+
+.reasonHint {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.45;
+}
+
+.reasonOption {
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  gap: 0.75rem;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  padding: 0.5rem 0.75rem;
+  background: var(--surface);
+  cursor: pointer;
+  font-weight: 700;
+}
+
+.reasonOption input {
+  width: 1.4rem;
+  height: 1.4rem;
+  flex: none;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.reasonOption:focus-within {
+  outline: 3px solid var(--focus);
+  outline-offset: 2px;
+}
+
+.failedDeliveryActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.75rem;
+}

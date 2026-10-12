@@ -91,6 +91,7 @@ describe("driver sync scheduler", () => {
         createProofUploadSession: vi.fn(),
         finalizeProof: vi.fn(),
         recordCodCollection: vi.fn(),
+        openFailedDeliveryIncident: vi.fn(),
       } as DriverSyncApi,
       refreshStops: async () => stopList([stop]),
       onQueueChanged: vi.fn(),
@@ -283,6 +284,7 @@ describe("driver sync scheduler", () => {
           createProofUploadSession: vi.fn(),
           finalizeProof: vi.fn(),
           recordCodCollection: vi.fn(),
+          openFailedDeliveryIncident: vi.fn(),
         },
         refreshStops: async () => stopList([{
           order_id: orderA,
@@ -771,6 +773,7 @@ function expiryScheduler(
       createProofUploadSession: vi.fn(),
       finalizeProof: vi.fn(),
       recordCodCollection: vi.fn(),
+      openFailedDeliveryIncident: vi.fn(),
       ...apiOverrides,
     },
     refreshStops,
@@ -868,6 +871,7 @@ function schedulerFor(
     createProofUploadSession: vi.fn(),
     finalizeProof: vi.fn(),
     recordCodCollection: vi.fn(),
+    openFailedDeliveryIncident: vi.fn(),
     ...apiOverrides,
   };
   return new DriverSyncScheduler({

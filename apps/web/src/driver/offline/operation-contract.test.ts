@@ -13,7 +13,7 @@ const operationId = "11111111-1111-4111-8111-111111111111";
 const orderId = "22222222-2222-4222-8222-222222222222";
 
 describe("driver offline operation contract", () => {
-  it("defines exactly the five canonical transitions and the cash collection", () => {
+  it("defines exactly the five canonical transitions, the cash collection and the failed-delivery report", () => {
     expect(driverOperationDefinitions).toEqual({
       CHECK_IN: {
         sourceStatus: "ASSIGNED",
@@ -56,6 +56,13 @@ describe("driver offline operation contract", () => {
         reason: "DRIVER_COD_COLLECTED",
         proofType: null,
         transition: false,
+      },
+      FAILED_DELIVERY: {
+        sourceStatus: "DELIVERING",
+        targetStatus: "FAILED_ATTEMPT",
+        reason: "DRIVER_DELIVERY_FAILED_REPORTED",
+        proofType: "DELIVERY_PHOTO",
+        transition: true,
       },
     });
   });
@@ -138,7 +145,7 @@ describe("driver offline operation contract", () => {
         reason: "client timestamp in reason",
       }),
     ).toThrow();
-    for (const schemaVersion of [1, 3]) {
+    for (const schemaVersion of [1, 2, 4]) {
       expect(() =>
         parseDriverOfflineOperation({
           ...operation,

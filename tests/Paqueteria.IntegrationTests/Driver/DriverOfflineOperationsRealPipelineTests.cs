@@ -403,7 +403,7 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
             var actual = await page.EvaluateAsync<int>(
                 """
                 () => new Promise((resolve, reject) => {
-                  const open = indexedDB.open("paquetenvia-driver-stops-v1", 3);
+                  const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
                   open.onerror = () => reject(open.error);
                   open.onsuccess = () => {
                     const db = open.result;
@@ -431,7 +431,7 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
         var diagnostics = await page.EvaluateAsync<string>(
             """
             () => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 3);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
               open.onerror = () => reject(open.error);
               open.onsuccess = () => {
                 const db = open.result;
@@ -484,7 +484,7 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
             var reached = await page.EvaluateAsync<bool>(
                 """
                 expected => new Promise((resolve, reject) => {
-                  const open = indexedDB.open("paquetenvia-driver-stops-v1", 3);
+                  const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
                   open.onerror = () => reject(open.error);
                   open.onsuccess = () => {
                     const db = open.result;
@@ -518,7 +518,7 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
         page.EvaluateAsync<int>(
             """
             storeName => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 3);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
               open.onerror = () => reject(open.error);
               open.onsuccess = () => {
                 const db = open.result;
@@ -541,7 +541,7 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
         page.EvaluateAsync<string>(
             """
             () => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 3);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
               open.onerror = () => reject(open.error);
               open.onsuccess = () => {
                 const db = open.result;

@@ -1,5 +1,10 @@
 import { createDriverCachePartition } from "../cache/driver-stops-cache";
-import type { DriverStopList } from "../contracts/driver-stop";
+import type { DriverStopCod, DriverStopList } from "../contracts/driver-stop";
+import {
+  driverFailedDeliveryReasonAllowed,
+  isDriverFailedDeliveryReason,
+  type DriverFailedDeliveryReason,
+} from "../contracts/failed-delivery";
 import {
   IndexedDbDriverOfflineQueue,
   type DriverOfflineQueue,
@@ -307,6 +312,118 @@ export class DriverOperationsController {
     return true;
   }
 
+  /**
+   * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 ("Enviar reporte"): queues
+   * "No se pudo entregar" for a DELIVERY stop at the door with the reason from
+   * the closed list and exactly one photo ("Foto del lugar"). The operation
+   * keeps the photo, the four Idempotency-Keys (upload session, proof,
+   * incident, transition) and its progress, so a retry resumes at the right
+   * step. Refused, and nothing is stored, when the stop is not DELIVERING,
+   * when "No pagó el cobro" is chosen on a stop without cash on delivery, and
+   * (owner answer "No, llama a despacho (Recommended)") when the order's cash
+   * is saved on the phone or recorded on the server. At most one report per
+   * order is ever queued. Resolves `true` only when this call stored it.
+   */
+  public async enqueueFailedDelivery(
+    input: {
+      readonly orderId: string;
+      readonly reasonCode: DriverFailedDeliveryReason;
+      readonly projectedStatus: DriverOperationalStatus;
+      readonly projectedVersion: number;
+      /** DriverStop.cod of the stop: the only source of whether it collects cash. */
+      readonly cod: DriverStopCod | null;
+    },
+    blob?: Blob,
+  ): Promise<boolean> {
+    if (!this.partition || this.state.mutating) return false;
+    if (
+      input.projectedStatus !==
+      driverOperationDefinitions.FAILED_DELIVERY.sourceStatus
+    ) {
+      this.setMessage("Actualiza la parada antes de reportar.");
+      return false;
+    }
+    if (
+      !isDriverFailedDeliveryReason(input.reasonCode) ||
+      !driverFailedDeliveryReasonAllowed(input.reasonCode, input.cod !== null)
+    ) {
+      this.setMessage("Elige un motivo de la lista.");
+      return false;
+    }
+    const sameOrder = this.state.operations.filter(
+      (candidate) => candidate.orderId === input.orderId,
+    );
+    if (
+      input.cod?.recorded === true ||
+      sameOrder.some(
+        (candidate) =>
+          candidate.kind === "COD_COLLECTION" &&
+          candidate.status === "AWAITING_REST_CONFIRMATION",
+      )
+    ) {
+      this.setMessage(
+        "El cobro ya está registrado. Llama a despacho: ellos deciden y coordinan la devolución del cobro.",
+      );
+      return false;
+    }
+    if (sameOrder.some((candidate) => candidate.kind === "COD_COLLECTION")) {
+      this.setMessage(
+        "Hay un cobro guardado en el teléfono. Si fue un error, descártalo antes de reportar.",
+      );
+      return false;
+    }
+    if (
+      sameOrder.some(
+        (candidate) =>
+          candidate.kind === "FAILED_DELIVERY" ||
+          candidate.kind === "DELIVERY_PROOF",
+      )
+    ) {
+      return false;
+    }
+
+    this.beginMutation();
+    let operation: DriverOfflineOperation;
+    let proof: ValidatedDriverProof;
+    try {
+      proof = await validateDriverProof(blob);
+      operation = createDriverOfflineOperation({
+        partitionKey: this.partition.key,
+        orderId: input.orderId,
+        kind: "FAILED_DELIVERY",
+        expectedVersion: input.projectedVersion,
+        proof,
+        failedDelivery: { reasonCode: input.reasonCode },
+        now: this.options.now,
+        randomUuid: this.options.randomUuid,
+      });
+      await this.queue.enqueue(this.partition, operation, proof);
+    } catch {
+      this.setState({
+        ...this.state,
+        mutating: false,
+        message:
+          "No fue posible guardar el reporte. Verifica tipo, tamaño y espacio disponible.",
+      });
+      return false;
+    }
+
+    const saved = "Reporte guardado. Se enviará cuando haya conexión.";
+    try {
+      this.telemetry.proofBytesQueued(driverProofSizeBucket(proof.sizeBytes));
+      await this.reload(saved);
+    } catch {
+      this.setState({
+        operations: [...this.state.operations, operation],
+        loading: false,
+        mutating: false,
+        message: saved,
+      });
+    }
+    void this.scheduler?.requestSync(false);
+    return true;
+  }
+
   public async syncNow(): Promise<void> {
     this.expiredKinds = [];
     this.setMessage("Sincronizando acciones pendientes.");
@@ -328,19 +445,31 @@ export class DriverOperationsController {
       (candidate) => candidate.id === operationId,
     );
     this.beginMutation();
-    await this.queue.deleteOperation(this.partition, operationId);
-    if (
-      discarded &&
-      confirmedStatus &&
-      confirmedVersion !== undefined
-    ) {
-      await this.recalculateOrderChain(
-        discarded.orderId,
-        confirmedStatus,
-        confirmedVersion,
-      );
+    // UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: a saved collection may be
+    // discarded while it is still pending, so the sync stops first; a pass
+    // that was already sending it can neither send it again nor write it back.
+    const scheduler = this.scheduler;
+    await scheduler?.pause();
+    try {
+      await this.queue.deleteOperation(this.partition, operationId);
+      if (
+        discarded &&
+        confirmedStatus &&
+        confirmedVersion !== undefined
+      ) {
+        await this.recalculateOrderChain(
+          discarded.orderId,
+          confirmedStatus,
+          confirmedVersion,
+        );
+      }
+    } finally {
+      scheduler?.resume();
     }
     await this.reload("La acción y su evidencia local se descartaron.");
+    // What the discard unblocked (for example a report held for the cash it
+    // had saved) is sent without waiting for the next trigger.
+    void scheduler?.requestSync(false);
   }
 
   public async createNewSession(operationId: string): Promise<void> {
@@ -444,6 +573,9 @@ export class DriverOperationsController {
               sha256: old.sha256,
             }
           : undefined,
+      failedDelivery: old.failedDelivery
+        ? { reasonCode: old.failedDelivery.reasonCode }
+        : undefined,
       now: this.options.now,
       randomUuid: this.options.randomUuid,
     });
@@ -455,11 +587,13 @@ export class DriverOperationsController {
           proofId: old.proofId,
         }
       : replacement;
-    await this.queue.rebuildOperation(
-      this.partition,
-      old.id,
-      replacementWithFinalizedProof,
-    );
+    // UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: a rebuilt report keeps its
+    // incident (and the key that opened it, in case only its answer was lost),
+    // so it never opens a second incident; only the transition is new.
+    const rebuilt = old.failedDelivery
+      ? { ...replacementWithFinalizedProof, failedDelivery: old.failedDelivery }
+      : replacementWithFinalizedProof;
+    await this.queue.rebuildOperation(this.partition, old.id, rebuilt);
     await this.reload("Se creó una acción nueva para la versión confirmada.");
     void this.scheduler?.requestSync(false);
   }

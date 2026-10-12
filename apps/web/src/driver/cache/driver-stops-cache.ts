@@ -11,9 +11,13 @@ export const DriverStopsStoreName = "snapshots";
 /**
  * 1: DRV-001 snapshots. 2: DRV-002 offline queue stores. 3:
  * UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 snapshot schema 2 (stop details)
- * and operation schema 2 (cash collection); see upgradeDriverDatabase.
+ * and operation schema 2 (cash collection). 4:
+ * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 operation schema 3 ("No se pudo
+ * entregar"); see upgradeDriverDatabase. A browser never opens the database
+ * below its current version, so an app built for an older version cannot read
+ * (and therefore cannot misread or drop) an operation it does not know.
  */
-export const DriverDatabaseVersion = 3 as const;
+export const DriverDatabaseVersion = 4 as const;
 /**
  * Schema 2 snapshots carry the stop details (contact name, zone, window, cash
  * to collect and navigation target, or that they are unavailable) and the
@@ -225,9 +229,10 @@ export function openDriverDatabase(): Promise<IDBDatabase> {
  * change transaction, so it either completes or leaves the old version intact:
  * - creates any missing store (DRV-001 snapshots, DRV-002 queue stores);
  * - from version 1 or 2, drops the schema 1 snapshots: they carry no stop
- *   details and the next successful REST response replaces them;
- * - from version 2, rewrites every queued schema 1 operation as schema 2 in
- *   place, so no queued action, proof blob or lease is lost.
+ *   details and the next successful REST response replaces them (the schema 2
+ *   snapshots of version 3 are kept);
+ * - from version 2 or 3, rewrites every queued schema 1 or 2 operation as
+ *   schema 3 in place, so no queued action, proof blob or lease is lost.
  */
 export function upgradeDriverDatabase(
   database: IDBDatabase,
@@ -238,7 +243,7 @@ export function upgradeDriverDatabase(
   if (oldVersion >= 1 && oldVersion < 3) {
     transaction.objectStore(DriverStopsStoreName).clear();
   }
-  if (oldVersion === 2) {
+  if (oldVersion === 2 || oldVersion === 3) {
     const cursorRequest = transaction
       .objectStore(DriverOfflineOperationsStoreName)
       .openCursor();

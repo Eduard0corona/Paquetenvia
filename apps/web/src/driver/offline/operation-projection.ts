@@ -18,6 +18,14 @@ export type DriverCodCollectionState =
   | "attention"
   | "recorded";
 
+/**
+ * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: whether the stop has a
+ * "No se pudo entregar" report on the phone, waiting to sync ("queued") or
+ * held for the driver's attention. A report that REST confirmed has left the
+ * queue; the stop then reads FAILED_ATTEMPT from the server.
+ */
+export type DriverFailedReportState = "none" | "queued" | "attention";
+
 export interface ProjectedDriverStop
   extends Omit<DriverStop, "status" | "aggregate_version"> {
   readonly confirmedStatus: DriverStop["status"];
@@ -34,6 +42,8 @@ export interface ProjectedDriverStop
    * offered again.
    */
   readonly deliveryAwaitingCash: boolean;
+  /** The "No se pudo entregar" report saved on the phone, if any. */
+  readonly failedReport: DriverFailedReportState;
 }
 
 export interface DriverOperationProjection {
@@ -85,13 +95,21 @@ const driverOperationalStatusOrder: readonly DriverOperationalStatus[] = [
  * the order they were saved: each step before the next one (check-in, pickup,
  * transit, start of the delivery) and, at the door, the cash collection before
  * the delivery, even when the collection was saved again after a discard.
+ *
+ * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: a "No se pudo entregar" report
+ * is the first action at the door. The screen never saves it next to a
+ * collection or a delivery of the same order, so this only matters when both
+ * reach the queue anyway (for example from a second tab): nothing else of the
+ * order runs while the report is pending, held or backing off, and the
+ * scheduler holds the report itself while a collection exists, so the cash and
+ * the report are never both sent.
  */
 function dependencyRank(operation: DriverOfflineOperation): number {
   const definition = driverOperationDefinitions[operation.kind];
-  return (
-    driverOperationalStatusOrder.indexOf(definition.sourceStatus) * 2 +
-    (definition.transition ? 1 : 0)
-  );
+  const step =
+    driverOperationalStatusOrder.indexOf(definition.sourceStatus) * 3;
+  if (operation.kind === "FAILED_DELIVERY") return step;
+  return step + (definition.transition ? 2 : 1);
 }
 
 /**
@@ -180,6 +198,7 @@ export function projectDriverOperations(
     let attentionCount = 0;
     let deliveryAwaitingCash = false;
     let codOperationStatus: DriverOperationStatus | null = null;
+    let failedReport: DriverFailedReportState = "none";
     for (const operation of operationsByOrder.get(stop.order_id) ?? []) {
       let derivedStatus: DriverOperationStatus = operation.status;
       if (chainBlocked) {
@@ -213,6 +232,12 @@ export function projectDriverOperations(
       pendingCount += 1;
       if (derivedStatus === "NEEDS_ATTENTION") attentionCount += 1;
       if (operation.kind === "COD_COLLECTION") codOperationStatus = derivedStatus;
+      if (operation.kind === "FAILED_DELIVERY") {
+        failedReport =
+          derivedStatus === "NEEDS_ATTENTION" || derivedStatus === "BLOCKED"
+            ? "attention"
+            : "queued";
+      }
     }
 
     const {
@@ -230,6 +255,7 @@ export function projectDriverOperations(
       attentionCount,
       codCollection: codCollectionState(stop, codOperationStatus),
       deliveryAwaitingCash,
+      failedReport,
     });
   });
 
@@ -284,6 +310,10 @@ export function nextDriverOperationKind(
     case "DELIVERING":
       return "DELIVERY_PROOF";
     case "DELIVERED":
+      return null;
+    // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: after a failed attempt
+    // the driver has no next action; dispatch decides.
+    case "FAILED_ATTEMPT":
       return null;
   }
 }
