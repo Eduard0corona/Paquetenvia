@@ -58,8 +58,11 @@ public sealed class DispatchArchitectureTests
         Assert.DoesNotContain("Orders.Infrastructure", references);
         Assert.DoesNotContain("Drivers.Infrastructure", references);
         Assert.DoesNotContain("Locations.Infrastructure", references);
-        // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the stop details are read through the Locations port only.
-        Assert.Contains("Locations.Application", references);
+        // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the stop details are read through the shared port
+        // Paqueteria.Application.Locations.ILocationPiiReader; a reference to the Locations module would bring its
+        // geometry package into the Dispatch package graph, a dependency change REL-000 does not admit.
+        Assert.DoesNotContain("Locations.Application", references);
+        Assert.DoesNotContain("Locations.Domain", references);
         Assert.Contains("Orders.Domain", references);
         Assert.Contains("Orders.Application", references);
         Assert.Contains("Drivers.Application", references);

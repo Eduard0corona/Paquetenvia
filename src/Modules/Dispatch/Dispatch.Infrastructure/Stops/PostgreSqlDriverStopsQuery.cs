@@ -2,13 +2,13 @@ using System.Diagnostics.Metrics;
 using Dispatch.Application.Stops;
 using Dispatch.Domain;
 using Dispatch.Infrastructure.Persistence;
-using Locations.Application.Locations;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
 using Paqueteria.Application;
+using Paqueteria.Application.Locations;
 using Paqueteria.Application.Tenancy;
 using Paqueteria.Infrastructure.Tenancy;
 

@@ -15,11 +15,12 @@
   `details_available`, `contact_short_name`, `contact_full_name`, `zone_name`, `service_window`, `cod` (`expected` y
   `recorded`) y `navigation` (latitud, longitud, dirección y referencias), solo para las asignaciones ACCEPTED o ACTIVE
   del repartidor que consulta. El servidor descifra la dirección y el contacto con el sobre ADP-001, en un lote, después
-  de cerrar la transacción del tenant y a través del puerto `ILocationPiiReader` de Locations, con el mismo modo de
-  `Locations:PiiProtector`. Si los datos de una parada no se pueden leer, la parada llega con `details_available` en
-  false y sin nombre ni navegación; la respuesta nunca falla ni es parcial por eso. `details=false` devuelve las mismas
-  paradas sin leer ningún dato protegido (otro valor, otro parámetro o uno repetido: 409 INVALID_REQUEST). Toda
-  respuesta lleva Cache-Control no-store.
+  de cerrar la transacción del tenant y a través del puerto compartido `ILocationPiiReader` (Paqueteria.Application),
+  que Locations implementa con su mismo modo de `Locations:PiiProtector`; Dispatch no referencia el módulo Locations.
+  Si los datos de una parada no se pueden leer, la parada llega con `details_available` en false y sin nombre ni
+  navegación; la respuesta nunca falla ni es parcial por eso. `details=false` devuelve las mismas paradas sin leer
+  ningún dato protegido (otro valor, otro parámetro o uno repetido: 409 INVALID_REQUEST). Toda respuesta lleva
+  Cache-Control no-store.
   Contacto: en recolección y devolución, el nombre completo (`contact_full_name`); en entrega, solo el nombre corto
   (`contact_short_name`: inicial de la primera palabra, punto y última palabra, "M. Pérez"). Los caracteres de formato
   cuentan como espacio, un texto vacío es null y `zone_name` se recorta a 200 caracteres. `cod.recorded` es la misma

@@ -43,7 +43,11 @@ encabezado). Las preguntas completas están en la fila de `decision-log.md`, que
   nombres o zonas patológicos (una inicial que por sí sola no cabe se omite).
 - Todo se lee en la transacción del tenant del repartidor, con FORCE RLS (`set_config(..., true)` después de `BEGIN`).
   El descifrado ocurre después de cerrar la transacción, en un solo lote y solo si se pidieron los datos, por el puerto
-  `ILocationPiiReader` de `Locations.Application`, con el mismo modo de `Locations:PiiProtector` que usa Locations:
+  compartido `ILocationPiiReader` (`Paqueteria.Application.Locations`), que el módulo Locations registra con el mismo
+  modo de `Locations:PiiProtector` que usa para proteger. El puerto vive en la capa compartida (como los contratos de
+  VOICE-001) porque una referencia de Dispatch a `Locations.Application` metería el paquete de geometría de Locations
+  (NetTopologySuite) en el grafo de paquetes de `Dispatch.Infrastructure`, un cambio de dependencias que REL-000 no
+  admite (`UNAUTHORIZED_DEPENDENCY_FILE_CHANGED`):
   - `AzureKeyVault` (piloto): sobre ADP-001 ligado a la organización dueña, la fila, la columna y la versión de llave
     (`EnvelopeLocationPiiReader`, hasta 8 valores a la vez; si el servicio de llaves no responde, deja de intentar el
     resto del lote).

@@ -6,7 +6,6 @@
     <ProjectReference Include="../Dispatch.Application/Dispatch.Application.csproj" />
     <ProjectReference Include="../Dispatch.Domain/Dispatch.Domain.csproj" />
     <ProjectReference Include="../../Drivers/Drivers.Application/Drivers.Application.csproj" />
-    <ProjectReference Include="../../Locations/Locations.Application/Locations.Application.csproj" />
     <ProjectReference Include="../../Orders/Orders.Application/Orders.Application.csproj" />
     <ProjectReference Include="../../Orders/Orders.Domain/Orders.Domain.csproj" />
     <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Infrastructure/Paqueteria.Infrastructure.csproj" />

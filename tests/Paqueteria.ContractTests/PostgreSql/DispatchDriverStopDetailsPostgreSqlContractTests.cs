@@ -12,6 +12,7 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using Paqueteria.Application.Auditing;
+using Paqueteria.Application.Locations;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
 using Paqueteria.Infrastructure.Auditing;
 using Paqueteria.Infrastructure.Security.Pii;

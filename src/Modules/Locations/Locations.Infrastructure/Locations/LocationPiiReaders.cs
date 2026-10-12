@@ -1,5 +1,6 @@
 using Locations.Application.Locations;
 using Locations.Infrastructure.Geocoding;
+using Paqueteria.Application.Locations;
 using Paqueteria.Infrastructure.Security.Pii;
 
 namespace Locations.Infrastructure.Locations;
