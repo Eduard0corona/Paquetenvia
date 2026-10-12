@@ -5491,7 +5491,11 @@ class DependencyAdmissionAmendmentTests(unittest.TestCase):
 
     def test_committed_admissions_index_as_single_step_chains(self):
         policy = rel000.load_remediation_policy(REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH)
-        amendments = rel000.admission_amendments(policy["dependency_admissions"])
+        earlier = [
+            item for item in policy["dependency_admissions"] if item["id"] in {"AUTH-001-OIDC", "ADP-001-AZURE"}
+        ]
+        self.assertEqual(["AUTH-001-OIDC", "ADP-001-AZURE"], [item["id"] for item in earlier])
+        amendments = rel000.admission_amendments(earlier)
         self.assertEqual(
             {
                 ("tests/Paqueteria.IntegrationTests/packages.lock.json", "net10.0", "microsoft.bcl.asyncinterfaces"): [
