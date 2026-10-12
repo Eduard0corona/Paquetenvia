@@ -16,10 +16,6 @@ import {
   selectSessionInstallation,
   type SessionHost,
 } from "./bff-session-installation";
-import {
-  driverReportRole,
-  type DriverReportRole,
-} from "../driver/session/driver-session";
 
 const csrf = "C".repeat(43);
 const namespace = "N".repeat(32);
@@ -195,10 +191,9 @@ describe("BFF session", () => {
 });
 
 describe("BFF session installation", () => {
-  // As the API answers: one context per organization, with every role of the person there in `roles`.
   const contexts = [
-    { organization_id: organizationA, display_name: "A", role: "DRIVER", is_default: false, roles: ["DRIVER"] },
-    { organization_id: organizationB, display_name: "B", role: "DISPATCHER", is_default: true, roles: ["DISPATCHER"] },
+    { organization_id: organizationA, display_name: "A", role: "DRIVER", is_default: false },
+    { organization_id: organizationB, display_name: "B", role: "DISPATCHER", is_default: true },
   ];
 
   it("prefers an explicit organization, then the default membership", () => {
@@ -213,8 +208,6 @@ describe("BFF session installation", () => {
       organizationId: organizationA,
       displayName: "A",
       landingPath: "/driver/stops",
-      // Only the roles of the selected organization: DISPATCHER in another one does not count.
-      organizationRoles: ["DRIVER"],
     });
     expect(selectSessionInstallation([])).toEqual({ kind: "none" });
   });
@@ -222,7 +215,7 @@ describe("BFF session installation", () => {
   it("lands DISPATCHER and PLATFORM_ADMIN on the work inbox, FINANCE on COD, DRIVER on stops and the rest on the dashboard", () => {
     expect(
       selectSessionInstallation([
-        { organization_id: organizationA, display_name: "A", role: "FINANCE", is_default: true, roles: ["FINANCE"] },
+        { organization_id: organizationA, display_name: "A", role: "FINANCE", is_default: true },
       ]),
     ).toEqual({
       kind: "operations",
@@ -266,73 +259,10 @@ describe("BFF session installation", () => {
     const result = await bootstrapBffSession(target, fetcher as unknown as typeof fetch);
     expect(result.installation.kind).toBe("driver");
     expect(target.__paquetenviaDriverSession?.cacheNamespace).toBe(namespace);
-    expect(target.__paquetenviaDriverSession?.organizationRoles).toEqual(["DRIVER"]);
     for (const call of fetcher.mock.calls as unknown as [string, RequestInit][]) {
       expect(call[0].startsWith("/")).toBe(true);
       expect(call[1].credentials).toBe("include");
     }
-  });
-
-  it.each<[readonly string[], DriverReportRole]>([
-    [["DISPATCHER", "DRIVER"], "dispatch"],
-    [["DRIVER", "PLATFORM_ADMIN"], "dispatch"],
-    [["DRIVER", "VIEWER"], "driver"],
-    [["DRIVER"], "driver"],
-  ])(
-    "keeps the roles %j of the one context the API answers for the organization, in memory only (ORG-CONTEXT-ROLES-2026-10-12)",
-    async (roles, reportRole) => {
-      // The real answer: one context per organization. DISPATCHER in another organization does not count.
-      const answer = [
-        { organization_id: organizationA, display_name: "A", role: "DRIVER", is_default: true, roles },
-        { organization_id: organizationB, display_name: "B", role: "DISPATCHER", is_default: false, roles: ["DISPATCHER"] },
-      ];
-      const target = host();
-      const fetcher = vi.fn(async (input: RequestInfo | URL) =>
-        String(input) === "/auth/session"
-          ? jsonResponse(200, sessionBody())
-          : jsonResponse(200, answer),
-      );
-      const result = await bootstrapBffSession(target, fetcher as unknown as typeof fetch);
-      expect(result.installation).toMatchObject({ kind: "driver", organizationId: organizationA });
-      const session = target.__paquetenviaDriverSession;
-      expect(session?.organizationRoles).toEqual(roles);
-      expect(session && driverReportRole(session)).toBe(reportRole);
-    },
-  );
-
-  it("still signs in with an answer without roles (an older API); the driver's roles are then unknown", async () => {
-    const older = [
-      { organization_id: organizationA, display_name: "A", role: "DRIVER", is_default: true },
-      { organization_id: organizationB, display_name: "B", role: "DISPATCHER", is_default: false },
-    ];
-    const target = host();
-    const fetcher = vi.fn(async (input: RequestInfo | URL) =>
-      String(input) === "/auth/session" ? jsonResponse(200, sessionBody()) : jsonResponse(200, older),
-    );
-    const result = await bootstrapBffSession(target, fetcher as unknown as typeof fetch);
-    expect(result.installation).toMatchObject({ kind: "driver", organizationRoles: null });
-    const session = target.__paquetenviaDriverSession;
-    expect(session?.organizationRoles).toBeNull();
-    // "No se pudo entregar" fails closed; everything else of the driver app works as before.
-    expect(session && driverReportRole(session)).toBe("unknown");
-
-    const operations = host();
-    await bootstrapBffSession(operations, fetcher as unknown as typeof fetch, organizationB);
-    expect(operations.__paquetenviaOperationsSession?.organizationId).toBe(organizationB);
-  });
-
-  it("refuses an answer whose roles break the contract, like any other member", async () => {
-    const target = host();
-    const fetcher = vi.fn(async (input: RequestInfo | URL) =>
-      String(input) === "/auth/session"
-        ? jsonResponse(200, sessionBody())
-        : jsonResponse(200, [
-            { organization_id: organizationA, display_name: "A", role: "DRIVER", is_default: true, roles: ["DISPATCHER"] },
-          ]),
-    );
-    const result = await bootstrapBffSession(target, fetcher as unknown as typeof fetch);
-    expect(result.installation).toEqual({ kind: "none" });
-    expect(target.__paquetenviaDriverSession).toBeUndefined();
   });
 
   it("clears sessions for unauthorized identities and never lists organizations", async () => {

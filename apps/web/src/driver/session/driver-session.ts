@@ -7,46 +7,7 @@ import { asUuid } from "../../realtime/envelope";
 export type DriverSession = SessionCredentials & {
   readonly organizationId: string;
   readonly cacheNamespace: string;
-  /**
-   * ORG-CONTEXT-ROLES-2026-10-12: every role the person holds in this
-   * organization, copied at sign-in from the `roles` of the selected context
-   * of GET /me/organization-contexts and kept in memory only. Null or absent
-   * means unknown (an API answer without `roles`, or a session installed
-   * without them); see {@link driverReportRole}.
-   */
-  readonly organizationRoles?: readonly string[] | null;
 };
-
-/**
- * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 with ORG-CONTEXT-ROLES-2026-10-12:
- * who files "No se pudo entregar" for this session.
- *
- * - `driver`: the roles are known, include DRIVER and neither DISPATCHER nor
- *   PLATFORM_ADMIN; the report is offered.
- * - `dispatch`: they include DISPATCHER or PLATFORM_ADMIN. The server treats a
- *   report from the phone as dispatch's and refuses the short one, so the stop
- *   says to register the attempt in Despacho (owner answer "Registrar desde
- *   Despacho (Recommended)").
- * - `unknown`: the roles are missing or malformed. The report is not offered
- *   (fails closed) and the stop says why; nothing else of the app changes.
- */
-export type DriverReportRole = "driver" | "dispatch" | "unknown";
-
-export function driverReportRole(
-  session: Pick<DriverSession, "organizationRoles">,
-): DriverReportRole {
-  const roles: unknown = session.organizationRoles;
-  if (
-    !Array.isArray(roles) ||
-    !roles.every((role) => typeof role === "string") ||
-    !roles.includes("DRIVER")
-  ) {
-    return "unknown";
-  }
-  return roles.includes("DISPATCHER") || roles.includes("PLATFORM_ADMIN")
-    ? "dispatch"
-    : "driver";
-}
 
 declare global {
   interface Window {

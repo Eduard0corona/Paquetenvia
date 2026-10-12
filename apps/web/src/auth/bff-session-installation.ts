@@ -10,23 +10,11 @@ import type { SessionAccount } from "./session-account";
 
 export type BffSessionInstallation =
   | {
-      readonly kind: "operations";
+      readonly kind: "operations" | "driver";
       readonly organizationId: string;
       readonly displayName: string;
       /** Where "Continuar" sends the person after login; see {@link landingPathForRole}. */
       readonly landingPath: string;
-    }
-  | {
-      readonly kind: "driver";
-      readonly organizationId: string;
-      readonly displayName: string;
-      readonly landingPath: string;
-      /**
-       * ORG-CONTEXT-ROLES-2026-10-12: the selected context's `roles`, every role of
-       * the person in this organization; null when the answer did not carry them
-       * (see DriverSession.organizationRoles and driverReportRole).
-       */
-      readonly organizationRoles: readonly string[] | null;
     }
   | { readonly kind: "none" };
 
@@ -66,15 +54,12 @@ export function selectSessionInstallation(
   if (selected === undefined) {
     return { kind: "none" };
   }
-  const base = {
+  return {
+    kind: selected.role === "DRIVER" ? "driver" : "operations",
     organizationId: selected.organization_id,
     displayName: selected.display_name,
     landingPath: landingPathForRole(selected.role),
   };
-  if (selected.role !== "DRIVER") return { kind: "operations", ...base };
-  // The API answers one context per organization; the person's other roles
-  // there come only in its `roles` (ORG-CONTEXT-ROLES-2026-10-12).
-  return { kind: "driver", ...base, organizationRoles: selected.roles };
 }
 
 export interface InstallOptions {
@@ -109,7 +94,6 @@ export function installBffSession(
       organizationId: installation.organizationId,
       cacheNamespace: sessionNamespace,
       ...credentials,
-      organizationRoles: installation.organizationRoles,
     };
     host.dispatchEvent(new Event(driverSessionChangedEvent));
     return;

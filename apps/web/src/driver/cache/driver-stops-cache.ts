@@ -13,9 +13,10 @@ export const DriverStopsStoreName = "snapshots";
  * UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 snapshot schema 2 (stop details)
  * and operation schema 2 (cash collection). 4:
  * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 operation schema 3 ("No se pudo
- * entregar"); see upgradeDriverDatabase. A browser never opens the database
- * below its current version, so an app built for an older version cannot read
- * (and therefore cannot misread or drop) an operation it does not know.
+ * entregar") and the organization roles store (ORG-MY-ROLES-2026-10-12); see
+ * upgradeDriverDatabase. A browser never opens the database below its current
+ * version, so an app built for an older version cannot read (and therefore
+ * cannot misread or drop) an operation it does not know.
  */
 export const DriverDatabaseVersion = 4 as const;
 /**
@@ -30,6 +31,13 @@ export const DriverStopsSchemaVersion = DriverStopsSnapshotSchemaVersion;
 export const DriverOfflineOperationsStoreName = "operations";
 export const DriverProofBlobsStoreName = "proof_blobs";
 export const DriverSyncLeasesStoreName = "sync_leases";
+/**
+ * ORG-MY-ROLES-2026-10-12: the last successful answer of getMyOrganizationRoles
+ * of each partition (role codes only), so "No se pudo entregar" keeps working
+ * offline; see IndexedDbDriverOrganizationRolesCache. It leaves the phone with
+ * its partition (401 or 403) and on logout, like the stop snapshots.
+ */
+export const DriverOrganizationRolesStoreName = "organization_roles";
 
 export interface DriverCachePartition {
   readonly key: string;
@@ -135,16 +143,31 @@ export class IndexedDbDriverStopsCache implements DriverStopsCache {
     }
   }
 
+  /** 401 or 403: the partition's snapshot and its saved organization roles (ORG-MY-ROLES-2026-10-12) leave together. */
   public async clearPartition(partition: DriverCachePartition): Promise<void> {
     const database = await openDriverDatabase();
     try {
-      const transaction = database.transaction(DriverStopsStoreName, "readwrite");
-      transaction.objectStore(DriverStopsStoreName).delete(partition.key);
+      const stores = partitionCacheStores(database);
+      const transaction = database.transaction(stores, "readwrite");
+      for (const store of stores) {
+        transaction.objectStore(store).delete(partition.key);
+      }
       await driverDatabaseTransactionCompleted(transaction);
     } finally {
       database.close();
     }
   }
+}
+
+/**
+ * The stores keyed by partition that only cache what the server answered: the
+ * stop snapshots and, when the database has it (it does since version 4), the
+ * organization roles.
+ */
+function partitionCacheStores(database: IDBDatabase): string[] {
+  return database.objectStoreNames.contains(DriverOrganizationRolesStoreName)
+    ? [DriverStopsStoreName, DriverOrganizationRolesStoreName]
+    : [DriverStopsStoreName];
 }
 
 /**
@@ -206,14 +229,18 @@ function isUtcTimestamp(value: string): boolean {
 /**
  * UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 retention ("Se borra del teléfono
  * ... al cerrar sesión"): removes every saved stop snapshot, of every
- * partition, before signing out. Snapshots are only a cache that the next
- * successful REST response rebuilds; the offline queue is left as it is.
+ * partition, before signing out, and with them every saved answer of
+ * getMyOrganizationRoles (ORG-MY-ROLES-2026-10-12). Both are only a cache that
+ * the next successful response rebuilds; the offline queue is left as it is.
  */
 export async function forgetDriverStopDetails(): Promise<void> {
   const database = await openDriverDatabase();
   try {
-    const transaction = database.transaction(DriverStopsStoreName, "readwrite");
-    transaction.objectStore(DriverStopsStoreName).clear();
+    const stores = partitionCacheStores(database);
+    const transaction = database.transaction(stores, "readwrite");
+    for (const store of stores) {
+      transaction.objectStore(store).clear();
+    }
     await driverDatabaseTransactionCompleted(transaction);
   } finally {
     database.close();
@@ -263,7 +290,8 @@ export function openDriverDatabase(): Promise<IDBDatabase> {
 /**
  * Brings the database to {@link DriverDatabaseVersion} inside the version
  * change transaction, so it either completes or leaves the old version intact:
- * - creates any missing store (DRV-001 snapshots, DRV-002 queue stores);
+ * - creates any missing store (DRV-001 snapshots, DRV-002 queue stores, the
+ *   ORG-MY-ROLES-2026-10-12 organization roles);
  * - from version 1 or 2, drops the schema 1 snapshots: they carry no stop
  *   details and the next successful REST response replaces them (the schema 2
  *   snapshots of version 3 are kept);
@@ -331,6 +359,11 @@ function createMissingStores(database: IDBDatabase): void {
   }
   if (!database.objectStoreNames.contains(DriverSyncLeasesStoreName)) {
     database.createObjectStore(DriverSyncLeasesStoreName, {
+      keyPath: "partitionKey",
+    });
+  }
+  if (!database.objectStoreNames.contains(DriverOrganizationRolesStoreName)) {
+    database.createObjectStore(DriverOrganizationRolesStoreName, {
       keyPath: "partitionKey",
     });
   }

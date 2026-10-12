@@ -1,5 +1,5 @@
 import type { DriverStop } from "../contracts/driver-stop";
-import type { DriverReportRole } from "../session/driver-session";
+import type { DriverReportRole } from "../contracts/organization-roles";
 import type { DriverOfflineOperation } from "./operation-contract";
 import type { ProjectedDriverStop } from "./operation-projection";
 import {
@@ -27,14 +27,15 @@ import {
  * - `dispatch-decides`: REST confirms FAILED_ATTEMPT ("Intento fallido · El
  *   despacho decide").
  * - `dispatch-role`: the report would be offered, but the person also holds
- *   DISPATCHER or PLATFORM_ADMIN in this organization (the `roles` of its
- *   organization context, ORG-CONTEXT-ROLES-2026-10-12), so the server treats
- *   a report from the phone as dispatch's and refuses the short one (owner
- *   answer "Registrar desde Despacho (Recommended)", 2026-10-12): the stop
- *   says to register the attempt from the order in Despacho.
- * - `role-unknown`: the report would be offered, but the session does not
- *   know the person's roles in this organization (an answer without `roles`):
- *   it is not offered (fails closed) and the stop says why.
+ *   DISPATCHER or PLATFORM_ADMIN in this organization (getMyOrganizationRoles,
+ *   ORG-MY-ROLES-2026-10-12), so the server treats a report from the phone as
+ *   dispatch's and refuses the short one (owner answer "Registrar desde
+ *   Despacho (Recommended)", 2026-10-12): the stop says to register the
+ *   attempt from the order in Despacho.
+ * - `role-unknown`: the report would be offered, but no answer of
+ *   getMyOrganizationRoles is known for the session (never answered, or an
+ *   older API without it): it is not offered (fails closed) and the stop says
+ *   why.
  * - `hidden`: anything else (not a delivery, not at the door, another action
  *   of the stop needs attention first, or a delivery is already saved).
  */
@@ -60,7 +61,8 @@ export type DriverFailedDeliveryAvailability =
 /**
  * `operations` are the projected operations of the stop's order (the queue as
  * the projection shows it, with derived statuses). `reportRole` is
- * driverReportRole of the session: only `driver` is ever offered the report.
+ * driverReportRole of the person's roles: only `driver` is ever offered the
+ * report.
  */
 export function driverFailedDeliveryAvailability(
   stop: ProjectedDriverStop,
@@ -140,18 +142,18 @@ const roleUnknown: DriverFailedDeliveryAvailability = Object.freeze({
 /**
  * Owner answer "Registrar desde Despacho (Recommended)" (2026-10-12): shown in
  * place of "No se pudo entregar" to a person who is also dispatch in the
- * organization, known from the `roles` of its organization context
- * (ORG-CONTEXT-ROLES-2026-10-12). The server keeps treating that person's
- * report as dispatch's, so the phone never offers it and uploads no photo.
+ * organization, known from getMyOrganizationRoles (ORG-MY-ROLES-2026-10-12).
+ * The server keeps treating that person's report as dispatch's, so the phone
+ * never offers it and uploads no photo.
  */
 export const driverDispatchRoleReportMessage =
   "También eres despacho en esta organización, así que el intento fallido no se reporta desde el teléfono: " +
   "regístralo desde la orden en Despacho, donde eliges el motivo y el siguiente paso.";
 
 /**
- * ORG-CONTEXT-ROLES-2026-10-12: shown in place of "No se pudo entregar" when
- * the session does not know the person's roles in this organization (the
- * report fails closed). Signing in again reads them again.
+ * ORG-MY-ROLES-2026-10-12: shown in place of "No se pudo entregar" when no
+ * answer of getMyOrganizationRoles is known for the session (the report fails
+ * closed). Opening the app again with a connection reads them again.
  */
 export const driverRoleUnknownReportMessage =
   "No se pudo confirmar tu rol en esta organización, así que el intento fallido no se reporta desde el teléfono. " +

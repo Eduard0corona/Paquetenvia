@@ -6,6 +6,7 @@ import {
 import {
   DriverDatabaseVersion,
   DriverOfflineOperationsStoreName,
+  DriverOrganizationRolesStoreName,
   DriverProofBlobsStoreName,
   DriverStopsDatabaseName,
   DriverStopsStoreName,
@@ -26,16 +27,18 @@ import {
 const partitionKey = "H".repeat(43);
 
 describe("driver database version 4 upgrade", () => {
-  it("creates every store on a fresh install", async () => {
+  it("creates every store on a fresh install, the organization roles included (ORG-MY-ROLES-2026-10-12)", async () => {
     const database = new FakeDatabase();
     upgradeDriverDatabase(database.asDatabase(), database.asTransaction(), 0);
     await settle();
     expect(database.storeNames()).toEqual([
       DriverOfflineOperationsStoreName,
+      DriverOrganizationRolesStoreName,
       DriverProofBlobsStoreName,
       DriverStopsStoreName,
       DriverSyncLeasesStoreName,
     ].sort());
+    expect(DriverOrganizationRolesStoreName).toBe("organization_roles");
   });
 
   it("drops DRV-001 snapshots from version 1, which carry no stop details", async () => {
@@ -44,7 +47,7 @@ describe("driver database version 4 upgrade", () => {
     upgradeDriverDatabase(database.asDatabase(), database.asTransaction(), 1);
     await settle();
     expect(database.records(DriverStopsStoreName)).toEqual([]);
-    expect(database.storeNames()).toHaveLength(4);
+    expect(database.storeNames()).toHaveLength(5);
   });
 
   it("keeps every queued operation, blob and lease from version 2 as schema 3", async () => {
@@ -154,18 +157,20 @@ describe("Cerrar sesión wipes the saved stop details", () => {
     Object.defineProperty(globalThis, "indexedDB", { value: original, configurable: true });
   });
 
-  it("clears every snapshot and nothing else", async () => {
+  it("clears every snapshot and every saved roles answer (ORG-MY-ROLES-2026-10-12), and nothing else", async () => {
     const database = new FakeDatabase();
     for (const name of [
       DriverStopsStoreName,
       DriverOfflineOperationsStoreName,
       DriverProofBlobsStoreName,
       DriverSyncLeasesStoreName,
+      DriverOrganizationRolesStoreName,
     ]) {
       database.createObjectStore(name);
     }
     database.seed(DriverStopsStoreName, "partition-a", { stops: ["a"] });
     database.seed(DriverStopsStoreName, "partition-b", { stops: ["b"] });
+    database.seed(DriverOrganizationRolesStoreName, "partition-a", { roles: ["DRIVER"] });
     database.seed(DriverOfflineOperationsStoreName, "operation", { id: "kept" });
     const opened: [string, number][] = [];
     Object.defineProperty(globalThis, "indexedDB", {
@@ -187,6 +192,7 @@ describe("Cerrar sesión wipes the saved stop details", () => {
 
     expect(opened).toEqual([[DriverStopsDatabaseName, DriverDatabaseVersion]]);
     expect(database.records(DriverStopsStoreName)).toEqual([]);
+    expect(database.records(DriverOrganizationRolesStoreName)).toEqual([]);
     expect(database.records(DriverOfflineOperationsStoreName)).toEqual([{ id: "kept" }]);
     expect(database.closed).toBe(true);
   });

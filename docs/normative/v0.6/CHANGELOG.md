@@ -1,30 +1,46 @@
 # Changelog
 
-## Contextos de organización con todos los roles de la persona (ORG-CONTEXT-ROLES-2026-10-12) — 2026-10-12
+## Roles propios en la organización activa: `GET /me/organization-roles` (ORG-MY-ROLES-2026-10-12) — 2026-10-12
 
-- Pregunta y respuesta literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR
-  del contrato de la API (AI-01 §7): ""Registrar desde Despacho" no se puede cumplir sin tocar el servidor: el API solo
-  dice un rol por empresa, así que la app del repartidor no sabe que esa persona también es despacho. ¿Qué hacemos?" →
-  "Agregar los roles al API (Recommended)" ("Cambio pequeño y aditivo: el contexto de cada empresa trae también la
-  lista de roles de la persona (con ADR). La app no le ofrece el reporte desde el inicio y no se sube ninguna foto.");
-  no elegida: "Aprender tras el primer rechazo".
-- AI-05: `OrganizationContext` (`listOrganizationContexts`) agrega el arreglo obligatorio `roles`: cada rol que la
-  persona tiene en esa organización por una membresía ACTIVE (el mismo enum de roles, sin repetidos, en orden ordinal,
-  nunca vacío y siempre con `role`); `role` e `is_default` no cambian; entrada `ORG-CONTEXT-ROLES` en
-  `x-pilot-contract-deltas`.
-- Servidor: `OrganizationContextResponse.Roles` se calcula con `OrganizationContextRoles.ByOrganization` a partir de
-  las membresías de quien pregunta, dentro de la misma lectura con RLS; nada de otras personas, sin PII, sin
-  migración, tabla, rol, permiso ni flujo nuevo; AI-04, AI-06 y AI-18 sin cambios.
-- Web: el parser de contextos lee `roles` de forma estricta (un `roles` mal formado rechaza toda la respuesta) y
-  acepta una respuesta sin `roles` con `roles: null`, para que el inicio de sesión siga funcionando; la sesión del
-  repartidor guarda en memoria los roles de la organización elegida; con DISPATCHER o PLATFORM_ADMIN la parada dice
-  que se registre desde Despacho, y sin roles conocidos el reporte no se ofrece (falla cerrado) y la parada dice "No se
-  pudo confirmar tu rol en esta organización, así que el intento fallido no se reporta desde el teléfono. Cierra sesión
-  y vuelve a entrar con conexión; si sigue igual, llama a despacho para que lo registre." El portal local de desarrollo
-  lee los roles de la misma respuesta.
-- Orden de despliegue: la web anterior lee los contextos con miembros exactos y rechaza una respuesta con `roles`, así
-  que esta web se despliega antes o junto con esta API. Rollback: revertir la API primero o junto con la web; sin datos
-  ni esquema que deshacer.
+- Preguntas y respuestas literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR
+  del contrato de la API (AI-01 §7). Primera: ""Registrar desde Despacho" no se puede cumplir sin tocar el servidor: el
+  API solo dice un rol por empresa, así que la app del repartidor no sabe que esa persona también es despacho. ¿Qué
+  hacemos?" → "Agregar los roles al API (Recommended)" ("Cambio pequeño y aditivo: el contexto de cada empresa trae
+  también la lista de roles de la persona (con ADR). La app no le ofrece el reporte desde el inicio y no se sube ninguna
+  foto."); no elegida: "Aprender tras el primer rechazo". Segunda, tras revisar esa primera versión (un miembro `roles`
+  en `OrganizationContext`, nunca fusionado ni desplegado): "Agregar "roles" dentro del contexto de cada empresa rompe
+  el inicio de sesión de la web actual (la de hoy rechaza campos que no conoce) si el API se publica antes que la web, y
+  deja fallando las pestañas ya abiertas hasta recargar. ¿Cómo lo hacemos?" → "Endpoint nuevo de roles (Recommended)"
+  ("Los roles salen de una consulta nueva del API (solo los de la persona en su empresa activa). La web actual nunca la
+  llama, así que nada se rompe en ningún orden de despliegue; mismo resultado en la app del repartidor."); no elegida:
+  "Campo en el contexto y orden de despliegue".
+- AI-05: `OrganizationContext` y `listOrganizationContexts` quedan como estaban (cuatro miembros; el parser estricto de
+  la web no cambia). Nueva operación `getMyOrganizationRoles` (`GET /me/organization-roles`, etiqueta Identity, con
+  `X-Organization-Id`) y esquema `MyOrganizationRoles`: el objeto cerrado `{"roles":[...]}` con los roles propios de
+  quien pregunta en la organización elegida (membresía ACTIVE de una organización ACTIVE; el mismo enum de roles, sin
+  repetidos, en orden ordinal, minItems 1); 200, 401, 403 (encabezado ausente, mal formado o ajeno, o sin esa membresía)
+  y 503, como `getMyDriverPhone`; `Cache-Control: no-store`. `x-capability-matrix` agrega `own_membership_operations`
+  (todos los roles miembros, sin MFA: no dice nada más allá de las propias membresías) y `x-pilot-contract-deltas` la
+  entrada `ORG-MY-ROLES`.
+- Servidor: `OrganizationEndpoints` la mapea con `ActiveOrganizationMember` y el contexto tenant (403); la capacidad
+  `getMyOrganizationRoles` se revisa antes de leer; `PostgreSqlMyOrganizationRolesReader` lee solo las membresías
+  propias dentro de una transacción tenant explícita con RLS como `paqueteria_app` y nunca escribe. Nada de otras
+  personas, sin PII, sin migración, tabla, rol, permiso ni flujo atómico nuevo; AI-04, AI-06 y AI-18 sin cambios.
+- PWA del repartidor: pide la consulta al instalar la sesión y en cada sesión nueva (otro inicio de sesión u otra
+  organización); usa al instante la respuesta guardada para la partición y la reemplaza con cada respuesta correcta.
+  La respuesta se guarda en el IndexedDB particionado existente (store `organization_roles` de la versión 4, que
+  ningún teléfono ha abierto todavía, así que no sube de versión): la llave de partición, el esquema y los códigos de
+  rol, nada más. Sale del teléfono con la partición ante 401 o 403 y con todas las instantáneas al cerrar sesión;
+  cualquier otra falla (sin conexión, 5xx, 404 de una API anterior, respuesta fuera de contrato) conserva la guardada.
+  Las reglas no cambian: con DISPATCHER o PLATFORM_ADMIN la parada dice que se registre desde Despacho; DRIVER sin
+  ellos reporta, también sin conexión; sin respuesta conocida el reporte no se ofrece (falla cerrado) con "No se pudo
+  confirmar tu rol en esta organización, así que el intento fallido no se reporta desde el teléfono. Cierra sesión y
+  vuelve a entrar con conexión; si sigue igual, llama a despacho para que lo registre."
+- AI-07 `driver_stop`: `failed_delivery.dispatch_role` y `role_unknown` citan esta consulta; `offline_cache` y
+  `details.retention` agregan la respuesta guardada.
+- Despliegue: no hace falta ningún orden. La web anterior nunca llama la consulta nueva, y esta web con una API anterior
+  (404) solo deja de ofrecer "No se pudo entregar"; el inicio de sesión, las paradas y todo lo demás siguen igual.
+  Rollback: revertir la web o la API, en cualquier orden, sin datos ni esquema que deshacer.
 
 ## Repartidor: "No se pudo entregar" con motivo y foto, también sin conexión (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12) — 2026-10-12
 
@@ -77,12 +93,13 @@
 - Riesgos residuales: la "Foto del lugar" que queda sin incidencia podría contar para DELIVERED (pendiente de servidor
   con ADR); `DriverStop.cod.recorded` es falso con un cobro DISPUTED o REVERSED; un cobro registrado entre la última
   revisión y una petición no se puede impedir desde el teléfono.
-- Segunda revisión: el teléfono sabe que la persona también es despacho por los `roles` de su contexto de organización
-  (ORG-CONTEXT-ROLES-2026-10-12, abajo); sin esos roles el reporte no se ofrece (falla cerrado) y la parada lo explica;
-  un reporte que REST ya confirma ya no impide un reporte nuevo de la misma parada; y una acción que el servidor ya
-  aceptó sigue esperando a REST cuando falla la lectura de confirmación, así que nunca vence como no enviada.
+- Segunda y tercera revisión: el teléfono sabe que la persona también es despacho por su propia consulta de roles
+  (`GET /me/organization-roles`, ORG-MY-ROLES-2026-10-12, arriba), guardada por partición para que funcione sin
+  conexión; sin respuesta conocida el reporte no se ofrece (falla cerrado) y la parada lo explica; un reporte que REST
+  ya confirma ya no impide un reporte nuevo de la misma parada; y una acción que el servidor ya aceptó sigue esperando a
+  REST cuando falla la lectura de confirmación, así que nunca vence como no enviada.
 - Sin cambios en AI-04, AI-06, AI-18, roles, permisos ni migraciones, y sin un flujo atómico nuevo; el cambio de AI-05
-  y del servidor que necesita la respuesta 3 es ORG-CONTEXT-ROLES-2026-10-12.
+  y del servidor que necesita la respuesta 3 es ORG-MY-ROLES-2026-10-12, sin orden de despliegue.
   Rollback: no es un revert simple (la app anterior abre IndexedDB 3 y el teléfono actualizado la rechaza); es una
   versión que deja de ofrecer "No se pudo entregar" con IndexedDB 4, o una con IndexedDB 5 que reescribe la cola al
   esquema 2 y descarta los reportes en cola (ver la nota de desarrollo).

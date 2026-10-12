@@ -136,8 +136,11 @@ describe("\"No se pudo entregar\" on the stop", () => {
     );
     expect(html).not.toContain("<button");
     expect(html).not.toContain("<input");
-    // The role comes from the session's organization roles (the API's `roles`), kept in memory only.
-    expect(experience).toContain("reportRole={driverReportRole(session)}");
+    // ORG-MY-ROLES-2026-10-12: the role comes from getMyOrganizationRoles (DriverRolesController), and the
+    // controller that stores the report checks the same roles.
+    expect(experience).toContain("reportRole={driverReportRole(organizationRoles)}");
+    expect(experience).toContain("organizationRoles: () => rolesController.current.roles,");
+    expect(experience).toContain("void rolesController.start();");
   });
 
   it("says the role could not be confirmed, with no form, when the session does not know the roles", () => {
@@ -306,16 +309,35 @@ describe("AI-07 record", () => {
       "the report and the cash can then both exist on the server",
       '"Después, con ADR (Recommended)"',
       "a pending server follow-up",
-      // Second review: the roles come from the API (ORG-CONTEXT-ROLES-2026-10-12) and unknown roles fail closed.
-      "the roles array of the selected organization context at sign-in",
+      // Second and third reviews: the roles come from their own API read
+      // (ORG-MY-ROLES-2026-10-12), saved per partition, and unknown roles fail closed.
+      "The phone knows it from GET /me/organization-roles (getMyOrganizationRoles",
       '"Agregar los roles al API (Recommended)"',
+      '"Endpoint nuevo de roles (Recommended)"',
+      "GET /me/organization-contexts answers one context and one role per organization and stays unchanged",
       "No photo is uploaded and nothing is stored",
-      "role_unknown: 'ORG-CONTEXT-ROLES-2026-10-12",
+      "role_unknown: 'ORG-MY-ROLES-2026-10-12",
+      "the API is earlier and answers 404",
       "it fails closed",
+      "A failed read keeps the answer already saved; 401 or 403 removes it",
+      "no deploy order is needed between the web and the API",
       "never holds back a new report of the same stop",
     ]) {
       expect(plain, expected).toContain(expected);
     }
+    // ORG-MY-ROLES-2026-10-12: the saved roles answer is part of what the phone keeps, and leaves with the snapshots.
+    const kept = screen
+      .slice(screen.indexOf("    offline_cache:\n"), screen.indexOf("    privacy:\n"))
+      .replace(/\s+/g, " ");
+    expect(kept).toContain(
+      "the last successful answer of GET /me/organization-roles for the session''s partition: the role codes only",
+    );
+    expect(kept).toContain("with every snapshot on logout");
+    expect(screen.replace(/\s+/g, " ")).toContain(
+      "the saved roles answer (ORG-MY-ROLES-2026-10-12) is wiped with the snapshots, on logout and on 401 or 403",
+    );
+    expect(plain).not.toContain("ORG-CONTEXT-ROLES");
+    expect(plain).not.toContain("the roles array of the selected organization context");
     expect(plain).not.toContain("the report and the cash are never both sent");
     const cash = screen.slice(screen.indexOf("    cod_collection:\n"), screen.indexOf("    failed_delivery:\n"));
     expect(cash.replace(/\s+/g, " ")).toContain(

@@ -28,29 +28,33 @@ import {
   driverRoleUnknownReportMessage,
 } from "../offline/failed-delivery-policy";
 import { projectDriverOperations } from "../offline/operation-projection";
-import {
-  driverSessionFromAnswer,
-  organizationContextsAnswer,
-} from "../session/driver-session.fixtures";
+import type { DriverSession } from "../session/driver-session";
 import {
   DriverOperationsController,
   driverDatabaseBlockedMessage,
   driverOperationExpiredMessage,
 } from "./driver-operations-controller";
+import {
+  myOrganizationRolesAnswer,
+  olderApiAnswer,
+  startedRolesController,
+  type RolesAnswer,
+} from "./driver-roles.fixtures";
 
 /**
  * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: "Enviar reporte" queues one
  * report with its photo; the controller refuses it where the stop does not
  * offer it (owner answers "Solo si hay cobro" and "No, llama a despacho"),
  * rebuilds a held report without a second incident, and pauses the sync while
- * it discards. Every session comes from a GET /me/organization-contexts answer
- * shaped like the API's (ORG-CONTEXT-ROLES-2026-10-12).
+ * it discards. The person's roles always come from an answer of
+ * getMyOrganizationRoles shaped like the API's, through the real client and
+ * DriverRolesController (ORG-MY-ROLES-2026-10-12).
  */
-const organizationId = "44444444-4444-4444-8444-444444444444";
-const cacheNamespace = "opaque-failed-delivery-controller";
-const sessionFor = (roles: readonly string[] | null) =>
-  driverSessionFromAnswer(organizationContextsAnswer(organizationId, roles), cacheNamespace);
-const session = sessionFor(["DRIVER"]);
+const session: DriverSession = {
+  organizationId: "44444444-4444-4444-8444-444444444444",
+  cacheNamespace: "opaque-failed-delivery-controller",
+  getAccessToken: () => "memory-only",
+};
 const newId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const cashPending: DriverStopCod = {
   expected: { currency: "MXN", amount_cents: amountCents },
@@ -63,8 +67,9 @@ function placePhoto(type = "image/png", size = 3): Blob {
 
 async function harness(
   initial: readonly DriverOfflineOperation[] = [],
-  options: { readonly roles?: readonly string[] | null } = {},
+  options: { readonly roles?: RolesAnswer } = {},
 ) {
+  const roles = await startedRolesController(session, options.roles ?? myOrganizationRolesAnswer("DRIVER"));
   const key = (await createDriverCachePartition(session)).key;
   const queue = new MemoryQueue(initial.map((operation) => ({ ...operation, partitionKey: key })));
   const scheduler = {
@@ -75,11 +80,12 @@ async function harness(
     resume: vi.fn(),
   };
   const controller = new DriverOperationsController({
-    session: options.roles === undefined ? session : sessionFor(options.roles),
+    session,
     queue,
     api: {} as DriverSyncApi,
     refreshStops: async () => stopList([]),
     onAccessRevoked: vi.fn(),
+    organizationRoles: () => roles.current.roles,
     schedulerFactory: () => scheduler as unknown as DriverSyncScheduler,
     now: () => new Date("2026-10-12T18:45:00.000Z"),
     randomUuid: () => newId,
@@ -196,9 +202,9 @@ describe("Enviar reporte", () => {
   });
 
   it.each([[["DISPATCHER", "DRIVER"]], [["DRIVER", "PLATFORM_ADMIN"]]])(
-    "refuses a report from a person whose organization context also lists %j (owner answer \"Registrar desde Despacho\")",
+    "refuses a report from a person whose roles answer also lists %j (owner answer \"Registrar desde Despacho\")",
     async (roles) => {
-      const { controller, queue } = await harness([], { roles });
+      const { controller, queue } = await harness([], { roles: myOrganizationRolesAnswer(...roles) });
       await expect(controller.enqueueFailedDelivery(report(), placePhoto())).resolves.toEqual(
         refused(driverDispatchRoleReportMessage),
       );
@@ -207,8 +213,12 @@ describe("Enviar reporte", () => {
     },
   );
 
-  it("refuses a report when the organization context carries no roles (it fails closed)", async () => {
-    const { controller, queue } = await harness([], { roles: null });
+  it.each<[string, RolesAnswer]>([
+    ["an older API without the operation (404)", olderApiAnswer],
+    ["an answer that breaks the contract", { status: 200, body: JSON.stringify({ roles: [] }) }],
+    ["an unavailable API", { status: 503, body: "{}" }],
+  ])("refuses a report when the roles are unknown after %s (it fails closed)", async (_name, roles) => {
+    const { controller, queue } = await harness([], { roles });
     await expect(controller.enqueueFailedDelivery(report(), placePhoto())).resolves.toEqual(
       refused(driverRoleUnknownReportMessage),
     );
@@ -217,7 +227,7 @@ describe("Enviar reporte", () => {
   });
 
   it("takes a driver whose other roles are not dispatch (DRIVER and VIEWER)", async () => {
-    const { controller, queue } = await harness([], { roles: ["DRIVER", "VIEWER"] });
+    const { controller, queue } = await harness([], { roles: myOrganizationRolesAnswer("VIEWER", "DRIVER") });
     await expect(controller.enqueueFailedDelivery(report(), placePhoto())).resolves.toEqual(stored);
     expect(queue.only().kind).toBe("FAILED_DELIVERY");
   });

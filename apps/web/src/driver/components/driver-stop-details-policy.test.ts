@@ -40,10 +40,20 @@ describe("driver stop details retention", () => {
       cache.indexOf("export async function forgetDriverStopDetails"),
       cache.indexOf("export function openDriverDatabase"),
     );
-    expect(forget).toContain("database.transaction(DriverStopsStoreName, \"readwrite\")");
-    expect(forget).toContain(".objectStore(DriverStopsStoreName).clear()");
+    expect(forget).toContain("const stores = partitionCacheStores(database);");
+    expect(forget).toContain("transaction.objectStore(store).clear();");
     expect(forget).not.toContain("DriverOfflineOperationsStoreName");
     expect(forget).not.toContain("DriverProofBlobsStoreName");
+    // The stores it clears: the stop snapshots and the saved organization roles (ORG-MY-ROLES-2026-10-12).
+    const stores = cache.slice(
+      cache.indexOf("function partitionCacheStores"),
+      cache.indexOf("/**", cache.indexOf("function partitionCacheStores")),
+    );
+    expect(stores).toContain("[DriverStopsStoreName, DriverOrganizationRolesStoreName]");
+    expect(stores).toContain(": [DriverStopsStoreName];");
+    expect(stores).not.toContain("DriverOfflineOperationsStoreName");
+    expect(stores).not.toContain("DriverProofBlobsStoreName");
+    expect(stores).not.toContain("DriverSyncLeasesStoreName");
   });
 });
 

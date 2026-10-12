@@ -137,39 +137,10 @@ public sealed class PostgreSqlBootstrapTrackingTests(
         Assert.Equal("Synthetic Operations", contexts[0].GetProperty("display_name").GetString());
         Assert.Equal("DISPATCHER", contexts[0].GetProperty("role").GetString());
         Assert.False(contexts[0].GetProperty("is_default").GetBoolean());
-        Assert.Equal(["DISPATCHER"], Roles(contexts[0]));
         Assert.Equal("Synthetic Viewer", contexts[1].GetProperty("display_name").GetString());
         Assert.Equal("VIEWER", contexts[1].GetProperty("role").GetString());
         Assert.True(contexts[1].GetProperty("is_default").GetBoolean());
-        Assert.Equal(["VIEWER"], Roles(contexts[1]));
-        // ORG-CONTEXT-ROLES-2026-10-12: exactly these members, nothing about any other person.
-        Assert.All(contexts, context => Assert.Equal(
-            ["display_name", "is_default", "organization_id", "role", "roles"],
-            context.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal)));
     }
-
-    /// <summary>
-    /// ORG-CONTEXT-ROLES-2026-10-12: one context for the organization where the person holds two ACTIVE memberships
-    /// (DRIVER and VIEWER), with both roles, read through the productive transactional RLS.
-    /// </summary>
-    [Fact]
-    public async Task Organization_context_lists_every_active_role_of_the_person_in_the_organization()
-    {
-        using var response = await SendBearerAsync(
-            "/api/v1/me/organization-contexts",
-            MockIdentityProfiles.ActiveDriver);
-
-        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
-        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
-        var context = Assert.Single(document.RootElement.EnumerateArray());
-        Assert.Equal("Synthetic Viewer", context.GetProperty("display_name").GetString());
-        Assert.Equal(["DRIVER", "VIEWER"], Roles(context));
-        Assert.Contains(context.GetProperty("role").GetString() ?? string.Empty, Roles(context));
-        Assert.False(context.GetProperty("is_default").GetBoolean());
-    }
-
-    private static string[] Roles(JsonElement context) =>
-        context.GetProperty("roles").EnumerateArray().Select(role => role.GetString() ?? string.Empty).ToArray();
 
     [Fact]
     public async Task Active_identity_without_memberships_receives_an_empty_context_list()
@@ -310,6 +281,82 @@ public sealed class PostgreSqlBootstrapTrackingTests(
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, path);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential);
+        return await _client.SendAsync(request);
+    }
+
+    /// <summary>
+    /// ORG-MY-ROLES-2026-10-12 (getMyOrganizationRoles) over the productive transactional RLS: the answer is
+    /// {"roles":[...]} with only the requesting person's own ACTIVE roles in the organization selected with
+    /// X-Organization-Id - DRIVER and VIEWER for the active driver, never the PLATFORM_ADMIN or DRIVER memberships of
+    /// the other people of that organization - each once and in ordinal order, MFA not needed, never cached.
+    /// </summary>
+    [Fact]
+    public async Task My_organization_roles_are_only_the_callers_own_roles_in_the_selected_organization()
+    {
+        var viewerOrganization = PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId;
+        var operationsOrganization = PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId;
+        foreach (var (profile, organization, expected) in new (string, Guid, string[])[]
+                 {
+                     (MockIdentityProfiles.ActiveDriver, viewerOrganization, ["DRIVER", "VIEWER"]),
+                     (MockIdentityProfiles.SecondaryDriver, viewerOrganization, ["DRIVER"]),
+                     (MockIdentityProfiles.ActivePlatformAdminNoMfa, viewerOrganization, ["PLATFORM_ADMIN"]),
+                     (MockIdentityProfiles.ActiveMultiOrganization, viewerOrganization, ["VIEWER"]),
+                     (MockIdentityProfiles.ActiveMultiOrganization, operationsOrganization, ["DISPATCHER"]),
+                 })
+        {
+            using var response = await SendMyRolesAsync(profile, organization);
+
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.True(response.Headers.CacheControl?.NoStore, $"{profile} is cacheable.");
+            using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(["roles"], document.RootElement.EnumerateObject().Select(property => property.Name));
+            Assert.Equal(
+                expected,
+                document.RootElement.GetProperty("roles").EnumerateArray()
+                    .Select(role => role.GetString() ?? string.Empty));
+        }
+    }
+
+    /// <summary>
+    /// ORG-MY-ROLES-2026-10-12: a person without an ACTIVE membership in the selected organization - none at all,
+    /// another organization's member, a suspended or revoked membership, or no X-Organization-Id - receives the
+    /// uniform 403 and reads nothing; without a credential it is 401.
+    /// </summary>
+    [Fact]
+    public async Task My_organization_roles_refuse_whoever_holds_no_active_membership_there()
+    {
+        var viewerOrganization = PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId;
+        var operationsOrganization = PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId;
+        foreach (var (profile, organization) in new (string, Guid?)[]
+                 {
+                     (MockIdentityProfiles.ActiveWithoutMemberships, viewerOrganization),
+                     (MockIdentityProfiles.ActiveDriver, operationsOrganization),
+                     (MockIdentityProfiles.SuspendedMembership, viewerOrganization),
+                     (MockIdentityProfiles.RevokedMembership, viewerOrganization),
+                     (MockIdentityProfiles.ActiveDriver, null),
+                 })
+        {
+            using var response = await SendMyRolesAsync(profile, organization);
+
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+            Assert.DoesNotContain("roles", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        }
+
+        using var anonymous = new HttpRequestMessage(HttpMethod.Get, "/api/v1/me/organization-roles");
+        anonymous.Headers.Add("X-Organization-Id", viewerOrganization.ToString("D"));
+        using var unauthenticated = await _client.SendAsync(anonymous);
+        Assert.Equal(HttpStatusCode.Unauthorized, unauthenticated.StatusCode);
+    }
+
+    private async Task<HttpResponseMessage> SendMyRolesAsync(string credential, Guid? organizationId)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/me/organization-roles");
+        request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", credential);
+        if (organizationId is { } organization)
+        {
+            request.Headers.Add("X-Organization-Id", organization.ToString("D"));
+        }
+
         return await _client.SendAsync(request);
     }
 

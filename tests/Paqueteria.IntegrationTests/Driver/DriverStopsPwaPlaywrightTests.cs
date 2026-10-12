@@ -675,13 +675,13 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         await page.RouteAsync(
             "**/hubs/driver/negotiate**",
             route => route.AbortAsync());
-        // ORG-CONTEXT-ROLES-2026-10-12: from the API's organization contexts answer for a DRIVER.
+        // ORG-MY-ROLES-2026-10-12: the roles read answers as the API does for a DRIVER.
+        await DriverOrganizationRoles.RouteAsync(page);
         var configuration = JsonSerializer.Serialize(new
         {
             organizationId,
             cacheNamespace,
             token,
-            contexts = DriverOrganizationContexts.Answer(organizationId, []),
         });
         await page.AddInitScriptAsync(
             $$"""
@@ -690,7 +690,11 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
               const stored = window.sessionStorage.getItem(
                 "paquetenvia-driver-test-session");
               const value = stored ? JSON.parse(stored) : initial;
-              {{DriverOrganizationContexts.InstallFromAnswer}}
+              window.__paquetenviaDriverSession = {
+                organizationId: value.organizationId,
+                cacheNamespace: value.cacheNamespace,
+                getAccessToken: () => value.token,
+              };
             })();
             """);
     }
@@ -700,24 +704,26 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         string organizationId,
         string cacheNamespace)
     {
-        var configuration = JsonSerializer.Serialize(new
-        {
-            organizationId,
-            cacheNamespace,
-            token = "synthetic-driver-token",
-            contexts = DriverOrganizationContexts.Answer(organizationId, []),
-        });
         await page.EvaluateAsync(
-            $$"""
-            () => {
-              const value = {{configuration}};
+            """
+            value => {
               window.sessionStorage.setItem(
                 "paquetenvia-driver-test-session",
                 JSON.stringify(value));
-              {{DriverOrganizationContexts.InstallFromAnswer}}
+              window.__paquetenviaDriverSession = {
+                organizationId: value.organizationId,
+                cacheNamespace: value.cacheNamespace,
+                getAccessToken: () => "synthetic-driver-token",
+              };
               window.dispatchEvent(new Event("paquetenvia:driver-session-changed"));
             }
-            """);
+            """,
+            new
+            {
+                organizationId,
+                cacheNamespace,
+                token = "synthetic-driver-token",
+            });
     }
 
     private static async Task RouteStopsAsync(

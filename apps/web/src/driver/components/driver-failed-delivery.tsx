@@ -25,7 +25,7 @@ import {
 } from "../offline/failed-delivery-policy";
 import type { DriverOfflineOperation } from "../offline/operation-contract";
 import type { ProjectedDriverStop } from "../offline/operation-projection";
-import type { DriverReportRole } from "../session/driver-session";
+import type { DriverReportRole } from "../contracts/organization-roles";
 import type { DriverFailedDeliveryEnqueueResult } from "../state/driver-operations-controller";
 import {
   DriverProofPreview,
@@ -104,7 +104,7 @@ export function DriverFailedDelivery({
   stop: ProjectedDriverStop;
   /** The projected operations of the stop's order. */
   operations: readonly DriverOfflineOperation[];
-  /** driverReportRole of the session (ORG-CONTEXT-ROLES-2026-10-12). */
+  /** driverReportRole of the roles getMyOrganizationRoles answered (ORG-MY-ROLES-2026-10-12). */
   reportRole: DriverReportRole;
   disabled: boolean;
   onReport: (
@@ -192,7 +192,7 @@ export function FailedDeliverySection({
         </section>
       );
     case "role-unknown":
-      // ORG-CONTEXT-ROLES-2026-10-12: the roles are unknown, so the report fails closed.
+      // ORG-MY-ROLES-2026-10-12: the roles are unknown, so the report fails closed.
       return (
         <section className={styles.failedDelivery} aria-label={failedDeliveryCopy.open}>
           <p className={styles.failedDeliveryNote}>{failedDeliveryCopy.roleUnknown}</p>

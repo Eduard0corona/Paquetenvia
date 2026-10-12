@@ -9,9 +9,15 @@ import {
   DriverStopsApiError,
 } from "../api/driver-stops-api";
 import { createExternalOffersApi } from "../api/external-offers-api";
+import { createDriverOrganizationRolesApi } from "../api/organization-roles-api";
 import { createDriverVoiceApi, type DriverVoiceApi } from "../api/voice-api";
+import { IndexedDbDriverOrganizationRolesCache } from "../cache/driver-roles-cache";
 import { IndexedDbDriverStopsCache } from "../cache/driver-stops-cache";
 import type { DriverFailedDeliveryReason } from "../contracts/failed-delivery";
+import {
+  driverReportRole,
+  type DriverReportRole,
+} from "../contracts/organization-roles";
 import {
   driverConfirmedStatusLabel,
   driverOperationLabel,
@@ -47,11 +53,9 @@ import {
 } from "../routing/driver-stops-route";
 import {
   driverLogoutStartedEvent,
-  driverReportRole,
   driverSessionChangedEvent,
   readBrowserDriverSession,
   sessionIdentity,
-  type DriverReportRole,
   type DriverSession,
 } from "../session/driver-session";
 import {
@@ -59,6 +63,7 @@ import {
   type DriverFailedDeliveryEnqueueResult,
   type DriverOperationsState,
 } from "../state/driver-operations-controller";
+import { DriverRolesController } from "../state/driver-roles-controller";
 import {
   DriverStopsController,
   type DriverStopsViewState,
@@ -120,6 +125,11 @@ export function DriverStopsExperience() {
   );
   const [externalOffersState, setExternalOffersState] =
     useState<ExternalOffersState>(unavailableExternalOffersState);
+  // ORG-MY-ROLES-2026-10-12: the person's own roles in the session's
+  // organization (getMyOrganizationRoles, saved per partition); null while unknown.
+  const [organizationRoles, setOrganizationRoles] = useState<
+    readonly string[] | null
+  >(null);
   const [route, setRoute] = useState<DriverStopsRoute | null>(null);
   const controllerRef = useRef<DriverStopsController | null>(null);
   const operationsControllerRef = useRef<DriverOperationsController | null>(
@@ -128,6 +138,7 @@ export function DriverStopsExperience() {
   const externalOffersControllerRef = useRef<ExternalOffersController | null>(
     null,
   );
+  const rolesControllerRef = useRef<DriverRolesController | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const identity = sessionIdentity(session);
   // VOICE-001: online-only calls; never part of the offline queue.
@@ -161,6 +172,7 @@ export function DriverStopsExperience() {
       void controllerRef.current?.dispose();
       void operationsControllerRef.current?.dispose();
       externalOffersControllerRef.current?.dispose();
+      rolesControllerRef.current?.dispose();
     };
     window.addEventListener(driverLogoutStartedEvent, stopControllers);
     return () =>
@@ -188,6 +200,14 @@ export function DriverStopsExperience() {
     const externalOffersController = new ExternalOffersController(
       createExternalOffersApi(baseUrl, session),
     );
+    // ORG-MY-ROLES-2026-10-12: asked once per session start (a new sign-in or
+    // organization is a new session); the answer saved for the partition keeps
+    // "No se pudo entregar" working offline.
+    const rolesController = new DriverRolesController({
+      session,
+      api: createDriverOrganizationRolesApi({ baseUrl, session }),
+      cache: new IndexedDbDriverOrganizationRolesCache(),
+    });
     const controller = new DriverStopsController({
       baseUrl,
       session,
@@ -226,12 +246,17 @@ export function DriverStopsExperience() {
         }
       },
       onAccessRevoked: (category) => void controller.revokeAccess(category),
+      organizationRoles: () => rolesController.current.roles,
     });
     controllerRef.current = controller;
     operationsControllerRef.current = operationsController;
     externalOffersControllerRef.current = externalOffersController;
+    rolesControllerRef.current = rolesController;
     const unsubscribe = controller.subscribe((next) => {
       if (active) setState(next);
+    });
+    const unsubscribeRoles = rolesController.subscribe((next) => {
+      if (active) setOrganizationRoles(next.roles);
     });
     const unsubscribeOperations = operationsController.subscribe((next) => {
       if (active) setOperationsState(next);
@@ -244,16 +269,20 @@ export function DriverStopsExperience() {
     void controller.start();
     void operationsController.start();
     void externalOffersController.start();
+    void rolesController.start();
 
     return () => {
       active = false;
       unsubscribe();
       unsubscribeOperations();
       unsubscribeExternalOffers();
+      unsubscribeRoles();
       controllerRef.current = null;
       operationsControllerRef.current = null;
       externalOffersControllerRef.current = null;
+      rolesControllerRef.current = null;
       externalOffersController.dispose();
+      rolesController.dispose();
       void operationsController.dispose();
       void controller.dispose();
     };
@@ -370,7 +399,7 @@ export function DriverStopsExperience() {
           operations={projection.operations.filter(
             (operation) => operation.orderId === route.orderId,
           )}
-          reportRole={driverReportRole(session)}
+          reportRole={driverReportRole(organizationRoles)}
           mutating={operationsState.mutating}
           onEnqueue={(kind, blob) =>
             stop && operationsControllerRef.current
@@ -730,7 +759,7 @@ function StopDetail({
   offline: boolean;
   voiceApi: DriverVoiceApi | null;
   operations: readonly DriverOfflineOperation[];
-  /** driverReportRole of the session (ORG-CONTEXT-ROLES-2026-10-12). */
+  /** driverReportRole of the roles getMyOrganizationRoles answered (ORG-MY-ROLES-2026-10-12). */
   reportRole: DriverReportRole;
   mutating: boolean;
   onEnqueue: (kind: DriverOperationKind, blob?: Blob) => Promise<boolean>;

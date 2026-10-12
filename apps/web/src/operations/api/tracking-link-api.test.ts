@@ -87,7 +87,6 @@ describe("tracking link API (TRK-002-AUTO-LINK)", () => {
       display_name: "Synthetic",
       role,
       is_default: true,
-      roles: [role],
     });
     expect(
       canManageTrackingLink([context("DISPATCHER")], organizationId, organizationId),

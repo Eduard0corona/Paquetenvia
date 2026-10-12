@@ -61,6 +61,21 @@ public static class TenantCapabilities
         Create("getRecipientCallAvailability", Driver);
     public static readonly TenantCapability RequestRecipientCall = Create("requestRecipientCall", Driver);
 
+    // x-capability-matrix own_membership_operations (ORG-MY-ROLES-2026-10-12): every member role, without MFA, reads
+    // its own roles in the selected organization and nothing else; a person without an ACTIVE membership there is
+    // refused before (tenant context) and again here.
+    public static readonly TenantCapability GetMyOrganizationRoles = Create(
+        "getMyOrganizationRoles",
+        PlatformAdmin,
+        Dispatcher,
+        new(OrganizationRole.Finance, false),
+        new(OrganizationRole.AllyAdmin, false),
+        new(OrganizationRole.AllyOperator, false),
+        new(OrganizationRole.BusinessAdmin, false),
+        new(OrganizationRole.BusinessOperator, false),
+        Driver,
+        Viewer);
+
     // D5-CAPABILITY-MATRIX: FINANCE is limited to settlements and finance.
     public static readonly TenantCapability CreateSettlement = Settlement("createSettlement");
     public static readonly TenantCapability ListSettlements = Settlement("listSettlements");

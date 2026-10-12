@@ -113,11 +113,13 @@ public sealed class CapabilityMatrixContractTests
 
         var financeOperations = OperationIds(Matrix.Mapping("finance_operations"));
         financeOperations.UnionWith(mfaForEveryRole);
+        // ORG-MY-ROLES-2026-10-12: reading one's own roles never needs MFA, for any role.
+        var ownMembershipOperations = OperationIds(Matrix.Mapping("own_membership_operations"));
         foreach (var (operationId, capability) in TenantCapabilities.All)
         {
             foreach (var grant in capability.Grants)
             {
-                var expected = grant.Role switch
+                var expected = ownMembershipOperations.Contains(operationId) ? false : grant.Role switch
                 {
                     OrganizationRole.Dispatcher or OrganizationRole.Driver or OrganizationRole.Viewer => false,
                     OrganizationRole.Finance => financeOperations.Contains(operationId),
@@ -446,6 +448,27 @@ public sealed class CapabilityMatrixContractTests
         }
     }
 
+    /// <summary>
+    /// ORG-MY-ROLES-2026-10-12 ("Endpoint nuevo de roles (Recommended)"): getMyOrganizationRoles answers only the
+    /// caller's own roles in the selected organization, so AI-05 publishes it in its own section with every member
+    /// role and the server grants exactly those, none of them needing MFA.
+    /// </summary>
+    [Fact]
+    public void Own_membership_operations_take_every_member_role_without_MFA()
+    {
+        var decision = Matrix.Scalar("own_membership_operations_decision");
+        Assert.StartsWith("ORG-MY-ROLES-2026-10-12", decision, StringComparison.Ordinal);
+        Assert.Contains("\"Endpoint nuevo de roles (Recommended)\"", decision, StringComparison.Ordinal);
+        Assert.Contains("only the requesting person's own roles", decision, StringComparison.Ordinal);
+        Assert.Equal(["getMyOrganizationRoles"], OperationIds(Matrix.Mapping("own_membership_operations")).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            Enum.GetValues<OrganizationRole>().Select(role => (role, false)),
+            TenantCapabilities.GetMyOrganizationRoles.Grants
+                .Select(grant => (grant.Role, grant.RequiresMfa))
+                .OrderBy(grant => grant.Role));
+        Assert.Same(TenantCapabilities.GetMyOrganizationRoles, TenantCapabilities.All["getMyOrganizationRoles"]);
+    }
+
     [Fact]
     public void Every_capability_names_an_AI05_tenant_operation_that_declares_the_Forbidden_response()
     {
@@ -533,6 +556,7 @@ public sealed class CapabilityMatrixContractTests
                      "operations", "finance_operations", "platform_operations", "membership_operations",
                      "tracking_link_operations", "incident_operations", "assignable_driver_operations",
                      "operations_queue_operations", "driver_list_operations", "voice_call_operations",
+                     "own_membership_operations",
                  })
         {
             foreach (var (key, value) in Matrix.Mapping(section).Children)

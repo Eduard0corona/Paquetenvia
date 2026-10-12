@@ -213,7 +213,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         var root = document.RootElement;
         Assert.Equal(4, root.GetProperty("version").GetInt32());
         Assert.Equal(
-            ["operations", "proof_blobs", "snapshots", "sync_leases"],
+            ["operations", "organization_roles", "proof_blobs", "snapshots", "sync_leases"],
             root.GetProperty("stores")
                 .EnumerateArray()
                 .Select(value => value.GetString() ?? string.Empty)
@@ -686,9 +686,21 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         await page.GotoAsync(
             new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
         await ExpectTextAsync(page, "por cobrar al entregar");
+        // ORG-MY-ROLES-2026-10-12: the answer of the roles read is saved for the partition, role codes only.
+        var saved = Assert.Single(await DriverOrganizationRoles.WaitForSavedAsync(page, 1));
+        Assert.Equal(
+            ["partitionKey", "roles", "schemaVersion"],
+            saved.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(["DRIVER"], saved.GetProperty("roles").EnumerateArray().Select(role => role.GetString() ?? string.Empty));
+        // The start's sync pass releases its lease before the page goes away; a lease left by a page closed mid-pass
+        // would hold the next sync for its 15 seconds and make the timing below depend on the machine.
+        await WaitForStoreCountAsync(page, "sync_leases", 0);
         await context.SetOfflineAsync(true);
         try
         {
+            // An offline start reads the roles saved for the partition, so a DRIVER still reports.
+            await page.ReloadAsync();
+            await ExpectTextAsync(page, "por cobrar al entregar");
             await OpenFailedDeliveryAsync(page);
             await page.GetByRole(AriaRole.Radio, new() { Name = "No pagó el cobro" }).CheckAsync();
             await ChooseFailedDeliveryPhotoAsync(page);
@@ -904,9 +916,9 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
 
     /// <summary>
     /// UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 (owner answer "Registrar desde Despacho (Recommended)") with
-    /// ORG-CONTEXT-ROLES-2026-10-12: a person whose organization context also lists DISPATCHER (the one context the
-    /// API answers for that organization) is not offered "No se pudo entregar" and uploads nothing; the stop says
-    /// to register the attempt from the order in Despacho.
+    /// ORG-MY-ROLES-2026-10-12: a person whose roles read (getMyOrganizationRoles, the API's own answer) lists DRIVER
+    /// and DISPATCHER is not offered "No se pudo entregar" and uploads nothing; the stop says to register the attempt
+    /// from the order in Despacho.
     /// </summary>
     [Fact]
     [Trait("Category", "DriverOfflineOperationsPwa")]
@@ -935,6 +947,47 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             0,
             await page.GetByRole(AriaRole.Button, new() { Name = "No se pudo entregar" }).CountAsync());
         Assert.Empty(backend.Calls);
+        var saved = Assert.Single(await DriverOrganizationRoles.WaitForSavedAsync(page, 1));
+        Assert.Equal(
+            ["DISPATCHER", "DRIVER"],
+            saved.GetProperty("roles").EnumerateArray().Select(role => role.GetString() ?? string.Empty));
+    }
+
+    /// <summary>
+    /// ORG-MY-ROLES-2026-10-12: this app against an API older than the roles read (404) withholds only "No se pudo
+    /// entregar" - it says the role could not be confirmed and saves nothing - while the stop, the delivery and its
+    /// sync work as before; no deployment order is needed.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Against_an_older_API_without_the_roles_read_only_the_report_is_withheld()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-drv-failed-older-api");
+        // Registered last, so it answers the roles read instead of InstallSessionAsync's route.
+        await DriverOrganizationRoles.RouteOlderApiAsync(page);
+        var backend = new SyntheticOfflineBackend();
+        backend.SetOrderState("DELIVERING", 8);
+        await backend.RouteAsync(page);
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(
+            page,
+            "No se pudo confirmar tu rol en esta organización, así que el intento fallido no se reporta desde el teléfono. Cierra sesión y vuelve a entrar con conexión; si sigue igual, llama a despacho para que lo registre.");
+        Assert.Equal(
+            0,
+            await page.GetByRole(AriaRole.Button, new() { Name = "No se pudo entregar" }).CountAsync());
+        Assert.Empty(await DriverOrganizationRoles.ReadSavedAsync(page));
+
+        await EnqueueProofAsync(page, "Confirmar entrega", "delivery-older-api.png");
+        await WaitUntilAsync(() => backend.Calls.Contains("transition:DELIVERED"));
+        await WaitForOperationCountAsync(page, 0);
+        Assert.Equal(["transition:DELIVERED"], backend.Calls);
     }
 
     [Fact]
@@ -1786,9 +1839,9 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             """);
 
     /// <summary>
-    /// Installs the driver session from the API's organization contexts answer for a person whose memberships in
-    /// the organization hold <paramref name="roles"/> (DRIVER only by default); see
-    /// <see cref="DriverOrganizationContexts"/>.
+    /// Installs the driver session and answers its roles read (ORG-MY-ROLES-2026-10-12) with the API's own answer for
+    /// a person whose memberships hold <paramref name="roles"/> (DRIVER only by default); see
+    /// <see cref="DriverOrganizationRoles"/>.
     /// </summary>
     private static async Task InstallSessionAsync(
         IPage page,
@@ -1796,18 +1849,22 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         params OrganizationRole[] roles)
     {
         await page.RouteAsync("**/hubs/driver/negotiate**", route => route.AbortAsync());
+        await DriverOrganizationRoles.RouteAsync(page, roles);
         var configuration = JsonSerializer.Serialize(new
         {
             organizationId = OrganizationId,
             cacheNamespace,
             token = "synthetic-driver-token",
-            contexts = DriverOrganizationContexts.Answer(OrganizationId, roles),
         });
         await page.AddInitScriptAsync(
             $$"""
             (() => {
               const value = {{configuration}};
-              {{DriverOrganizationContexts.InstallFromAnswer}}
+              window.__paquetenviaDriverSession = {
+                organizationId: value.organizationId,
+                cacheNamespace: value.cacheNamespace,
+                getAccessToken: () => value.token,
+              };
             })();
             """);
     }
@@ -1815,24 +1872,19 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
     private static Task ChangeOrganizationAsync(
         IPage page,
         string organizationId,
-        string cacheNamespace)
-    {
-        var configuration = JsonSerializer.Serialize(new
-        {
-            organizationId,
-            cacheNamespace,
-            token = "synthetic-driver-token",
-            contexts = DriverOrganizationContexts.Answer(organizationId, []),
-        });
-        return page.EvaluateAsync(
-            $$"""
-            () => {
-              const value = {{configuration}};
-              {{DriverOrganizationContexts.InstallFromAnswer}}
+        string cacheNamespace) =>
+        page.EvaluateAsync(
+            """
+            value => {
+              window.__paquetenviaDriverSession = {
+                organizationId: value.organizationId,
+                cacheNamespace: value.cacheNamespace,
+                getAccessToken: () => "synthetic-driver-token",
+              };
               window.dispatchEvent(new Event("paquetenvia:driver-session-changed"));
             }
-            """);
-    }
+            """,
+            new { organizationId, cacheNamespace });
 
     private static Task<string> ReadSingleClientOccurredAtAsync(IPage page) =>
         page.EvaluateAsync<string>(

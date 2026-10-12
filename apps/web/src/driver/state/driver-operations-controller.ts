@@ -52,10 +52,8 @@ import {
   validateDriverProof,
   type ValidatedDriverProof,
 } from "../proofs/proof-file";
-import {
-  driverReportRole,
-  type DriverSession,
-} from "../session/driver-session";
+import { driverReportRole } from "../contracts/organization-roles";
+import type { DriverSession } from "../session/driver-session";
 
 export interface DriverOperationsState {
   readonly operations: readonly DriverOfflineOperation[];
@@ -70,6 +68,12 @@ export interface DriverOperationsControllerOptions {
   /** The confirmation read; see DriverSyncSchedulerOptions.refreshStops. */
   readonly refreshStops: (signal?: AbortSignal) => Promise<DriverStopList>;
   readonly onAccessRevoked: (category: "unauthorized" | "forbidden") => void;
+  /**
+   * ORG-MY-ROLES-2026-10-12: the person's own roles in the session's
+   * organization as DriverRolesController knows them now; absent or null means
+   * unknown, and "No se pudo entregar" is then refused (fails closed).
+   */
+  readonly organizationRoles?: () => readonly string[] | null;
   readonly telemetry?: DriverSyncTelemetry;
   readonly queue?: DriverOfflineQueue;
   readonly schedulerFactory?: (
@@ -386,8 +390,8 @@ export class DriverOperationsController {
    * (owner answer "No, llama a despacho (Recommended)") when the order's cash
    * is saved on the phone or recorded on the server, (owner answer "Registrar
    * desde Despacho (Recommended)") when the person is also dispatch in the
-   * organization, and (ORG-CONTEXT-ROLES-2026-10-12) when the session does not
-   * know the person's roles there. At most one unsettled report per order is
+   * organization, and (ORG-MY-ROLES-2026-10-12) when the person's roles there
+   * are not known. At most one unsettled report per order is
    * ever queued: a report REST already confirms only waits to leave the queue.
    * Resolves `{ stored: true }` only when this call stored it; otherwise the
    * result carries the reason the form shows.
@@ -418,8 +422,8 @@ export class DriverOperationsController {
     // nor PLATFORM_ADMIN files the report from the phone: the server treats a
     // person who is also dispatch as dispatch and refuses the short report
     // (owner answer "Registrar desde Despacho (Recommended)"), and unknown
-    // roles fail closed (ORG-CONTEXT-ROLES-2026-10-12).
-    switch (driverReportRole(this.options.session)) {
+    // roles fail closed (ORG-MY-ROLES-2026-10-12).
+    switch (driverReportRole(this.options.organizationRoles?.() ?? null)) {
       case "dispatch":
         return refuse(driverDispatchRoleReportMessage);
       case "unknown":

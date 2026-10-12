@@ -6,7 +6,8 @@ MAJOR según AI-01 §7). Se construye sobre `INC-FAILED-ATTEMPT-DISPATCH-DECIDES
 sobre la cola sin conexión de DRV-002 con el cobro de `UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11`
 ([cola](drv-002-offline-events-pod.md), [cobro](ui-001-phase3-driver-stop-details.md)). Contratos: AI-07
 `/driver/stops/:id` y `screen_contracts.driver_stop.failed_delivery`, `cod_collection.not_paid` y
-`cod_collection.door_only`. AI-04, AI-05, AI-06, AI-18 y el servidor no cambian.
+`cod_collection.door_only`. AI-04, AI-06 y AI-18 no cambian; AI-05 y el servidor solo agregan la lectura de roles
+propios `GET /me/organization-roles` (`ORG-MY-ROLES-2026-10-12`, ver "Quien también es despacho").
 
 ## Lo que decidió el owner (literal)
 
@@ -44,13 +45,21 @@ sobre la cola sin conexión de DRV-002 con el cobro de `UI-PHASE3-DRIVER-STOP-DE
   (Recommended)": "Lo registro como riesgo y pendiente (un tipo de foto propio para intento fallido, o que la entrega
   cite su foto). En el uso normal de la app la entrega siempre sube su propia foto, así que no bloquea el piloto."
   (No se eligió "Ahora, antes de fusionar".)
-- 2026-10-12, después de la segunda revisión (`ORG-CONTEXT-ROLES-2026-10-12`), pregunta: ""Registrar desde Despacho"
+- 2026-10-12, después de la segunda revisión (`ORG-MY-ROLES-2026-10-12`), pregunta: ""Registrar desde Despacho"
   no se puede cumplir sin tocar el servidor: el API solo dice un rol por empresa, así que la app del repartidor no sabe
   que esa persona también es despacho. ¿Qué hacemos?" → "Agregar los roles al API (Recommended)": "Cambio pequeño y
   aditivo: el contexto de cada empresa trae también la lista de roles de la persona (con ADR). La app no le ofrece el
   reporte desde el inicio y no se sube ninguna foto." (No se eligió "Aprender tras el primer rechazo": "Sin tocar el
   servidor: la primera vez se sube la foto, el servidor rechaza el reporte y la app le dice que use Despacho; desde ahí
   ya no se lo ofrece en esa sesión. Queda una foto suelta por sesión.")
+- 2026-10-12, después de la tercera revisión (la primera versión puso `roles` dentro de `OrganizationContext`; nunca
+  se fusionó ni se desplegó), pregunta: "Agregar "roles" dentro del contexto de cada empresa rompe el inicio de sesión
+  de la web actual (la de hoy rechaza campos que no conoce) si el API se publica antes que la web, y deja fallando las
+  pestañas ya abiertas hasta recargar. ¿Cómo lo hacemos?" → "Endpoint nuevo de roles (Recommended)": "Los roles salen
+  de una consulta nueva del API (solo los de la persona en su empresa activa). La web actual nunca la llama, así que
+  nada se rompe en ningún orden de despliegue; mismo resultado en la app del repartidor." (No se eligió "Campo en el
+  contexto y orden de despliegue": "Se queda como está y se fuerza publicar la web antes que el API (cambio en la
+  infraestructura de Azure); las pestañas abiertas durante el despliegue fallan hasta recargar.")
 
 ## Pantalla
 
@@ -58,7 +67,7 @@ sobre la cola sin conexión de DRV-002 con el cobro de `UI-PHASE3-DRIVER-STOP-DE
 | --- | --- |
 | DELIVERING (confirmado o por sincronizar), sin cobro guardado ni registrado | "No se pudo entregar" |
 | Igual, pero la persona también es DISPATCHER o PLATFORM_ADMIN en la organización | "También eres despacho en esta organización, así que el intento fallido no se reporta desde el teléfono: regístralo desde la orden en Despacho, donde eliges el motivo y el siguiente paso." Sin formulario |
-| Igual, pero la sesión no conoce los roles de la persona en la organización | "No se pudo confirmar tu rol en esta organización, así que el intento fallido no se reporta desde el teléfono. Cierra sesión y vuelve a entrar con conexión; si sigue igual, llama a despacho para que lo registre." Sin formulario |
+| Igual, pero el teléfono no conoce los roles de la persona en la organización (ninguna respuesta de `GET /me/organization-roles` en esta sesión ni guardada para su partición) | "No se pudo confirmar tu rol en esta organización, así que el intento fallido no se reporta desde el teléfono. Cierra sesión y vuelve a entrar con conexión; si sigue igual, llama a despacho para que lo registre." Sin formulario |
 | Cobro guardado en el teléfono (en cola, reintentando o retenido) | "Hay un cobro guardado en el teléfono. Si fue un error, descártalo para poder reportar que no se pudo entregar." y "Descartar cobro guardado" (con la confirmación de siempre); si el cobro está retenido, se descarta desde su aviso |
 | Cobro registrado (`DriverStop.cod.recorded`, o el servidor ya aceptó el cobro y falta la confirmación REST) | "El cobro ya está registrado. Si no puedes entregar, llama a despacho: ellos deciden y coordinan la devolución del cobro." Sin número de teléfono: la app no tiene el de despacho |
 | Reporte guardado, esperando sincronizar | "Reporte guardado en el teléfono. Se enviará cuando haya conexión." El estado confirmado sigue "En reparto" y "Estado por sincronizar" dice "Intento fallido" |
@@ -83,25 +92,36 @@ sobre la cola sin conexión de DRV-002 con el cobro de `UI-PHASE3-DRIVER-STOP-DE
 - No hay ningún campo de texto.
 - El estado confirmado FAILED_ATTEMPT deja de contar el cobro de la parada como pendiente ("Cobrar $X" y el
   encabezado): lo siguiente lo decide despacho.
-- Quien también es despacho (`ORG-CONTEXT-ROLES-2026-10-12`): `GET /me/organization-contexts` devuelve un contexto por
+- Quien también es despacho (`ORG-MY-ROLES-2026-10-12`): `GET /me/organization-contexts` devuelve un contexto por
   organización, con un solo `role` (el de la membresía por defecto), así que con eso el teléfono nunca veía a un
-  repartidor que también es despacho. Ahora cada contexto trae `roles`, todos los roles de la persona en esa
-  organización por membresías ACTIVE (sin repetidos, en orden ordinal, siempre con `role`). Al iniciar sesión, la
-  instalación BFF copia los `roles` del contexto elegido a la sesión del repartidor (`organizationRoles`, solo en
-  memoria) y `driverReportRole` decide: con DISPATCHER o PLATFORM_ADMIN, "dispatch" (el aviso de registrar desde
-  Despacho; el formulario no aparece y no se sube ninguna foto); con DRIVER y sin esos, "driver" (se ofrece); sin
-  roles o con roles mal formados, "unknown": no se ofrece (falla cerrado) y la parada lo explica. El controlador aplica
-  la misma regla antes de guardar nada. Se usa PLATFORM_ADMIN aunque el servidor solo lo trate como despacho con MFA:
-  el teléfono no sabe si hay MFA y así falla cerrado.
-- Una respuesta sin `roles` (una API anterior a esta web) se sigue leyendo con `roles: null`: el inicio de sesión y el
-  resto de la app funcionan igual, y solo el reporte falla cerrado. Un `roles` mal formado (vacío, repetido, sin
-  `role`, de más de 64) rechaza toda la respuesta, como cualquier otro miembro. Un rol que la web todavía no conoce se
-  lee como `role`, así que no rompe el inicio de sesión. El portal local de desarrollo lee los roles del perfil de la
-  misma respuesta de la API.
-- Orden de despliegue: la web anterior lee los contextos con miembros exactos y rechaza una respuesta con `roles`
-  (su inicio de sesión no encontraría organización), así que esta web se despliega antes o junto con esta API. Una
-  página de la web anterior que siga abierta conserva su sesión instalada; si vuelve a iniciar sesión o cambia de
-  organización después del despliegue de la API, necesita recargar (la navegación va primero a la red).
+  repartidor que también es despacho. Esa respuesta no cambia (cuatro miembros; el parser estricto de la web tampoco).
+  La API agrega `getMyOrganizationRoles` (`GET /me/organization-roles` con `X-Organization-Id`): el objeto cerrado
+  `{"roles":[...]}` con los roles propios de quien pregunta en la organización elegida, por membresías ACTIVE de una
+  organización ACTIVE (sin repetidos, en orden ordinal, nunca vacío); 403 a quien no tiene ahí una membresía activa,
+  401 sin sesión, 503 si la lectura falla, `Cache-Control: no-store`. El servidor revisa la capacidad
+  (`own_membership_operations`, cualquier rol miembro, sin MFA) antes de leer, lee dentro de una transacción tenant con
+  RLS filtrando a la propia persona y nunca escribe.
+- En la PWA, `DriverRolesController` pide la consulta al instalarse la sesión del repartidor y en cada sesión nueva
+  (otro inicio de sesión u otra organización son otra sesión y otra partición). Primero usa la respuesta guardada para
+  la partición, luego pregunta: una respuesta correcta la reemplaza; 401 o 403 la borra; cualquier otra falla (sin
+  conexión, timeout, 5xx, el 404 de una API anterior o una respuesta fuera de contrato) conserva la guardada.
+  `driverReportRole` decide con esos roles: con DISPATCHER o PLATFORM_ADMIN, "dispatch" (el aviso de registrar desde
+  Despacho; el formulario no aparece y no se sube ninguna foto); con DRIVER y sin esos, "driver" (se ofrece, también
+  sin conexión); sin respuesta conocida (una respuesta fuera de contrato nunca se usa ni se guarda), "unknown": no se
+  ofrece (falla cerrado) y la parada lo explica. El controlador de operaciones aplica la misma regla antes de guardar nada. Se usa PLATFORM_ADMIN aunque el
+  servidor solo lo trate como despacho con MFA: el teléfono no sabe si hay MFA y así falla cerrado.
+- La respuesta se guarda en el IndexedDB particionado de siempre (`paquetenvia-driver-stops-v1`), store
+  `organization_roles` con llave `partitionKey` (esquema 1: la llave de partición, el esquema y los códigos de rol; nada
+  más). El store lo crea la misma subida a la versión 4 que agrega `FAILED_DELIVERY`: esa versión no ha llegado a
+  ningún teléfono (este PR no se ha fusionado ni desplegado), así que no sube a 5. El código tolera una base sin el
+  store (lee "sin respuesta" y no falla). Sale del teléfono junto con la instantánea de la partición ante 401 o 403
+  (`clearPartition`) y con todas las instantáneas al "Cerrar sesión" (`forgetDriverStopDetails`); la cola sigue
+  sobreviviendo al cierre de sesión como dice DRV-002. Ninguna regla de DRV-001/DRV-002 choca con guardarla: son
+  códigos de rol de la propia persona, sin PII, y se borran con la partición.
+- Despliegue: no hace falta ningún orden. La web anterior nunca llama la consulta nueva, así que una API nueva no la
+  afecta (tampoco a las pestañas abiertas). Esta web con una API anterior recibe 404: el inicio de sesión, las paradas,
+  la entrega, el cobro y las demás acciones siguen igual, y solo "No se pudo entregar" no se ofrece (con el aviso de rol
+  no confirmado). El portal local de desarrollo vuelve a leer los contextos como en `development`.
 
 ## Secuencia y cola sin conexión
 
@@ -191,8 +211,8 @@ registrarla": dice que la incidencia quedó abierta y que despacho decide, y que
 - Los de DRV-002: 100 operaciones y 25 MiB de fotos por partición, 10 MiB por foto, solo JPEG y PNG, estimación de
   almacenamiento.
 - La operación solo guarda códigos, ids, llaves, el SHA-256 y el tamaño de la foto. Nada de texto, nombre, dirección,
-  token, URL firmada ni object key en IndexedDB, logs o consola. Los roles de la sesión (`organizationRoles`) viven
-  solo en memoria.
+  token, URL firmada ni object key en IndexedDB, logs o consola. La respuesta de roles guardada solo tiene la llave de
+  partición, el esquema y los códigos de rol (`organization_roles`).
 - Descartar pausa la sincronización: el pase en curso se aborta y se espera, la operación se borra y se recalcula la
   cadena de la orden, y luego se reanuda y se pide una sincronización. Así un cobro que se descarta mientras estaba
   pendiente no se manda ni se vuelve a escribir.
@@ -207,7 +227,12 @@ registrarla": dice que la incidencia quedó abierta y que despacho decide, y que
 - El contrato de operación sube al esquema 3 (miembro `failedDelivery`: motivo, llave de la incidencia de esa misma
   operación, incidencia pedida, id de la incidencia) e IndexedDB a la versión 4. La subida reescribe en el mismo lugar
   las operaciones en cola de esquema 2 (versión 3) y de esquema 1 (versión 2) agregando los miembros nuevos en null;
-  las instantáneas de esquema 2 se conservan. El parser sigue estricto a un solo esquema.
+  las instantáneas de esquema 2 se conservan. El parser sigue estricto a un solo esquema. La misma subida crea el store
+  `organization_roles` (`ORG-MY-ROLES-2026-10-12`).
+- El store `organization_roles` se agregó a la versión 4 en la tercera revisión, sin subir a 5, por la misma razón que
+  el punto siguiente: ninguna compilación con la versión 4 llegó a un teléfono real. Un navegador de prueba que ya
+  tenga la versión 4 sin ese store sigue funcionando: con conexión usa la respuesta de la API sin guardarla, y al
+  arrancar sin conexión no tiene respuesta guardada (el reporte falla cerrado) hasta borrar los datos del sitio.
 - El esquema 3 cambió de forma durante la revisión de este PR sin subir de número (se agregó
   `failedDelivery.incidentRequested` y la llave de la incidencia quedó atada al id de su operación). No hace falta
   migrar nada: ninguna compilación con la forma anterior llegó a un teléfono real (el PR no se fusionó ni se desplegó);
@@ -279,40 +304,52 @@ Vitest (`apps/web`):
 - `driver/offline/failed-delivery-sync-api.test.ts`: cuerpo exacto de la incidencia y de la transición, llaves,
   lectura estricta de la respuesta y clasificación de errores.
 - `driver/state/failed-delivery-controller.test.ts` y `driver/components/driver-failed-delivery.test.ts`: reglas de
-  "Enviar reporte" con su motivo real, quien también es despacho (DISPATCHER o PLATFORM_ADMIN en los `roles` de su
-  contexto), roles desconocidos (falla cerrado), un reporte confirmado por REST que ya no impide uno nuevo, nunca
+  "Enviar reporte" con su motivo real, quien también es despacho (DISPATCHER o PLATFORM_ADMIN en su respuesta de
+  roles), roles desconocidos (API anterior con 404, respuesta vacía o 503 sin nada guardado: falla cerrado), un
+  reporte confirmado por REST que ya no impide uno nuevo, nunca
   rehacer un reporte, descartar lo que queda de una parada movida, reintentar libera lo bloqueado, avisos de
   vencimiento, pestaña que bloquea, estados de la pantalla, motivos, "Otro…", foto obligatoria, botón deshabilitado,
-  vista previa, textos en cola y confirmado, 44 px y sin texto libre. Cada sesión sale de una respuesta de
-  `/me/organization-contexts` con la forma de la API, por el parser, la selección y la instalación reales
-  (`driver/session/driver-session.fixtures.ts`).
+  vista previa, textos en cola y confirmado, 44 px y sin texto libre. Los roles salen de respuestas de
+  `/me/organization-roles` con la forma de la API, por el cliente, el parser y el controlador reales
+  (`driver/state/driver-roles.fixtures.ts`), nunca de una bandera inyectada.
+- `driver/contracts/organization-roles.test.ts`, `driver/api/organization-roles-api.test.ts`,
+  `driver/cache/driver-roles-cache.test.ts` y `driver/state/driver-roles-controller.test.ts`: el objeto cerrado
+  `{"roles":[...]}` (vacío, repetido, otro miembro o más de 64 se rechazan), la petición (`X-Organization-Id`,
+  `no-store`, credenciales de la sesión) y la clasificación 401/403/404/5xx; el registro guardado (solo llave de
+  partición, esquema y códigos; uno ajeno o con otra forma se rechaza; base sin el store); y el controlador: usa lo
+  guardado sin conexión, lo reemplaza con cada respuesta correcta, lo borra con 401/403, lo conserva ante red, 5xx, 404
+  o respuesta fuera de contrato, y no escribe nada después de cerrarse.
+- `driver/cache/driver-database-upgrade.test.ts` y `driver/components/driver-stop-details-policy.test.ts`: la base
+  nueva trae `organization_roles`, y "Cerrar sesión" y 401/403 la vacían con las instantáneas.
 - `driver/offline/driver-sync-scheduler.test.ts`: una acción aceptada cuya lectura de confirmación falla (red,
   contrato o error inesperado) sigue esperando a REST, no se vuelve a mandar y a las 72 horas sale sin aviso de
   vencida.
-- `auth/bff-session.test.ts`: los `roles` del único contexto que la API devuelve por organización llegan a la sesión
-  del repartidor (DISPATCHER o PLATFORM_ADMIN → despacho; DRIVER y VIEWER → repartidor; DISPATCHER de otra
-  organización no cuenta); una respuesta sin `roles` sigue iniciando sesión con roles desconocidos; un `roles` mal
-  formado rechaza la respuesta. `operations/contracts/organization-contexts.test.ts`: el parser estricto de `roles`.
-
 Playwright (`tests/Paqueteria.IntegrationTests/Driver`): `DriverOfflineOperationsPwaPlaywrightTests` agrega el flujo
-en línea (orden de llamadas, cuerpo exacto, llaves), sin conexión con recarga y sincronización, cobro guardado y
+en línea (orden de llamadas, cuerpo exacto, llaves), sin conexión con recarga y sincronización (la página arranca sin
+conexión y reporta con la respuesta de roles guardada, que se revisa: solo llave, esquema y `DRIVER`), cobro guardado y
 registrado, reporte retenido por un cobro registrado mientras tanto, reporte retenido sin mandar nada porque despacho
-registró el intento fallido (y descartado), quien también es despacho, y la subida de IndexedDB 3 → 4;
-`DriverStopsPwaPlaywrightTests` agrega la pantalla de 320 px (44 px, sin desbordes) y el intento fallido confirmado.
-Sus sesiones se instalan desde la respuesta de contextos que arma el propio registro de la API
-(`OrganizationContextResponse` con `OrganizationContextRoles`, `DriverOrganizationContexts.cs`), nunca con una
-bandera inyectada; la prueba de despacho usa DRIVER y DISPATCHER en la misma organización.
+registró el intento fallido (y descartado), quien también es despacho (DRIVER y DISPATCHER en la misma organización,
+respuesta guardada incluida), una API anterior sin la consulta (404: no se ofrece el reporte, nada se guarda y la
+entrega se sincroniza igual) y la subida de IndexedDB 3 → 4; `DriverStopsPwaPlaywrightTests` agrega la pantalla de
+320 px (44 px, sin desbordes) y el intento fallido confirmado. La respuesta de roles la arma el propio registro de la
+API (`MyOrganizationRolesResponse` con `MyOrganizationRoles.FromRoles`, `DriverOrganizationRoles.cs`), nunca una
+bandera inyectada.
 
-.NET: `OrganizationContextRolesContractTests` (AI-05 `roles`, forma JSON del registro, roles por organización y
-lectura dentro de la transacción), `ActiveTenantRuntimeContractTests` (lector en PostgreSQL real con DRIVER y
-DISPATCHER en la misma organización) y `PostgreSqlBootstrapTrackingTests` (endpoint real con RLS: DRIVER y VIEWER en
-un solo contexto).
+.NET: `MyOrganizationRolesContractTests` (operación y esquema cerrado de AI-05, mismas respuestas que
+`getMyDriverPhone`, `OrganizationContext` de vuelta a cuatro miembros, entrada `ORG-MY-ROLES`, forma JSON del registro,
+orden y unicidad, endpoint sin escrituras y capacidad antes de leer), `CapabilityMatrixContractTests`
+(`own_membership_operations`: todos los roles miembros, sin MFA), `ActiveTenantRuntimeContractTests` (lector en
+PostgreSQL real como `paqueteria_app`: solo DRIVER, DRIVER y DISPATCHER, DRIVER y PLATFORM_ADMIN, membresías
+suspendidas, revocadas, de otra organización o de una organización suspendida, y nunca los roles de otra persona) y
+`PostgreSqlBootstrapTrackingTests` (endpoint real con RLS: roles propios por organización elegida, `no-store`, 403 sin
+membresía activa ahí, sin encabezado o con una membresía suspendida o revocada, y 401 sin sesión).
 
 ```bash
 cd apps/web && pnpm run lint && pnpm run typecheck && pnpm exec vitest run && pnpm run build
 dotnet test tests/Paqueteria.IntegrationTests --filter "Category=DriverStopsPwa|Category=DriverOfflineOperationsPwa"
 dotnet test tests/Paqueteria.ArchitectureTests tests/Paqueteria.ContractTests --filter "FullyQualifiedName~SyntheticEnvironmentArchitectureTests|FullyQualifiedName~NormativeBaselineTests"
-dotnet test tests/Paqueteria.ContractTests --filter "FullyQualifiedName~OrganizationContextRolesContractTests|FullyQualifiedName~OpenApi|FullyQualifiedName~ActiveTenantRuntimeContractTests"
+dotnet test tests/Paqueteria.ContractTests --filter "FullyQualifiedName~MyOrganizationRolesContractTests|FullyQualifiedName~CapabilityMatrixContractTests|FullyQualifiedName~OpenApi|FullyQualifiedName~ActiveTenantRuntimeContractTests"
+dotnet test tests/Paqueteria.IntegrationTests --filter "FullyQualifiedName~PostgreSqlBootstrapTrackingTests"
 python3 docs/normative/v0.6/tools/validate_contracts.py
 ```
 
@@ -331,11 +368,16 @@ python3 docs/normative/v0.6/tools/validate_contracts.py
   dice y no invita a reportarlo de nuevo, pero el teléfono no impide que el repartidor, después de descartar un reporte
   con incidencia abierta, reporte otra vez en el mismo intento.
 - No hay número de despacho en la app; "llama a despacho" depende de que el repartidor lo tenga.
-- Los roles se leen al iniciar sesión: si a la persona le dan o le quitan DISPATCHER o PLATFORM_ADMIN con la sesión
-  abierta, el teléfono lo sabe hasta el siguiente inicio de sesión o cambio de organización. El servidor sigue siendo la
-  barrera: si ya es despacho, rechaza el reporte corto (409 `INVALID_REQUEST`, que dice registrar desde Despacho).
-- Una persona con DRIVER y otro rol en la misma organización sin membresía por defecto recibe en `role` uno de los dos
-  (como antes de este cambio); solo con DRIVER ahí entra a la app del repartidor.
+- Los roles se leen al arrancar la sesión en la página (inicio de sesión, cambio de organización o recarga con
+  conexión): si a la persona le dan o le quitan DISPATCHER o PLATFORM_ADMIN con la página abierta, o mientras el
+  teléfono está sin conexión con una respuesta guardada, el teléfono lo sabe hasta el siguiente arranque con conexión.
+  El servidor sigue siendo la barrera: si ya es despacho, rechaza el reporte corto (409 `INVALID_REQUEST`, que dice
+  registrar desde Despacho).
+- Un repartidor cuyo primer arranque de la sesión fue sin conexión (o contra una API anterior) no tiene respuesta
+  guardada y no puede reportar hasta un arranque con conexión contra la API nueva; despacho registra el intento.
+- Una persona con DRIVER y otro rol en la misma organización sin membresía por defecto recibe en `role` de
+  `/me/organization-contexts` uno de los dos (como antes de este cambio); solo con DRIVER ahí entra a la app del
+  repartidor.
 - IndexedDB es almacenamiento del navegador; la foto puede contener información visual sensible (GATE-007).
 - Con una entrega guardada en el teléfono (por ejemplo esperando el cobro) no se ofrece el reporte.
 
@@ -360,4 +402,9 @@ Hay dos salidas, las dos como una versión nueva de la PWA:
    despacho; los que no, no dejan nada en el servidor. Por eso, antes de publicarla, se pide a los repartidores
    sincronizar y despacho registra desde la orden los intentos que falten.
 
-El servidor, los datos, el esquema y el API no cambian en ningún caso.
+El servidor, los datos y el esquema no cambian en ningún caso.
+
+La lectura de roles (`ORG-MY-ROLES-2026-10-12`) se revierte aparte, en cualquier orden: revertir la API deja a esta
+web con el 404 de una API anterior (cada teléfono conserva su respuesta guardada; sin ella, solo el reporte deja de
+ofrecerse), y revertir la web deja una lectura que nadie llama. No hay datos ni esquema que deshacer; el store
+`organization_roles` sigue la suerte de la versión 4 descrita arriba.

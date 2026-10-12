@@ -837,6 +837,9 @@ screen_contracts:
       (Recommended)": "Solo de sus paradas asignadas. Se borra del teléfono cuando la parada deja de estar asignada o
       al cerrar sesión."); they leave the phone as details.retention says'
     - the count of the driver's stops completed today (a number, no data about those stops)
+    - 'the last successful answer of GET /me/organization-roles for the session''s partition: the role codes only
+      (ORG-MY-ROLES-2026-10-12, so "No se pudo entregar" keeps its dispatch_role rule offline); it leaves the phone
+      with the partition''s snapshot on 401 or 403 and with every snapshot on logout'
     - pending events
     - pending proof metadata
     privacy:
@@ -886,6 +889,7 @@ screen_contracts:
       - the phone keeps the details only inside the latest server snapshot of its session; a stop the server no
         longer returns leaves the phone with the next snapshot
       - logging out wipes every saved snapshot of the phone before leaving; 401 or 403 wipes the session's snapshot
+      - the saved roles answer (ORG-MY-ROLES-2026-10-12) is wiped with the snapshots, on logout and on 401 or 403
       - the offline queue survives a logout and carries no address or contact datum
       - every listMyStops answer carries Cache-Control no-store
       - synthetic data only until GATE-007 closes
@@ -959,15 +963,20 @@ screen_contracts:
         DISPATCHER or PLATFORM_ADMIN in the active organization is reported by the server as dispatch, which refuses
         the short report (409 INVALID_REQUEST); the stop does not offer "No se pudo entregar" and says "También eres
         despacho en esta organización, así que el intento fallido no se reporta desde el teléfono: regístralo desde la
-        orden en Despacho, donde eliges el motivo y el siguiente paso." The phone knows it from the roles array of the
-        selected organization context at sign-in (GET /me/organization-contexts, kept in memory only), which the API
-        added for it: ORG-CONTEXT-ROLES-2026-10-12 (owner answer "Agregar los roles al API (Recommended)"), because it
-        answers one context and one role per organization. No photo is uploaded and nothing is stored'
-      role_unknown: 'ORG-CONTEXT-ROLES-2026-10-12: when the session does not know the person''s roles in the
-        organization (an answer without roles), "No se pudo entregar" is not offered either (it fails closed) and the
-        stop says "No se pudo confirmar tu rol en esta organización, así que el intento fallido no se reporta desde el
-        teléfono. Cierra sesión y vuelve a entrar con conexión; si sigue igual, llama a despacho para que lo
-        registre." The sign-in and every other action of the driver app work as before'
+        orden en Despacho, donde eliges el motivo y el siguiente paso." The phone knows it from GET
+        /me/organization-roles (getMyOrganizationRoles: the person''s own roles in the session''s organization only),
+        added for it by ORG-MY-ROLES-2026-10-12 (owner answers "Agregar los roles al API (Recommended)" and "Endpoint
+        nuevo de roles (Recommended)"), because GET /me/organization-contexts answers one context and one role per
+        organization and stays unchanged. The phone asks once per session start (a new sign-in or organization),
+        uses the answer saved for the session''s partition at once and keeps the last successful one there
+        (offline_cache), so a driver also reports offline. No photo is uploaded and nothing is stored'
+      role_unknown: 'ORG-MY-ROLES-2026-10-12: when the phone knows no answer for the session (the first start was
+        offline, the read failed with nothing saved, the API is earlier and answers 404, or the answer broke the
+        contract), "No se pudo entregar" is not offered (it fails closed) and the stop says "No se pudo confirmar tu
+        rol en esta organización, así que el intento fallido no se reporta desde el teléfono. Cierra sesión y vuelve
+        a entrar con conexión; si sigue igual, llama a despacho para que lo registre." A failed read keeps the answer
+        already saved; 401 or 403 removes it. The sign-in, the stops and every other action of the driver app work
+        as before, so no deploy order is needed between the web and the API'
       settled_report: a report REST already confirms (its transition accepted and the stop at a later version, for
         example after dispatch chose "Reintentar hoy") only waits to leave the queue and never holds back a new report
         of the same stop
