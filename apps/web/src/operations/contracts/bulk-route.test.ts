@@ -2,16 +2,23 @@ import { describe, expect, it } from "vitest";
 import type { BulkOrder } from "./bulk-assignment";
 import {
   bulkRouteConfirmation,
+  bulkRouteMixedCitiesMessage,
   bulkRouteOffer,
   bulkRouteOfferText,
   bulkRoutePreviewText,
   bulkRouteRunSummary,
+  createdRouteText,
+  createRouteConflictMessages,
+  createRouteNotFoundMessage,
+  createRouteOfferText,
   draftRouteChoices,
   isDraftRouteOf,
   ordersText,
   routeDateText,
   routeStopConflictMessages,
   stopCountText,
+  todayInMazatlan,
+  unconfirmedRouteText,
   type FinishedBatch,
 } from "./bulk-route";
 import type { ManualRoute } from "./manual-route";
@@ -197,5 +204,71 @@ describe("bulk add to route (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11)", () 
     expect(bulkRouteRunSummary(0, 2)).toBe("No se agregó ninguna orden a la ruta. Revisa el motivo en cada fila.");
     expect(bulkRouteRunSummary(1, 3)).toBe("Se agregó 1 de 3 órdenes a la ruta. Revisa el motivo de las demás en su fila.");
     expect(bulkRouteRunSummary(2, 3)).toBe("Se agregaron 2 de 3 órdenes a la ruta. Revisa el motivo de las demás en su fila.");
+  });
+});
+
+describe("Crear ruta nueva (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)", () => {
+  it("takes today's calendar date in Mazatlán, not the UTC date nor the device's", () => {
+    // Mazatlán is UTC-7 all year: 05:30 UTC on 12 October is still 11 October there.
+    expect(todayInMazatlan(new Date("2026-10-12T05:30:00Z"))).toBe("2026-10-11");
+    expect(todayInMazatlan(new Date("2026-10-12T06:59:59.999Z"))).toBe("2026-10-11");
+    expect(todayInMazatlan(new Date("2026-10-12T07:00:00Z"))).toBe("2026-10-12");
+    expect(todayInMazatlan(new Date("2026-10-12T23:30:00Z"))).toBe("2026-10-12");
+    // Across a month and a year.
+    expect(todayInMazatlan(new Date("2027-01-01T03:00:00Z"))).toBe("2026-12-31");
+    expect(() => todayInMazatlan(new Date(Number.NaN))).toThrow(RangeError);
+    for (const instant of ["2026-10-12T05:30:00Z", "2027-01-01T03:00:00Z"])
+      expect(routeDateText(todayInMazatlan(new Date(instant)))).not.toBeNull();
+  });
+
+  it("says what the button creates before it is pressed, naming the city only by name", () => {
+    expect(createRouteOfferText("DRV-0a1b2c3d", "Culiacán, SIN")).toBe(
+      "«Crear ruta nueva» crea una ruta en borrador para DRV-0a1b2c3d en Culiacán, SIN, la ciudad de las órdenes, con " +
+        "la fecha de hoy (hora de Mazatlán), y sigue a la vista previa. Ninguna orden se agrega hasta que confirmes.",
+    );
+    // Without the city's name, it is "the orders' city"; never its id.
+    expect(createRouteOfferText("DRV-0a1b2c3d", null)).toContain("para DRV-0a1b2c3d en la ciudad de las órdenes, con la fecha de hoy");
+    expect(createRouteOfferText("DRV-0a1b2c3d", null)).not.toMatch(uuidText);
+  });
+
+  it("says plainly why orders in different cities get no route here", () => {
+    expect(bulkRouteMixedCitiesMessage).toBe(
+      "Las órdenes de este lote están en ciudades distintas y una ruta cubre una sola ciudad, así que aquí no se crea " +
+        "ninguna. Las rutas se crean en Rutas.",
+    );
+  });
+
+  it("names the created route like any DRAFT route and points to the preview", () => {
+    expect(createdRouteText(route(1, { scheduled_for: "2026-10-11", stop_count: 0 }), "DRV-0a1b2c3d")).toBe(
+      "Se creó «Ruta del 11 de octubre de 2026» en borrador para DRV-0a1b2c3d. Revisa la vista previa y confirma para " +
+        "agregar las órdenes.",
+    );
+  });
+
+  it("refuses in es-MX without codes or identifiers, and never claims a route that may not exist", () => {
+    expect(Object.keys(createRouteConflictMessages).sort()).toEqual(["DRIVER_INELIGIBLE", "INVALID_REQUEST"]);
+    for (const message of [...Object.values(createRouteConflictMessages), createRouteNotFoundMessage]) {
+      expect(message).toMatch(/^No se creó la ruta: /);
+      expect(message).not.toMatch(/[A-Z]{2,}_[A-Z]|[0-9a-f]{8}-[0-9a-f]{4}|\b(409|404|403)\b/);
+    }
+    expect(createRouteConflictMessages.DRIVER_INELIGIBLE).toContain("no puede tomar rutas en la ciudad de estas órdenes");
+    expect(createRouteNotFoundMessage).toBe("No se creó la ruta: el repartidor o la ciudad ya no están disponibles.");
+    expect(unconfirmedRouteText("found", true, "DRV-0a1b2c3d")).toBe(
+      "No se pudo confirmar si la ruta se creó. Se buscaron de nuevo las rutas en borrador de DRV-0a1b2c3d: si la nueva " +
+        "ya aparece, elígela.",
+    );
+    expect(unconfirmedRouteText("none", true, "DRV-0a1b2c3d")).toBe(
+      "No se pudo confirmar si la ruta se creó y no aparece entre las rutas en borrador de DRV-0a1b2c3d. Puedes " +
+        "intentarlo de nuevo: se reenvía la misma solicitud sin duplicarla.",
+    );
+    expect(unconfirmedRouteText("none", false, "DRV-0a1b2c3d")).toBe(
+      "No se pudo confirmar si la ruta se creó y no aparece entre las rutas en borrador de DRV-0a1b2c3d. Puedes " +
+        "intentarlo de nuevo.",
+    );
+    expect(unconfirmedRouteText("unread", false, "DRV-0a1b2c3d")).toBe(
+      "No se pudo confirmar si la ruta se creó. Busca las rutas de nuevo antes de intentarlo otra vez.",
+    );
+    for (const outcome of ["found", "none", "unread"] as const)
+      expect(unconfirmedRouteText(outcome, true, "DRV-0a1b2c3d")).not.toMatch(/Se creó|se creó la ruta\./);
   });
 });

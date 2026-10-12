@@ -124,9 +124,9 @@ repartidor de la ruta que aún no está en otra ruta; además revisa ciudad, ár
   Cada ruta se nombra por su fecha ("Ruta del 12 de octubre de 2026" o "Ruta sin fecha", y "la más reciente", "la
   segunda más reciente"… si comparten fecha) y sus paradas actuales, de la más reciente a la más antigua. Sin
   identificadores ni montos: el costo total de asignaciones de la ruta no se muestra en la bandeja.
-- Sin rutas en borrador: la pantalla lo dice y explica que las rutas se crean en Rutas ("Abrir Rutas en otra pestaña",
-  para no perder el lote, y luego "Buscar rutas de nuevo"). La bandeja no crea rutas: `createRoute` pide una ciudad
-  que la bandeja no tiene y el formulario de Rutas pide identificadores internos (ver Pendiente).
+- Sin rutas en borrador: la pantalla lo dice y, si todas las órdenes del lote son de una misma ciudad, ofrece "Crear
+  ruta nueva" (ver abajo). Las rutas también se crean en Rutas ("Abrir Rutas en otra pestaña", para no perder el lote,
+  y luego "Buscar rutas de nuevo").
 - Vista previa: la ruta, el repartidor (`DRV-`) y las órdenes en el orden en que se agregan ("Orden de envío", Guía y
   Destino); se agregan al final de la ruta.
 - Confirmación (ConfirmDialog): la ruta con sus paradas actuales, el repartidor y el número de órdenes.
@@ -152,6 +152,60 @@ repartidor de la ruta que aún no está en otra ruta; además revisa ciudad, ár
   espera mientras se agregan las órdenes.
 - Es una secuencia de una operación existente de una sola orden: no es un flujo atómico nuevo de AI-13 §4 ni cambia
   estados de orden; el backend y RLS deciden cada parada. Nada se guarda en el navegador ni se registra en consola.
+
+### Crear ruta nueva dentro del paso (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)
+
+Pregunta literal al owner (2026-10-11): "Bandeja, "Agregar estas órdenes a una ruta…": si el repartidor no tiene una
+ruta en borrador, hoy hay que ir a Rutas a crearla. ¿Agregamos "Crear ruta nueva" dentro de ese mismo paso?". Respuesta
+literal: "Sí, en el paso (Recommended)", cuya opción decía "Crea la ruta en borrador para ese repartidor, con la ciudad
+de las órdenes y la fecha de hoy (hora de Mazatlán), y sigue a la vista previa." No se eligió "Solo en Rutas" ("El paso
+sigue mandando a Rutas para crearla; ahí cambio los IDs por selectores de repartidor y ciudad."). Después se le dijo al
+owner que el mismo cambio sustituye también los IDs del formulario "Crear ruta" de Rutas por selectores
+(`ui-001-phase3-routes.md`), y no objetó. Contrato: AI-07 `work_inbox.bulk_add_to_route.create_route`.
+
+- Cuándo: solo donde el paso dice que el repartidor no tiene rutas en borrador (`listRoutes` vacío y ninguna ruta
+  fijada por un envío). Nunca junto a una lista de rutas en borrador.
+- La ciudad de las órdenes (`state/bulk-route-controller.ts`): cada orden del lote (máximo 20) se lee con el cliente
+  existente de `getOrder` (`api/operations-api.ts`), una tras otra y cancelable al cerrar el paso, y se toma
+  `Order.city_id`.
+  - Todas con el mismo `city_id`: esa es la ciudad; se nombra con `listCities` (`api/locations-api.ts`, "Culiacán,
+    SIN"). Si `listCities` falla o no la trae, el texto dice "la ciudad de las órdenes", nunca el id.
+  - Ciudades distintas: no hay botón y el paso dice "Las órdenes de este lote están en ciudades distintas y una ruta
+    cubre una sola ciudad, así que aquí no se crea ninguna. Las rutas se crean en Rutas." Se conservan "Abrir Rutas en
+    otra pestaña" y "Buscar rutas de nuevo".
+  - Una orden que no se puede leer: no hay botón y se muestra el mensaje de no disponible del paso ("No fue posible
+    cargar las rutas en borrador del repartidor. Intenta de nuevo.").
+  - Una orden no cambia de ciudad, así que tras una lectura completa "Buscar rutas de nuevo" vuelve a leer las rutas
+    (y el nombre si faltó), no las órdenes.
+- Envío (`api/bulk-route-api.ts`, `createRoute`): `driver_id` del lote, `city_id` de las órdenes,
+  `service_area_id: null` (el owner no pidió área) y `scheduled_for` con la fecha de hoy en America/Mazatlan
+  (`contracts/bulk-route.ts`, `todayInMazatlan`, con el reloj inyectable del controlador; nunca la fecha del navegador
+  ni la de UTC: las 05:30 UTC del 12 de octubre siguen siendo el 11 en Mazatlán). La respuesta debe ser esa ruta en
+  DRAFT, versión 1, sin paradas ni área; si no, cuenta como respuesta inesperada.
+- Idempotency-Key (`PendingSubmissions`, ámbito `create-route`): la misma solicitud (repartidor, ciudad y fecha) conserva
+  su llave hasta una respuesta definitiva y solo se reutiliza para reenviarla tras una falla de red o del servidor;
+  otra fecha es otra solicitud y otra llave. El botón se deshabilita mientras se envía (y "Buscar rutas de nuevo",
+  "Cancelar" y el "Cerrar" del panel esperan), así que la ruta nunca se crea dos veces.
+- Al crearla, la ruta queda elegida, el foco pasa a la vista previa y aparece "Se creó «Ruta del 11 de octubre de
+  2026» en borrador para DRV-…. Revisa la vista previa y confirma para agregar las órdenes." Desde ahí nada cambia: la
+  misma vista previa, el mismo ConfirmDialog y la misma secuencia de `addRouteStop`, con `expected_version` 1 de la
+  ruta creada.
+- Fallas (`createFailure` en el controlador):
+  - Negativas seguras, que conservan el botón y no vuelven a listar: 401, 403 y 403 MFA_REQUIRED (con "Verificar
+    identidad" de regreso a la bandeja), con los textos de `describeFailure` después de "No se creó la ruta: "; el 404
+    uniforme ("No se creó la ruta: el repartidor o la ciudad ya no están disponibles."); DRIVER_INELIGIBLE ("No se creó
+    la ruta: el repartidor no puede tomar rutas en la ciudad de estas órdenes. Puede que su ciudad sea otra o que hoy no
+    esté habilitado (su estado o sus documentos).") e INVALID_REQUEST. La llave se descarta.
+  - Sin confirmación (red, 503 u otro 5xx, respuesta inesperada, CONFLICT genérico o código desconocido; el servidor
+    también responde CONFLICT cuando falla su almacenamiento): nunca se muestra un éxito. Primero se vuelven a listar las
+    rutas en borrador; si aparece alguna, se elige como cualquier ruta ("No se pudo confirmar si la ruta se creó. Se
+    buscaron de nuevo las rutas en borrador de DRV-…: si la nueva ya aparece, elígela.") y el botón no vuelve; si no
+    aparece ninguna, el botón vuelve, y tras red o 503 reenvía la misma solicitud con la misma llave ("…se reenvía la
+    misma solicitud sin duplicarla."); si la lista no se puede leer, no hay botón hasta leerla.
+- Es una operación existente (`createRoute`) antes de la secuencia existente de `addRouteStop`: no es un flujo atómico
+  nuevo de AI-13 §4 ni cambia estados de orden; el backend y RLS deciden la ruta (repartidor OWN ACTIVE elegible por
+  DSP-001 y ciudad coherente con él). Sin identificadores en pantalla; nada se guarda en el navegador ni se registra en
+  consola.
 
 ## Combinación de consultas (`state/inbox-merge.ts`)
 
@@ -200,10 +254,9 @@ historial y sin recargar las órdenes. Corrige el hallazgo de revisión del PR #
 - "Agregar a ruta…" como botón de una cola: `addRouteStop` solo acepta órdenes ya asignadas (OWN) al repartidor de la
   ruta y ninguna cola de la bandeja lista esas órdenes. Por decisión del owner se ofrece al terminar un lote (arriba);
   no se muestra un botón deshabilitado.
-- Crear una ruta desde la bandeja: `createRoute` pide ciudad (y opcionalmente área y fecha) que la bandeja no tiene, y
-  el formulario de Rutas pide pegar identificadores internos del repartidor y la ciudad, que la web no muestra en
-  ninguna pantalla. Hace falta una decisión del owner (selector de repartidor y ciudad en Rutas o "Crear ruta nueva"
-  en este paso).
+- Crear desde la bandeja una ruta para un lote con órdenes de ciudades distintas: una ruta cubre una sola ciudad, así
+  que esas rutas se crean en Rutas (ahora con selectores, `ui-001-phase3-routes.md`). Elegir área de servicio o fecha
+  al crear desde el paso no se pidió: la ruta se crea para toda la ciudad y con la fecha de hoy.
 - El costo sugerido por el tabulador: el owner aún no envía sus montos; hoy cada costo se captura a mano.
 - Entrada "Órdenes" del menú aprobado: aún no hay pantalla. "Repartidores" ya existe (`/ops/drivers`,
   UI-PHASE3-DRIVERS-2026-10-11; ver `ui-001-phase3-drivers.md`).
@@ -228,5 +281,8 @@ tablero. Revertir el commit de "Precio por revisar" y la asignación en lote qui
 quedan como cualquier asignación individual (no hay datos, esquema ni migración que deshacer). Revertir el commit de
 "Agregar estas órdenes a una ruta…" quita el paso y su contrato AI-07; las paradas ya agregadas quedan como cualquier
 parada agregada desde Rutas (se retiran ahí si hace falta) y no hay datos, esquema, API ni migración que deshacer.
+Revertir el commit de "Crear ruta nueva" (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11) devuelve el paso a mandar a Rutas
+para crear la ruta y el formulario de Rutas a pedir IDs; las rutas ya creadas quedan como cualquier ruta en borrador
+creada en Rutas, y no hay datos, esquema, API ni migración que deshacer.
 Revertir el commit del Total quita `total` del read model del tablero y la columna de la bandeja a la vez
 (web y API se despliegan juntas); no hay datos, esquema ni migración que deshacer.
