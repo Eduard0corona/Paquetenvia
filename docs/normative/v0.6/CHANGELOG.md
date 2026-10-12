@@ -49,6 +49,56 @@
   simple, porque una compilación de la versión 4 no abre una base en la versión 5: es una versión que conserva
   IndexedDB 5 con el store y deja de mostrar el enlace.
 
+## Fase 4 de UI-001, plataforma: decisiones y backlog (PHASE4-PLATFORM-APPROVAL-2026-10-12) — 2026-10-12
+
+- Preguntas y respuestas literales del project owner (2026-10-12), registradas en `decision-log.md`:
+  - `PHASE4-PLATFORM-APPROVAL-2026-10-12`: "La fase 3 quedó completa y en main. ¿Sigo con la fase 4 de la propuesta
+    (plataforma: plomería compartida, un pool de conexiones por rol, espera adaptativa del outbox, OpenTelemetry,
+    límites de tasa y pruebas de punta a punta)?" → "Sí, avanza con la fase 4 (Recommended)" ("Empiezo por
+    OpenTelemetry y correlación, y por los límites de tasa en endpoints pesados, que son lo que más ayuda a operar el
+    piloto."); no elegidas: "Primero preparar el despliegue" ("Antes de más funciones, preparo contigo el despliegue
+    del piloto en Azure con lo que ya está en main.") y "Esperar" ("Me detengo aquí; tú decides después.").
+  - `OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12`: "Fase 4, telemetría: ¿a dónde mandamos métricas y trazas? (Hoy solo
+    hay logs en Log Analytics.)" → "Application Insights (Recommended)" ("OpenTelemetry con el exportador oficial de
+    Azure, en México Central, sobre el mismo Log Analytics con muestreo de 10 %. Aprox. 0–5 USD/mes; el peor caso del
+    presupuesto no sube por el tope diario. Admite 7 paquetes nuevos y sube Azure.Core 1.61→1.63 (admisión
+    explícita)."); no elegidas: "Agente OTLP de Container Apps" ("Menos paquetes (sin tocar Azure.Core), mismo costo,
+    pero hay que verificar que acepte métricas.") y "Solo logs" ("Sin paquetes ni costo: identificador de traza en
+    cada log y resúmenes periódicos, pero sin vista de trazas."). La lista exacta de paquetes todavía necesita su
+    admisión explícita por paquete (GOV-DEPENDENCY-ADMISSION-001) cuando se prepare la entrada de admisión.
+  - `SEC-004-RATE-LIMITS-2026-10-12` (cambio MAJOR de AI-01 §7 al aplicarse; la fila es su registro ADR): "Fase 4,
+    límites de tasa: ¿qué endpoints limitamos? (Hoy solo seguimiento público, tiempo real y GPS. Es cambio de contrato:
+    cada uno declara 429 en el API.)" → "Lista corta y generosa (Recommended)" ("Por usuario: CSV 10/min (1 importación
+    a la vez), exportar liquidación 10/min, crear dirección (cuesta Google) 30/min, fotos 30–60/min, tablero y conteos
+    60/min, lista de órdenes 120/min, cotizar 60/min, repartidores asignables 60/min; inicio de sesión 20/min por red.
+    Se ajusta tras 2 semanas con métricas."); no elegidas: "Solo caros o anónimos" ("CSV, exportar, crear dirección e
+    inicio de sesión.") y "Medir primero" ("Dos semanas solo midiendo (sin nuevos 429) y luego fijamos números.").
+  - `OBS-003-TENANT-PSEUDONYM-2026-10-12`: "Fase 4, privacidad en trazas: la arquitectura pide marcar cada traza con la
+    empresa y el actor, pero la observabilidad del piloto lo prohíbe. ¿Qué hacemos?" → "Seudónimo de empresa
+    (Recommended)" ("Un código HMAC con llave en Key Vault (no el id real) solo en trazas y logs, y el actor solo como
+    tipo de rol; nunca en métricas ni alertas."); no elegidas: "Id real de la empresa" ("El id de la organización en
+    las trazas (no en métricas).") y "Sin empresa" ("Las trazas no llevan empresa; se corrige la arquitectura con un
+    ADR.").
+- AI-08: ítems nuevos OBS-003 (trazas W3C y correlación, exportación a Application Insights apagada por defecto con
+  muestreo de 10 %, lista permitida de atributos de span, seudónimo de organización y tipo de rol del actor), SEC-004
+  (plomería compartida de límites de tasa, 429 `application/problem+json` con `Retry-After`, la lista decidida y la
+  declaración 429 en AI-05), SCL-007 (un pool de conexiones por rol de base de datos y espera adaptativa del outbox) y
+  OPS-005 (pruebas de punta a punta de la plataforma); todos MVP-1, P1, compuerta `owner_technology_operations`.
+  `item_count` pasa de 66 a 70; el conjunto MVP-0/P0 no cambia. Quedan como decisiones pendientes del owner en sus
+  criterios: la espera máxima del outbox, el contexto de traza a través del outbox (columna, payload o ninguno), una
+  alerta de métrica sobre conexiones de PostgreSQL y el correo de alertas que el owner fija al desplegar, el mapeo
+  operación por operación de la lista de límites, cómo registra su 429 el tablero (`GET /operations/dashboard`, fuera
+  de AI-05 por ADR-OBS-001), el texto de cada pantalla ante un 429 y los recorridos de negocio de la suite de punta a
+  punta.
+- AI-03 §18: el tenant va como seudónimo HMAC de la organización (llave en Key Vault, nunca el id real) y el actor
+  técnico solo como tipo de rol, únicamente en trazas y logs y con contexto de organización; nunca como etiqueta de
+  métrica, dimensión de alerta o de libro de trabajo ni dimensión de telemetría. La lista permitida de OBS-002
+  (`TelemetryDimensions.Allowed`) no los incluye.
+- AI-13 §10: enmienda mínima de "enrichment tenant/correlation sin PII" con la misma regla, porque se leía como el id
+  real de la organización.
+- Secuencia de diez PR en `docs/development/phase4-platform-plan.md`. Sin cambios en AI-02, AI-04, AI-05, AI-06, AI-07,
+  AI-10, AI-12, AI-15, AI-18, AI-24, código, paquetes, plantillas, roles, migraciones ni flujos cross-module.
+
 ## Rutas: el repartidor (DRV-) en cada fila de la lista (UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12) — 2026-10-12
 
 - Pregunta y respuesta literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR
