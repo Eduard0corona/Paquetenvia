@@ -62,6 +62,31 @@ describe("order actions api (UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05)", () => {
     await expect(api().findOrderIdByPublicId(publicId)).rejects.toMatchObject({ category: "invalid" });
   });
 
+  // UI-PHASE3-ORDERS-LIST-2026-10-12 (owner, "En dos pasos (Recommended)"): Order.created_at is accepted before the
+  // API sends it ("Buscar guía" and Rutas "Agregar entrega" search, and every transition answer).
+  it.each([
+    [undefined, true],
+    ["2026-10-12T17:04:05Z", true],
+    ["2026-10-12T17:04:05.1234567+00:00", true],
+    [null, false],
+    ["2026-10-12T17:04:05", false],
+    ["2026-10-12T10:04:05-07:00", false],
+    ["2026-10-12", false],
+  ])("reads the order created_at %s in a search and a transition (accepted: %s)", async (createdAt, ok) => {
+    const order = (overrides: Record<string, unknown>) => {
+      const body: Record<string, unknown> = { ...pendingOrderResponse(orderId, publicId), ...overrides };
+      if (createdAt !== undefined) body.created_at = createdAt;
+      return body;
+    };
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, { items: [order({})], next_cursor: null })));
+    if (ok) await expect(api().findOrderIdByPublicId(publicId)).resolves.toBe(orderId);
+    else await expect(api().findOrderIdByPublicId(publicId)).rejects.toMatchObject({ category: "invalid" });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(200, order({ status: "CANCELLED", version: 5 }))));
+    const transition = api().transitionOrder(orderId, cancel, "Motivo", 4, false, key);
+    if (ok) await expect(transition).resolves.toEqual({ id: orderId, status: "CANCELLED", version: 5 });
+    else await expect(transition).rejects.toMatchObject({ category: "invalid" });
+  });
+
   it("sends transitionOrder with the reason, the read version and the Idempotency-Key", async () => {
     const fetchMock = vi
       .fn()

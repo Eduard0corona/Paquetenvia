@@ -144,7 +144,10 @@ public sealed class IncidentReadPolicyTests
         var proofCursor = ProofCursorCodec.Encode(new ProofCursor(Order, CreatedAt, Guid.NewGuid()));
         Assert.False(IncidentCursorCodec.TryDecode(proofCursor, out _));
 
-        var orderCursor = global::Orders.Application.Orders.OrderCursorCodec.Encode(CreatedAt, Guid.NewGuid());
+        var orderCursor = global::Orders.Application.Orders.OrderCursorCodec.Encode(
+            CreatedAt,
+            Guid.NewGuid(),
+            global::Orders.Application.Orders.OrderCursorCodec.Binding(Order, null, null, false, null, default));
         Assert.False(IncidentCursorCodec.TryDecode(orderCursor, out _));
 
         var incidentCursor = IncidentCursorCodec.Encode(new IncidentCursor(CreatedAt, Guid.NewGuid()));

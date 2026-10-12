@@ -1,4 +1,4 @@
-import { canOpenWorkInbox, canPerform } from "../../operations/contracts/capabilities";
+import { canOpenOrderList, canOpenWorkInbox, canPerform } from "../../operations/contracts/capabilities";
 
 /**
  * Navigation of the app shell for /ops and /finance. Every item is derived from the client
@@ -16,6 +16,7 @@ export interface NavItem {
 
 export type NavKey =
   | "inbox"
+  | "orders"
   | "operations"
   | "new-order"
   | "csv-import"
@@ -33,9 +34,10 @@ interface NavRule extends NavItem {
 
 /**
  * Display order of UI-PHASE3-INBOX-2026-10-10 (approved menu "Bandeja · Órdenes · + Nueva
- * orden · Rutas · Incidencias · Importar CSV · Repartidores"): the operations board keeps the
- * second place as "Tablero"; "Repartidores" (UI-PHASE3-DRIVERS-2026-10-11) closes the operations
- * items; the finance items follow.
+ * orden · Rutas · Incidencias · Importar CSV · Repartidores"): "Órdenes"
+ * (UI-PHASE3-ORDERS-LIST-2026-10-12) follows "Bandeja" as in the approved menu and the operations
+ * board, kept as "Tablero", comes right after it; "Repartidores" (UI-PHASE3-DRIVERS-2026-10-11)
+ * closes the operations items; the finance items follow.
  */
 const rules: readonly NavRule[] = [
   {
@@ -45,6 +47,15 @@ const rules: readonly NavRule[] = [
     // The order detail is opened from the inbox and returns to it.
     sectionPrefixes: ["/ops/orders/"],
     visible: canOpenWorkInbox,
+  },
+  {
+    key: "orders",
+    href: "/ops/orders",
+    label: "Órdenes",
+    // UI-PHASE3-ORDERS-LIST-2026-10-12: the list of every order, for the listOrders roles. It owns
+    // /ops/orders itself; the order detail stays under "Bandeja" for the roles that have it (the
+    // longer "/ops/orders/" prefix wins), and falls to "Órdenes" for VIEWER, which has no Bandeja.
+    visible: canOpenOrderList,
   },
   {
     key: "operations",
@@ -112,7 +123,8 @@ export function navItemsForRole(role: string | null): readonly NavItem[] {
 
 /**
  * The item that owns a pathname: its own href, or a section prefix, choosing the most
- * specific match (/ops/orders/new is "Nueva orden", /ops/orders/{id} is "Bandeja").
+ * specific match (/ops/orders is "Órdenes", /ops/orders/new is "Nueva orden", /ops/orders/{id}
+ * is "Bandeja", or "Órdenes" for a role without Bandeja).
  */
 export function activeNavKey(items: readonly NavItem[], pathname: string): NavKey | null {
   let best: { key: NavKey; length: number } | null = null;

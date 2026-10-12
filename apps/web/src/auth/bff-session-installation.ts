@@ -1,4 +1,4 @@
-import { canOpenWorkInbox } from "../operations/contracts/capabilities";
+import { canOpenOrderList, canOpenWorkInbox } from "../operations/contracts/capabilities";
 import type { OperationsOrganizationContext } from "../operations/contracts/operations-dashboard";
 import { parseOrganizationContexts } from "../operations/contracts/operations-parsers";
 import type { DriverSession } from "../driver/session/driver-session";
@@ -21,13 +21,15 @@ export type BffSessionInstallation =
 /**
  * First screen for a membership role after login. DISPATCHER and PLATFORM_ADMIN land on the
  * work inbox (UI-PHASE3-INBOX-2026-10-10), FINANCE works from the COD and settlement screens,
- * DRIVER from its stops; every other role starts on the operations dashboard. This only picks
- * a page: each screen still asks the API what the role may do.
+ * DRIVER from its stops, and VIEWER, which lists orders but has no inbox, on "Órdenes"
+ * (UI-PHASE3-ORDERS-LIST-2026-10-12); every other role starts on the operations dashboard.
+ * This only picks a page: each screen still asks the API what the role may do.
  */
 export function landingPathForRole(role: string): string {
   if (role === "DRIVER") return "/driver/stops";
   if (role === "FINANCE") return "/finance/cod";
   if (canOpenWorkInbox(role)) return "/ops/inbox";
+  if (canOpenOrderList(role)) return "/ops/orders";
   return "/ops/dashboard";
 }
 

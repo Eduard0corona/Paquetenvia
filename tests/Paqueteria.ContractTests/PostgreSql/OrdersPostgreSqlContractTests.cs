@@ -65,7 +65,7 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
         Assert.True(Orders.Domain.OrderPublicIdPolicy.IsValid(created.PublicId));
 
         var page = await scope.Service.ListAsync(
-            scenario.UserId, scenario.OrganizationId, "DRAFT", scenario.OrganizationId, null, false, false, null, CancellationToken.None);
+            scenario.UserId, scenario.OrganizationId, "DRAFT", scenario.OrganizationId, null, false, false, null, default, CancellationToken.None);
         Assert.Single(page.Items);
         var detail = await scope.Service.GetAsync(
             scenario.UserId, scenario.OrganizationId, created.Id, false, CancellationToken.None);
@@ -424,7 +424,7 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
         var detail = await scope.Service.GetAsync(scenario.UserId, scenario.OrganizationId, created.Id, false, CancellationToken.None);
         Assert.Equal(window, detail.Order.ServiceWindow);
         var page = await scope.Service.ListAsync(
-            scenario.UserId, scenario.OrganizationId, null, null, null, false, false, null, CancellationToken.None);
+            scenario.UserId, scenario.OrganizationId, null, null, null, false, false, null, default, CancellationToken.None);
         Assert.Equal(window, Assert.Single(page.Items, item => item.Id == created.Id).ServiceWindow);
 
         await using (var verify = fixture.AdminDataSource.CreateCommand(

@@ -5,6 +5,7 @@ import {
 } from "../contracts/order-transitions";
 import { orderStatuses } from "../contracts/operations-dashboard";
 import { array, boundedString, exactObject, fail, integer, oneOf, uuid } from "../contracts/strict-json";
+import { orderCreatedAtField, optionalOrderCreatedAt } from "../../lib/utc-instant";
 import type { OperationsSession } from "../session/operations-session";
 import { assertUuid, createTenantRequester, readJson, TenantApiError } from "./tenant-request";
 
@@ -49,6 +50,8 @@ const otherOrderFields = [
   "claim_window_ends_at",
   "finalized_at",
   "service_window",
+  // UI-PHASE3-ORDERS-LIST-2026-10-12 ("En dos pasos"): accepted, and validated, before the API sends it.
+  orderCreatedAtField,
 ] as const;
 
 export function parseOrderSearchPage(value: unknown, publicId: string): string | null {
@@ -58,6 +61,7 @@ export function parseOrderSearchPage(value: unknown, publicId: string): string |
   if (items.length === 0) return null;
   const order = exactObject(items[0], ["id", "public_id", "status", "version"], otherOrderFields);
   if (boundedString(order.public_id, 26, 26) !== publicId) fail();
+  optionalOrderCreatedAt(order, fail);
   oneOf(order.status, orderStatuses);
   integer(order.version, 1);
   return uuid(order.id);
@@ -66,6 +70,7 @@ export function parseOrderSearchPage(value: unknown, publicId: string): string |
 export function parseTransitionedOrder(value: unknown): TransitionedOrder {
   const order = exactObject(value, ["id", "public_id", "status", "version"], otherOrderFields);
   boundedString(order.public_id, 1, 128);
+  optionalOrderCreatedAt(order, fail);
   return {
     id: uuid(order.id),
     status: oneOf(order.status, orderStatuses),

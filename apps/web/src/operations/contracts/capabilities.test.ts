@@ -3,6 +3,8 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   canAuthorizeLowPrice,
+  canOpenOrderDetail,
+  canOpenOrderList,
   canOpenWorkInbox,
   canSearchOrders,
   canListPendingCod,
@@ -164,6 +166,18 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
     expect(canSearchOrders("PLATFORM_ADMIN")).toBe(true);
     for (const role of ["VIEWER", "DRIVER", "FINANCE", "CUSTOMER_SUPPORT", null])
       expect(canSearchOrders(role), String(role)).toBe(false);
+  });
+
+  it("offers Órdenes to the listOrders roles and links the detail only for its roles (UI-PHASE3-ORDERS-LIST-2026-10-12)", () => {
+    for (const role of ["DISPATCHER", "PLATFORM_ADMIN", "VIEWER"]) expect(canOpenOrderList(role), role).toBe(true);
+    // FINANCE lists only COD-pending orders (FIN-PENDING-COD-LIST-FINANCE-2026-10-02): no "Órdenes" screen.
+    for (const role of ["FINANCE", "DRIVER", "CUSTOMER_SUPPORT", "BUSINESS_ADMIN", "ALLY_ADMIN", null])
+      expect(canOpenOrderList(role), String(role)).toBe(false);
+    for (const role of ["DISPATCHER", "PLATFORM_ADMIN", "VIEWER", "FINANCE", "DRIVER"])
+      expect(canOpenOrderList(role), role).toBe(canPerform(role, "listOrders"));
+    expect(canOpenOrderDetail("DISPATCHER")).toBe(true);
+    expect(canOpenOrderDetail("PLATFORM_ADMIN")).toBe(true);
+    for (const role of ["VIEWER", "FINANCE", "DRIVER", null]) expect(canOpenOrderDetail(role), String(role)).toBe(false);
   });
 
   it("offers the work inbox to exactly the dashboard and queue-count roles (UI-PHASE3-INBOX-2026-10-10)", () => {
