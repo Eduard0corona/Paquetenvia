@@ -31,4 +31,10 @@ regexes = [
   # in the history of feature/trk-002-issue-endpoint (commit 61f376e) and that pushed history cannot be
   # rewritten.
   '''ZZIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA''',
+  # VOICE-001 synthetic phone protector key version identifier (not a key), like PRC-001 above.
+  '''voice001-synthetic-v1''',
+  # VOICE-001 unit-test Twilio API key secret, a synthetic placeholder that never reached Twilio. It is only in
+  # the history of feat/voice-001-masked-call-bridge (commit ed1ca22; the test now derives its value at runtime)
+  # and that pushed history cannot be rewritten.
+  '''SyntheticTwilioApiKeySecret0001''',
 ]

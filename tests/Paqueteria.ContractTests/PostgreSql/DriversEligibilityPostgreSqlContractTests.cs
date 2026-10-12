@@ -205,7 +205,11 @@ public sealed class DriversEligibilityPostgreSqlContractTests(PostgreSqlContract
             Assert.Equal("paqueteria_migrator", reader.GetString(1));
         }
         Assert.Equal(
-            ["20260723_AdoptCanonicalDriversBaseline", "20260725000156_AdoptCanonicalDriverPositions"],
+            [
+                "20260723_AdoptCanonicalDriversBaseline",
+                "20260725000156_AdoptCanonicalDriverPositions",
+                "20261011000100_AddDriverVoiceBridge",
+            ],
             migrations.Order(StringComparer.Ordinal));
     }
 
