@@ -651,8 +651,8 @@ screen_contracts:
         (the driver cannot take routes in that city or service area), INVALID_REQUEST and the uniform 404 say no route
         was created; addRouteStop DRIVER_INELIGIBLE, CONFLICT, an unknown code and the uniform 404 reuse the messages
         of bulk_add_to_route; removeRouteStop and reorderRouteStops say the stop or the order could not change
-        (INVALID_STOP_SET - the new order does not match the route's stops); INVALID_REQUEST asks to refresh the
-        route
+        (INVALID_STOP_SET - the new order does not match the route's stops); INVALID_REQUEST of a stop change asks to
+        refresh the route
       version_conflict: only VERSION_CONFLICT says the route changed while it was being edited, and only it reads the
         route again (or says it could not)
       session: 401, 403 and 403 MFA_REQUIRED use the shared session, role and MFA texts; MFA_REQUIRED offers
@@ -683,8 +683,9 @@ screen_contracts:
         driver that read does not return, for example an inactive one, is "Repartidor no disponible"), its status, its
         stops and its assignment cost total
       stops: each stop by its guía, read with getOrder one order after another (at most 100 stops per route,
-        cancelled when another route is opened or the screen closes, cached by order while the screen is open); an
-        order that cannot be read is "Guía no disponible" and is read again with the route
+        cancelled when another route is opened or the screen closes, cached by order while the screen is open);
+        "Cargando guía…" while it is read; an order that cannot be read, or a stop beyond the 100th, is "Guía no
+        disponible", and a failed read is tried again with the route
       actions: '"Mover orden ORD_… arriba", "Mover orden ORD_… abajo" and "Retirar orden ORD_… de la ruta" name the
         stop by its guía, or by its position ("parada 2") when the guía is not available; the removal confirmation
         too'

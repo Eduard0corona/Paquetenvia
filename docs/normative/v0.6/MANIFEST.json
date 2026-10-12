@@ -40,7 +40,7 @@
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "4237c1b04863d7dad66b8eae4639b447dbc370c901c3adb61fd4fc98b45249cc"
+      "sha256": "0c17a52278930f3f2f762207e97e8fcf52f2f0e3c9befb0a2a86ae02e7f36bc0"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
@@ -334,8 +334,8 @@
     },
     {
       "path": "specs/AI-07_UI_CONTRACTS.yaml",
-      "bytes": 81672,
-      "sha256": "94f168ca67e88da6c3ec39e0d86b3efbfe9aac0e171910e865a6270474bd4285"
+      "bytes": 81780,
+      "sha256": "491e89677ff4fd9487273c6f5d740bfb89d8357b678d22e7fb0330f30278a1e6"
     },
     {
       "path": "specs/AI-08_BACKLOG.yaml",
