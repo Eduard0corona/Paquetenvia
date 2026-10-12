@@ -31,7 +31,7 @@ describe("cash collection operation", () => {
   it("keeps the exact amount, the app's reference and one stable key", () => {
     const operation = codOperation();
     expect(operation).toMatchObject({
-      schemaVersion: 2,
+      schemaVersion: 3,
       kind: "COD_COLLECTION",
       sourceStatus: "DELIVERING",
       targetStatus: "DELIVERING",
@@ -40,6 +40,7 @@ describe("cash collection operation", () => {
       sessionIdempotencyKey: null,
       finalizeIdempotencyKey: null,
       rejectionCode: null,
+      failedDelivery: null,
       cod: {
         amountCents: 125_000,
         reference,
@@ -111,8 +112,8 @@ describe("cash collection operation", () => {
   });
 });
 
-describe("IndexedDB v3 operation migration", () => {
-  it("turns a queued schema 1 operation into schema 2 without losing anything", () => {
+describe("IndexedDB operation migration to schema 3", () => {
+  it("turns a queued schema 1 operation into schema 3 without losing anything", () => {
     const current = createDriverOfflineOperation({
       partitionKey,
       orderId,
@@ -130,10 +131,17 @@ describe("IndexedDB v3 operation migration", () => {
     };
     delete legacy.cod;
     delete legacy.rejectionCode;
+    delete legacy.failedDelivery;
 
     const migrated = migrateDriverOfflineOperationRecord(legacy);
 
-    expect(migrated).toEqual({ ...legacy, schemaVersion: 2, cod: null, rejectionCode: null });
+    expect(migrated).toEqual({
+      ...legacy,
+      schemaVersion: 3,
+      cod: null,
+      rejectionCode: null,
+      failedDelivery: null,
+    });
     expect(parseDriverOfflineOperation(migrated, partitionKey)).toMatchObject({
       id: operationId,
       kind: "DELIVERY_PROOF",
@@ -144,10 +152,33 @@ describe("IndexedDB v3 operation migration", () => {
     });
   });
 
-  it("leaves schema 2 records and anything unknown untouched", () => {
+  it("turns a queued schema 2 cash collection into schema 3 without losing anything", () => {
+    const current = codOperation();
+    const schema2: Record<string, unknown> = {
+      ...current,
+      schemaVersion: 2,
+      status: "NEEDS_ATTENTION",
+      rejectionCode: "COD_AMOUNT_MISMATCH",
+    };
+    delete schema2.failedDelivery;
+
+    const migrated = migrateDriverOfflineOperationRecord(schema2);
+
+    expect(migrated).toEqual({ ...schema2, schemaVersion: 3, failedDelivery: null });
+    expect(parseDriverOfflineOperation(migrated, partitionKey)).toMatchObject({
+      id: operationId,
+      kind: "COD_COLLECTION",
+      status: "NEEDS_ATTENTION",
+      rejectionCode: "COD_AMOUNT_MISMATCH",
+      cod: current.cod,
+      failedDelivery: null,
+    });
+  });
+
+  it("leaves schema 3 records and anything unknown untouched", () => {
     const current = codOperation();
     expect(migrateDriverOfflineOperationRecord(current)).toBe(current);
-    for (const value of [null, 7, "x", [], { schemaVersion: 3 }]) {
+    for (const value of [null, 7, "x", [], { schemaVersion: 4 }]) {
       expect(migrateDriverOfflineOperationRecord(value)).toBe(value);
     }
   });

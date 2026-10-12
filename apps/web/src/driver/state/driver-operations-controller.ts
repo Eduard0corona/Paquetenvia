@@ -1,5 +1,17 @@
-import { createDriverCachePartition } from "../cache/driver-stops-cache";
-import type { DriverStopList } from "../contracts/driver-stop";
+import {
+  createDriverCachePartition,
+  DriverDatabaseBlockedError,
+} from "../cache/driver-stops-cache";
+import type {
+  DriverStop,
+  DriverStopCod,
+  DriverStopList,
+} from "../contracts/driver-stop";
+import {
+  driverFailedDeliveryReasonAllowed,
+  isDriverFailedDeliveryReason,
+  type DriverFailedDeliveryReason,
+} from "../contracts/failed-delivery";
 import {
   IndexedDbDriverOfflineQueue,
   type DriverOfflineQueue,
@@ -19,6 +31,7 @@ import {
   applyDriverOperation,
   compareDriverOperationDependency,
   driverOperationApplies,
+  driverOperationConfirmedByStop,
 } from "../offline/operation-projection";
 import {
   disabledDriverSyncTelemetry,
@@ -28,12 +41,19 @@ import {
   type DriverSyncSchedulerOptions,
 } from "../offline/driver-sync-scheduler";
 import type { DriverSyncApi } from "../offline/driver-sync-api";
+import {
+  driverDispatchRoleReportMessage,
+  driverFailedReportIncident,
+  driverRoleLoadingReportMessage,
+  driverRoleUnknownReportMessage,
+} from "../offline/failed-delivery-policy";
 import { OfflineOperationMaximumAgeHours } from "../offline/offline-operation-age";
 import { driverOperationLabel } from "../contracts/labels";
 import {
   validateDriverProof,
   type ValidatedDriverProof,
 } from "../proofs/proof-file";
+import type { DriverReportRole } from "../contracts/organization-roles";
 import type { DriverSession } from "../session/driver-session";
 
 export interface DriverOperationsState {
@@ -49,6 +69,13 @@ export interface DriverOperationsControllerOptions {
   /** The confirmation read; see DriverSyncSchedulerOptions.refreshStops. */
   readonly refreshStops: (signal?: AbortSignal) => Promise<DriverStopList>;
   readonly onAccessRevoked: (category: "unauthorized" | "forbidden") => void;
+  /**
+   * ORG-MY-ROLES-2026-10-12: who reports, from the person's own roles in the
+   * session's organization as DriverRolesController knows them now
+   * (driverReportRoleOf); absent means `unknown`, and "No se pudo entregar" is
+   * then refused (fails closed).
+   */
+  readonly reportRole?: () => DriverReportRole;
   readonly telemetry?: DriverSyncTelemetry;
   readonly queue?: DriverOfflineQueue;
   readonly schedulerFactory?: (
@@ -59,27 +86,71 @@ export interface DriverOperationsControllerOptions {
 }
 
 /**
+ * What the expiry notice needs from an expired action: its kind and, for a
+ * "No se pudo entregar" report, whether its incident is (or may be) open on
+ * the server already (driverFailedReportIncident).
+ */
+export interface DriverExpiredOperation {
+  readonly kind: DriverOperationKind;
+  readonly incident: "open" | "maybe" | "none";
+}
+
+/**
  * OPS-003-OFFLINE-72H: the driver is told, in plain Spanish, that the action
  * was discarded because it waited too long without connection and that it has
  * to be registered again or reported to dispatch.
+ * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: a report whose incident is (or
+ * may be) open is never presented as unsent and never to register again: the
+ * incident stays for dispatch, who decides.
  */
 export function driverOperationExpiredMessage(
-  kinds: readonly DriverOperationKind[],
+  expired: readonly (DriverOperationKind | DriverExpiredOperation)[],
 ): string {
   const limit = `${OfflineOperationMaximumAgeHours} horas`;
-  if (kinds.length === 1) {
-    return (
-      `La acción «${driverOperationLabel(kinds[0])}» venció: pasaron más de ` +
-      `${limit} sin conexión y ya no se enviará. Vuelve a registrarla o ` +
-      "repórtala a despacho."
+  const actions = expired.map((value) =>
+    typeof value === "string" ? { kind: value, incident: "none" as const } : value,
+  );
+  const reported = actions.filter((action) => action.incident !== "none");
+  const unsent = actions.filter((action) => action.incident === "none");
+  const parts: string[] = [];
+  if (unsent.length === 1) {
+    parts.push(
+      `La acción «${driverOperationLabel(unsent[0].kind)}» venció: pasaron más de ` +
+        `${limit} sin conexión y ya no se enviará. Vuelve a registrarla o ` +
+        "repórtala a despacho.",
+    );
+  } else if (unsent.length > 1) {
+    parts.push(
+      `${unsent.length} acciones guardadas vencieron: pasaron más de ${limit} ` +
+        "sin conexión y ya no se enviarán. Vuelve a registrarlas o repórtalas a " +
+        "despacho.",
     );
   }
-  return (
-    `${kinds.length} acciones guardadas vencieron: pasaron más de ${limit} ` +
-    "sin conexión y ya no se enviarán. Vuelve a registrarlas o repórtalas a " +
-    "despacho."
-  );
+  if (reported.length > 0) {
+    parts.push(
+      reported.some((action) => action.incident === "open")
+        ? `Tu reporte «${driverOperationLabel("FAILED_DELIVERY")}» ya quedó abierto como incidencia y ` +
+            `despacho decide qué sigue; el teléfono dejó de seguirlo porque pasaron más de ${limit} ` +
+            "sin conexión. No lo vuelvas a reportar."
+        : `Tu reporte «${driverOperationLabel("FAILED_DELIVERY")}» venció sin confirmarse: puede que ya ` +
+            "haya quedado abierto como incidencia. Avisa a despacho y no lo vuelvas a reportar.",
+    );
+  }
+  return parts.join(" ");
 }
+
+/** Shown when another tab of an older version keeps the phone's database open. */
+export const driverDatabaseBlockedMessage =
+  "Hay otra pestaña de Paquetenvia abierta con una versión anterior. Ciérrala y vuelve a cargar esta página " +
+  "para usar las acciones guardadas en el teléfono.";
+
+/**
+ * Why "Enviar reporte" stored nothing, in the words the form shows
+ * (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12).
+ */
+export type DriverFailedDeliveryEnqueueResult =
+  | { readonly stored: true }
+  | { readonly stored: false; readonly message: string };
 
 const initialState: DriverOperationsState = Object.freeze({
   operations: [],
@@ -100,7 +171,7 @@ export class DriverOperationsController {
   private scheduler: DriverSyncScheduler | null = null;
   private readonly telemetry: DriverSyncTelemetry;
   private disposed = false;
-  private expiredKinds: DriverOperationKind[] = [];
+  private expired: DriverExpiredOperation[] = [];
 
   public constructor(private readonly options: DriverOperationsControllerOptions) {
     this.queue = options.queue ?? new IndexedDbDriverOfflineQueue();
@@ -135,22 +206,25 @@ export class DriverOperationsController {
         onQueueChanged: (next) =>
           this.setState({ ...this.state, operations: next, loading: false }),
         onAccessRevoked: this.options.onAccessRevoked,
-        onOperationExpired: (operation) => this.notifyExpired(operation.kind),
+        onOperationExpired: (operation) => this.notifyExpired(operation),
         // Each pass reports only its own expirations; a notice already shown
         // is never folded into a later one.
         onSyncPassStarted: () => {
-          this.expiredKinds = [];
+          this.expired = [];
         },
         telemetry: this.telemetry,
         now: this.options.now,
         randomUuid: this.options.randomUuid,
       });
       this.scheduler.start();
-    } catch {
+    } catch (error) {
       this.setState({
         ...initialState,
         loading: false,
-        message: "La cola local no está disponible.",
+        message:
+          error instanceof DriverDatabaseBlockedError
+            ? driverDatabaseBlockedMessage
+            : "La cola local no está disponible.",
       });
     }
   }
@@ -307,13 +381,162 @@ export class DriverOperationsController {
     return true;
   }
 
+  /**
+   * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 ("Enviar reporte"): queues
+   * "No se pudo entregar" for a DELIVERY stop at the door with the reason from
+   * the closed list and exactly one photo ("Foto del lugar"). The operation
+   * keeps the photo, the four Idempotency-Keys (upload session, proof,
+   * incident, transition) and its progress, so a retry resumes at the right
+   * step. Refused, and nothing is stored, when the stop is not DELIVERING,
+   * when "No pagó el cobro" is chosen on a stop without cash on delivery,
+   * (owner answer "No, llama a despacho (Recommended)") when the order's cash
+   * is saved on the phone or recorded on the server, (owner answer "Registrar
+   * desde Despacho (Recommended)") when the person is also dispatch in the
+   * organization, and (ORG-MY-ROLES-2026-10-12) when the person's roles there
+   * are not known. At most one unsettled report per order is
+   * ever queued: a report REST already confirms only waits to leave the queue.
+   * Resolves `{ stored: true }` only when this call stored it; otherwise the
+   * result carries the reason the form shows.
+   */
+  public async enqueueFailedDelivery(
+    input: {
+      readonly orderId: string;
+      readonly reasonCode: DriverFailedDeliveryReason;
+      readonly projectedStatus: DriverOperationalStatus;
+      readonly projectedVersion: number;
+      /** The stop as REST confirms it (ProjectedDriverStop.confirmedStatus and confirmedVersion). */
+      readonly confirmedStatus: DriverStop["status"];
+      readonly confirmedVersion: number;
+      /** DriverStop.cod of the stop: the only source of whether it collects cash. */
+      readonly cod: DriverStopCod | null;
+    },
+    blob?: Blob,
+  ): Promise<DriverFailedDeliveryEnqueueResult> {
+    const refuse = (message: string): DriverFailedDeliveryEnqueueResult => {
+      this.setMessage(message);
+      return Object.freeze({ stored: false, message });
+    };
+    if (!this.partition) return refuse("La cola local no está disponible.");
+    if (this.state.mutating) {
+      return refuse("Espera a que termine la acción en curso y vuelve a enviar el reporte.");
+    }
+    // Only a person whose roles here are known and include neither DISPATCHER
+    // nor PLATFORM_ADMIN files the report from the phone: the server treats a
+    // person who is also dispatch as dispatch and refuses the short report
+    // (owner answer "Registrar desde Despacho (Recommended)"), and unknown
+    // roles fail closed (ORG-MY-ROLES-2026-10-12), also while they load.
+    switch (this.options.reportRole?.() ?? "unknown") {
+      case "dispatch":
+        return refuse(driverDispatchRoleReportMessage);
+      case "loading":
+        return refuse(driverRoleLoadingReportMessage);
+      case "unknown":
+        return refuse(driverRoleUnknownReportMessage);
+      case "driver":
+        break;
+    }
+    if (
+      input.projectedStatus !==
+      driverOperationDefinitions.FAILED_DELIVERY.sourceStatus
+    ) {
+      return refuse("Actualiza la parada antes de reportar.");
+    }
+    if (
+      !isDriverFailedDeliveryReason(input.reasonCode) ||
+      !driverFailedDeliveryReasonAllowed(input.reasonCode, input.cod !== null)
+    ) {
+      return refuse("Elige un motivo de la lista.");
+    }
+    const sameOrder = this.state.operations.filter(
+      (candidate) => candidate.orderId === input.orderId,
+    );
+    if (
+      input.cod?.recorded === true ||
+      sameOrder.some(
+        (candidate) =>
+          candidate.kind === "COD_COLLECTION" &&
+          candidate.status === "AWAITING_REST_CONFIRMATION",
+      )
+    ) {
+      return refuse(
+        "El cobro ya está registrado. Llama a despacho: ellos deciden y coordinan la devolución del cobro.",
+      );
+    }
+    if (sameOrder.some((candidate) => candidate.kind === "COD_COLLECTION")) {
+      return refuse(
+        "Hay un cobro guardado en el teléfono. Si fue un error, descártalo antes de reportar.",
+      );
+    }
+    // A report REST already confirms (for example its transition was accepted
+    // and dispatch then chose "Reintentar hoy") is settled: the stop no longer
+    // shows it and it leaves the queue on the next pass, so it never holds a
+    // new report back (see driverOperationConfirmedByStop).
+    const confirmedStop = {
+      status: input.confirmedStatus,
+      aggregate_version: input.confirmedVersion,
+      cod: input.cod,
+    };
+    if (
+      sameOrder.some(
+        (candidate) =>
+          candidate.kind === "FAILED_DELIVERY" &&
+          !driverOperationConfirmedByStop(candidate, confirmedStop),
+      )
+    ) {
+      return refuse("Ya hay un reporte guardado en el teléfono para esta entrega.");
+    }
+    if (sameOrder.some((candidate) => candidate.kind === "DELIVERY_PROOF")) {
+      return refuse(
+        "La entrega ya está guardada en el teléfono, así que no se puede reportar que no se pudo entregar.",
+      );
+    }
+
+    this.beginMutation();
+    let operation: DriverOfflineOperation;
+    let proof: ValidatedDriverProof;
+    try {
+      proof = await validateDriverProof(blob);
+      operation = createDriverOfflineOperation({
+        partitionKey: this.partition.key,
+        orderId: input.orderId,
+        kind: "FAILED_DELIVERY",
+        expectedVersion: input.projectedVersion,
+        proof,
+        failedDelivery: { reasonCode: input.reasonCode },
+        now: this.options.now,
+        randomUuid: this.options.randomUuid,
+      });
+      await this.queue.enqueue(this.partition, operation, proof);
+    } catch {
+      const message =
+        "No fue posible guardar el reporte. Verifica tipo, tamaño y espacio disponible.";
+      this.setState({ ...this.state, mutating: false, message });
+      return Object.freeze({ stored: false, message });
+    }
+
+    const saved = "Reporte guardado. Se enviará cuando haya conexión.";
+    try {
+      this.telemetry.proofBytesQueued(driverProofSizeBucket(proof.sizeBytes));
+      await this.reload(saved);
+    } catch {
+      this.setState({
+        operations: [...this.state.operations, operation],
+        loading: false,
+        mutating: false,
+        message: saved,
+      });
+    }
+    void this.scheduler?.requestSync(false);
+    return Object.freeze({ stored: true });
+  }
+
   public async syncNow(): Promise<void> {
-    this.expiredKinds = [];
+    this.expired = [];
     this.setMessage("Sincronizando acciones pendientes.");
     await this.scheduler?.requestSync(true);
     await this.reload(
-      this.expiredKinds.length > 0
-        ? driverOperationExpiredMessage(this.expiredKinds)
+      this.expired.length > 0
+        ? driverOperationExpiredMessage(this.expired)
         : null,
     );
   }
@@ -328,19 +551,34 @@ export class DriverOperationsController {
       (candidate) => candidate.id === operationId,
     );
     this.beginMutation();
-    await this.queue.deleteOperation(this.partition, operationId);
-    if (
-      discarded &&
-      confirmedStatus &&
-      confirmedVersion !== undefined
-    ) {
-      await this.recalculateOrderChain(
-        discarded.orderId,
-        confirmedStatus,
-        confirmedVersion,
-      );
+    // UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: a saved collection may be
+    // discarded while it is still pending, so the sync stops first; a pass
+    // that was already sending it can neither send it again nor write it back.
+    const scheduler = this.scheduler;
+    await scheduler?.pause();
+    try {
+      await this.queue.deleteOperation(this.partition, operationId);
+      if (discarded && confirmedVersion !== undefined) {
+        if (confirmedStatus) {
+          await this.recalculateOrderChain(
+            discarded.orderId,
+            confirmedStatus,
+            confirmedVersion,
+          );
+        } else {
+          // The stop is no longer at any step the phone acts on (for example
+          // FAILED_ATTEMPT): nothing left of the order can apply, so the first
+          // remaining action is held for the driver, who can discard it.
+          await this.holdOrderForDriver(discarded.orderId);
+        }
+      }
+    } finally {
+      scheduler?.resume();
     }
     await this.reload("La acción y su evidencia local se descartaron.");
+    // What the discard unblocked (for example a report held for the cash it
+    // had saved) is sent without waiting for the next trigger.
+    void scheduler?.requestSync(false);
   }
 
   public async createNewSession(operationId: string): Promise<void> {
@@ -397,13 +635,31 @@ export class DriverOperationsController {
       return;
     }
     this.beginMutation();
+    const nextAttemptAt = (this.options.now ?? (() => new Date()))().toISOString();
     await this.queue.replaceOperation(this.partition, {
       ...operation,
       status: "PENDING",
-      nextAttemptAt: (this.options.now ?? (() => new Date()))().toISOString(),
+      nextAttemptAt,
       safeError: null,
       rejectionCode: null,
     });
+    // The actions held behind it go again after it, in dependency order; if
+    // it is refused again the sync holds them again.
+    for (const blocked of this.state.operations) {
+      if (
+        blocked.orderId === operation.orderId &&
+        blocked.status === "BLOCKED" &&
+        compareDriverOperationDependency(blocked, operation) > 0
+      ) {
+        await this.queue.replaceOperation(this.partition, {
+          ...blocked,
+          status: "PENDING",
+          nextAttemptAt,
+          safeError: null,
+          rejectionCode: null,
+        });
+      }
+    }
     await this.reload("La misma acción quedó lista para reintentar.");
     void this.scheduler?.requestSync(false);
   }
@@ -425,6 +681,15 @@ export class DriverOperationsController {
       // A cash collection is never rebuilt with a new key: it is retried as it
       // is, or discarded and recorded again from the stop.
       this.setMessage("Reintenta el cobro o descártalo y vuelve a registrarlo.");
+      return;
+    }
+    if (old.kind === "FAILED_DELIVERY") {
+      // UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: a report is never rebuilt
+      // for another version. Before its incident it describes an attempt that
+      // moved on, so the driver reports again from the stop with a new reason
+      // and photo; after it, the incident belongs to that attempt (and may
+      // already justify a failed attempt), so dispatch decides.
+      this.setMessage("Este reporte no se puede rehacer para otra versión.");
       return;
     }
     this.beginMutation();
@@ -501,6 +766,14 @@ export class DriverOperationsController {
     let version = confirmedVersion;
     let blocked = false;
     for (const operation of operations) {
+      if (operation.status === "AWAITING_REST_CONFIRMATION") {
+        // Accepted by the server: it only waits for REST and is never turned
+        // back into an action to send.
+        if (!blocked && driverOperationApplies(operation, status, version)) {
+          ({ status, version } = applyDriverOperation(operation, status, version));
+        }
+        continue;
+      }
       const nextStatus: DriverOperationStatus =
         blocked
           ? "BLOCKED"
@@ -525,14 +798,52 @@ export class DriverOperationsController {
     }
   }
 
+  /**
+   * After a discard on a stop whose confirmed status is not one the phone acts
+   * on (FAILED_ATTEMPT, RESCHEDULED, RETURNING): no remaining action of the
+   * order can apply, so unless one already waits for the driver the first of
+   * them is held for attention (VERSION_CONFLICT) and the rest stay blocked
+   * behind it. The driver can always discard it; nothing is ever left blocked
+   * with no action shown.
+   */
+  private async holdOrderForDriver(orderId: string): Promise<void> {
+    if (!this.partition) return;
+    const operations = (await this.queue.listOperations(this.partition))
+      .filter(
+        (candidate) =>
+          candidate.orderId === orderId &&
+          candidate.status !== "AWAITING_REST_CONFIRMATION",
+      )
+      .sort(compareDriverOperationDependency);
+    if (operations.some((candidate) => candidate.status === "NEEDS_ATTENTION")) {
+      return;
+    }
+    let held = false;
+    for (const operation of operations) {
+      await this.queue.replaceOperation(this.partition, {
+        ...operation,
+        status: held ? "BLOCKED" : "NEEDS_ATTENTION",
+        safeError: held ? operation.safeError : "VERSION_CONFLICT",
+        rejectionCode: held ? operation.rejectionCode : null,
+      });
+      held = true;
+    }
+  }
+
   private beginMutation(): void {
-    this.expiredKinds = [];
+    this.expired = [];
     this.setState({ ...this.state, mutating: true, message: null });
   }
 
-  private notifyExpired(kind: DriverOperationKind): void {
-    this.expiredKinds = [...this.expiredKinds, kind];
-    this.setMessage(driverOperationExpiredMessage(this.expiredKinds));
+  private notifyExpired(operation: DriverOfflineOperation): void {
+    this.expired = [
+      ...this.expired,
+      {
+        kind: operation.kind,
+        incident: driverFailedReportIncident(operation),
+      },
+    ];
+    this.setMessage(driverOperationExpiredMessage(this.expired));
   }
 
   private setMessage(message: string): void {

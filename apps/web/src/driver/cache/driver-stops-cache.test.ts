@@ -54,7 +54,7 @@ describe("driver stop cache partition", () => {
     expect(partition.key).toMatch(/^[A-Za-z0-9_-]{43}$/);
   });
 
-  it("upgrades the existing database to v3 with snapshot schema 2", () => {
+  it("upgrades the existing database to v4 with snapshot schema 2", () => {
     const source = readFileSync(
       resolve(process.cwd(), "src/driver/cache/driver-stops-cache.ts"),
       "utf8",
@@ -62,7 +62,7 @@ describe("driver stop cache partition", () => {
     expect(DriverStopsDatabaseName).toBe("paquetenvia-driver-stops-v1");
     expect(DriverStopsStoreName).toBe("snapshots");
     expect(DriverStopsSchemaVersion).toBe(2);
-    expect(DriverDatabaseVersion).toBe(3);
+    expect(DriverDatabaseVersion).toBe(4);
     expect(DriverOfflineOperationsStoreName).toBe("operations");
     expect(DriverProofBlobsStoreName).toBe("proof_blobs");
     expect(DriverSyncLeasesStoreName).toBe("sync_leases");

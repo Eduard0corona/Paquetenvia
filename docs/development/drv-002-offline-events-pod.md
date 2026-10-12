@@ -12,15 +12,29 @@ cinco acciones operativas autorizadas:
 | `START_TRANSIT` | `PICKED_UP` | `IN_TRANSIT` | `DRIVER_TRANSIT_STARTED` |
 | `START_DELIVERY` | `IN_TRANSIT` | `DELIVERING` | `DRIVER_DELIVERY_STARTED` |
 | `DELIVERY_PROOF` | `DELIVERING` | `DELIVERED` | `DRIVER_DELIVERY_CONFIRMED` |
+| `COD_COLLECTION` | `DELIVERING` | (sin transición) | `recordCodCollection`, UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 |
+| `FAILED_DELIVERY` | `DELIVERING` | `FAILED_ATTEMPT` | `DRIVER_DELIVERY_FAILED_REPORTED`, con prueba, incidencia y `metadata.incident_id` (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12) |
 
-Los únicos proof types son `PICKUP_PHOTO` y `DELIVERY_PHOTO`. No se agregan
+Los únicos proof types son `PICKUP_PHOTO` y `DELIVERY_PHOTO`. La foto del lugar
+de "No se pudo entregar" es una `DELIVERY_PHOTO`; deja de contar para
+`DELIVERED` solo cuando la incidencia la cita como evidencia. Si el reporte se
+detiene después de finalizar la foto y antes de abrir la incidencia, la foto
+queda sin incidencia y el servidor podría contarla para `DELIVERED` en ese
+intento: riesgo residual con pendiente de servidor (respuesta del owner
+"Después, con ADR (Recommended)", ver
+`ui-001-phase3-driver-failed-delivery.md`). No se agregan
 endpoints, migraciones, paquetes, dependencias ni cambios productivos al
-backend. La implementación consume los contratos existentes de ORD-002 y
-POD-001.
+backend. La implementación consume los contratos existentes de ORD-002,
+POD-001, FIN-001 e INC-001.
 
-Quedan fuera de alcance ubicación, navegación, contacto, incidentes,
-`FAILED_ATTEMPT`, devolución, firma, código de entrega, reintentos desde el
-Service Worker, Background Sync y cualquier transición distinta de la tabla.
+Quedan fuera de alcance ubicación, devolución, firma, código de entrega, un
+intento fallido en recolección, reintentos desde el Service Worker, Background
+Sync y cualquier transición distinta de la tabla. Navegación, contacto y cobro
+llegaron con UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11; la incidencia y
+`FAILED_ATTEMPT` de una entrega, solo como "No se pudo entregar"
+(`FAILED_DELIVERY`), con UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 (ver
+`ui-001-phase3-driver-failed-delivery.md`). Ninguna otra salida de
+`FAILED_ATTEMPT` se ofrece en el teléfono: despacho decide.
 
 ## Arquitectura
 
@@ -48,6 +62,24 @@ Actualización `UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11`: la base sube a la
 versión `3`, el snapshot al esquema `2` y las operaciones al esquema `2` (agregan
 `cod` y `rejectionCode`, y el tipo `COD_COLLECTION`); las operaciones en cola se
 migran sin perderse. Ver `ui-001-phase3-driver-stop-details.md`.
+
+Actualización `UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12`: la base sube a la
+versión `4` y las operaciones al esquema `3` (agregan `failedDelivery` y el tipo
+`FAILED_DELIVERY`, con la llave `drv2-{operationId}-incident`); las operaciones
+en cola de esquema 1 o 2 se migran en el mismo lugar y las instantáneas de
+esquema 2 se conservan. Una app de una versión anterior no puede abrir la base.
+El shell del Service Worker sube a `paquetenvia-driver-shell-v7`. Descartar una
+operación pausa la sincronización. Para todas las acciones: una acción que el
+servidor ya aceptó (`AWAITING_REST_CONFIRMATION`) nunca vuelve a quedar
+bloqueada ni pendiente de mandar, y si REST nunca la muestra sale de la cola a
+las 72 horas sin aviso; al descartar una acción en una parada que despacho movió
+(sin estado operativo), la primera que queda de la orden pasa a atención, y una
+acción bloqueada sin nada retenido antes se muestra como retenida, así que
+siempre se puede descartar; reintentar la misma acción libera las que quedaron
+bloqueadas detrás. Cada conexión a la base se cierra sola cuando una versión más
+nueva la pide; si otra pestaña bloquea la subida, la pantalla pide cerrarla y
+recargar, y la conexión tardía se cierra. Ver
+`ui-001-phase3-driver-failed-delivery.md`.
 
 La base conserva el nombre `paquetenvia-driver-stops-v1` y sube su versión de
 base de datos a `2`. El snapshot DRV-001 conserva `schemaVersion: 1`. La
@@ -345,7 +377,9 @@ dotnet test .\tests\Paqueteria.IntegrationTests\Paqueteria.IntegrationTests.cspr
   conflicto; REST sigue siendo autoridad y SignalR sólo solicita un refresh.
 - Los 409/503 de POD conservan el drift normativo heredado; DRV-002 no cambia
   OpenAPI ni backend para resolverlo.
-- No existe failed attempt, workflow de incidentes ni frontend COD.
+- El cobro en la puerta (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11) y "No se pudo
+  entregar" (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12) ya existen; no hay
+  intento fallido en recolección ni otro flujo de incidencias en el teléfono.
 - GATE-007 bloquea el uso productivo de evidencia real.
 - Las vulnerabilidades de paquetes heredadas no se corrigen porque el alcance
   prohíbe cambios de versiones, lockfile u overrides.

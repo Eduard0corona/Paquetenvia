@@ -189,6 +189,79 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         Assert.False(await HasHorizontalOverflowAsync(page));
     }
 
+    /// <summary>
+    /// UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 on the smallest phone: "No se pudo entregar" opens "¿Qué pasó?" with
+    /// 44 px reasons, "No pagó el cobro" only on the stop that collects cash, "Otro…" with three more and no text
+    /// field. A confirmed failed attempt reads "Intento fallido · El despacho decide", offers nothing, and its cash
+    /// is no longer counted as pending.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverStopsPwa")]
+    public async Task Failed_delivery_fits_a_phone_and_a_failed_attempt_waits_for_dispatch()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync(new BrowserNewContextOptions
+        {
+            ViewportSize = new ViewportSize { Width = 320, Height = 568 },
+        });
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-session-failed-01");
+        const string delivering = "44444444-4444-4444-8444-444444444444";
+        const string failed = "55555555-5555-4555-8555-555555555555";
+        await RouteStopsAsync(
+            page,
+            _ => (200,
+            [
+                Stop(delivering, 8, "ORD_cdefghijklmnopqrstuvwx", "DELIVERY", "DELIVERING", "Calle Sintética 8",
+                    contactShortName: "M. López", codExpectedCents: 125_000),
+                Stop(failed, 9, "ORD_defghijklmnopqrstuvwxy", "DELIVERY", "FAILED_ATTEMPT", "Calle Sintética 9",
+                    contactShortName: "R. Pérez", codExpectedCents: 80_000),
+            ]));
+
+        await page.GotoAsync(new Uri(server.BaseAddress, "/driver/stops").AbsoluteUri);
+        await ExpectTextAsync(page, "ORD_defghijklmnopqrstuvwxy");
+        var cards = page.Locator("li");
+        Assert.Contains("Intento fallido · El despacho decide", await cards.Nth(1).InnerTextAsync());
+        Assert.DoesNotContain("Cobrar $800.00", await cards.Nth(1).InnerTextAsync());
+        Assert.Contains("1 cobro pendiente $1,250.00", await page.Locator("body").InnerTextAsync());
+
+        await page.GotoAsync(new Uri(server.BaseAddress, $"/driver/stops/{delivering}").AbsoluteUri);
+        await page.GetByRole(AriaRole.Button, new() { Name = "No se pudo entregar", Exact = true }).ClickAsync();
+        await page.GetByRole(AriaRole.Group, new() { Name = "¿Qué pasó?" }).WaitForAsync();
+        await page.GetByRole(AriaRole.Radio, new() { Name = "Otro…" }).CheckAsync();
+        foreach (var reason in new[]
+                 {
+                     "No había nadie", "Dirección incorrecta", "Rechazó el paquete", "No pagó el cobro", "Otro…",
+                     "Acceso restringido", "Paquete dañado", "Riesgo de seguridad",
+                 })
+        {
+            var option = await page.Locator("label", new() { HasText = reason }).BoundingBoxAsync();
+            Assert.NotNull(option);
+            Assert.True(option.Height >= 44, $"{reason} is {option.Height}px high");
+        }
+        foreach (var name in new[] { "Enviar reporte", "Cancelar" })
+        {
+            var button = await page.GetByRole(AriaRole.Button, new() { Name = name, Exact = true }).BoundingBoxAsync();
+            Assert.NotNull(button);
+            Assert.True(button.Height >= 44, $"{name} is {button.Height}px high");
+        }
+        Assert.True(await page.GetByRole(AriaRole.Button, new() { Name = "Enviar reporte" }).IsDisabledAsync());
+        Assert.Equal(0, await page.Locator("textarea, input[type=text], input:not([type])").CountAsync());
+        Assert.False(await HasHorizontalOverflowAsync(page));
+        await page.GetByRole(AriaRole.Button, new() { Name = "Cancelar", Exact = true }).ClickAsync();
+        await page.GetByRole(AriaRole.Button, new() { Name = "No se pudo entregar", Exact = true }).WaitForAsync();
+
+        await page.GotoAsync(new Uri(server.BaseAddress, $"/driver/stops/{failed}").AbsoluteUri);
+        await ExpectTextAsync(page, "Intento fallido · El despacho decide");
+        Assert.Equal(
+            0,
+            await page.GetByRole(AriaRole.Button, new() { Name = "No se pudo entregar" }).CountAsync());
+        Assert.Equal(0, await page.Locator("input[type=file]").CountAsync());
+        Assert.False(await HasHorizontalOverflowAsync(page));
+    }
+
     [Fact]
     [Trait("Category", "DriverStopsPwa")]
     public async Task Empty_and_offline_states_do_not_invent_data()
@@ -509,7 +582,7 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         await page.WaitForFunctionAsync(
             """
             async () => {
-              const cache = await caches.open("paquetenvia-driver-shell-v6");
+              const cache = await caches.open("paquetenvia-driver-shell-v7");
               const keys = await cache.keys();
               return keys.some(key => new URL(key.url).pathname.startsWith("/_next/static/"));
             }
@@ -521,7 +594,7 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         await page.WaitForFunctionAsync(
             """
             minimum => new Promise(resolve => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 3);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
               open.onerror = () => resolve(false);
               open.onsuccess = () => {
                 const database = open.result;
@@ -550,7 +623,7 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         var state = await page.EvaluateAsync<bool[]>(
             """
             async orderId => {
-              const cache = await caches.open("paquetenvia-driver-shell-v6");
+              const cache = await caches.open("paquetenvia-driver-shell-v7");
               const shell = await cache.match("/driver/stops");
               const exact = await cache.match(`/driver/stops/${orderId}`);
               const shellText = shell ? await shell.clone().text() : "";
@@ -602,6 +675,8 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         await page.RouteAsync(
             "**/hubs/driver/negotiate**",
             route => route.AbortAsync());
+        // ORG-MY-ROLES-2026-10-12: the roles read answers as the API does for a DRIVER.
+        await DriverOrganizationRoles.RouteAsync(page);
         var configuration = JsonSerializer.Serialize(new
         {
             organizationId,

@@ -91,6 +91,7 @@ describe("driver sync scheduler", () => {
         createProofUploadSession: vi.fn(),
         finalizeProof: vi.fn(),
         recordCodCollection: vi.fn(),
+        openFailedDeliveryIncident: vi.fn(),
       } as DriverSyncApi,
       refreshStops: async () => stopList([stop]),
       onQueueChanged: vi.fn(),
@@ -283,6 +284,7 @@ describe("driver sync scheduler", () => {
           createProofUploadSession: vi.fn(),
           finalizeProof: vi.fn(),
           recordCodCollection: vi.fn(),
+          openFailedDeliveryIncident: vi.fn(),
         },
         refreshStops: async () => stopList([{
           order_id: orderA,
@@ -498,6 +500,86 @@ describe("OPS-003 offline operation expiry", () => {
     );
     await scheduler.dispose();
   });
+
+  it.each<[string, Error]>([
+    ["a network failure", new DriverSyncApiError("recoverable")],
+    ["an answer that breaks the contract", new DriverSyncApiError("invalid-contract")],
+    ["an unexpected error", new Error("synthetic")],
+  ])(
+    "keeps an accepted action waiting for REST when the read right after the 2xx fails with %s, so it never expires as unsent",
+    async (_name, failure) => {
+      const queued = operation("CHECK_IN", orderA, 3, 1);
+      const queue = new MemoryQueue([queued]);
+      const transitionOrder = vi.fn(async () => ({
+        id: orderA,
+        status: "AT_PICKUP" as const,
+        version: 4,
+      }));
+      const onOperationExpired = vi.fn();
+      const answers: (() => DriverStopList)[] = [
+        // Before sending: REST does not show the action yet.
+        () => stopList([stopA("ASSIGNED", 3)]),
+        // The confirmation read right after the server accepted it.
+        () => {
+          throw failure;
+        },
+        // A later read that still lags behind.
+        () => stopList([stopA("ASSIGNED", 3)]),
+      ];
+      const refreshStops = vi.fn(async () => {
+        const answer = answers.shift();
+        if (!answer) throw new Error("unexpected read");
+        return answer();
+      });
+      let clock = new Date(captured);
+      const scheduler = new DriverSyncScheduler({
+        partition,
+        queue,
+        api: {
+          transitionOrder,
+          createProofUploadSession: vi.fn(),
+          finalizeProof: vi.fn(),
+          recordCodCollection: vi.fn(),
+          openFailedDeliveryIncident: vi.fn(),
+        },
+        refreshStops,
+        onQueueChanged: vi.fn(),
+        onAccessRevoked: vi.fn(),
+        onOperationExpired,
+        now: () => clock,
+        randomUuid: () => "99999999-9999-4999-8999-999999999999",
+        upload: vi.fn().mockResolvedValue(undefined),
+      });
+
+      await scheduler.requestSync(true);
+      expect(transitionOrder).toHaveBeenCalledOnce();
+      expect(queue.operations).toEqual([
+        expect.objectContaining({
+          id: queued.id,
+          status: "AWAITING_REST_CONFIRMATION",
+          attemptCount: 1,
+          nextAttemptAt: "2026-07-26T12:00:02.000Z",
+          safeError: null,
+        }),
+      ]);
+
+      // Still within the window, REST lags: it keeps waiting and is not sent again.
+      clock = new Date(Date.parse(captured) + 60_000);
+      await scheduler.requestSync(true);
+      expect(queue.operations).toEqual([
+        expect.objectContaining({ status: "AWAITING_REST_CONFIRMATION", attemptCount: 2 }),
+      ]);
+
+      // Past the OPS-003 window it leaves the queue without the "venció" notice: the server has it.
+      clock = justOutside;
+      await scheduler.requestSync(true);
+      expect(queue.operations).toEqual([]);
+      expect(transitionOrder).toHaveBeenCalledOnce();
+      expect(onOperationExpired).not.toHaveBeenCalled();
+      expect(refreshStops).toHaveBeenCalledTimes(3);
+      await scheduler.dispose();
+    },
+  );
 
   it("confirms by REST before expiring an action the server already applied", async () => {
     const queue = new MemoryQueue([operation("CHECK_IN", orderA, 3, 1)]);
@@ -771,6 +853,7 @@ function expiryScheduler(
       createProofUploadSession: vi.fn(),
       finalizeProof: vi.fn(),
       recordCodCollection: vi.fn(),
+      openFailedDeliveryIncident: vi.fn(),
       ...apiOverrides,
     },
     refreshStops,
@@ -868,6 +951,7 @@ function schedulerFor(
     createProofUploadSession: vi.fn(),
     finalizeProof: vi.fn(),
     recordCodCollection: vi.fn(),
+    openFailedDeliveryIncident: vi.fn(),
     ...apiOverrides,
   };
   return new DriverSyncScheduler({

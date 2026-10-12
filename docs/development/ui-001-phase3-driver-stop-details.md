@@ -158,7 +158,9 @@ hay solicitud a nuestro servidor ni a Directions/Routes, ni cálculo de ruta, di
 
 - Un validador compartido de propiedades exactas entre `driver-stop.ts`, `external-offer.ts` y `operation-contract.ts`:
   cada uno conserva el suyo para no cambiar contratos fuera de esta tarea.
-- "No pagó el cobro" va en el cambio del intento fallido. "Llamar" es VOICE-001.
+- "No pagó el cobro" va en el cambio del intento fallido (llegó con `UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12`,
+  que también sube IndexedDB a la versión 4, las operaciones al esquema 3 y la caché del Service Worker a v7; ver
+  `ui-001-phase3-driver-failed-delivery.md`). "Llamar" es VOICE-001.
 - Datos reales: solo datos de prueba hasta cerrar GATE-007.
 
 ## Validación

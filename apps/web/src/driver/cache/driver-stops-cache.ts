@@ -11,9 +11,14 @@ export const DriverStopsStoreName = "snapshots";
 /**
  * 1: DRV-001 snapshots. 2: DRV-002 offline queue stores. 3:
  * UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 snapshot schema 2 (stop details)
- * and operation schema 2 (cash collection); see upgradeDriverDatabase.
+ * and operation schema 2 (cash collection). 4:
+ * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 operation schema 3 ("No se pudo
+ * entregar") and the organization roles store (ORG-MY-ROLES-2026-10-12); see
+ * upgradeDriverDatabase. A browser never opens the database below its current
+ * version, so an app built for an older version cannot read (and therefore
+ * cannot misread or drop) an operation it does not know.
  */
-export const DriverDatabaseVersion = 3 as const;
+export const DriverDatabaseVersion = 4 as const;
 /**
  * Schema 2 snapshots carry the stop details (contact name, zone, window, cash
  * to collect and navigation target, or that they are unavailable) and the
@@ -26,6 +31,13 @@ export const DriverStopsSchemaVersion = DriverStopsSnapshotSchemaVersion;
 export const DriverOfflineOperationsStoreName = "operations";
 export const DriverProofBlobsStoreName = "proof_blobs";
 export const DriverSyncLeasesStoreName = "sync_leases";
+/**
+ * ORG-MY-ROLES-2026-10-12: the last successful answer of getMyOrganizationRoles
+ * of each partition (role codes only), so "No se pudo entregar" keeps working
+ * offline; see IndexedDbDriverOrganizationRolesCache. It leaves the phone with
+ * its partition (401 or 403) and on logout, like the stop snapshots.
+ */
+export const DriverOrganizationRolesStoreName = "organization_roles";
 
 export interface DriverCachePartition {
   readonly key: string;
@@ -61,6 +73,19 @@ export class DriverStopsCacheError extends Error {
   public constructor() {
     super("La caché de paradas no está disponible.");
     this.name = "DriverStopsCacheError";
+  }
+}
+
+/**
+ * The upgrade to {@link DriverDatabaseVersion} waits for another tab that
+ * still holds the database open (typically one of an older version). The
+ * request fails now; the screen asks the driver to close the other
+ * Paquetenvia tabs and reload.
+ */
+export class DriverDatabaseBlockedError extends DriverStopsCacheError {
+  public constructor() {
+    super();
+    this.name = "DriverDatabaseBlockedError";
   }
 }
 
@@ -118,16 +143,31 @@ export class IndexedDbDriverStopsCache implements DriverStopsCache {
     }
   }
 
+  /** 401 or 403: the partition's snapshot and its saved organization roles (ORG-MY-ROLES-2026-10-12) leave together. */
   public async clearPartition(partition: DriverCachePartition): Promise<void> {
     const database = await openDriverDatabase();
     try {
-      const transaction = database.transaction(DriverStopsStoreName, "readwrite");
-      transaction.objectStore(DriverStopsStoreName).delete(partition.key);
+      const stores = partitionCacheStores(database);
+      const transaction = database.transaction(stores, "readwrite");
+      for (const store of stores) {
+        transaction.objectStore(store).delete(partition.key);
+      }
       await driverDatabaseTransactionCompleted(transaction);
     } finally {
       database.close();
     }
   }
+}
+
+/**
+ * The stores keyed by partition that only cache what the server answered: the
+ * stop snapshots and, when the database has it (it does since version 4), the
+ * organization roles.
+ */
+function partitionCacheStores(database: IDBDatabase): string[] {
+  return database.objectStoreNames.contains(DriverOrganizationRolesStoreName)
+    ? [DriverStopsStoreName, DriverOrganizationRolesStoreName]
+    : [DriverStopsStoreName];
 }
 
 /**
@@ -189,45 +229,74 @@ function isUtcTimestamp(value: string): boolean {
 /**
  * UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 retention ("Se borra del teléfono
  * ... al cerrar sesión"): removes every saved stop snapshot, of every
- * partition, before signing out. Snapshots are only a cache that the next
- * successful REST response rebuilds; the offline queue is left as it is.
+ * partition, before signing out, and with them every saved answer of
+ * getMyOrganizationRoles (ORG-MY-ROLES-2026-10-12). Both are only a cache that
+ * the next successful response rebuilds; the offline queue is left as it is.
  */
 export async function forgetDriverStopDetails(): Promise<void> {
   const database = await openDriverDatabase();
   try {
-    const transaction = database.transaction(DriverStopsStoreName, "readwrite");
-    transaction.objectStore(DriverStopsStoreName).clear();
+    const stores = partitionCacheStores(database);
+    const transaction = database.transaction(stores, "readwrite");
+    for (const store of stores) {
+      transaction.objectStore(store).clear();
+    }
     await driverDatabaseTransactionCompleted(transaction);
   } finally {
     database.close();
   }
 }
 
+/**
+ * Opens the database at {@link DriverDatabaseVersion}. Every connection closes
+ * itself when a newer version asks for the database, so this tab never blocks
+ * a later upgrade. When the upgrade is blocked by another tab the request
+ * fails with DriverDatabaseBlockedError; the browser may still open the
+ * database later, once that tab lets go, and that late connection is closed
+ * at once instead of being left open by a request nobody waits for.
+ */
 export function openDriverDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const fail = (error: DriverStopsCacheError) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
     const open = indexedDB.open(DriverStopsDatabaseName, DriverDatabaseVersion);
     open.onupgradeneeded = (event) => {
       const transaction = open.transaction;
       if (!transaction) {
-        reject(new DriverStopsCacheError());
+        fail(new DriverStopsCacheError());
         return;
       }
       upgradeDriverDatabase(open.result, transaction, event.oldVersion);
     };
-    open.onsuccess = () => resolve(open.result);
-    open.onerror = () => reject(new DriverStopsCacheError());
-    open.onblocked = () => reject(new DriverStopsCacheError());
+    open.onsuccess = () => {
+      const database = open.result;
+      if (settled) {
+        database.close();
+        return;
+      }
+      settled = true;
+      database.onversionchange = () => database.close();
+      resolve(database);
+    };
+    open.onerror = () => fail(new DriverStopsCacheError());
+    open.onblocked = () => fail(new DriverDatabaseBlockedError());
   });
 }
 
 /**
  * Brings the database to {@link DriverDatabaseVersion} inside the version
  * change transaction, so it either completes or leaves the old version intact:
- * - creates any missing store (DRV-001 snapshots, DRV-002 queue stores);
+ * - creates any missing store (DRV-001 snapshots, DRV-002 queue stores, the
+ *   ORG-MY-ROLES-2026-10-12 organization roles);
  * - from version 1 or 2, drops the schema 1 snapshots: they carry no stop
- *   details and the next successful REST response replaces them;
- * - from version 2, rewrites every queued schema 1 operation as schema 2 in
- *   place, so no queued action, proof blob or lease is lost.
+ *   details and the next successful REST response replaces them (the schema 2
+ *   snapshots of version 3 are kept);
+ * - from version 2 or 3, rewrites every queued schema 1 or 2 operation as
+ *   schema 3 in place, so no queued action, proof blob or lease is lost.
  */
 export function upgradeDriverDatabase(
   database: IDBDatabase,
@@ -238,7 +307,7 @@ export function upgradeDriverDatabase(
   if (oldVersion >= 1 && oldVersion < 3) {
     transaction.objectStore(DriverStopsStoreName).clear();
   }
-  if (oldVersion === 2) {
+  if (oldVersion === 2 || oldVersion === 3) {
     const cursorRequest = transaction
       .objectStore(DriverOfflineOperationsStoreName)
       .openCursor();
@@ -290,6 +359,11 @@ function createMissingStores(database: IDBDatabase): void {
   }
   if (!database.objectStoreNames.contains(DriverSyncLeasesStoreName)) {
     database.createObjectStore(DriverSyncLeasesStoreName, {
+      keyPath: "partitionKey",
+    });
+  }
+  if (!database.objectStoreNames.contains(DriverOrganizationRolesStoreName)) {
+    database.createObjectStore(DriverOrganizationRolesStoreName, {
       keyPath: "partitionKey",
     });
   }

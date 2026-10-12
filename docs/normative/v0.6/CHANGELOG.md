@@ -1,5 +1,111 @@
 # Changelog
 
+## Roles propios en la organización activa: `GET /me/organization-roles` (ORG-MY-ROLES-2026-10-12) — 2026-10-12
+
+- Preguntas y respuestas literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR
+  del contrato de la API (AI-01 §7). Primera: ""Registrar desde Despacho" no se puede cumplir sin tocar el servidor: el
+  API solo dice un rol por empresa, así que la app del repartidor no sabe que esa persona también es despacho. ¿Qué
+  hacemos?" → "Agregar los roles al API (Recommended)" ("Cambio pequeño y aditivo: el contexto de cada empresa trae
+  también la lista de roles de la persona (con ADR). La app no le ofrece el reporte desde el inicio y no se sube ninguna
+  foto."); no elegida: "Aprender tras el primer rechazo". Segunda, tras revisar esa primera versión (un miembro `roles`
+  en `OrganizationContext`, nunca fusionado ni desplegado): "Agregar "roles" dentro del contexto de cada empresa rompe
+  el inicio de sesión de la web actual (la de hoy rechaza campos que no conoce) si el API se publica antes que la web, y
+  deja fallando las pestañas ya abiertas hasta recargar. ¿Cómo lo hacemos?" → "Endpoint nuevo de roles (Recommended)"
+  ("Los roles salen de una consulta nueva del API (solo los de la persona en su empresa activa). La web actual nunca la
+  llama, así que nada se rompe en ningún orden de despliegue; mismo resultado en la app del repartidor."); no elegida:
+  "Campo en el contexto y orden de despliegue".
+- AI-05: `OrganizationContext` y `listOrganizationContexts` quedan como estaban (cuatro miembros; el parser estricto de
+  la web no cambia). Nueva operación `getMyOrganizationRoles` (`GET /me/organization-roles`, etiqueta Identity, con
+  `X-Organization-Id`) y esquema `MyOrganizationRoles`: el objeto cerrado `{"roles":[...]}` con los roles propios de
+  quien pregunta en la organización elegida (membresía ACTIVE de una organización ACTIVE; el mismo enum de roles, sin
+  repetidos, en orden ordinal, minItems 1); 200, 401, 403 (encabezado ausente, mal formado o ajeno, o sin esa membresía)
+  y 503, como `getMyDriverPhone`; `Cache-Control: no-store`. `x-capability-matrix` agrega `own_membership_operations`
+  (todos los roles miembros, sin MFA: no dice nada más allá de las propias membresías) y `x-pilot-contract-deltas` la
+  entrada `ORG-MY-ROLES`.
+- Servidor: `OrganizationEndpoints` la mapea con `ActiveOrganizationMember` y el contexto tenant (403); la capacidad
+  `getMyOrganizationRoles` se revisa antes de leer; `PostgreSqlMyOrganizationRolesReader` lee solo las membresías
+  propias dentro de una transacción tenant explícita con RLS como `paqueteria_app` y nunca escribe. Nada de otras
+  personas, sin PII, sin migración, tabla, rol, permiso ni flujo atómico nuevo; AI-04, AI-06 y AI-18 sin cambios.
+- PWA del repartidor: pide la consulta al instalar la sesión y en cada sesión nueva (otro inicio de sesión u otra
+  organización); usa al instante la respuesta guardada para la partición y la reemplaza con cada respuesta correcta.
+  La respuesta se guarda en el IndexedDB particionado existente (store `organization_roles` de la versión 4, que
+  ningún teléfono ha abierto todavía, así que no sube de versión): la llave de partición, el esquema y los códigos de
+  rol, nada más. Sale del teléfono con la partición ante 401 o 403 y con todas las instantáneas al cerrar sesión;
+  cualquier otra falla (sin conexión, 5xx, 404 de una API anterior, respuesta fuera de contrato) conserva la guardada
+  y la consulta se repite al volver la conexión o al volver a verse la app (en línea, una a la vez, hasta 5 veces por
+  sesión, nunca después de 401 o 403). Las reglas no cambian: con DISPATCHER o PLATFORM_ADMIN la parada dice que se
+  registre desde Despacho; DRIVER sin ellos reporta, también sin conexión; mientras la primera consulta va en camino
+  el reporte todavía no se ofrece y no se dice nada del rol; sin respuesta conocida ni consulta en camino el reporte
+  no se ofrece (falla cerrado) con "No pudimos confirmar tu rol. Vuelve a abrir la app con conexión para reportar."
+  Ningún aviso de rol pide cerrar sesión, que borraría lo que el teléfono guarda sin conexión.
+- AI-07 `driver_stop`: `failed_delivery.dispatch_role`, `role_loading` y `role_unknown` citan esta consulta;
+  `offline_cache` y `details.retention` agregan la respuesta guardada.
+- Despliegue: no hace falta ningún orden. La web anterior nunca llama la consulta nueva, y esta web con una API anterior
+  (404) solo deja de ofrecer "No se pudo entregar"; el inicio de sesión, las paradas y todo lo demás siguen igual.
+  Rollback: revertir la web o la API, en cualquier orden, sin datos ni esquema que deshacer.
+
+## Repartidor: "No se pudo entregar" con motivo y foto, también sin conexión (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12) — 2026-10-12
+
+- Respuestas literales del project owner, registradas con sus preguntas en `decision-log.md` como cambio MAJOR
+  (AI-01 §7): fase 3 aprobada con "avanza con la fase 3" y la pantalla de entrega del diseño ("Cómo llegar",
+  "Llamar", "Llegué al destino", "Foto de entrega", "Cobro $…", "Confirmar entrega", "Vista previa de la foto ·
+  Repetir", "Usar esta foto", "No se pudo entregar"; "¿Qué pasó?" con "El despacho decidirá si se reprograma o
+  regresa", "No había nadie", "Dirección incorrecta", "Rechazó el paquete", "No pagó el cobro", "Otro…", "Foto del
+  lugar (obligatoria)" y "Enviar reporte"); el 2026-10-11 "Despacho decide (Recommended)", "Lista cerrada
+  (Recommended)" y "Según el motivo (Recommended)" (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11); el 2026-10-12
+  "Solo si hay cobro (Recommended)" (""No pagó el cobro" aparece solo cuando la parada tiene un cobro COD; en las demás
+  se ven los otros motivos y "Otro…".") y "No, llama a despacho (Recommended)" ("Con un cobro guardado en el teléfono o
+  ya registrado, "No se pudo entregar" no aparece. Si fue un error, descarta el cobro guardado; si ya se registró, la
+  app le pide llamar a despacho, que decide y coordina la devolución del dinero."); y, tras la revisión del PR,
+  "Registrar desde Despacho (Recommended)" ("La app no le ofrece "No se pudo entregar" y le explica que registre el
+  intento desde la orden en Despacho, donde elige motivo y siguiente paso. Sin cambiar el servidor.") y "Después, con
+  ADR (Recommended)" ("Lo registro como riesgo y pendiente (un tipo de foto propio para intento fallido, o que la
+  entrega cite su foto). En el uso normal de la app la entrega siempre sube su propia foto, así que no bloquea el
+  piloto.").
+- AI-07 `/driver/stops/:id` agrega la decisión y `screen_contracts.driver_stop.failed_delivery`: en una parada de
+  entrega en DELIVERING (confirmado o por sincronizar), "No se pudo entregar" abre "¿Qué pasó?" (renglones de 44 px;
+  "No pagó el cobro" solo si `DriverStop.cod` no es null; "Otro…" muestra "Acceso restringido", "Paquete dañado" y
+  "Riesgo de seguridad"), "Foto del lugar (obligatoria)" con la misma vista previa de la entrega y "Enviar reporte",
+  deshabilitado hasta tener motivo y foto, sin texto libre ni confirmación. `cod_collection.not_paid` apunta a este
+  flujo y `cod_collection.door_only` dice que un cobro solo se registra con la parada en DELIVERING.
+- PWA: una operación cerrada FAILED_DELIVERY corre la secuencia de AI-05 (sesión DELIVERY_PHOTO, PUT, prueba,
+  `openIncident` sin severity, description ni next_action, `transitionOrder` a FAILED_ATTEMPT con
+  `metadata.incident_id`), con una Idempotency-Key por petición al API; guarda la foto, las llaves y su avance, así
+  que un reintento o una pestaña nueva siguen en el paso correcto y nunca abren otra incidencia. Operaciones esquema 3,
+  IndexedDB versión 4 (las operaciones en cola se migran sin perderse; una app anterior no puede abrir la base) y caché
+  del Service Worker v7. Pendiente se ve como pendiente ("Reporte guardado en el teléfono. Se enviará cuando haya
+  conexión."); confirmado se ve "Intento fallido · El despacho decide".
+- Cobro: con un cobro guardado en el teléfono el reporte no aparece y la parada pide descartarlo primero (con la
+  confirmación de siempre); con el cobro registrado pide llamar a despacho, sin mostrar teléfono. La sincronización
+  retiene el reporte si aparece un cobro de la orden (antes de la sesión de carga, antes de la incidencia y antes de la
+  transición) y nunca registra un cobro fuera de la puerta: la incidencia nunca se pide con un cobro guardado o
+  registrado; si el cobro se registra después de abrirla, la transición no se manda y la incidencia queda para
+  despacho. Solo en la PWA: el servidor sigue aceptando el reporte del despacho con cobro, a propósito, porque despacho
+  decide.
+- Revisión del PR: antes de su incidencia, un reporte solo se manda si REST muestra la parada en DELIVERING en la
+  versión exacta en que se hizo (antes de la sesión y antes de la incidencia); un intento fallido que registró despacho
+  nunca lo confirma ("Despacho ya registró el intento fallido de esta entrega, así que tu reporte no se envió.
+  Descártalo."); REST confirma un reporte solo por su transición aceptada (cualquier versión posterior) o por su propia
+  incidencia; sin la parada en la respuesta de REST no se manda ni reporte ni cobro, y lo aceptado que REST nunca
+  muestra sale a las 72 horas; un reporte nunca se rehace para otra versión; lo que queda de una parada que despacho
+  movió siempre se puede descartar; un reporte con incidencia abierta (o posiblemente abierta) lo dice y nunca invita a
+  reportarlo de nuevo, también al vencer; "Enviar reporte" muestra el motivo real de un rechazo; quien también es
+  despacho ve el aviso de registrar desde Despacho y el 409 `INVALID_REQUEST` de la incidencia ya no habla del reloj;
+  una actualización de la base que bloquea otra pestaña pide cerrarla y cierra la conexión tardía.
+- Riesgos residuales: la "Foto del lugar" que queda sin incidencia podría contar para DELIVERED (pendiente de servidor
+  con ADR); `DriverStop.cod.recorded` es falso con un cobro DISPUTED o REVERSED; un cobro registrado entre la última
+  revisión y una petición no se puede impedir desde el teléfono.
+- Segunda y tercera revisión: el teléfono sabe que la persona también es despacho por su propia consulta de roles
+  (`GET /me/organization-roles`, ORG-MY-ROLES-2026-10-12, arriba), guardada por partición para que funcione sin
+  conexión; sin respuesta conocida el reporte no se ofrece (falla cerrado) y la parada lo explica; un reporte que REST
+  ya confirma ya no impide un reporte nuevo de la misma parada; y una acción que el servidor ya aceptó sigue esperando a
+  REST cuando falla la lectura de confirmación, así que nunca vence como no enviada.
+- Sin cambios en AI-04, AI-06, AI-18, roles, permisos ni migraciones, y sin un flujo atómico nuevo; el cambio de AI-05
+  y del servidor que necesita la respuesta 3 es ORG-MY-ROLES-2026-10-12, sin orden de despliegue.
+  Rollback: no es un revert simple (la app anterior abre IndexedDB 3 y el teléfono actualizado la rechaza); es una
+  versión que deja de ofrecer "No se pudo entregar" con IndexedDB 4, o una con IndexedDB 5 que reescribe la cola al
+  esquema 2 y descarta los reportes en cola (ver la nota de desarrollo).
+
 ## Tablero y bandeja: la otra parte de la orden sin nombre en lugar de 503 (OBS-001-OPERATED-OWNER-NAME-2026-10-12) — 2026-10-12
 
 - Instrucción literal del project owner (2026-10-11), registrada en `decision-log.md` como cambio MAJOR (AI-01 §7):

@@ -274,6 +274,7 @@ describe("driver operations OPS-003 expiry notice", () => {
         createProofUploadSession: vi.fn(),
         finalizeProof: vi.fn(),
         recordCodCollection: vi.fn(),
+        openFailedDeliveryIncident: vi.fn(),
       } as DriverSyncApi,
       refreshStops: async () => stopList([]),
       onAccessRevoked: vi.fn(),
@@ -526,6 +527,8 @@ async function createHarness(
     start: vi.fn(),
     requestSync: vi.fn().mockResolvedValue(undefined),
     dispose: vi.fn().mockResolvedValue(undefined),
+    pause: vi.fn().mockResolvedValue(undefined),
+    resume: vi.fn(),
   } as unknown as DriverSyncScheduler;
   const controller = new DriverOperationsController({
     session,
@@ -535,6 +538,7 @@ async function createHarness(
       createProofUploadSession: vi.fn(),
       finalizeProof: vi.fn(),
       recordCodCollection: vi.fn(),
+      openFailedDeliveryIncident: vi.fn(),
     } as DriverSyncApi,
     refreshStops: async () => stopList([]),
     onAccessRevoked: vi.fn(),

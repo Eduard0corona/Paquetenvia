@@ -7,8 +7,10 @@ using Npgsql;
 using Organizations.Application;
 using Organizations.Application.Auditing;
 using Organizations.Application.OrganizationContexts;
+using Organizations.Application.OrganizationRoles;
 using Organizations.Infrastructure.Auditing;
 using Organizations.Infrastructure.OrganizationContexts;
+using Organizations.Infrastructure.OrganizationRoles;
 using Organizations.Infrastructure.Persistence;
 using Paqueteria.Infrastructure.Tenancy;
 using Paqueteria.Application;
@@ -77,6 +79,16 @@ public static class DependencyInjection
             {
                 TenancyProviderKind.PostgreSql => serviceProvider.GetRequiredService<PostgreSqlPlatformAdminTenantActivationAudit>(),
                 _ => serviceProvider.GetRequiredService<DisabledPlatformAdminTenantActivationAudit>(),
+            });
+
+        // ORG-MY-ROLES-2026-10-12: the requesting person's own roles in the selected organization.
+        services.AddSingleton<DisabledMyOrganizationRolesReader>();
+        services.AddScoped<PostgreSqlMyOrganizationRolesReader>();
+        services.AddScoped<IMyOrganizationRolesReader>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<TenancyOptions>>().Value.Provider switch
+            {
+                TenancyProviderKind.PostgreSql => serviceProvider.GetRequiredService<PostgreSqlMyOrganizationRolesReader>(),
+                _ => serviceProvider.GetRequiredService<DisabledMyOrganizationRolesReader>(),
             });
         services.TryAddScoped<IInitialOrganizationProvisioningAuthorizer, DenyInitialOrganizationProvisioningAuthorizer>();
         services.TryAddScoped<IProvisioningFailureInjector, NoOpProvisioningFailureInjector>();

@@ -13,7 +13,9 @@ MAJOR según AI-01 §7). Fase 3 de la propuesta UI-001, aprobada con "avanza con
 
 Esta entrega cubre contrato, servidor y la pantalla del despachador. La pantalla "No se pudo entregar" de la PWA del
 repartidor y su cola sin conexión quedan para una entrega posterior que se construye sobre esta API
-([secuencia](#secuencia-de-api-para-la-pwa-del-repartidor)).
+([secuencia](#secuencia-de-api-para-la-pwa-del-repartidor)). Actualización: llegaron con
+`UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12` ([nota](ui-001-phase3-driver-failed-delivery.md)), sin cambios en esta
+API.
 
 ## Quién reporta decide qué manda (`openIncident`)
 

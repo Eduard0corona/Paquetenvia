@@ -1872,6 +1872,37 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /me/organization-roles:
+    get:
+      tags:
+      - Identity
+      operationId: getMyOrganizationRoles
+      description: >-
+        ORG-MY-ROLES-2026-10-12 (project owner, 2026-10-12, "Endpoint nuevo de roles (Recommended)") - the requesting
+        person's own roles in the organization selected with X-Organization-Id: every role of an ACTIVE membership of
+        that ACTIVE organization, each once, in ordinal order. Only the caller's own roles: never another person's
+        role, an id, a name or any other personal datum. Every member role may call it, without MFA
+        (x-capability-matrix own_membership_operations); a person without an ACTIVE membership there, a missing,
+        malformed or foreign X-Organization-Id included, receives the uniform 403 and reads nothing. Read-only, in one
+        explicit tenant transaction. The driver app reads it to know whether a driver is also DISPATCHER or
+        PLATFORM_ADMIN there (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12); listOrganizationContexts and
+        OrganizationContext are unchanged, so no client and no deployment order depend on it. Cache-Control no-store.
+      x-authorization-precedence: capability-before-persisted-state
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      responses:
+        '200':
+          description: The requesting person's roles in the selected organization
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/MyOrganizationRoles'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /onboarding/organizations:
     post:
       tags:
@@ -6227,6 +6258,32 @@ components:
           type: string
         is_default:
           type: boolean
+    MyOrganizationRoles:
+      type: object
+      additionalProperties: false
+      required:
+      - roles
+      properties:
+        roles:
+          type: array
+          description: >-
+            ORG-MY-ROLES-2026-10-12 - every role of the requesting person's ACTIVE memberships of the selected ACTIVE
+            organization, each once, in ordinal order; never empty (without such a membership the answer is 403).
+          minItems: 1
+          maxItems: 9
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+            - PLATFORM_ADMIN
+            - DISPATCHER
+            - FINANCE
+            - ALLY_ADMIN
+            - ALLY_OPERATOR
+            - BUSINESS_ADMIN
+            - BUSINESS_OPERATOR
+            - DRIVER
+            - VIEWER
     City:
       type: object
       required:
@@ -7730,6 +7787,14 @@ x-capability-matrix:
     removeMyDriverPhone: [DRIVER]
     getRecipientCallAvailability: [DRIVER]
     requestRecipientCall: [DRIVER]
+  own_membership_operations_decision: ORG-MY-ROLES-2026-10-12 (project owner, 2026-10-12, "Endpoint nuevo de roles
+    (Recommended)") - getMyOrganizationRoles answers only the requesting person's own roles in the organization
+    selected with X-Organization-Id, so every member role may call it, without MFA (it tells the person nothing beyond
+    its own memberships, like listOrganizationContexts); a person without an ACTIVE membership there receives the
+    uniform 403 before any state is read
+  own_membership_operations:
+    getMyOrganizationRoles: [PLATFORM_ADMIN, DISPATCHER, FINANCE, ALLY_ADMIN, ALLY_OPERATOR, BUSINESS_ADMIN,
+      BUSINESS_OPERATOR, DRIVER, VIEWER]
 x-pilot-contract-deltas:
   purpose: Contract deltas recorded for the pilot. The HTTP surface above is unchanged until the implementing task publishes
     each delta together with code and tests. Every entry is an owner decision (DECIDED).
@@ -7883,3 +7948,22 @@ x-pilot-contract-deltas:
       (ORDER BY in security.get_public_tracking_projection and the paqueteria_bootstrap grant on
       orders.order_events.aggregate_version) is decided too; translation to AI-06/AI-18 ships with its migration in the
       implementation PR
+  - id: ORG-MY-ROLES
+    status: DECIDED
+    decision: ORG-MY-ROLES-2026-10-12 (project owner, 2026-10-12)
+    literal: '"Agregar "roles" dentro del contexto de cada empresa rompe el inicio de sesión de la web actual (la de hoy
+      rechaza campos que no conoce) si el API se publica antes que la web, y deja fallando las pestañas ya abiertas
+      hasta recargar. ¿Cómo lo hacemos?" - Endpoint nuevo de roles (Recommended)'
+    earlier: 'the same day the owner was first asked ""Registrar desde Despacho" no se puede cumplir sin tocar el
+      servidor: el API solo dice un rol por empresa, así que la app del repartidor no sabe que esa persona también es
+      despacho. ¿Qué hacemos?" and answered Agregar los roles al API (Recommended); its roles member in
+      OrganizationContext was never shipped and is replaced by this operation'
+    implementation: shipped by feat/ui-001-driver-failed-delivery together with its code and tests -
+      getMyOrganizationRoles, MyOrganizationRolesResponse, PostgreSqlMyOrganizationRolesReader, the
+      own_membership_operations capability and the driver app's roles client and phone cache
+    delta: a new read-only operation getMyOrganizationRoles (GET /me/organization-roles, schema MyOrganizationRoles)
+      answers {"roles":[...]} - the requesting person's own ACTIVE membership roles in the ACTIVE organization selected
+      with X-Organization-Id (the AI-05 role enum, each once, in ordinal order, at least one); every member role,
+      without MFA; the uniform 403 without such a membership; Cache-Control no-store; nothing about any other person,
+      no PII and no schema, role, grant or migration change; listOrganizationContexts and OrganizationContext are
+      unchanged, so every client and every deployment order keep working

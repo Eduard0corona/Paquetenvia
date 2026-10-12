@@ -22,10 +22,13 @@ import styles from "./driver-stops.module.css";
 
 /**
  * The cash still to collect, in integer cents: not recorded on the server and
- * not saved on the phone; null when there is nothing to collect.
+ * not saved on the phone; null when there is nothing to collect. A stop whose
+ * delivery failed (reported on the phone or confirmed) collects nothing now:
+ * dispatch decides what follows (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12).
  */
 export function codStillToCollect(stop: ProjectedDriverStop): number | null {
   return stop.cod !== null &&
+    stop.projectedStatus !== "FAILED_ATTEMPT" &&
     (stop.codCollection === "pending" || stop.codCollection === "attention")
     ? stop.cod.expected.amount_cents
     : null;

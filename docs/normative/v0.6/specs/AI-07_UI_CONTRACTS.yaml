@@ -236,12 +236,16 @@ routes:
   # el diseño (Recommended)", "Google Maps (Recommended)" and "Solo confirma el monto (Recommended)"): the stop shows
   # what the driver needs at the door, "Cómo llegar" opens Google Maps and the driver records the cash collected
   # (screen_contracts.driver_stop). The backend and RLS remain the barrier.
+  # UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 (project owner, 2026-10-12 "Solo si hay cobro (Recommended)" and "No,
+  # llama a despacho (Recommended)"): fail_attempt and incident are "No se pudo entregar" at the door, reason and photo,
+  # queued offline; dispatch decides what follows (screen_contracts.driver_stop.failed_delivery).
   /driver/stops/:id:
     roles:
     - assigned_driver
     release: MVP-0
     decisions:
     - UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11
+    - UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12
     actions:
     - check_in
     - pickup_proof
@@ -833,6 +837,9 @@ screen_contracts:
       (Recommended)": "Solo de sus paradas asignadas. Se borra del teléfono cuando la parada deja de estar asignada o
       al cerrar sesión."); they leave the phone as details.retention says'
     - the count of the driver's stops completed today (a number, no data about those stops)
+    - 'the last successful answer of GET /me/organization-roles for the session''s partition: the role codes only
+      (ORG-MY-ROLES-2026-10-12, so "No se pudo entregar" keeps its dispatch_role rule offline); it leaves the phone
+      with the partition''s snapshot on 401 or 403 and with every snapshot on logout'
     - pending events
     - pending proof metadata
     privacy:
@@ -882,6 +889,7 @@ screen_contracts:
       - the phone keeps the details only inside the latest server snapshot of its session; a stop the server no
         longer returns leaves the phone with the next snapshot
       - logging out wipes every saved snapshot of the phone before leaving; 401 or 403 wipes the session's snapshot
+      - the saved roles answer (ORG-MY-ROLES-2026-10-12) is wiped with the snapshots, on logout and on 401 or 403
       - the offline queue survives a logout and carries no address or contact datum
       - every listMyStops answer carries Cache-Control no-store
       - synthetic data only until GATE-007 closes
@@ -929,7 +937,133 @@ screen_contracts:
       delivery: '"Confirmar entrega" stays disabled until the cash is recorded or saved on the phone; the server still
         refuses DELIVERED without the recorded cash (COD_NOT_RECORDED)'
       rejections: each finance conflict code and COD_NOT_RECORDED has its own Spanish message; no code is shown
-      not_paid: '"No pagó el cobro" is reported through the failed attempt (fail_attempt), outside this change'
+      not_paid: '"No pagó el cobro" is a reason of "No se pudo entregar" (failed_delivery,
+        UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12), offered only on a stop with cash on delivery and only while no
+        collection is saved on the phone or recorded'
+      door_only: a collection is recorded only while REST shows the stop DELIVERING; a queued collection whose stop
+        left DELIVERING (for example after a failed attempt) is held for attention and never sent, and one whose stop
+        REST leaves out of its answer waits unsent (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12)
+    # UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 (project owner: phase 3 approved 2026-10-09 with "avanza con la fase
+    # 3" and the delivery screen "Cómo llegar", "Llamar", "Llegué al destino", "Foto de entrega", "Cobro $…", "Confirmar
+    # entrega", "Vista previa de la foto · Repetir", "Usar esta foto", "No se pudo entregar"; 2026-10-11 "Despacho decide
+    # (Recommended)", "Lista cerrada (Recommended)" and "Según el motivo (Recommended)" in
+    # INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11; 2026-10-12 "Solo si hay cobro (Recommended)", "No, llama a
+    # despacho (Recommended)", "Registrar desde Despacho (Recommended)" and "Después, con ADR (Recommended)"): the
+    # driver reports that the delivery could not be made with a reason from the closed list and one photo; dispatch
+    # decides what follows. The backend and RLS remain the barrier.
+    failed_delivery:
+      decision: UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12
+      server_rule: INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11
+      label: No se pudo entregar
+      shown_when: a DELIVERY stop whose confirmed or projected status is DELIVERING, while no other action of the stop
+        is held for attention and no delivery is saved on the phone, to a person whose roles in the organization are
+        known and are not also dispatch (dispatch_role, role_loading, role_unknown); never on a pickup or a return
+        (the phone has no failed pickup)
+      dispatch_role: 'owner answer "Registrar desde Despacho (Recommended)" (2026-10-12): a person who also holds
+        DISPATCHER or PLATFORM_ADMIN in the active organization is reported by the server as dispatch, which refuses
+        the short report (409 INVALID_REQUEST); the stop does not offer "No se pudo entregar" and says "También eres
+        despacho en esta organización, así que el intento fallido no se reporta desde el teléfono: regístralo desde la
+        orden en Despacho, donde eliges el motivo y el siguiente paso." The phone knows it from GET
+        /me/organization-roles (getMyOrganizationRoles: the person''s own roles in the session''s organization only),
+        added for it by ORG-MY-ROLES-2026-10-12 (owner answers "Agregar los roles al API (Recommended)" and "Endpoint
+        nuevo de roles (Recommended)"), because GET /me/organization-contexts answers one context and one role per
+        organization and stays unchanged. The phone asks once per session start (a new sign-in or organization),
+        uses the answer saved for the session''s partition at once and keeps the last successful one there
+        (offline_cache), so a driver also reports offline. No photo is uploaded and nothing is stored'
+      role_loading: 'ORG-MY-ROLES-2026-10-12: while the read is on its way and no answer is known (right after every
+        sign-in, since logging out wipes the saved answer, or during a retry), "No se pudo entregar" is not offered
+        yet and the stop says nothing about the role: loading is not an error'
+      role_unknown: 'ORG-MY-ROLES-2026-10-12: when the phone knows no answer for the session and none is on its way
+        (the read failed with nothing saved, the API is earlier and answers 404, the answer broke the contract, or 401
+        or 403), "No se pudo entregar" is not offered (it fails closed) and the stop says "No pudimos confirmar tu rol.
+        Vuelve a abrir la app con conexión para reportar." - never asking to sign out, which would wipe what the phone
+        keeps offline. A failed read keeps the answer already saved and is made again when the connection returns or
+        the app is shown again, at most 5 times per session start and never after 401 or 403, which remove the
+        answer. The sign-in, the stops and every other action of the driver app work as before, so no deploy order
+        is needed between the web and the API'
+      settled_report: a report REST already confirms (its transition accepted and the stop at a later version, for
+        example after dispatch chose "Reintentar hoy") only waits to leave the queue and never holds back a new report
+        of the same stop
+      question: '"¿Qué pasó?" with the subtitle "El despacho decidirá si se reprograma o regresa", a radio group whose
+        options are 44 px targets'
+      reasons:
+      - RECIPIENT_ABSENT "No había nadie"
+      - ADDRESS_NOT_FOUND "Dirección incorrecta"
+      - RECIPIENT_REFUSED "Rechazó el paquete"
+      - PAYMENT_UNAVAILABLE "No pagó el cobro", only on a stop with cash on delivery (DriverStop.cod not null; owner
+        answer "Solo si hay cobro (Recommended)")
+      - '"Otro…" reveals ACCESS_RESTRICTED "Acceso restringido", PACKAGE_DAMAGED "Paquete dañado" and SECURITY_RISK
+        "Riesgo de seguridad"'
+      free_text: none; the server builds the description from the reason and derives the severity from it
+      photo: '"Foto del lugar (obligatoria)": exactly one JPEG or PNG of at most 10 MiB, shown in "Vista previa de la
+        foto" with "Repetir" and "Usar esta foto" like the delivery photo; the object URL is revoked on "Repetir", on
+        "Usar esta foto" and when the step closes; nothing is stored before "Enviar reporte"'
+      submit: '"Enviar reporte" stays disabled until a reason and the photo are chosen; it asks no confirmation, like
+        "Confirmar entrega"'
+      requests:
+      - POST /orders/{orderId}/proof-upload-sessions (createProofUploadSession) with proof_type DELIVERY_PHOTO while
+        the order is DELIVERING
+      - PUT of the photo to upload_url with only the session's required_headers and no credentials
+      - POST /orders/{orderId}/proofs (finalizeProof), which returns the proof id
+      - POST /orders/{orderId}/incidents (openIncident) with type FAILED_DELIVERY_ATTEMPT, reason_code, occurred_at (the
+        instant of the report) and evidence_proof_ids with that proof; never severity, description or next_action
+        (409 INVALID_REQUEST otherwise)
+      - POST /orders/{orderId}/transitions (transitionOrder) with target_status FAILED_ATTEMPT, reason
+        DRIVER_DELIVERY_FAILED_REPORTED, the expected_version the report was built on, metadata.incident_id and
+        client_occurred_at
+      attempt_check: until its incident exists, a report is sent only while REST shows its stop DELIVERING at exactly
+        the version it was built on, checked before the upload session and again before openIncident; otherwise
+        nothing is sent (no photo, no incident) and the report is held. A stop REST leaves out of its answer sends
+        nothing either; the report is read again after the backoff. Once the incident exists the transition is
+        replayed with its key whatever REST shows, because its stored answer is what tells whether the server
+        applied it
+      idempotency: each of the four API requests has its own Idempotency-Key (the PUT to storage carries only the
+        required_headers), derived from the operation and reused only to retry the same content; openIncident is
+        marked as requested before it is first sent; a report is never rebuilt for another version, so its incident
+        key always names it and a second incident is never opened from the phone
+      confirmation: REST confirms a report only by this phone's own work - once its transition was accepted, any
+        later version of the stop, whatever dispatch decided next ("Reintentar hoy", "Regresar"); before that, a
+        FAILED_ATTEMPT at a later version only when its own incident exists. A failed attempt dispatch registered on
+        its own never confirms a report that was not sent; the report is held with "Despacho ya registró el intento
+        fallido de esta entrega, así que tu reporte no se envió. Descártalo."
+      offline: one closed operation of the offline queue (FAILED_DELIVERY, operation schema 3, IndexedDB version 4)
+        holds the photo, the four keys and its progress (session, upload, proof id, incident requested, incident id),
+        so a retry or a new tab resumes at the next step; it is the first action of its order at the door, so no other
+        action of the order is sent while it is pending, retrying or held; the 72-hour rule and the per-partition
+        limits (100 operations, 25 MiB of photos, 10 MiB per photo) are those of the other driver actions, and an
+        action the server accepted that REST never shows leaves the queue after the same 72 hours without a notice;
+        the attention actions are discard, retry the same (only where it still applies and the cash is not recorded)
+        and a new upload session, never a rebuild for the current version (a new attempt is reported again from the
+        stop with a new reason and photo); every queued action of a stop dispatch moved on stays discardable; when
+        another Paquetenvia tab keeps the database open during the upgrade the stop asks to close it and reload; no
+        text, name, address, token, signed URL or object key is stored
+      after: 'while it waits the stop says "Reporte guardado en el teléfono. Se enviará cuando haya conexión." and
+        shows FAILED_ATTEMPT only as the status to sync; once REST confirms it the stop reads "Intento fallido · El
+        despacho decide", offers no next action and no longer counts its cash as pending; a refused action uses the
+        es-MX rule messages, DISPATCH_DECISION_REQUIRED included ("El siguiente paso de este intento fallido lo
+        decide el despacho."), and 409 INVALID_REQUEST of openIncident points to registering the attempt in Despacho,
+        never to the phone''s clock; a held report whose incident is open (or may be, after a lost answer) says so -
+        dispatch decides - and never says "not sent" nor invites reporting it again, also when it expires'
+      cash: 'owner answer "No, llama a despacho (Recommended)": with a cash collection saved on the phone (queued or
+        held) the report is not offered and the stop asks to discard the collection first if it was a mistake, with
+        the existing discard confirmation; with the cash recorded on the server (DriverStop.cod.recorded, or a
+        collection the server already accepted) it is not offered and the stop asks the driver to call dispatch, who
+        decides and coordinates returning the cash (no phone number is shown; the app has none); the sync holds a
+        queued report for attention when a collection of the same order is saved or the cash is recorded, checking
+        before the upload session, before openIncident and before the transition. The incident is never requested
+        while the cash is saved or recorded; when the cash is recorded after the incident was opened, the
+        transition is not sent and the incident stays open for dispatch, so the report and the cash can then both
+        exist on the server'
+      enforcement: the PWA enforces the cash rule; the server still accepts DELIVERING -> FAILED_ATTEMPT with the cash
+        recorded (AI-04 has no such guard), so a report made by dispatch is not blocked, which is intended because
+        dispatch decides; DriverStop.cod.recorded is false for a DISPUTED or REVERSED cash record, and a collection
+        recorded between the last check and a request cannot be prevented from the phone (residual risks)
+      orphan_photo: 'owner answer "Después, con ADR (Recommended)" (2026-10-12): a "Foto del lugar" finalized as a
+        DELIVERY_PHOTO whose report stops before openIncident (held, refused, discarded or expired) is cited by no
+        incident, so the server''s DELIVERED guard could still count it for the current attempt; recorded as a
+        residual risk and a pending server follow-up (a proof type of its own for a failed attempt, or a delivery
+        that cites its photo). The PWA reduces it by checking the attempt and the cash before the upload session and
+        again before openIncident; in normal use a delivery always uploads its own photo'
     recipient_call: VOICE-001-MASKED-CALLS-2026-10-11 ("Sí, con número enmascarado") and
       VOICE-001-PROVIDER-TWILIO-2026-10-11 - the detail of a DELIVERY stop whose confirmed status is DELIVERING offers
       "Llamar al destinatario" only when getRecipientCallAvailability answers available true; it sends
