@@ -1121,6 +1121,50 @@ def validate_settings(entries: list[Any], *, allow_sentinel: bool) -> list[str]:
             failures.append(f"setting {name} still awaits an owner decision ({OWNER_SENTINEL})")
         if re.search(r"(?i)(password|secret|token|key)", name):
             failures.append(f"setting {name} looks like a secret; secrets belong in Key Vault")
+    failures.extend(validate_dispatch_contacts(entries))
+    return failures
+
+
+# DRV-DISPATCH-CONTACT-2026-10-12 ("Sí, configurable (Recommended)"): the dispatch number of an organization is an
+# owner business setting, empty by default (no entry: the driver app shows no "Llamar a despacho"). The API refuses
+# to start with an invalid entry, so the pilot checks the same rules before deploying. A failure never echoes a value.
+DISPATCH_CONTACT_PREFIX = "Drivers__DispatchContacts__"
+DISPATCH_CONTACT_SETTING = re.compile(r"^Drivers__DispatchContacts__(0|[1-9][0-9]{0,2})__(OrganizationId|PhoneE164)\Z")
+CANONICAL_UUID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\Z")
+DISPATCH_PHONE_E164 = re.compile(r"^\+52[2-9][0-9]{9}\Z")
+
+
+def validate_dispatch_contacts(entries: list[Any]) -> list[str]:
+    """Drivers__DispatchContacts__<n>__OrganizationId and __PhoneE164: both for every n, n = 0, 1, 2... with no gap,
+    a canonical lowercase UUID (never the nil one), +52 and ten digits starting with 2-9, each organization once."""
+    contacts: dict[int, dict[str, str]] = {}
+    failures: list[str] = []
+    for entry in entries:
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str) or not isinstance(entry.get("value"), str):
+            continue
+        name = entry["name"]
+        if not name.startswith(DISPATCH_CONTACT_PREFIX):
+            continue
+        match = DISPATCH_CONTACT_SETTING.match(name)
+        if match is None:
+            failures.append(f"setting {name} is not Drivers__DispatchContacts__<n>__OrganizationId or __PhoneE164")
+            continue
+        contacts.setdefault(int(match.group(1)), {})[match.group(2)] = entry["value"]
+    if sorted(contacts) != list(range(len(contacts))):
+        failures.append("Drivers__DispatchContacts entries must be numbered 0, 1, 2... without gaps")
+    organizations: set[str] = set()
+    for index in sorted(contacts):
+        contact = contacts[index]
+        organization = contact.get("OrganizationId")
+        if organization is None or not CANONICAL_UUID.match(organization) or set(organization) <= {"0", "-"}:
+            failures.append(f"Drivers__DispatchContacts__{index}__OrganizationId must be a canonical lowercase UUID")
+        elif organization in organizations:
+            failures.append(f"Drivers__DispatchContacts__{index}__OrganizationId names an organization twice")
+        else:
+            organizations.add(organization)
+        if contact.get("PhoneE164") is None or not DISPATCH_PHONE_E164.match(contact["PhoneE164"]):
+            failures.append(
+                f"Drivers__DispatchContacts__{index}__PhoneE164 must be +52 and ten digits, the first one 2-9")
     return failures
 
 

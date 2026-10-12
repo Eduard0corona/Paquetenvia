@@ -33,7 +33,9 @@ import { projectDriverOperations } from "../offline/operation-projection";
 import type { DriverSession } from "../session/driver-session";
 import {
   DriverOperationsController,
+  driverCashRecordedRefusalMessage,
   driverDatabaseBlockedMessage,
+  driverMessageCallsDispatch,
   driverOperationExpiredMessage,
 } from "./driver-operations-controller";
 import {
@@ -188,6 +190,9 @@ describe("Enviar reporte", () => {
       ),
     ).resolves.toEqual(callDispatch);
     expect(recorded.controller.current.message).toContain("Llama a despacho");
+    // DRV-DISPATCH-CONTACT-2026-10-12: the form and the sync summary put "Llamar a despacho" next to this refusal.
+    expect(recorded.controller.current.message).toBe(driverCashRecordedRefusalMessage);
+    expect(driverMessageCallsDispatch(recorded.controller.current.message)).toBe(true);
 
     const accepted = await harness([collectionOperation({ status: "AWAITING_REST_CONFIRMATION" })]);
     await expect(

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   DriverDatabaseBlockedError,
   DriverDatabaseVersion,
+  DriverDispatchContactStoreName,
   DriverOfflineOperationsStoreName,
   DriverProofBlobsStoreName,
   DriverStopsDatabaseName,
@@ -197,7 +198,7 @@ describe("sync lease", () => {
   });
 });
 
-describe("IndexedDB version 4", () => {
+describe("IndexedDB version 5 (DRV-DISPATCH-CONTACT-2026-10-12), from versions 3 and 4", () => {
   it("rewrites a queued schema 2 action as schema 3 when the app opens the version 3 database", async () => {
     const schema2 = { ...checkIn(uuid(0x501)), schemaVersion: 2 } as Record<string, unknown>;
     delete schema2.failedDelivery;
@@ -221,19 +222,54 @@ describe("IndexedDB version 4", () => {
 
     const [migrated] = await queue.listOperations(partition);
 
-    expect(idb.version(DriverStopsDatabaseName)).toBe(4);
+    expect(idb.version(DriverStopsDatabaseName)).toBe(DriverDatabaseVersion);
     expect(migrated).toMatchObject({ id: uuid(0x501), schemaVersion: 3, failedDelivery: null });
   });
 
-  it("cannot be opened by an app built for version 3, so it never misreads a newer action", async () => {
+  it("keeps a queued schema 3 action of the version 4 database (main) as it is and adds the dispatch contact store", async () => {
+    const queued = checkIn(uuid(0x502));
+    await new Promise<void>((resolve, reject) => {
+      const open = idb.open(DriverStopsDatabaseName, 4);
+      open.onupgradeneeded = () => {
+        const database = open.result!;
+        database.createObjectStore("snapshots", { keyPath: "partitionKey" });
+        database
+          .createObjectStore("operations", { keyPath: ["partitionKey", "id"] })
+          .createIndex("by_partition", "partitionKey");
+        database
+          .createObjectStore("proof_blobs", { keyPath: ["partitionKey", "operationId"] })
+          .createIndex("by_partition", "partitionKey");
+        database.createObjectStore("sync_leases", { keyPath: "partitionKey" });
+        database.createObjectStore("organization_roles", { keyPath: "partitionKey" });
+      };
+      open.onsuccess = () => {
+        open.result!.close();
+        resolve();
+      };
+      open.onerror = () => reject(open.error);
+    });
+    idb.seed(DriverStopsDatabaseName, DriverOfflineOperationsStoreName, queued);
+
+    const [kept] = await queue.listOperations(partition);
+
+    expect(DriverDatabaseVersion).toBe(5);
+    expect(idb.version(DriverStopsDatabaseName)).toBe(5);
+    expect(kept).toEqual(queued);
+    expect(stored(DriverOfflineOperationsStoreName)).toEqual([queued]);
+    expect(stored(DriverDispatchContactStoreName)).toEqual([]);
+  });
+
+  it("cannot be opened by an app built for version 3 or 4, so it never misreads a newer action", async () => {
     const database = await openDriverDatabase();
     database.close();
-    const error = await new Promise<DOMException | null>((resolve) => {
-      const open = idb.open(DriverStopsDatabaseName, 3);
-      open.onsuccess = () => resolve(null);
-      open.onerror = () => resolve(open.error);
-    });
-    expect(error?.name).toBe("VersionError");
+    for (const older of [3, 4]) {
+      const error = await new Promise<DOMException | null>((resolve) => {
+        const open = idb.open(DriverStopsDatabaseName, older);
+        open.onsuccess = () => resolve(null);
+        open.onerror = () => resolve(open.error);
+      });
+      expect(error?.name).toBe("VersionError");
+    }
   });
 
   it("when another tab blocks the upgrade, fails with its own error and closes the connection that opens later", async () => {
@@ -254,7 +290,7 @@ describe("IndexedDB version 4", () => {
     letGo();
     // The browser finishes the upgrade once the other tab lets go; nobody
     // waits for that connection any more, so it is closed at once.
-    await vi.waitFor(() => expect(idb.version(DriverStopsDatabaseName)).toBe(4));
+    await vi.waitFor(() => expect(idb.version(DriverStopsDatabaseName)).toBe(DriverDatabaseVersion));
     await vi.waitFor(() => expect(idb.connections.at(-1)?.closed).toBe(true));
   });
 

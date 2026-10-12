@@ -166,6 +166,7 @@ app.MapPublicTrackingLinkEndpoints();
 app.MapDispatchEndpoints();
 app.MapDriverLocationEndpoints();
 app.MapDriverVoiceEndpoints();
+app.MapDriverDispatchContactEndpoints();
 app.MapRealtimeHubs();
 app.MapProofEndpoints();
 app.MapProofReadEndpoints();

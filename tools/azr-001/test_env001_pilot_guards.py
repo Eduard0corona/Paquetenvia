@@ -107,6 +107,48 @@ class SettingsTests(unittest.TestCase):
         entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
         self.assertFalse(any(entry["name"].startswith("Voice__") for entry in entries))
 
+    def test_dispatch_contacts_are_empty_by_default_and_checked_before_deploying(self):
+        # DRV-DISPATCH-CONTACT-2026-10-12: the owner gives the number later; until then the file has no entry and
+        # the driver app shows no "Llamar a despacho". The numbers below are synthetic.
+        entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
+        self.assertFalse(any(entry["name"].startswith("Drivers__DispatchContacts") for entry in entries))
+
+        def contact(index, organization, phone):
+            return [
+                {"name": f"Drivers__DispatchContacts__{index}__OrganizationId", "value": organization},
+                {"name": f"Drivers__DispatchContacts__{index}__PhoneE164", "value": phone},
+            ]
+
+        first = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+        second = "22222222-2222-4222-8222-222222222222"
+        number = "+522000000001"
+        valid = contact(0, first, number) + contact(1, second, number)
+        self.assertEqual([], guards.validate_settings(valid, allow_sentinel=False))
+
+        invalid = {
+            "uppercase id": contact(0, first.upper(), number),
+            "nil id": contact(0, "00000000-0000-0000-0000-000000000000", number),
+            "id without hyphens": contact(0, first.replace("-", ""), number),
+            "no country code": contact(0, first, "2000000001"),
+            "spaces": contact(0, first, "+52 2000000001"),
+            "first digit 1": contact(0, first, "+521000000001"),
+            "other country": contact(0, first, "+12025550100"),
+            "trailing line break": contact(0, first, number + "\n"),
+            "missing number": contact(0, first, number)[:1],
+            "missing organization": contact(0, first, number)[1:],
+            "organization twice": contact(0, first, number) + contact(1, first, "+522000000002"),
+            "gap": contact(0, first, number) + contact(2, second, number),
+            "unknown member": contact(0, first, number) + [{"name": "Drivers__DispatchContacts__0__Label", "value": "x"}],
+        }
+        for case, settings in invalid.items():
+            with self.subTest(case=case):
+                failures = guards.validate_settings(settings, allow_sentinel=False)
+                self.assertTrue(failures)
+                self.assertTrue(all("DispatchContacts" in failure for failure in failures), failures)
+                for entry in settings:
+                    if entry["name"].endswith("PhoneE164"):
+                        self.assertFalse(any(entry["value"].strip() in failure for failure in failures), failures)
+
     def test_removed_global_pricing_policy_version_is_rejected(self):
         # PRC-POLICY-VERSION-PER-ORG: the version comes from each organization's tariff rules.
         failures = guards.validate_settings([{"name": "Pricing__PricingPolicyVersion", "value": "PRC-PILOT-v1"}], allow_sentinel=False)

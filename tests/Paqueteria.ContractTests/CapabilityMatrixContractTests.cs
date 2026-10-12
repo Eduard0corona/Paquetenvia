@@ -469,6 +469,30 @@ public sealed class CapabilityMatrixContractTests
         Assert.Same(TenantCapabilities.GetMyOrganizationRoles, TenantCapabilities.All["getMyOrganizationRoles"]);
     }
 
+    /// <summary>
+    /// DRV-DISPATCH-CONTACT-2026-10-12 ("Sí, configurable (Recommended)"): AI-05 publishes getMyDispatchContact in its
+    /// own section with DRIVER only, and the server grants exactly DRIVER without MFA, like listMyStops; every other
+    /// role, MFA or not, is refused before anything is read.
+    /// </summary>
+    [Fact]
+    public void Dispatch_contact_operations_take_only_DRIVER_without_MFA()
+    {
+        var decision = Matrix.Scalar("dispatch_contact_operations_decision");
+        Assert.StartsWith("DRV-DISPATCH-CONTACT-2026-10-12", decision, StringComparison.Ordinal);
+        Assert.Contains("\"Sí, configurable (Recommended)\"", decision, StringComparison.Ordinal);
+        Assert.Contains("every other role receives the uniform 403", decision, StringComparison.Ordinal);
+        Assert.Equal(
+            ["getMyDispatchContact"],
+            OperationIds(Matrix.Mapping("dispatch_contact_operations")).Order(StringComparer.Ordinal));
+        Assert.Same(TenantCapabilities.GetMyDispatchContact, TenantCapabilities.All["getMyDispatchContact"]);
+        Assert.Equal(
+            [(OrganizationRole.Driver, false)],
+            TenantCapabilities.GetMyDispatchContact.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        Assert.Equal(
+            TenantCapabilities.ListMyStops.Grants.Select(grant => (grant.Role, grant.RequiresMfa)),
+            TenantCapabilities.GetMyDispatchContact.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+    }
+
     [Fact]
     public void Every_capability_names_an_AI05_tenant_operation_that_declares_the_Forbidden_response()
     {
@@ -556,7 +580,7 @@ public sealed class CapabilityMatrixContractTests
                      "operations", "finance_operations", "platform_operations", "membership_operations",
                      "tracking_link_operations", "incident_operations", "assignable_driver_operations",
                      "operations_queue_operations", "driver_list_operations", "voice_call_operations",
-                     "own_membership_operations",
+                     "own_membership_operations", "dispatch_contact_operations",
                  })
         {
             foreach (var (key, value) in Matrix.Mapping(section).Children)

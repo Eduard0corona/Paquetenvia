@@ -840,6 +840,9 @@ screen_contracts:
     - 'the last successful answer of GET /me/organization-roles for the session''s partition: the role codes only
       (ORG-MY-ROLES-2026-10-12, so "No se pudo entregar" keeps its dispatch_role rule offline); it leaves the phone
       with the partition''s snapshot on 401 or 403 and with every snapshot on logout'
+    - 'the last successful answer of GET /driver/me/dispatch-contact for the session''s partition: the organization''s
+      dispatch number or null, nothing else (DRV-DISPATCH-CONTACT-2026-10-12, so "Llamar a despacho" works offline); it
+      leaves the phone with the partition''s snapshot on 401 or 403 and with every snapshot on logout'
     - pending events
     - pending proof metadata
     privacy:
@@ -890,6 +893,8 @@ screen_contracts:
         longer returns leaves the phone with the next snapshot
       - logging out wipes every saved snapshot of the phone before leaving; 401 or 403 wipes the session's snapshot
       - the saved roles answer (ORG-MY-ROLES-2026-10-12) is wiped with the snapshots, on logout and on 401 or 403
+      - the saved dispatch contact answer (DRV-DISPATCH-CONTACT-2026-10-12) is wiped with the snapshots, on logout and
+        on 401 or 403
       - the offline queue survives a logout and carries no address or contact datum
       - every listMyStops answer carries Cache-Control no-store
       - synthetic data only until GATE-007 closes
@@ -1026,7 +1031,8 @@ screen_contracts:
         FAILED_ATTEMPT at a later version only when its own incident exists. A failed attempt dispatch registered on
         its own never confirms a report that was not sent; the report is held with "Despacho ya registró el intento
         fallido de esta entrega, así que tu reporte no se envió. Descártalo."
-      offline: one closed operation of the offline queue (FAILED_DELIVERY, operation schema 3, IndexedDB version 4)
+      offline: one closed operation of the offline queue (FAILED_DELIVERY, operation schema 3, IndexedDB version 4;
+        version 5 since DRV-DISPATCH-CONTACT-2026-10-12, which only adds the dispatch contact store)
         holds the photo, the four keys and its progress (session, upload, proof id, incident requested, incident id),
         so a retry or a new tab resumes at the next step; it is the first action of its order at the door, so no other
         action of the order is sent while it is pending, retrying or held; the 72-hour rule and the per-partition
@@ -1048,7 +1054,9 @@ screen_contracts:
         held) the report is not offered and the stop asks to discard the collection first if it was a mistake, with
         the existing discard confirmation; with the cash recorded on the server (DriverStop.cod.recorded, or a
         collection the server already accepted) it is not offered and the stop asks the driver to call dispatch, who
-        decides and coordinates returning the cash (no phone number is shown; the app has none); the sync holds a
+        decides and coordinates returning the cash (the text never carries a number; when the organization''s
+        dispatch number is known, "Llamar a despacho" goes next to it: dispatch_contact,
+        DRV-DISPATCH-CONTACT-2026-10-12); the sync holds a
         queued report for attention when a collection of the same order is saved or the cash is recorded, checking
         before the upload session, before openIncident and before the transition. The incident is never requested
         while the cash is saved or recorded; when the cash is recorded after the incident was opened, the
@@ -1064,6 +1072,37 @@ screen_contracts:
         residual risk and a pending server follow-up (a proof type of its own for a failed attempt, or a delivery
         that cites its photo). The PWA reduces it by checking the attempt and the cash before the upload session and
         again before openIncident; in normal use a delivery always uploads its own photo'
+    # DRV-DISPATCH-CONTACT-2026-10-12 (project owner, 2026-10-12, "Sí, configurable (Recommended)": "Un número de
+    # despacho por empresa en la configuración del piloto; la app lo muestra como botón "Llamar a despacho". Tú me das
+    # el número cuando lo tengas."; not chosen: "No, ya lo saben"): the driver calls dispatch from the app where the
+    # app tells it to call dispatch about a recorded cash collection.
+    dispatch_contact:
+      decision: DRV-DISPATCH-CONTACT-2026-10-12
+      source: GET /driver/me/dispatch-contact (getMyDispatchContact, DriverDispatchContact) - the number the server
+        configuration (Drivers:DispatchContacts, empty by default) holds for the session's organization, or null;
+        DRIVER members only
+      label: Llamar a despacho
+      control: 'a "tel:" link to the E.164 number ("tel:+52…"), at least 44 x 44 px; the number itself is never written
+        on the screen'
+      shown_next_to:
+      - 'failed_delivery.cash on the stop: "El cobro ya está registrado. Si no puedes entregar, llama a despacho: ellos
+        deciden y coordinan la devolución del cobro."'
+      - '"Enviar reporte" refused because the cash is recorded (in the form and in the sync summary): "El cobro ya
+        está registrado. Llama a despacho: ellos deciden y coordinan la devolución del cobro."'
+      - 'a report held before its incident with the cash recorded: "El cobro de esta entrega ya está registrado, así
+        que el reporte no se envió. Llama a despacho: ellos deciden y coordinan la devolución del cobro."'
+      - a report whose incident is (or may be) open, held because the cash is recorded ("…Llama a despacho…") or still
+        saved on the phone ("…si no, llama a despacho.")
+      not_shown: without a known number (none configured, no answer yet on this phone, an earlier API, 401 or 403) the
+        texts stay exactly as they are and nothing else is shown; the link is never placed anywhere else
+      read: asked once per session start (a new sign-in or organization), the answer saved for the session's
+        partition used at once; a successful answer (a number or null) replaces it; 401 or 403 removes it; any other
+        failure keeps it and the read is made again when the connection returns or the app is shown again, at most 5
+        times per session start, like the roles read
+      offline_cache: the last successful answer per partition in the existing IndexedDB (version 5, store
+        dispatch_contacts - the partition key, the schema and the number or null), so the link works offline
+      retention: wiped with the partition on 401 or 403 and with every snapshot on logout
+      privacy: a business contact of the organization, never a person's datum; never logged
     recipient_call: VOICE-001-MASKED-CALLS-2026-10-11 ("Sí, con número enmascarado") and
       VOICE-001-PROVIDER-TWILIO-2026-10-11 - the detail of a DELIVERY stop whose confirmed status is DELIVERING offers
       "Llamar al destinatario" only when getRecipientCallAvailability answers available true; it sends

@@ -1,6 +1,8 @@
+using Drivers.Application.DispatchContacts;
 using Drivers.Application.Eligibility;
 using Drivers.Application.Locations;
 using Drivers.Application.Voice;
+using Drivers.Infrastructure.DispatchContacts;
 using Drivers.Infrastructure.Eligibility;
 using Drivers.Infrastructure.Locations;
 using Drivers.Infrastructure.Persistence;
@@ -50,6 +52,11 @@ public static class DependencyInjection
                 "Drivers:RecipientCalls needs MaximumPerOrder 1-20, OrderWindowMinutes 1-60, " +
                 "MaximumPerDriverPerHour 1-200 (not below MaximumPerOrder), IdempotencyLifetimeMinutes 60-10080 and " +
                 "StaleRequestSeconds 60-3600.")
+            // DRV-DISPATCH-CONTACT-2026-10-12: the message never carries a configured value.
+            .Validate(options => ConfiguredDriverDispatchContactDirectory.AreValid(options.DispatchContacts),
+                "Drivers:DispatchContacts needs, in every entry, an OrganizationId written as a canonical lowercase " +
+                "UUID (not the nil UUID) and a PhoneE164 that is +52 followed by ten digits, the first one 2-9; each " +
+                "organization at most once.")
             .ValidateOnStart();
 
         services.TryAddSingleton(serviceProvider =>
@@ -136,6 +143,8 @@ public static class DependencyInjection
                 DriversProviderKind.PostgreSql => serviceProvider.GetRequiredService<PostgreSqlRecipientCallService>(),
                 _ => serviceProvider.GetRequiredService<DisabledRecipientCallService>(),
             });
+        // DRV-DISPATCH-CONTACT-2026-10-12: configuration only, whatever the provider.
+        services.TryAddSingleton<IDriverDispatchContactDirectory, ConfiguredDriverDispatchContactDirectory>();
         services.AddSingleton<DisabledDriverEligibilityService>();
         services.AddScoped<PostgreSqlDriverEligibilityService>();
         services.AddScoped<IDriverEligibilityService>(serviceProvider =>
