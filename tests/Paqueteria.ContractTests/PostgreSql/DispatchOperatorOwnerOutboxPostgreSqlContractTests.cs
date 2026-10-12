@@ -391,7 +391,7 @@ public sealed partial class DispatchPostgreSqlContractTests
         {
             var created = await CreateAssignmentService(fixture.AppDataSource)
                 .CreateOwnDriverAssignmentAsync(Command(scenario) with { OrganizationId = operatorId }, default);
-            await using var connections = new RealtimeWorkerConnectionFactory(fixture.WorkerConnectionString);
+            await using var connections = new RealtimeDispatcherConnectionFactory(fixture.RealtimeConnectionString);
             var evidence = new PostgreSqlRealtimeOutboxEvidenceReader(connections);
 
             // The owner's operations audience reads the assignment; the operator's driver is the driver audience.
@@ -475,7 +475,7 @@ public sealed partial class DispatchPostgreSqlContractTests
         {
             var created = await CreateAssignmentService(fixture.AppDataSource)
                 .CreateOwnDriverAssignmentAsync(Command(scenario) with { OrganizationId = operatorId }, default);
-            await using var connections = new RealtimeWorkerConnectionFactory(fixture.WorkerConnectionString);
+            await using var connections = new RealtimeDispatcherConnectionFactory(fixture.RealtimeConnectionString);
             var evidence = new PostgreSqlRealtimeOutboxEvidenceReader(connections);
 
             var active = await evidence.ReadAssignmentAsync(scenario.OrganizationId, created.Id, default);

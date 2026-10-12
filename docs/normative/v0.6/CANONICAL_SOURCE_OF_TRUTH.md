@@ -17,7 +17,7 @@ Este ZIP completo es la única entrega que debe validarse. No mezclar archivos s
 ## Archivos críticos
 
 - `database/AI-06_SCHEMA.sql` SHA-256: `f069b455894eb825f252f59c1a50373cd6a0d13d50d6b4493c53024f0d4b7ba7`
-- `database/AI-18_DATABASE_ROLE_MODEL.sql` SHA-256: `79733422531adcf4bdb39a420c30fa2639a9aa9e1d42dab911eccafd285ef804`
+- `database/AI-18_DATABASE_ROLE_MODEL.sql` SHA-256: `2a95220f8934f0431da096bb66028b60e2ab00fcdaa8b2c44d39bb43ec8f5700`
 
 El SQL canónico contiene:
 
@@ -56,7 +56,8 @@ almacén PostgreSQL de sesiones BFF (`BFF-SESSION-STORE-IMPLEMENTATION`: AI-06
 `identity.bff_sessions`; AI-18 `paqueteria_session_executor`) y por el ejecutor de outbox y auditoría del
 operador (`DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03`: AI-06 nota de política; AI-18
 `paqueteria_operator_outbox_executor`) y por el cierre automático de órdenes entregadas
-(`ORD-AUTO-CLOSE-2026-10-10`: AI-18 `paqueteria_auto_close_executor`). AI-05 recibió además cambios aditivos de EXT-001, RTE-001,
+(`ORD-AUTO-CLOSE-2026-10-10`: AI-18 `paqueteria_auto_close_executor`) y por la credencial propia del tiempo real de
+la API (`RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12`: AI-18 `paqueteria_realtime`). AI-05 recibió además cambios aditivos de EXT-001, RTE-001,
 CSV-001, INC-001, FIN-001 y SET-001; ver `CHANGELOG.md` y `decision-log.md`.
 El identificador de bundle no se reemitió.
 

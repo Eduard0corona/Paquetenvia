@@ -12,6 +12,15 @@ public sealed class OutboxDispatcherOptions
 {
     public const string SectionName = "Realtime:OutboxDispatcher";
 
+    /// <summary>
+    /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the connection string of the dispatchers' own login, a member of
+    /// <see cref="DatabaseRole"/> only. The Worker credential (<c>ConnectionStrings:PaqueteriaWorker</c>) is never used.
+    /// </summary>
+    public const string ConnectionStringName = "PaqueteriaRealtime";
+
+    /// <summary>The NOLOGIN NOBYPASSRLS role every dispatcher transaction assumes with <c>SET LOCAL ROLE</c>.</summary>
+    public const string DatabaseRole = "paqueteria_realtime";
+
     public OutboxDispatcherProviderKind Provider { get; set; } = OutboxDispatcherProviderKind.Disabled;
     public string WorkerId { get; set; } = "rtm002-local";
 

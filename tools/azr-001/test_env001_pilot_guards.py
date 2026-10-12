@@ -728,6 +728,52 @@ class TemplateGuardTests(unittest.TestCase):
         self.assertNotEqual(text, not_deployed)
         self.assert_fails(22, self.context(workflow_text=not_deployed), "web.parameters.json")
 
+    def test_api_realtime_dispatcher_reads_its_own_credential_and_never_the_workers(self):
+        """RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: own Key Vault connection, per-secret RBAC, login generated."""
+        ctx = self.context()
+        api = ctx.workload(guards.API_APP)
+        self.assertEqual("PostgreSql", api.value("Realtime__OutboxDispatcher__Provider"))
+        self.assertEqual("pg-realtime-runtime-connection", guards.secret_mappings(api)["ConnectionStrings:PaqueteriaRealtime"])
+        self.assertIn("pg-realtime-runtime-connection", ctx.templates["apps"]["variables"]["apiSecretNames"])
+        self.assertNotIn("pg-worker-runtime-connection", ctx.templates["apps"]["variables"]["apiSecretNames"])
+        logins = ctx.workload(guards.LOGINS_JOB)
+        self.assertEqual("pg-realtime-login-verifier", guards.secret_mappings(logins)["PAQUETERIA_REALTIME_LOGIN_VERIFIER"])
+
+        def unmapped(t):
+            self.edit(t, "apps", "'KeyVaultSecrets__Mappings__5__ConfigurationKey', 'value', 'ConnectionStrings:PaqueteriaRealtime')",
+                      "'KeyVaultSecrets__Mappings__5__ConfigurationKey', 'value', 'ConnectionStrings:PaqueteriaOther')")
+        self.assert_fails(23, self.context(unmapped), "does not map ConnectionStrings:PaqueteriaRealtime")
+        self.assert_fails(6, self.context(unmapped), "differ from the least-privilege set")
+
+        def worker_credential(t):
+            self.edit(t, "apps",
+                      "'KeyVaultSecrets__Mappings__5__SecretName', 'value', 'pg-realtime-runtime-connection')",
+                      "'KeyVaultSecrets__Mappings__5__SecretName', 'value', 'pg-worker-runtime-connection')")
+            self.edit(t, "apps", "'KeyVaultSecrets__Mappings__5__ConfigurationKey', 'value', 'ConnectionStrings:PaqueteriaRealtime')",
+                      "'KeyVaultSecrets__Mappings__5__ConfigurationKey', 'value', 'ConnectionStrings:PaqueteriaWorker')")
+        self.assert_fails(23, self.context(worker_credential), "the Worker credential must never reach the API")
+        self.assert_fails(23, self.context(worker_credential), "api maps Worker secrets")
+
+        def worker_reads_realtime(t):
+            self.edit(t, "apps", "'KeyVaultSecrets__Mappings__1__SecretName', 'value', 'pg-worker-runtime-connection')",
+                      "'KeyVaultSecrets__Mappings__1__SecretName', 'value', 'pg-realtime-runtime-connection')")
+        self.assert_fails(23, self.context(worker_reads_realtime), "only the API's realtime dispatchers read it")
+
+        def rbac_missing(t):
+            t["apps"]["variables"]["apiSecretNames"] = [n for n in t["apps"]["variables"]["apiSecretNames"]
+                                                        if n != "pg-realtime-runtime-connection"]
+        self.assert_fails(6, self.context(rbac_missing), "apps.apiSecretNames")
+
+        def verifier_missing(t):
+            t["jobs"]["variables"]["loginsSecretNames"] = [n for n in t["jobs"]["variables"]["loginsSecretNames"]
+                                                           if n != "pg-realtime-login-verifier"]
+        self.assert_fails(6, self.context(verifier_missing), "jobs.loginsSecretNames")
+
+        text = (REPO_ROOT / guards.PILOT_WORKFLOW).read_text(encoding="utf-8")
+        not_generated = text.replace("for role in api worker realtime; do", "for role in api worker; do")
+        self.assertNotEqual(text, not_generated)
+        self.assert_fails(23, self.context(workflow_text=not_generated), "api, worker and realtime runtime logins")
+
     def test_observability_template_is_required(self):
         def drop(t):
             del t["observability"]
