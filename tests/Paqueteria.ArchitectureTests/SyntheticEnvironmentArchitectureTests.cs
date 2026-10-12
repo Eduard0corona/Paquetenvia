@@ -99,7 +99,8 @@ public sealed class SyntheticEnvironmentArchitectureTests
         Assert.Contains("if (args[0] == \"bootstrap\")", source, StringComparison.Ordinal);
         Assert.Contains("await SeedPrerequisitesAsync(connection);", source, StringComparison.Ordinal);
         Assert.Equal(1, Regex.Matches(source, @"BootstrapRuntimeRolesAsync\(").Count - 1);
-        Assert.Equal(2, Regex.Matches(source, @"EnsureLoginAsync\(").Count - 1);
+        // RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: app, worker and the API realtime dispatcher login.
+        Assert.Equal(3, Regex.Matches(source, @"EnsureLoginAsync\(").Count - 1);
     }
 
     [Fact]
@@ -125,10 +126,10 @@ public sealed class SyntheticEnvironmentArchitectureTests
             "E03A8FCD34FE8F7ED9EC83E163AACA13A095E7E26C041C3E28CB72EC1DF0A8C4");
         AssertSha256(
             "docs/normative/v0.6/MANIFEST.json",
-            "4EB27E60BCF95CD7FE25786A854391CF779853B875ED1D1F937C08771D9451E5");
+            "61FF69731E2309D3F653E16B840A154C72702C88F266BA142F1DE9B80B5E9513");
         AssertSha256(
             "docs/normative/v0.6/CHECKSUMS_SHA256.txt",
-            "0C64591EF747CF8A5801B567F6F78E976E84560AF386DEBA7B9A3E5FC176A131");
+            "3296110AA89501C6DF21B90C113A22C5743E9B7F05956BDF47B7E9B40FA308CD");
     }
 
     [Fact]

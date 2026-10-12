@@ -14,6 +14,7 @@ public sealed class Adp001MigratorKeyVaultSettingsTests
     private const string Connection = "Host=db;Username=migrator;Password=synthetic-migration-secret";
     private const string ApiVerifier = "SCRAM-SHA-256$4096:c2FsdA==$c3RvcmVk:c2VydmVy";
     private const string WorkerVerifier = "SCRAM-SHA-256$4096:d29ya2Vy$c3RvcmVk:c2VydmVy";
+    private const string RealtimeVerifier = "SCRAM-SHA-256$4096:cmVhbHRpbWU=$c3RvcmVk:c2VydmVy";
 
     [Fact]
     public void Mapped_connection_and_runtime_login_verifiers_are_visible_to_the_migrator_lookup()
@@ -21,11 +22,13 @@ public sealed class Adp001MigratorKeyVaultSettingsTests
         var keyVault = Mapped(
             ("pg-migration-connection", "PAQUETERIA_MIGRATION_CONNECTION", Connection),
             ("pg-api-login-verifier", "PAQUETERIA_API_LOGIN_VERIFIER", ApiVerifier),
-            ("pg-worker-login-verifier", "PAQUETERIA_WORKER_LOGIN_VERIFIER", WorkerVerifier));
+            ("pg-worker-login-verifier", "PAQUETERIA_WORKER_LOGIN_VERIFIER", WorkerVerifier),
+            ("pg-realtime-login-verifier", "PAQUETERIA_REALTIME_LOGIN_VERIFIER", RealtimeVerifier));
 
         Assert.Equal(Connection, DatabaseMigratorProgram.ResolveSetting("PAQUETERIA_MIGRATION_CONNECTION", keyVault, _ => null));
         Assert.Equal(ApiVerifier, DatabaseMigratorProgram.ResolveSetting("PAQUETERIA_API_LOGIN_VERIFIER", keyVault, _ => null));
         Assert.Equal(WorkerVerifier, DatabaseMigratorProgram.ResolveSetting("PAQUETERIA_WORKER_LOGIN_VERIFIER", keyVault, _ => null));
+        Assert.Equal(RealtimeVerifier, DatabaseMigratorProgram.ResolveSetting("PAQUETERIA_REALTIME_LOGIN_VERIFIER", keyVault, _ => null));
         Assert.Null(DatabaseMigratorProgram.ResolveSetting("PAQUETERIA_UNMAPPED_SETTING", keyVault, _ => null));
     }
 

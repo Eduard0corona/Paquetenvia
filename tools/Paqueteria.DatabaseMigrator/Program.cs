@@ -68,11 +68,13 @@ internal static partial class DatabaseMigratorProgram
                     return 0;
 
                 case "runtime-logins":
-                    // ENV-001: least-privilege runtime LOGIN roles for the pilot API and Worker (SCRAM verifiers only).
+                    // ENV-001: least-privilege runtime LOGIN roles for the pilot API, Worker and API realtime dispatchers
+                    // (RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12); SCRAM verifiers only.
                     await deployer.AssertAsync(baseline, connectionString, cancellation.Token).ConfigureAwait(false);
                     await RuntimeLoginProvisioner.RunAsync(connectionString, ReadSetting, cancellation.Token)
                         .ConfigureAwait(false);
-                    Console.WriteLine($"RUNTIME_LOGINS_OK api={RuntimeLoginProvisioner.ApiLogin} worker={RuntimeLoginProvisioner.WorkerLogin}");
+                    Console.WriteLine(
+                        $"RUNTIME_LOGINS_OK api={RuntimeLoginProvisioner.ApiLogin} worker={RuntimeLoginProvisioner.WorkerLogin} realtime={RuntimeLoginProvisioner.RealtimeLogin}");
                     return 0;
 
                 case "ownership-diagnostic":
@@ -218,7 +220,8 @@ internal static partial class DatabaseMigratorProgram
 
     /// <summary>
     /// The single lookup for named settings (the <c>--connection-env</c> connection and the runtime-login
-    /// verifiers <c>PAQUETERIA_API_LOGIN_VERIFIER</c> / <c>PAQUETERIA_WORKER_LOGIN_VERIFIER</c>).
+    /// verifiers <c>PAQUETERIA_API_LOGIN_VERIFIER</c> / <c>PAQUETERIA_WORKER_LOGIN_VERIFIER</c> /
+    /// <c>PAQUETERIA_REALTIME_LOGIN_VERIFIER</c>).
     /// PILOT-KEYVAULT-PRIVATE-APP-READ: a name mapped to a Key Vault secret returns the secret; any other
     /// name reads the environment <b>at call time</b> (never a snapshot). Key Vault is read on first use
     /// only when <c>KeyVaultSecrets__VaultUri</c> is set, so <c>verify</c> never reaches it.

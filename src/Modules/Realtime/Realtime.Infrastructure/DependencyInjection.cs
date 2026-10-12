@@ -109,15 +109,21 @@ public static class DependencyInjection
                         "InProcess",
                         StringComparison.OrdinalIgnoreCase),
                 "Realtime:OutboxDispatcher:Provider=PostgreSql requires Realtime:Backplane=InProcess while GATE-013 is open.")
+            // RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the dispatchers use their own least-privilege login
+            // (member of paqueteria_realtime only), never the Worker credential.
             .Validate(
                 options => options.Provider != OutboxDispatcherProviderKind.PostgreSql ||
                     !string.IsNullOrWhiteSpace(
-                        configuration.GetConnectionString("PaqueteriaWorker")),
-                "Realtime:OutboxDispatcher:Provider=PostgreSql requires ConnectionStrings:PaqueteriaWorker.")
+                        configuration.GetConnectionString(OutboxDispatcherOptions.ConnectionStringName)),
+                $"Realtime:OutboxDispatcher:Provider=PostgreSql requires ConnectionStrings:{OutboxDispatcherOptions.ConnectionStringName}.")
+            .Validate(
+                options => options.Provider != OutboxDispatcherProviderKind.PostgreSql ||
+                    IsDedicatedRealtimeCredential(configuration),
+                $"ConnectionStrings:{OutboxDispatcherOptions.ConnectionStringName} must be a valid connection string whose login differs from ConnectionStrings:Paqueteria and ConnectionStrings:PaqueteriaWorker.")
             .ValidateOnStart();
 
-        services.AddSingleton(_ => new RealtimeWorkerConnectionFactory(
-            configuration.GetConnectionString("PaqueteriaWorker") ?? string.Empty));
+        services.AddSingleton(_ => new RealtimeDispatcherConnectionFactory(
+            configuration.GetConnectionString(OutboxDispatcherOptions.ConnectionStringName) ?? string.Empty));
         services.AddSingleton<IRealtimeOutboxStore, PostgreSqlRealtimeOutboxStore>();
         services.AddSingleton<IRealtimeOutboxEvidenceReader, PostgreSqlRealtimeOutboxEvidenceReader>();
         services.TryAddSingleton<IRealtimeOutboxFailureInjector, NoOpRealtimeOutboxFailureInjector>();
@@ -132,6 +138,50 @@ public static class DependencyInjection
                 "realtime_outbox_dispatcher",
                 tags: ["ready"]);
         return services;
+    }
+
+    /// <summary>
+    /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the realtime credential is its own login. It must parse, name a
+    /// login, and that login must not be the API's (<c>ConnectionStrings:Paqueteria</c>) or the Worker's
+    /// (<c>ConnectionStrings:PaqueteriaWorker</c>) when either is configured in this host.
+    /// </summary>
+    internal static bool IsDedicatedRealtimeCredential(IConfiguration configuration)
+    {
+        var realtime = LoginOf(configuration.GetConnectionString(OutboxDispatcherOptions.ConnectionStringName));
+        if (realtime is null)
+        {
+            return false;
+        }
+
+        foreach (var name in new[] { "Paqueteria", "PaqueteriaWorker" })
+        {
+            var other = configuration.GetConnectionString(name);
+            if (!string.IsNullOrWhiteSpace(other) &&
+                string.Equals(LoginOf(other), realtime, StringComparison.Ordinal))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static string? LoginOf(string? connectionString)
+    {
+        if (string.IsNullOrWhiteSpace(connectionString))
+        {
+            return null;
+        }
+
+        try
+        {
+            var username = new NpgsqlConnectionStringBuilder(connectionString).Username;
+            return string.IsNullOrWhiteSpace(username) ? null : username;
+        }
+        catch (Exception exception) when (exception is ArgumentException or FormatException or InvalidCastException)
+        {
+            return null;
+        }
     }
 
     private static bool IsValidReconnectPolicy(IReadOnlyList<int>? delays) =>

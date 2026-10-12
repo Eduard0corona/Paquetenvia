@@ -6,7 +6,7 @@ using Realtime.Application.Configuration;
 namespace Realtime.Infrastructure.Dispatching;
 
 internal sealed class RealtimeOutboxHealthCheck(
-    RealtimeWorkerConnectionFactory connections,
+    RealtimeDispatcherConnectionFactory connections,
     IOptions<RealtimeOptions> realtimeOptions,
     IOptions<OutboxDispatcherOptions> dispatcherOptions) : IHealthCheck
 {
@@ -31,19 +31,43 @@ internal sealed class RealtimeOutboxHealthCheck(
         {
             await using var connection = await connections.OpenConnectionAsync(cancellationToken);
             await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-            await PostgreSqlRealtimeOutboxStore.SetWorkerRoleAsync(
+            await PostgreSqlRealtimeOutboxStore.SetDispatcherRoleAsync(
                 connection,
                 transaction,
                 cancellationToken);
+            // RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: ready only as paqueteria_realtime (NOBYPASSRLS) with the six
+            // lease-token functions executable, and only while the session login has the exact shape the runtime login
+            // provisioning enforces: LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS and a
+            // member, directly or through any chain, of paqueteria_realtime and of no other role. Membership in any
+            // other role (the Worker or API runtime role, the migrator, bootstrap, maintenance or any executor) would let
+            // code in the API process SET ROLE into it, so the realtime credential is never reported ready that way.
             await using var command = new NpgsqlCommand(
                 """
                 SELECT
-                  current_user='paqueteria_worker'
+                  current_user='paqueteria_realtime'
                   AND EXISTS (
                     SELECT 1
                     FROM pg_catalog.pg_roles
                     WHERE rolname=current_user
                       AND rolbypassrls=false
+                  )
+                  AND EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.pg_roles login
+                    WHERE login.rolname=session_user
+                      AND login.rolcanlogin
+                      AND NOT login.rolsuper
+                      AND NOT login.rolbypassrls
+                      AND NOT login.rolcreaterole
+                      AND NOT login.rolcreatedb
+                      AND NOT login.rolreplication
+                      AND NOT login.rolinherit
+                  )
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM pg_catalog.pg_roles r
+                    WHERE r.rolname NOT IN ('paqueteria_realtime', session_user)
+                      AND pg_has_role(session_user, r.oid, 'MEMBER')
                   )
                   AND to_regprocedure('security.claim_realtime_outbox(text,integer,interval)') IS NOT NULL
                   AND to_regprocedure('security.settle_outbox(uuid,uuid,text,text,timestamp with time zone)') IS NOT NULL
@@ -82,14 +106,14 @@ internal sealed class RealtimeOutboxHealthCheck(
             await transaction.RollbackAsync(cancellationToken);
             return valid
                 ? HealthCheckResult.Healthy(
-                    "Worker database and canonical outbox functions are available.")
+                    "Realtime dispatcher database role and its lease-token outbox functions are available.")
                 : HealthCheckResult.Unhealthy(
-                    "Canonical outbox functions or execute grants are unavailable.");
+                    "Realtime dispatcher role, its login shape, its lease-token outbox functions or their execute grants are unavailable.");
         }
         catch (Exception exception) when (exception is NpgsqlException or InvalidOperationException)
         {
             return HealthCheckResult.Unhealthy(
-                "Worker database readiness failed.",
+                "Realtime dispatcher database readiness failed.",
                 exception);
         }
     }

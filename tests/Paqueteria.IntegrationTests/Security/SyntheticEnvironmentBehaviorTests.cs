@@ -314,6 +314,7 @@ public sealed class SyntheticEnvironmentBehaviorTests(
                      "PAQUETERIA_LOCAL_APP_CONNECTION",
                      "PAQUETERIA_LOCAL_APP_PASSWORD",
                      "PAQUETERIA_LOCAL_WORKER_PASSWORD",
+                     "PAQUETERIA_LOCAL_REALTIME_PASSWORD",
                  })
         {
             process.StartInfo.Environment.Remove(name);

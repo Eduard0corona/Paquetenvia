@@ -61,8 +61,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20261011000100_AllowDispatchDecidedNextAction.cs"),
         ("Finance", "__ef_migrations_history_finance", EnforceSettlementLedgerIntegrity.MigrationId,
             "src/Modules/Finance/Finance.Infrastructure/Persistence/Migrations/20260925000100_EnforceSettlementLedgerIntegrity.cs"),
-        ("Notifications", "__ef_migrations_history_notifications", FailStaleWhatsAppNotificationLeases.MigrationId,
-            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261003000100_FailStaleWhatsAppNotificationLeases.cs"),
+        ("Notifications", "__ef_migrations_history_notifications", AddRealtimeDispatcherRole.MigrationId,
+            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261012000100_AddRealtimeDispatcherRole.cs"),
         ("DataProtection", PlatformDataProtectionSchema.MigrationsHistoryTable,
             AddDistributedDataProtectionKeyRing.MigrationId,
             "src/BuildingBlocks/Paqueteria.Infrastructure/DataProtection/Migrations/20260922000100_AddDistributedDataProtectionKeyRing.cs"),
@@ -104,9 +104,10 @@ internal sealed class ModuleMigrationCoordinator
                 // America/Mazatlan only); its rollback restores the previous function. No grant, table, role or
                 // row is added, dropped, deleted or rewritten.
                 "Pricing" => IsMazatlanTimeZoneLoaderSource(source),
-                "Notifications" =>
-                    source.Contains("NTF-001 rollback blocked", StringComparison.Ordinal) &&
-                    !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase),
+                // RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the lane's latest step only grants the API's realtime
+                // dispatcher role its exact privileges (the role itself is declared by AI-18); its rollback revokes
+                // exactly those grants and keeps the role. Earlier steps are verified below with the NTF-001 rule.
+                "Notifications" => IsRealtimeDispatcherRoleSource(source),
                 // SET-001: the settlement ledger is append-only, so the lane only ever adds guards to
                 // the canonical tables and its rollback fails closed.
                 "Finance" =>
@@ -292,6 +293,10 @@ internal sealed class ModuleMigrationCoordinator
             "Incidents",
             AdoptCanonicalIncidentsBaseline.MigrationId,
             "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20260922_AdoptCanonicalIncidentsBaseline.cs");
+        VerifyNotificationsSource(
+            root,
+            FailStaleWhatsAppNotificationLeases.MigrationId,
+            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261003000100_FailStaleWhatsAppNotificationLeases.cs");
         VerifyIncidentsSource(
             root,
             IndexIncidentEvidenceByOrderProof.MigrationId,
@@ -526,6 +531,7 @@ internal sealed class ModuleMigrationCoordinator
                     AddDispatchOutboxLane.MigrationId,
                     FailAmbiguousWhatsAppNotifications.MigrationId,
                     FailStaleWhatsAppNotificationLeases.MigrationId,
+                    AddRealtimeDispatcherRole.MigrationId,
                 ],
             "Identity" =>
                 [AdoptCanonicalIdentityBaseline.MigrationId, AddBffSessionStore.MigrationId],
@@ -584,6 +590,50 @@ internal sealed class ModuleMigrationCoordinator
         !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: only the realtime dispatcher role (created idempotently, never
+    /// dropped), its exact grants and their verification; the rollback revokes those grants and nothing else. No function,
+    /// table, policy, column or row is created, replaced, dropped, deleted or rewritten.</summary>
+    private static bool IsRealtimeDispatcherRoleSource(string source) =>
+        source.Contains(AddRealtimeDispatcherRole.DecisionId, StringComparison.Ordinal) &&
+        source.Contains("NTF-001 rollback blocked", StringComparison.Ordinal) &&
+        source.Contains("CREATE ROLE paqueteria_realtime NOLOGIN NOBYPASSRLS;", StringComparison.Ordinal) &&
+        source.Contains("still holds privileges after the RTM-API-REALTIME-DISPATCHER-ROLE rollback", StringComparison.Ordinal) &&
+        !source.Contains(" BYPASSRLS", StringComparison.Ordinal) &&
+        !source.Contains("CREATE FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE OR REPLACE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("ALTER TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("ALTER FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("ROW LEVEL SECURITY;", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("INSERT INTO", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE platform", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("WITH GRANT OPTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>An earlier Notifications lane migration that must keep the NTF-001 fail-closed shape.</summary>
+    private static void VerifyNotificationsSource(string root, string migrationId, string sourcePath)
+    {
+        var path = Path.Combine(root, sourcePath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(path))
+        {
+            throw new BaselineVerificationException("Notifications evolution migration is missing.");
+        }
+
+        var source = File.ReadAllText(path);
+        if (!source.Contains(migrationId, StringComparison.Ordinal) ||
+            !source.Contains("NTF-001 rollback blocked", StringComparison.Ordinal) ||
+            source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase))
+        {
+            throw new BaselineVerificationException(
+                "Notifications evolution migration is destructive or has an unexpected identifier.");
+        }
+    }
 
     /// <summary>ORD-AUTO-CLOSE-2026-10-10: only the auto-close executor, its two column grants and its read-only
     /// discovery function; the rollback drops exactly that function and nothing else.</summary>

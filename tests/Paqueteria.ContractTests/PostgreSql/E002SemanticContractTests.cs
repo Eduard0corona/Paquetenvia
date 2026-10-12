@@ -54,10 +54,12 @@ public sealed class E002SemanticContractTests(PostgreSqlContractFixture fixture)
                 // routines, owner + paqueteria_app. ORD-AUTO-CLOSE-2026-10-10 adds the Orders auto-close step: one
                 // discovery routine, owner + Worker.
                 Assert.Equal(
-                    "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_V1",
+                    "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_PLUS_RTMAPIROLE_V1",
                     applied.RoutineMap);
                 Assert.Equal(51, applied.ControlledIdentities);
-                Assert.Equal(100, applied.NormalizedExecuteRows);
+                // RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the Notifications lane also grants paqueteria_realtime
+                // EXECUTE on the six realtime and location lease-token routines (no new routine).
+                Assert.Equal(106, applied.NormalizedExecuteRows);
             }
 
             Assert.All(await new ModuleMigrationCoordinator().AssertAsync(connectionString,

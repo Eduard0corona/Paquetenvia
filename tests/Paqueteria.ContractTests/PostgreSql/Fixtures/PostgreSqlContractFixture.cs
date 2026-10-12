@@ -15,9 +15,13 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
     public const string AppLogin = "paqueteria_app_login_test";
     public const string WorkerLogin = "paqueteria_worker_login_test";
 
+    /// <summary>RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the API realtime dispatchers' own login.</summary>
+    public const string RealtimeLogin = "paqueteria_realtime_login_test";
+
     private readonly string _adminPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
     private readonly string _appPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
     private readonly string _workerPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
+    private readonly string _realtimePassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
     private readonly HashSet<string> _isolatedDatabases = new(StringComparer.Ordinal);
     private PostgreSqlContainer? _container;
 
@@ -34,6 +38,12 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
     public string AppConnectionString { get; private set; } = string.Empty;
 
     public string WorkerConnectionString { get; private set; } = string.Empty;
+
+    /// <summary>
+    /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: a LOGIN NOINHERIT NOBYPASSRLS member of <c>paqueteria_realtime</c>
+    /// only, the credential of the API's in-process realtime outbox dispatchers.
+    /// </summary>
+    public string RealtimeConnectionString { get; private set; } = string.Empty;
     public TimeSpan BootstrapDuration { get; private set; }
     public TimeSpan SchemaDuration { get; private set; }
     public TimeSpan RolesDuration { get; private set; }
@@ -100,6 +110,7 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
 
             AppConnectionString = WithPooling(_container.GetConnectionString(), AppLogin, _appPassword);
             WorkerConnectionString = WithPooling(_container.GetConnectionString(), WorkerLogin, _workerPassword);
+            RealtimeConnectionString = WithPooling(_container.GetConnectionString(), RealtimeLogin, _realtimePassword);
             AppDataSource = NpgsqlDataSource.Create(AppConnectionString);
             WorkerDataSource = NpgsqlDataSource.Create(WorkerConnectionString);
 
@@ -201,6 +212,8 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
             GRANT paqueteria_app TO {{AppLogin}};
             CREATE ROLE {{WorkerLogin}} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '{{_workerPassword}}';
             GRANT paqueteria_worker TO {{WorkerLogin}};
+            CREATE ROLE {{RealtimeLogin}} LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '{{_realtimePassword}}';
+            GRANT paqueteria_realtime TO {{RealtimeLogin}};
             """;
         await ExecuteAdminScriptAsync(sql).ConfigureAwait(false);
     }

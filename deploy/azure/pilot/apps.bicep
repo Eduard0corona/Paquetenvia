@@ -63,6 +63,8 @@ var publicOrigin = 'https://${publicHost}'
 var kvReaderRole = '4633458b-17de-408a-b874-0445c86b69e6'
 var apiSecretNames = [
   'pg-api-runtime-connection'
+  // RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the in-process realtime dispatchers' own login (paqueteria_realtime).
+  'pg-realtime-runtime-connection'
   'authcenter-paquetenvia-client-secret'
   'paquetenvia-email-lookup-key-1'
   'google-maps-api-key'
@@ -226,6 +228,17 @@ var apiKeyVaultEnv = [
   {
     name: 'KeyVaultSecrets__Mappings__4__ConfigurationKey'
     value: 'PublicTracking:LinkKeys:1'
+  }
+  // RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12 ("Rol propio y mínimo"): the in-process realtime outbox dispatchers
+  // (Realtime__OutboxDispatcher__Provider=PostgreSql below) read their own least-privilege login, a member of
+  // paqueteria_realtime only. The API never maps the Worker credential.
+  {
+    name: 'KeyVaultSecrets__Mappings__5__SecretName'
+    value: 'pg-realtime-runtime-connection'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__5__ConfigurationKey'
+    value: 'ConnectionStrings:PaqueteriaRealtime'
   }
 ]
 

@@ -16,6 +16,12 @@ public static class E002NotificationStateReader
     /// <summary>D8-OUTBOX-LANE-DISPATCH: installs the DISPATCH lane claim/requeue functions.</summary>
     public const string DispatchLaneMigrationId = "20260927000200_AddDispatchOutboxLane";
 
+    /// <summary>
+    /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: grants <c>paqueteria_realtime</c> EXECUTE on the six REALTIME and
+    /// location lease-token functions, USAGE on its schemas and its evidence column reads.
+    /// </summary>
+    public const string RealtimeDispatcherRoleMigrationId = "20261012000100_AddRealtimeDispatcherRole";
+
     private static readonly string[] ExpectedHistory =
     [
         Ntf001MigrationId,
@@ -26,6 +32,7 @@ public static class E002NotificationStateReader
         "20261002000100_FailAmbiguousWhatsAppNotifications",
         // NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03: replaces only the recover_stale_notifications_outbox body.
         "20261003000100_FailStaleWhatsAppNotificationLeases",
+        RealtimeDispatcherRoleMigrationId,
     ];
 
     public static async Task<E002NotificationState> ReadAsync(
@@ -85,6 +92,32 @@ public static class E002NotificationStateReader
             "SELECT EXISTS (SELECT 1 FROM platform.__ef_migrations_history_notifications WHERE \"MigrationId\"=@id)",
             connection, transaction);
         command.Parameters.AddWithValue("id", DispatchLaneMigrationId);
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
+    }
+
+    /// <summary>
+    /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: whether the realtime dispatcher role grants are recorded. Recorded
+    /// history, not the catalog, decides, so a recorded lane whose grants are missing fails the map.
+    /// </summary>
+    public static async Task<bool> IsRealtimeDispatcherRoleAppliedAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction = null,
+        CancellationToken cancellationToken = default)
+    {
+        await using (var exists = new NpgsqlCommand(
+            "SELECT to_regclass('platform.__ef_migrations_history_notifications') IS NOT NULL",
+            connection, transaction))
+        {
+            if (await exists.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+            {
+                return false;
+            }
+        }
+
+        await using var command = new NpgsqlCommand(
+            "SELECT EXISTS (SELECT 1 FROM platform.__ef_migrations_history_notifications WHERE \"MigrationId\"=@id)",
+            connection, transaction);
+        command.Parameters.AddWithValue("id", RealtimeDispatcherRoleMigrationId);
         return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
     }
 

@@ -48,6 +48,30 @@
   workflows ni código de la aplicación. La entrada de admisión de OBS-003 (fase 4, PR 4: exportador 1.10.0 y
   Azure.Core 1.63) va después; el owner admite su lista exacta por paquete al aprobarla.
 
+## Credencial propia y mínima para el tiempo real de la API (RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12) — 2026-10-12
+
+- BLOCKER de seguridad y privilegio mínimo (AI-01 §7); el cambio de operación del piloto es MAJOR y lo registra
+  `docs/adr/ADR-RTM-API-REALTIME-DISPATCHER-ROLE.md`. Pregunta y respuesta literales del project owner (2026-10-12):
+  "Bloqueo del primer despliegue: la API del piloto envía los avisos en tiempo real (tablero, repartidor) leyendo la cola con la credencial del Worker, que hoy no tiene, así que no arrancaría. ¿Cómo lo resolvemos?" → "Rol propio y mínimo (Recommended)" ("Un rol de base de datos nuevo que solo puede tomar y cerrar mensajes de tiempo real, con su propio secreto en Key Vault para la API (ADR + AI-18 + migración). La API no gana ningún otro permiso."); no elegidas: "Darle a la API la del Worker" ("La API lee también el secreto del Worker. Es rápido, pero la API queda con todos los permisos del Worker (otras colas y mantenimiento).") y "Sin tiempo real en el piloto" ("Se apaga el despachador en la API; las pantallas se actualizan por consulta cada 30 s y el repartidor no recibe avisos al instante.").
+- AI-18: rol `paqueteria_realtime NOLOGIN NOBYPASSRLS`, creado sin privilegios, revocado de `paqueteria_app`,
+  `paqueteria_worker` y `paqueteria_bootstrap`, y sin poder heredar roles privilegiados (aserciones 35 a 37).
+- Lane Notifications `20261012000100_AddRealtimeDispatcherRole`: EXECUTE en las seis funciones con `lease_token` de
+  REALTIME y ubicación (`claim_realtime_outbox`, `requeue_stale_realtime_outbox`, `settle_outbox`,
+  `claim_location_outbox`, `settle_location_outbox`, `requeue_stale_location_outbox`), USAGE en siete esquemas y
+  SELECT en las 53 columnas que leen las lecturas de evidencia, todas también legibles por `paqueteria_app`. Sin
+  escrituras, sin tablas de outbox, sin otras colas, sin purgas ni mantenimiento. El Down revoca todo y lo verifica.
+- AI-24 `realtime_dispatcher_role`: `ConnectionStrings:PaqueteriaRealtime` validada al arrancar (login distinto del de
+  la API y del Worker), `SET LOCAL ROLE paqueteria_realtime`, readiness y rollback.
+- Piloto: secretos `pg-realtime-runtime-connection` y `pg-realtime-login-verifier`, login `pv_pilot_realtime`, la
+  identidad de la API lee solo ese secreto nuevo; guardas P06 y P23. Sin cambios en AI-04, AI-05, AI-06, AI-12 ni en
+  los flujos atómicos de AI-13 §4.
+- Correcciones de la revisión de seguridad (misma decisión): la readiness exige que el login tenga la forma
+  aprovisionada (`LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`) y no sea miembro,
+  directo o por cadena, de ningún rol fuera de `paqueteria_realtime`. AI-18 dice que las dos funciones de reclamo
+  devuelven filas completas de outbox REALTIME y de ubicación de todos los tenants (`payload` incluido), revoca cada
+  ejecutor también de `paqueteria_realtime` y precisa la aserción 37; AI-24 lista los pasos en el orden del código
+  (`BEGIN`, `SET LOCAL ROLE`, `set_config`).
+
 ## Repartidor: "Llamar a despacho" con el teléfono de despacho de la empresa (DRV-DISPATCH-CONTACT-2026-10-12) — 2026-10-12
 
 - Pregunta y respuesta literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR

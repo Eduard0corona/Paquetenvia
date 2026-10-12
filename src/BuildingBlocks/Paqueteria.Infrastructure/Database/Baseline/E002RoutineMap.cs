@@ -147,6 +147,21 @@ public static class E002RoutineMap
         new("security.list_auto_close_owner_organizations(uuid,integer)", "paqueteria_auto_close_executor", ["paqueteria_worker"]),
     ];
 
+    /// <summary>
+    /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the Notifications lane migration
+    /// 20261012000100_AddRealtimeDispatcherRole adds <c>paqueteria_realtime</c> as a grantee of exactly these six
+    /// lease-token routines (REALTIME business lane and location lane); it installs no routine.
+    /// </summary>
+    public static IReadOnlyList<string> RealtimeDispatcherRoutines { get; } = Array.AsReadOnly(new[]
+    {
+        "security.claim_realtime_outbox(text,integer,interval)",
+        "security.requeue_stale_realtime_outbox(interval,integer,integer)",
+        "security.settle_outbox(uuid,uuid,text,text,timestamp with time zone)",
+        "security.claim_location_outbox(text,integer,interval)",
+        "security.settle_location_outbox(uuid,uuid,text,text,timestamp with time zone)",
+        "security.requeue_stale_location_outbox(interval,integer,integer)",
+    });
+
     private static readonly IReadOnlyList<E002RoutineEntry> AppliedEntries =
         Array.AsReadOnly(PendingEntries.Select(entry => entry.Signature switch
         {
@@ -169,7 +184,9 @@ public static class E002RoutineMap
             Reg002Entries.Length != 4 || Reg002Entries.Sum(entry => 1 + entry.Grantees.Count) != 8 ||
             Mdm001Entries.Length != 1 || Mdm001Entries.Sum(entry => 1 + entry.Grantees.Count) != 2 ||
             OperatorOutboxEntries.Length != 2 || OperatorOutboxEntries.Sum(entry => 1 + entry.Grantees.Count) != 4 ||
-            OrderAutoCloseEntries.Length != 1 || OrderAutoCloseEntries.Sum(entry => 1 + entry.Grantees.Count) != 2)
+            OrderAutoCloseEntries.Length != 1 || OrderAutoCloseEntries.Sum(entry => 1 + entry.Grantees.Count) != 2 ||
+            RealtimeDispatcherRoutines.Count != 6 ||
+            RealtimeDispatcherRoutines.Any(signature => AppliedEntries.All(entry => entry.Signature != signature)))
         {
             throw new InvalidOperationException("E-002 normative routine-map cardinality is invalid.");
         }
@@ -186,7 +203,8 @@ public static class E002RoutineMap
         bool reg002Applied = false,
         bool mdm001Applied = false,
         bool operatorOutboxApplied = false,
-        bool orderAutoCloseApplied = false)
+        bool orderAutoCloseApplied = false,
+        bool realtimeDispatcherApplied = false)
     {
         IReadOnlyList<E002RoutineEntry> entries = state switch
         {
@@ -245,6 +263,18 @@ public static class E002RoutineMap
             selected = selected.Concat(OrderAutoCloseEntries);
         }
 
+        if (realtimeDispatcherApplied)
+        {
+            if (state == E002RoutineMapState.Pending)
+            {
+                throw new InvalidOperationException("E002_ROUTINE_MAP_TRANSITION_CONTEXT_INVALID");
+            }
+
+            selected = selected.Select(entry => RealtimeDispatcherRoutines.Contains(entry.Signature, StringComparer.Ordinal)
+                ? entry with { Grantees = Array.AsReadOnly(entry.Grantees.Append("paqueteria_realtime").ToArray()) }
+                : entry);
+        }
+
         return Array.AsReadOnly(selected.ToArray());
     }
 
@@ -259,7 +289,8 @@ public static class E002RoutineMap
         bool reg002Applied = false,
         bool mdm001Applied = false,
         bool operatorOutboxApplied = false,
-        bool orderAutoCloseApplied = false)
+        bool orderAutoCloseApplied = false,
+        bool realtimeDispatcherApplied = false)
     {
         var prefix = state switch
         {
@@ -279,6 +310,7 @@ public static class E002RoutineMap
             (mdm001Applied ? "_PLUS_MDM001" : string.Empty) +
             (operatorOutboxApplied ? "_PLUS_DSPOPOUTBOX" : string.Empty) +
             (orderAutoCloseApplied ? "_PLUS_ORDAUTOCLOSE" : string.Empty) +
+            (realtimeDispatcherApplied ? "_PLUS_RTMAPIROLE" : string.Empty) +
             "_V1";
     }
 }

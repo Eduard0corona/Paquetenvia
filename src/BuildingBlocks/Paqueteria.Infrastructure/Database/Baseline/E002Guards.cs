@@ -84,6 +84,9 @@ internal static class E002Guards
         ("paqueteria_master_data_loader", false),
         ("paqueteria_operator_outbox_executor", true),
         ("paqueteria_auto_close_executor", true),
+        // RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the API's realtime dispatcher runtime role (NOBYPASSRLS, owns
+        // nothing, so the deployment role needs no SET or USAGE on it).
+        ("paqueteria_realtime", false),
     ];
 
     /// <summary>
@@ -94,7 +97,7 @@ internal static class E002Guards
     internal static readonly string[] LaneIntroducedRoles =
     [
         "paqueteria_master_data_executor", "paqueteria_master_data_loader", "paqueteria_operator_outbox_executor",
-        "paqueteria_auto_close_executor",
+        "paqueteria_auto_close_executor", "paqueteria_realtime",
     ];
 
     /// <summary>
@@ -129,7 +132,7 @@ internal static class E002Guards
         return new E002AclEntry(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3));
     }
 
-    /// <summary>E-002 v0.8 §15: exact canonical-role attribute map (ADR-034 adds the seventh, the lifecycle executor; OPS-003-CLEANUP-ROLE the eighth, the cleanup executor; REG-001 the ninth, the registration executor; BFF-SESSION-TABLE-SHAPE the tenth, the session executor; MDM-001-OPERATOR-LOADER the eleventh and twelfth, the master data executor and its operator grantee; DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03 the thirteenth, the operator outbox executor; ORD-AUTO-CLOSE-2026-10-10 the fourteenth, the auto-close executor). Returns the names of roles that differ.</summary>
+    /// <summary>E-002 v0.8 §15: exact canonical-role attribute map (ADR-034 adds the seventh, the lifecycle executor; OPS-003-CLEANUP-ROLE the eighth, the cleanup executor; REG-001 the ninth, the registration executor; BFF-SESSION-TABLE-SHAPE the tenth, the session executor; MDM-001-OPERATOR-LOADER the eleventh and twelfth, the master data executor and its operator grantee; DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03 the thirteenth, the operator outbox executor; ORD-AUTO-CLOSE-2026-10-10 the fourteenth, the auto-close executor; RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12 the fifteenth, the realtime dispatcher runtime role). Returns the names of roles that differ.</summary>
     internal static async Task<IReadOnlyList<string>> RoleAttributeMismatchesAsync(
         NpgsqlConnection connection, NpgsqlTransaction? transaction, CancellationToken cancellationToken)
     {
@@ -146,8 +149,15 @@ internal static class E002Guards
             if (!found && LaneIntroducedRoles.Contains(name, StringComparer.Ordinal))
             {
                 await reader.DisposeAsync().ConfigureAwait(false);
-                if (!await LaneFunctionExistsAsync(connection, transaction, LaneFunction(name), cancellationToken)
-                        .ConfigureAwait(false))
+                // RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the realtime dispatcher lane installs no function; its
+                // recorded Notifications history row proves it ran.
+                var laneApplied = name == "paqueteria_realtime"
+                    ? await E002NotificationStateReader
+                        .IsRealtimeDispatcherRoleAppliedAsync(connection, transaction, cancellationToken)
+                        .ConfigureAwait(false)
+                    : await LaneFunctionExistsAsync(connection, transaction, LaneFunction(name), cancellationToken)
+                        .ConfigureAwait(false);
+                if (!laneApplied)
                 {
                     continue;
                 }
