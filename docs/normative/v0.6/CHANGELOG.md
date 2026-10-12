@@ -1,5 +1,28 @@
 # Changelog
 
+## Bandeja: "Agregar estas órdenes a una ruta…" al terminar una asignación en lote (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11) — 2026-10-11
+
+- Respuesta literal del project owner, registrada con su pregunta en `decision-log.md` como cambio MAJOR (AI-01 §7):
+  "Al terminar el lote (Recommended)" ("Después de "Asignar seleccionadas…" aparece "Agregar estas órdenes a una
+  ruta…" con las mismas órdenes y el mismo repartidor, con vista previa."). La fase 3 se aprobó con "avanza con la
+  fase 3".
+- AI-07 `work_inbox.bulk_add_to_route`: cuando un lote de "Asignar seleccionadas…" termina con al menos una orden
+  asignada, el panel ofrece "Agregar estas órdenes a una ruta…" solo con las órdenes que ese lote asignó y con su
+  repartidor. Solo se eligen rutas en borrador de ese repartidor (`listRoutes` con `status=DRAFT` y `driver_id`),
+  nombradas por fecha y paradas actuales, sin identificadores ni montos. La vista previa muestra la ruta, el
+  repartidor (`DRV-`) y las órdenes en el orden en que se agregan; la confirmación nombra la ruta, el repartidor y el
+  número de órdenes.
+- `addRouteStop` se envía una orden tras otra, cada una con su Idempotency-Key reutilizada al reenviar, con el
+  `expected_version` recién leído y después el de cada respuesta. Un VERSION_CONFLICT detiene el envío, vuelve a leer
+  la ruta y pide confirmar de nuevo. DRIVER_INELIGIBLE e INVALID_REQUEST responden solo por su orden. Un CONFLICT
+  genérico o el 404 también, pero el servidor los usa además para una ruta que dejó el borrador, así que antes de la
+  siguiente orden `getRoute` debe mostrar la misma ruta en borrador y la misma versión; si no, el envío se detiene como
+  con VERSION_CONFLICT. Un 403 MFA_REQUIRED ofrece "Verificar identidad". Resultado por fila con mensaje en español,
+  resumen sin ocultar fallas parciales y nueva lectura de la cola y los conteos. Es una secuencia de una operación
+  existente, no un flujo atómico nuevo de AI-13 §4.
+- La bandeja no crea rutas: si el repartidor no tiene una en borrador, la pantalla indica crearla en Rutas. Sin
+  cambios en AI-04, AI-05, AI-06, AI-18, backend, roles, capacidades ni migraciones.
+
 ## Llamadas enmascaradas: confirmar con una tecla (VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11) — 2026-10-11
 
 - Pregunta y respuesta literales del project owner: "Llamadas enmascaradas: si contesta un buzón de voz, el saludo del

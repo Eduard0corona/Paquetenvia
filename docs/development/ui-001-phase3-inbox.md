@@ -102,6 +102,57 @@ Respuestas literales del owner (2026-10-11), con la fase 3 aprobada con "avanza 
 - Es una secuencia de operaciones existentes de una sola orden: no es un flujo atómico nuevo de AI-13 §4 ni cambia
   estados de orden. Nada se guarda en el navegador ni se registra en consola.
 
+## Agregar estas órdenes a una ruta… (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11)
+
+Respuesta literal del owner (2026-10-11) a "Bandeja, "Agregar a ruta…" en lote: el servidor solo acepta en una ruta
+órdenes que ya tienen repartidor, así que no sirve sobre "Sin asignar". ¿Dónde lo ofrecemos?": "Al terminar el lote
+(Recommended)" ("Después de "Asignar seleccionadas…" aparece "Agregar estas órdenes a una ruta…" con las mismas órdenes
+y el mismo repartidor, con vista previa."). Contrato: AI-07 `work_inbox.bulk_add_to_route`.
+
+Regla del servidor que lo explica (`PostgreSqlRouteService.AddStopAsync` y `ManualRoutePolicy.CanLinkAssignment`):
+`addRouteStop` solo acepta una ruta DRAFT con la versión esperada y una orden con asignación OWN ACCEPTED o ACTIVE del
+repartidor de la ruta que aún no está en otra ruta; además revisa ciudad, área de servicio y elegibilidad DSP-001
+(DRIVER_INELIGIBLE). Las órdenes que acaba de asignar "Asignar seleccionadas…" cumplen la parte de la asignación.
+
+- Cuándo (`contracts/bulk-route.ts`, `bulkRouteOffer`): solo cuando el lote terminó con al menos una orden asignada.
+  El panel muestra "Agregar estas órdenes a una ruta…" con una nota de cuántas órdenes y qué repartidor (`DRV-`). Van
+  solo las órdenes que ese lote asignó, en el orden del lote y con su repartidor; no se agregan ni se quitan órdenes.
+  Mientras el paso está abierto, "Reintentar las pendientes" de la asignación espera ("Cancelar" lo cierra si aún no
+  se envió nada).
+- Rutas (`api/bulk-route-api.ts`): `listRoutes` con `status=DRAFT` y `driver_id` del repartidor, todas las páginas
+  (máximo 5) una tras otra. Una ruta que no sea DRAFT, de otro repartidor o con fecha imposible hace fallar la lectura.
+  Cada ruta se nombra por su fecha ("Ruta del 12 de octubre de 2026" o "Ruta sin fecha", y "la más reciente", "la
+  segunda más reciente"… si comparten fecha) y sus paradas actuales, de la más reciente a la más antigua. Sin
+  identificadores ni montos: el costo total de asignaciones de la ruta no se muestra en la bandeja.
+- Sin rutas en borrador: la pantalla lo dice y explica que las rutas se crean en Rutas ("Abrir Rutas en otra pestaña",
+  para no perder el lote, y luego "Buscar rutas de nuevo"). La bandeja no crea rutas: `createRoute` pide una ciudad
+  que la bandeja no tiene y el formulario de Rutas pide identificadores internos (ver Pendiente).
+- Vista previa: la ruta, el repartidor (`DRV-`) y las órdenes en el orden en que se agregan ("Orden de envío", Guía y
+  Destino); se agregan al final de la ruta.
+- Confirmación (ConfirmDialog): la ruta con sus paradas actuales, el repartidor y el número de órdenes.
+- Ejecución (`state/bulk-route-controller.ts`): `addRouteStop` una orden tras otra, cada una con su Idempotency-Key
+  (`PendingSubmissions`, por orden, con la misma ruta y `expected_version`) que se conserva hasta una respuesta
+  definitiva y se reutiliza al reenviar. `expected_version` es la versión recién listada y después la de cada respuesta
+  (la respuesta es la ruta autoritativa). La primera confirmación fija la ruta para el resto del lote.
+  - VERSION_CONFLICT (alguien más cambió la ruta): se detiene el envío, se vuelve a leer la ruta y las órdenes que no
+    se agregaron esperan una nueva confirmación con la versión nueva (llaves nuevas, porque cambió el cuerpo). Si la
+    ruta ya no está en borrador, no se envía nada más.
+  - DRIVER_INELIGIBLE e INVALID_REQUEST responden solo por esa orden, con su mensaje en español, y se sigue con la
+    siguiente.
+  - Un CONFLICT genérico (o un código desconocido) o el 404 uniforme también responden por esa orden, pero el servidor
+    los usa además para una ruta que dejó el borrador o ya no existe (`RouteStateConflict` sale como CONFLICT). Por
+    eso, antes de la siguiente orden, `getRoute` debe mostrar la misma ruta en borrador del repartidor con la misma
+    versión; si no, o si no se puede leer, el envío se detiene como con VERSION_CONFLICT (hallazgo de la revisión
+    automática del PR #225).
+  - Sesión, rol, MFA (403 MFA_REQUIRED ofrece "Verificar identidad" de regreso a la bandeja), red, servidor o una
+    respuesta inesperada detienen el envío y las demás quedan "Sin enviar". "Reintentar las pendientes" reenvía, con
+    las mismas llaves y cuerpos, solo lo que una falla de red o servidor dejó sin respuesta.
+- Resultado por fila ("Agregada a la ruta" o el mensaje de su código) y un resumen que no oculta fallas parciales;
+  "Ver la ruta en Rutas" al terminar. Después de cada envío se vuelven a leer la cola y los conteos. "Cerrar" del panel
+  espera mientras se agregan las órdenes.
+- Es una secuencia de una operación existente de una sola orden: no es un flujo atómico nuevo de AI-13 §4 ni cambia
+  estados de orden; el backend y RLS deciden cada parada. Nada se guarda en el navegador ni se registra en consola.
+
 ## Combinación de consultas (`state/inbox-merge.ts`)
 
 Una cola de varios estados es una consulta por estado, cada una con su cursor y el orden del servidor
@@ -137,8 +188,8 @@ historial y sin recargar las órdenes. Corrige el hallazgo de revisión del PR #
 - Acciones por fila: "Abrir" (o clic en la fila) y, solo si el servidor marca `unassigned_alert`, "Asignar", que
   abre el mismo selector del detalle (UI-PHASE2-DRIVER-PICKER-2026-10-05: lista, centavos enteros, confirmación con
   repartidor y costo). Tras asignar se vuelven a leer la cola y los conteos.
-- Acción en lote: "Asignar seleccionadas…" (ver arriba), siempre con vista previa y confirmación. No hay cambio de
-  estado en lote.
+- Acciones en lote: "Asignar seleccionadas…" y, al terminar ese lote, "Agregar estas órdenes a una ruta…" (ver
+  arriba), siempre con vista previa y confirmación. No hay cambio de estado en lote.
 - Estados: cargando, vacía por cola, error conservando filas, sin sesión y acceso no disponible.
 - Actualización: igual que el tablero (ADR-OBS-001): evento en tiempo real con 250 ms, reconexión obligatoria por
   REST, visibilidad y sondeo de 30 s; las lecturas en segundo plano esperan si la página está oculta. 401/403
@@ -146,9 +197,13 @@ historial y sin recargar las órdenes. Corrige el hallazgo de revisión del PR #
 
 ## Pendiente (no se simula)
 
-- "Agregar a ruta…" en lote, del diseño aprobado: `addRouteStop` solo acepta órdenes ya asignadas (OWN) al repartidor
-  de la ruta y ninguna cola de la bandeja lista esas órdenes (una orden asignada sale de "Sin asignar"). Queda para un
-  cambio posterior; no se muestra un botón deshabilitado.
+- "Agregar a ruta…" como botón de una cola: `addRouteStop` solo acepta órdenes ya asignadas (OWN) al repartidor de la
+  ruta y ninguna cola de la bandeja lista esas órdenes. Por decisión del owner se ofrece al terminar un lote (arriba);
+  no se muestra un botón deshabilitado.
+- Crear una ruta desde la bandeja: `createRoute` pide ciudad (y opcionalmente área y fecha) que la bandeja no tiene, y
+  el formulario de Rutas pide pegar identificadores internos del repartidor y la ciudad, que la web no muestra en
+  ninguna pantalla. Hace falta una decisión del owner (selector de repartidor y ciudad en Rutas o "Crear ruta nueva"
+  en este paso).
 - El costo sugerido por el tabulador: el owner aún no envía sus montos; hoy cada costo se captura a mano.
 - Entrada "Órdenes" del menú aprobado: aún no hay pantalla. "Repartidores" ya existe (`/ops/drivers`,
   UI-PHASE3-DRIVERS-2026-10-11; ver `ui-001-phase3-drivers.md`).
@@ -170,5 +225,8 @@ dotnet test tests/Paqueteria.IntegrationTests --filter "Category=OperationsDashb
 Revertir el commit. No hay datos, esquema ni API que deshacer; DISPATCHER y PLATFORM_ADMIN vuelven a entrar al
 tablero. Revertir el commit de "Precio por revisar" y la asignación en lote quita el filtro `price_review`, devuelve a
 `queues.price_review` el conteo de todas las órdenes con aviso y deja la pestaña como conteo; las asignaciones ya hechas
-quedan como cualquier asignación individual (no hay datos, esquema ni migración que deshacer). Revertir el commit del Total quita `total` del read model del tablero y la columna de la bandeja a la vez
+quedan como cualquier asignación individual (no hay datos, esquema ni migración que deshacer). Revertir el commit de
+"Agregar estas órdenes a una ruta…" quita el paso y su contrato AI-07; las paradas ya agregadas quedan como cualquier
+parada agregada desde Rutas (se retiran ahí si hace falta) y no hay datos, esquema, API ni migración que deshacer.
+Revertir el commit del Total quita `total` del read model del tablero y la columna de la bandeja a la vez
 (web y API se despliegan juntas); no hay datos, esquema ni migración que deshacer.

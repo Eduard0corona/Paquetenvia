@@ -16,7 +16,14 @@ const inboxSources = [
   "src/operations/components/operations-bulk-assignment.tsx",
   "src/operations/contracts/bulk-assignment.ts",
   "src/operations/state/bulk-assignment-controller.ts",
+  // UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11: "Agregar estas órdenes a una ruta…".
+  "src/operations/components/operations-bulk-route.tsx",
+  "src/operations/contracts/bulk-route.ts",
+  "src/operations/state/bulk-route-controller.ts",
 ];
+
+/** The routing client of the bulk add to route; it holds the only API paths of the inbox's bulk actions. */
+const bulkRouteApi = "src/operations/api/bulk-route-api.ts";
 
 const shell = () => read("src/operations/components/operations-inbox-shell.tsx");
 
@@ -30,7 +37,7 @@ describe("work inbox page policy (UI-PHASE3-INBOX-2026-10-10)", () => {
   });
 
   it("keeps tenant data in memory only and never logs it", () => {
-    for (const path of inboxSources) {
+    for (const path of [...inboxSources, bulkRouteApi]) {
       const source = read(path);
       expect(source, path).not.toMatch(/localStorage|sessionStorage|indexedDB|caches\.|console\.|sendBeacon/);
       expect(source, path).not.toMatch(/parseFloat|toFixed/);
@@ -55,6 +62,25 @@ describe("work inbox page policy (UI-PHASE3-INBOX-2026-10-10)", () => {
     expect(bulkController).toContain("this.api.listAssignableDrivers(orderId, cursor, this.abort.signal)");
     expect(bulkController).toContain("await this.api.assignDriver(");
     expect(bulkController).not.toMatch(/Promise\.all|transitionOrder|routes/);
+    // UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11: the existing listRoutes (the driver's DRAFT routes),
+    // getRoute (to check the route after a generic conflict) and addRouteStop, one order at a time; it
+    // never creates a route nor touches another operation.
+    const routeStep = read("src/operations/components/operations-bulk-route.tsx");
+    expect(routeStep).toContain("createBulkRouteApi(apiBaseUrl, session)");
+    const routeController = read("src/operations/state/bulk-route-controller.ts");
+    expect(routeController).toContain("this.api.listDraftRoutes(this.driver.driverId, cursor, this.abort.signal)");
+    expect(routeController).toContain("this.api.getRoute(route.id, this.abort.signal)");
+    expect(routeController).toContain("await this.api.addRouteStop(");
+    expect(routeController).not.toMatch(/Promise\.all|transitionOrder|assignDriver|createRoute|removeStop|reorder/);
+    const api = read(bulkRouteApi);
+    expect(api).toContain("createTenantRequester(baseUrl, session)");
+    expect(api).toContain('new URLSearchParams({ status: "DRAFT", driver_id: driverId })');
+    expect(api.match(/path: [`"]\/api\/v1\/[^`"]*[`"]/g)).toEqual([
+      'path: "/api/v1/routes"',
+      "path: `/api/v1/routes/${encodeURIComponent(routeId)}`",
+      "path: `/api/v1/routes/${encodeURIComponent(routeId)}/stops`",
+    ]);
+    expect(api).not.toMatch(/\bfetch\(|"PUT"|"DELETE"/);
   });
 
   it("shows server counts on every queue tab, price review a server list like the others", () => {
@@ -85,6 +111,8 @@ describe("work inbox page policy (UI-PHASE3-INBOX-2026-10-10)", () => {
     expect(source).toContain("selected.length >= bulkSelectionLimit");
     expect(source).toContain("Las acciones en lote siempre muestran una vista previa antes de ejecutarse.");
     expect(source).toContain("inboxFooterText({");
+    // "Agregar a ruta…" is never a queue button: a route takes only assigned orders, so it is offered
+    // when a bulk assignment ends (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11, checked below).
     expect(source).not.toMatch(/Cambiar estado|transitionOrder|Agregar a ruta/);
     expect(source).toContain('onChanged={() => state.refresh("assignment")}');
     // The batch belongs to the session, not to the view: changing the queue never stops a running batch.
@@ -105,6 +133,27 @@ describe("work inbox page policy (UI-PHASE3-INBOX-2026-10-10)", () => {
     expect(source).toContain("formatServiceWindow(row.delivery_window)");
     expect(source).toContain("Horarios mostrados en hora de Mazatlán.");
     expect(source).not.toMatch(/toLocale(Date|Time)?String|new Intl\.DateTimeFormat/);
+  });
+
+  it("offers a finished batch's orders for a route of its driver, always through a preview", () => {
+    const aiSeven = read(resolve(process.cwd(), "../../docs/normative/v0.6/specs/AI-07_UI_CONTRACTS.yaml"));
+    expect(aiSeven).toContain("    bulk_add_to_route:\n      decision: UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11\n");
+    const bulk = read("src/operations/components/operations-bulk-assignment.tsx");
+    // Offered only by a finished batch (bulkRouteOffer, tested in contracts/bulk-route.test.ts), with
+    // the orders it assigned and its driver.
+    expect(bulk).toContain("const routeOffer = routeStep === null ? bulkRouteOffer(state) : null;");
+    expect(bulk).toContain("Agregar estas órdenes a una ruta…");
+    expect(bulk).toContain("orders={routeStep.offer.orders}");
+    expect(bulk).toContain("driver={routeStep.offer.driver}");
+    // The batch panel cannot be closed while a route run is sending.
+    expect(bulk).toContain('disabled={state.phase === "running" || routeRunning}');
+    const step = read("src/operations/components/operations-bulk-route.tsx");
+    expect(step).toContain("<strong>Vista previa:</strong>");
+    expect(step).toContain("bulkRouteConfirmation(choice, reference, sendable.length)");
+    expect(step).toContain("controllerRef.current?.execute(choice.route.id)");
+    // No amount, identifier or route creation: routes are created in Rutas, opened in another tab.
+    expect(step).not.toMatch(/<Money\b|assignment_cost_cents_total|shortId|createRoute|\.create\(/);
+    expect(step).toContain('<Link href="/ops/routes" target="_blank" rel="noopener noreferrer">');
   });
 
   it("keeps the queue and the chips in the URL and filters only on the server", () => {
