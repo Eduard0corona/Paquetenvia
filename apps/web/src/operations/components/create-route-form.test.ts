@@ -37,6 +37,7 @@ const areas: readonly ServiceArea[] = [{ id: syntheticUuid(0x951), city_id: synt
 
 const loading: CreateRouteFormState = {
   drivers: { kind: "loading" },
+  driverReferences: new Map(),
   driversTruncated: false,
   cities: { kind: "loading" },
   areas: { kind: "idle" },

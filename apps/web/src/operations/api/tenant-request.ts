@@ -37,7 +37,8 @@ export class TenantApiError extends Error {
 }
 
 export interface TenantRequest {
-  readonly method: "GET" | "POST";
+  /** PUT and DELETE only for operations AI-05 declares so (reorderRouteStops, removeRouteStop). */
+  readonly method: "GET" | "POST" | "PUT" | "DELETE";
   readonly path: string;
   readonly search?: URLSearchParams;
   readonly body?: unknown;

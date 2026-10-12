@@ -16,6 +16,10 @@ import { describeFailure } from "./tenant-error-messages";
  * returns for the chosen city, plus "Toda la ciudad" (no area). Each list has its loading, empty and error state;
  * only listed values can be chosen, and the form is sent only with a driver and a city. createRoute itself stays the
  * route planner's. Everything lives in memory: a session or organization change starts from empty lists.
+ *
+ * UI-PHASE3-ROUTES-NO-IDS-2026-10-12: the same read of listOrganizationDrivers also names the driver of the route
+ * detail by its DRV- reference, whatever its status (`driverReferences`); a driver that read did not return is
+ * "Repartidor no disponible", never an id.
  */
 export const routeFormPath = "/ops/routes";
 
@@ -36,6 +40,8 @@ export type RouteFormList<T> =
 export interface CreateRouteFormState {
   /** ACTIVE drivers only, by DRV- reference. */
   readonly drivers: RouteFormList<OrganizationDriver>;
+  /** The DRV- reference of every driver the read returned, any status, by driver id; empty until it is read. */
+  readonly driverReferences: ReadonlyMap<string, string>;
   /** More drivers exist than {@link maximumDriverPages} pages hold; the form says some are missing. */
   readonly driversTruncated: boolean;
   readonly cities: RouteFormList<City>;
@@ -65,8 +71,11 @@ export interface CreateRouteFormDependencies {
   readonly createApi: (session: OperationsSession) => CreateRouteFormApi;
 }
 
+const noReferences: ReadonlyMap<string, string> = new Map();
+
 const initialState: CreateRouteFormState = {
   drivers: { kind: "loading" },
+  driverReferences: noReferences,
   driversTruncated: false,
   cities: { kind: "loading" },
   areas: { kind: "idle" },
@@ -120,7 +129,7 @@ export class CreateRouteFormController extends ExternalStore<CreateRouteFormStat
     const api = this.api;
     if (api === null) return;
     const generation = this.generation;
-    this.update({ drivers: { kind: "loading" }, driversTruncated: false, driverId: null });
+    this.update({ drivers: { kind: "loading" }, driverReferences: noReferences, driversTruncated: false, driverId: null });
     try {
       const drivers: OrganizationDriver[] = [];
       const cursors = new Set<string>();
@@ -142,6 +151,7 @@ export class CreateRouteFormController extends ExternalStore<CreateRouteFormStat
       const unique = [...new Map(drivers.map((driver) => [driver.driver_id, driver])).values()];
       this.update({
         drivers: { kind: "ready", items: sortByReference(unique.filter((driver) => driver.status === "ACTIVE")) },
+        driverReferences: new Map(unique.map((driver) => [driver.driver_id, driver.driver_reference])),
         driversTruncated: truncated,
       });
     } catch (error: unknown) {
@@ -227,6 +237,19 @@ export class CreateRouteFormController extends ExternalStore<CreateRouteFormStat
     this.abort = new AbortController();
     this.cancelAreas();
   }
+}
+
+export const routeDriverUnavailableText = "Repartidor no disponible";
+
+/**
+ * UI-PHASE3-ROUTES-NO-IDS-2026-10-12: the driver of a route as the detail names it - "Repartidor DRV-0a1b2c3d" from
+ * listOrganizationDrivers, any status - or "Repartidor no disponible" when that read failed or did not return the
+ * driver (for example an inactive one); never its id.
+ */
+export function routeDriverText(state: Pick<CreateRouteFormState, "drivers" | "driverReferences">, driverId: string): string {
+  if (state.drivers.kind === "loading") return "Cargando repartidor…";
+  const reference = state.drivers.kind === "ready" ? state.driverReferences.get(driverId) : undefined;
+  return reference === undefined ? routeDriverUnavailableText : `Repartidor ${reference}`;
 }
 
 /** Session, role and MFA (with the step-up back to Rutas) in their own words; anything else, the list's message. */

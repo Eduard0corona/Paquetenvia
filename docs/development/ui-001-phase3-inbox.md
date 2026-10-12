@@ -122,11 +122,12 @@ repartidor de la ruta que aún no está en otra ruta; además revisa ciudad, ár
 - Rutas (`api/bulk-route-api.ts`): `listRoutes` con `status=DRAFT` y `driver_id` del repartidor, todas las páginas
   (máximo 5) una tras otra. Una ruta que no sea DRAFT, de otro repartidor o con fecha imposible hace fallar la lectura.
   Cada ruta se nombra por su fecha ("Ruta del 12 de octubre de 2026" o "Ruta sin fecha", y "la más reciente", "la
-  segunda más reciente"… si comparten fecha) y sus paradas actuales, de la más reciente a la más antigua. Sin
+  segunda más reciente"… si comparten fecha) y sus paradas actuales, de la más reciente a la más antigua; desde
+  UI-PHASE3-ROUTES-DAILY-2026-10-12 las de hoy (Mazatlán) van primero y llevan "(hoy)" (ver "Ruta por día"). Sin
   identificadores ni montos: el costo total de asignaciones de la ruta no se muestra en la bandeja.
-- Sin rutas en borrador: la pantalla lo dice y, si todas las órdenes del lote son de una misma ciudad, ofrece "Crear
-  ruta nueva" (ver abajo). Las rutas también se crean en Rutas ("Abrir Rutas en otra pestaña", para no perder el lote,
-  y luego "Buscar rutas de nuevo").
+- Sin ruta en borrador de hoy: la pantalla lo dice y, si todas las órdenes del lote son de una misma ciudad, ofrece
+  "Crear ruta nueva" (ver abajo), debajo de las rutas en borrador anteriores si las hay. Las rutas también se crean en
+  Rutas ("Abrir Rutas en otra pestaña", para no perder el lote, y luego "Buscar rutas de nuevo").
 - Vista previa: la ruta, el repartidor (`DRV-`) y las órdenes en el orden en que se agregan ("Orden de envío", Guía y
   Destino); se agregan al final de la ruta.
 - Confirmación (ConfirmDialog): la ruta con sus paradas actuales, el repartidor y el número de órdenes.
@@ -163,8 +164,10 @@ sigue mandando a Rutas para crearla; ahí cambio los IDs por selectores de repar
 owner que el mismo cambio sustituye también los IDs del formulario "Crear ruta" de Rutas por selectores
 (`ui-001-phase3-routes.md`), y no objetó. Contrato: AI-07 `work_inbox.bulk_add_to_route.create_route`.
 
-- Cuándo: solo donde el paso dice que el repartidor no tiene rutas en borrador (`listRoutes` vacío y ninguna ruta
-  fijada por un envío). Nunca junto a una lista de rutas en borrador.
+- Cuándo (regla original): solo donde el paso dice que el repartidor no tiene rutas en borrador (`listRoutes` vacío y
+  ninguna ruta fijada por un envío). Desde UI-PHASE3-ROUTES-DAILY-2026-10-12 cuenta solo la ruta en borrador con fecha
+  de hoy y el botón también aparece debajo de las rutas anteriores (ver "Ruta por día" abajo); lo demás de esta sección
+  no cambia.
 - La ciudad de las órdenes (`state/bulk-route-controller.ts`): cada orden del lote (máximo 20) se lee con el cliente
   existente de `getOrder` (`api/operations-api.ts`), una tras otra y cancelable al cerrar el paso, y se toma
   `Order.city_id`.
@@ -198,14 +201,59 @@ owner que el mismo cambio sustituye también los IDs del formulario "Crear ruta"
     esté habilitado (su estado o sus documentos).") e INVALID_REQUEST. La llave se descarta.
   - Sin confirmación (red, 503 u otro 5xx, respuesta inesperada, CONFLICT genérico o código desconocido; el servidor
     también responde CONFLICT cuando falla su almacenamiento): nunca se muestra un éxito. Primero se vuelven a listar las
-    rutas en borrador; si aparece alguna, se elige como cualquier ruta ("No se pudo confirmar si la ruta se creó. Se
-    buscaron de nuevo las rutas en borrador de DRV-…: si la nueva ya aparece, elígela.") y el botón no vuelve; si no
-    aparece ninguna, el botón vuelve, y tras red o 503 reenvía la misma solicitud con la misma llave ("…se reenvía la
-    misma solicitud sin duplicarla."); si la lista no se puede leer, no hay botón hasta leerla.
+    rutas en borrador; si aparece alguna, se elige como cualquier ruta y el botón no vuelve; si no aparece ninguna, el
+    botón vuelve, y tras red o 503 reenvía la misma solicitud con la misma llave ("…se reenvía la misma solicitud sin
+    duplicarla."); si la lista no se puede leer, no hay botón hasta leerla. Desde UI-PHASE3-ROUTES-DAILY-2026-10-12 solo
+    cuenta como encontrada una ruta en borrador de hoy, con textos nuevos (ver "Ruta por día").
 - Es una operación existente (`createRoute`) antes de la secuencia existente de `addRouteStop`: no es un flujo atómico
   nuevo de AI-13 §4 ni cambia estados de orden; el backend y RLS deciden la ruta (repartidor OWN ACTIVE elegible por
   DSP-001 y ciudad coherente con él). Sin identificadores en pantalla; nada se guarda en el navegador ni se registra en
   consola.
+
+### Ruta por día (UI-PHASE3-ROUTES-DAILY-2026-10-12)
+
+Pregunta literal al owner (2026-10-12): "Rutas: el API no tiene forma de terminar ni cancelar una ruta, así que toda
+ruta se queda en borrador para siempre. Por eso "Crear ruta nueva" en la bandeja (solo aparece si el repartidor no tiene
+ninguna ruta en borrador) dejaría de aparecer desde el segundo día. ¿Qué hacemos?". Respuesta literal: "Ruta por día
+(Recommended)", cuya opción decía "Sin cambiar el API: el paso ofrece "Crear ruta nueva" cuando el repartidor no tiene
+ruta en borrador con fecha de hoy (Mazatlán), y las rutas de hoy salen primero. Terminar o descartar rutas viejas queda
+para después del piloto." No se eligieron "Ruta por día + cerrar rutas" ("Lo anterior, más un ADR con operaciones nuevas
+para "Terminar ruta" (sin paradas pendientes) y "Descartar ruta" (borrador sin paradas), para que las viejas salgan de
+las listas.") ni "Dejar como está". Contrato: AI-07 `work_inbox.bulk_add_to_route` (`route_order`, `no_route`) y
+`create_route` (`offered_when`, `outcome`, `found`). AI-05 no cambia.
+
+Por qué: AI-05 no tiene ninguna operación que saque una ruta de DRAFT (`RouteStatus` lista PLANNED, ACTIVE, COMPLETED y
+CANCELLED, pero nada llega a ellos), así que toda ruta se queda en borrador. Con la regla de UI-PHASE3-INBOX-CREATE-ROUTE
+("solo sin ninguna ruta en borrador"), el botón no volvía a aparecer después de la primera ruta del repartidor.
+
+- "Hoy" es la fecha de calendario de America/Mazatlan (`todayInMazatlan`, con el reloj inyectable del controlador), nunca
+  la del navegador ni la de UTC: las 06:30 UTC del 12 de octubre de 2026 siguen siendo el 11 en Mazatlán. La lectura de
+  rutas guarda la fecha para la que se hizo (`routes.today` en `state/bulk-route-controller.ts`).
+- Cuándo se ofrece "Crear ruta nueva": cuando ningún envío fijó una ruta y el repartidor no tiene ninguna ruta en
+  borrador cuyo `scheduled_for` sea hoy (una ruta sin fecha no cuenta como de hoy; una de mañana tampoco). Siguen todas
+  las demás reglas: misma ciudad de las órdenes (ciudades distintas: sin botón y con su mensaje), orden ilegible (sin
+  botón y con el mensaje de no disponible, como antes), idempotencia, falla ambigua (se vuelve a listar antes de ofrecer
+  otra vez) y vista previa.
+- Con rutas anteriores y ninguna de hoy, el paso muestra la lista de rutas en borrador del repartidor y, debajo, "DRV-…
+  no tiene una ruta en borrador con la fecha de hoy." con "Crear ruta nueva", así que se puede elegir una ruta vieja.
+  Sin ninguna ruta, el texto sigue siendo "DRV-… no tiene rutas en borrador.".
+- Orden de la lista (`draftRouteChoices(routes, today)` en `contracts/bulk-route.ts`): primero las rutas de hoy, luego
+  las demás en el orden del servidor (de la más reciente a la más antigua). Los nombres no cambian ("Ruta del 12 de
+  octubre de 2026", "la más reciente"…); solo la etiqueta de la lista marca las de hoy: "Ruta del 12 de octubre de 2026
+  (hoy) · 3 paradas" o "(hoy, la más reciente)" si comparten fecha. La vista previa y la confirmación usan el nombre sin
+  "hoy". La nota bajo la lista dice "Primero las de hoy (hora de Mazatlán); las demás, de la más reciente a la más
+  antigua." cuando hay alguna de hoy.
+- La ruta creada queda primera (es la de hoy y la más reciente), antes de las anteriores, y elegida; si antes se había
+  marcado una ruta vieja, al pulsar "Crear ruta nueva" se suelta esa elección.
+- Tras una falla ambigua, la nueva lista cuenta como "encontrada" solo si trae una ruta en borrador de ese repartidor
+  con fecha de hoy: entonces el botón no vuelve y el aviso pide elegirla ("No se pudo confirmar si la ruta se creó, pero
+  DRV-… ya tiene una ruta en borrador con la fecha de hoy: elígela en la lista."); no se elige sola. Si solo aparecen
+  rutas de otros días o sin fecha, no es la que se pidió y el botón vuelve ("…DRV-… no tiene ninguna ruta en borrador
+  con la fecha de hoy. Puedes intentarlo de nuevo…").
+- La regla se revisa también al pulsar: si cambió el día en Mazatlán desde la lectura y el nuevo día ya tiene una ruta
+  listada, no se crea nada y se vuelven a leer las rutas.
+- Si un envío ya fijó la ruta, nada cambia respecto a antes: no se ofrece crear.
+- Rutas (`/ops/routes`) no reordena su lista: conserva el orden del servidor.
 
 ## Combinación de consultas (`state/inbox-merge.ts`)
 
@@ -260,6 +308,12 @@ historial y sin recargar las órdenes. Corrige el hallazgo de revisión del PR #
 - El costo sugerido por el tabulador: el owner aún no envía sus montos; hoy cada costo se captura a mano.
 - Entrada "Órdenes" del menú aprobado: aún no hay pantalla. "Repartidores" ya existe (`/ops/drivers`,
   UI-PHASE3-DRIVERS-2026-10-11; ver `ui-001-phase3-drivers.md`).
+- Terminar o descartar rutas viejas: AI-05 no tiene operación para sacar una ruta de DRAFT, así que las rutas de días
+  anteriores siguen en la lista del paso (después de las de hoy) y en Rutas. Queda para después del piloto, por decisión
+  del owner (UI-PHASE3-ROUTES-DAILY-2026-10-12, "Terminar o descartar rutas viejas queda para después del piloto."); no
+  se construye nada para terminarlas ni descartarlas. Mientras tanto, la lista del paso lee como máximo 5 páginas (250
+  rutas en borrador por repartidor); con una ruta por día, el paso diría que no pudo revisar todas las rutas mucho
+  después del piloto.
 
 ## Validación
 
@@ -284,5 +338,9 @@ parada agregada desde Rutas (se retiran ahí si hace falta) y no hay datos, esqu
 Revertir el commit de "Crear ruta nueva" (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11) devuelve el paso a mandar a Rutas
 para crear la ruta y el formulario de Rutas a pedir IDs; las rutas ya creadas quedan como cualquier ruta en borrador
 creada en Rutas, y no hay datos, esquema, API ni migración que deshacer.
+Revertir el commit de "Ruta por día" (UI-PHASE3-ROUTES-DAILY-2026-10-12, junto con UI-PHASE3-ROUTES-NO-IDS-2026-10-12)
+devuelve la regla anterior: "Crear ruta nueva" solo sin ninguna ruta en borrador y la lista en el orden del servidor,
+sin "(hoy)"; las rutas creadas por día quedan como cualquier ruta en borrador y no hay datos, esquema, API ni migración
+que deshacer.
 Revertir el commit del Total quita `total` del read model del tablero y la columna de la bandeja a la vez
 (web y API se despliegan juntas); no hay datos, esquema ni migración que deshacer.

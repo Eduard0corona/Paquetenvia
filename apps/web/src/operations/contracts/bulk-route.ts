@@ -1,6 +1,8 @@
 import { instantToMazatlanWallTime } from "../../lib/mazatlan-time";
 import type { BulkOrder } from "./bulk-assignment";
-import type { ManualRoute } from "./manual-route";
+import { routeDateText, routeName, type ManualRoute } from "./manual-route";
+
+export { routeDateText };
 
 /**
  * UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11 ("Al terminar el lote (Recommended)"): when
@@ -53,34 +55,6 @@ export function bulkRouteOfferText(offer: BulkRouteOffer): string {
     : `Las ${count} órdenes asignadas a ${reference} pueden ir a una de sus rutas en borrador; antes verás una vista previa.`;
 }
 
-const months = [
-  "enero",
-  "febrero",
-  "marzo",
-  "abril",
-  "mayo",
-  "junio",
-  "julio",
-  "agosto",
-  "septiembre",
-  "octubre",
-  "noviembre",
-  "diciembre",
-] as const;
-
-/** A route's calendar date ("2026-10-12") in words ("12 de octubre de 2026"); null when it is not a real date. */
-export function routeDateText(value: string): string | null {
-  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
-  if (match === null) return null;
-  const year = Number(match[1]);
-  const month = Number(match[2]);
-  const day = Number(match[3]);
-  const date = new Date(Date.UTC(year, month - 1, day));
-  if (year < 1000 || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day)
-    return null;
-  return `${day} de ${months[month - 1]} de ${year}`;
-}
-
 /**
  * A route the inbox may offer for the driver: DRAFT, of that driver and with a real date or none.
  * Anything else in the answer to `status=DRAFT&driver_id=` breaks the request and fails closed.
@@ -104,16 +78,16 @@ export interface DraftRouteChoice {
   readonly route: ManualRoute;
   /** "Ruta del 12 de octubre de 2026", "Ruta sin fecha" or, when routes share that, "Ruta sin fecha (la más reciente)". */
   readonly name: string;
-  /** The name and the current stops: "Ruta del 12 de octubre de 2026 · 3 paradas". */
+  /**
+   * The name, "hoy" for a route of today (Mazatlán) and the current stops: "Ruta del 12 de octubre de 2026 (hoy) ·
+   * 3 paradas", "Ruta del 12 de octubre de 2026 (hoy, la más reciente) · sin paradas".
+   */
   readonly label: string;
+  /** Scheduled for today in America/Mazatlan (UI-PHASE3-ROUTES-DAILY-2026-10-12). */
+  readonly today: boolean;
 }
 
 const ordinals = ["", "segunda", "tercera", "cuarta", "quinta", "sexta", "séptima", "octava", "novena", "décima"];
-
-function baseName(route: ManualRoute): string {
-  const date = route.scheduled_for === null ? null : routeDateText(route.scheduled_for);
-  return date === null ? "Ruta sin fecha" : `Ruta del ${date}`;
-}
 
 function recency(position: number): string {
   if (position === 0) return "la más reciente";
@@ -121,20 +95,44 @@ function recency(position: number): string {
 }
 
 /**
- * The driver's DRAFT routes in the server order (newest first) with names that tell them apart: the
- * scheduled date, and the recency when several routes share it. Never an identifier or an amount.
+ * UI-PHASE3-ROUTES-DAILY-2026-10-12 ("Ruta por día (Recommended)"): a route is today's when its scheduled date is
+ * `today`, the calendar date in America/Mazatlan (`todayInMazatlan`). A route without a date is never today's.
  */
-export function draftRouteChoices(routes: readonly ManualRoute[]): readonly DraftRouteChoice[] {
-  const bases = routes.map(baseName);
+export function isTodaysRoute(route: Pick<ManualRoute, "scheduled_for">, today: string): boolean {
+  return route.scheduled_for !== null && route.scheduled_for === today;
+}
+
+/**
+ * The driver's DRAFT routes with names that tell them apart: the scheduled date, and the recency when several
+ * routes share it. Never an identifier or an amount. With `today` (UI-PHASE3-ROUTES-DAILY-2026-10-12) today's routes
+ * come first, marked "hoy", then the rest in the server order (newest first); a date belongs wholly to one part, so
+ * the recency of each name is the server's.
+ */
+export function draftRouteChoices(
+  routes: readonly ManualRoute[],
+  today: string | null = null,
+): readonly DraftRouteChoice[] {
+  const isToday = (route: ManualRoute) => today !== null && isTodaysRoute(route, today);
+  const ordered = [...routes.filter(isToday), ...routes.filter((route) => !isToday(route))];
+  const bases = ordered.map(routeName);
   const seen = new Map<string, number>();
-  return routes.map((route, index) => {
-    const base = bases[index] ?? baseName(route);
+  return ordered.map((route, index) => {
+    const base = bases[index] ?? routeName(route);
     const shared = bases.filter((name) => name === base).length > 1;
     const position = seen.get(base) ?? 0;
     seen.set(base, position + 1);
     const name = shared ? `${base} (${recency(position)})` : base;
-    return { route, name, label: `${name} · ${stopCountText(route.stop_count)}` };
+    const marks = [...(isToday(route) ? ["hoy"] : []), ...(shared ? [recency(position)] : [])];
+    const label = `${marks.length === 0 ? base : `${base} (${marks.join(", ")})`} · ${stopCountText(route.stop_count)}`;
+    return { route, name, label, today: isToday(route) };
   });
+}
+
+/** The hint under the list of DRAFT routes: their order. */
+export function draftRouteOrderText(choices: readonly DraftRouteChoice[]): string {
+  return choices.some((choice) => choice.today)
+    ? "Primero las de hoy (hora de Mazatlán); las demás, de la más reciente a la más antigua."
+    : "De la más reciente a la más antigua.";
 }
 
 /** "1 orden", "3 órdenes". */
@@ -205,8 +203,12 @@ export function bulkRouteRunSummary(added: number, total: number): string {
 /*
  * UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11 ("Sí, en el paso (Recommended)": "Crea la ruta en borrador para ese
  * repartidor, con la ciudad de las órdenes y la fecha de hoy (hora de Mazatlán), y sigue a la vista previa."). Only
- * where the step says the driver has no DRAFT route, and only when every order of the batch is in one city, "Crear
- * ruta nueva" creates that route (createRoute, no service area) and the step goes on to its preview.
+ * when every order of the batch is in one city, "Crear ruta nueva" creates that route (createRoute, no service area)
+ * and the step goes on to its preview.
+ *
+ * UI-PHASE3-ROUTES-DAILY-2026-10-12 ("Ruta por día (Recommended)"): AI-05 has no operation that takes a route out of
+ * DRAFT, so routes stay DRAFT. "Crear ruta nueva" is offered when the driver has no DRAFT route dated today in
+ * Mazatlán (a route without a date is not today's), next to the driver's older DRAFT routes when there are some.
  */
 
 /** Today's calendar date in America/Mazatlan (`YYYY-MM-DD`): never the device's date nor the UTC date. */
@@ -251,7 +253,8 @@ export const createRouteNotFoundMessage = "No se creó la ruta: el repartidor o 
 /**
  * After a failure that cannot say whether the route exists (no answer, a server failure, an unexpected answer or a
  * generic conflict), the driver's DRAFT routes are read again before "Crear ruta nueva" is offered again: `found`
- * when that read lists routes, `none` when it lists none, `unread` when it failed.
+ * when that read lists a DRAFT route of the driver dated today (UI-PHASE3-ROUTES-DAILY-2026-10-12) - the step then
+ * asks to choose it and offers no new route - `none` when it lists none of today, `unread` when it failed.
  */
 export function unconfirmedRouteText(
   outcome: "found" | "none" | "unread",
@@ -262,11 +265,22 @@ export function unconfirmedRouteText(
     return "No se pudo confirmar si la ruta se creó. Busca las rutas de nuevo antes de intentarlo otra vez.";
   if (outcome === "found")
     return (
-      `No se pudo confirmar si la ruta se creó. Se buscaron de nuevo las rutas en borrador de ${driverReference}: ` +
-      "si la nueva ya aparece, elígela."
+      `No se pudo confirmar si la ruta se creó, pero ${driverReference} ya tiene una ruta en borrador con la fecha ` +
+      "de hoy: elígela en la lista."
     );
   return (
-    `No se pudo confirmar si la ruta se creó y no aparece entre las rutas en borrador de ${driverReference}. ` +
+    `No se pudo confirmar si la ruta se creó y ${driverReference} no tiene ninguna ruta en borrador con la fecha de ` +
+    "hoy. " +
     (sameRequest ? "Puedes intentarlo de nuevo: se reenvía la misma solicitud sin duplicarla." : "Puedes intentarlo de nuevo.")
   );
+}
+
+/**
+ * UI-PHASE3-ROUTES-DAILY-2026-10-12: what the step says where "Crear ruta nueva" can be offered - the driver has no
+ * DRAFT route at all, or only older ones and none dated today.
+ */
+export function noTodayRouteText(driverReference: string, olderRoutes: boolean): string {
+  return olderRoutes
+    ? `${driverReference} no tiene una ruta en borrador con la fecha de hoy.`
+    : `${driverReference} no tiene rutas en borrador.`;
 }

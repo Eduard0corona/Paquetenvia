@@ -1,5 +1,50 @@
 # Changelog
 
+## Rutas: errores por motivo con "Verificar identidad", fechas legibles, todas las páginas, "Agregar entrega" por guía y detalle sin IDs (UI-PHASE3-ROUTES-NO-IDS-2026-10-12) — 2026-10-12
+
+- Pregunta y respuesta literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR
+  (AI-01 §7): "En la pantalla Rutas quedaron detalles fuera de lo que pedí: si falla "Crear ruta" dice "La ruta cambió
+  mientras la editabas…" aunque el motivo sea otro, no ofrece verificar identidad (MFA), la lista muestra fechas como
+  2026-10-12 y solo la primera página, "Agregar entrega" pide pegar el ID de la orden y el detalle muestra IDs cortos.
+  ¿Los corrijo?" → "Sí, todo (Recommended)" ("Mensaje por motivo y verificar identidad, fechas legibles y todas las
+  páginas, "Agregar entrega" por número de guía (PQ-…), y el detalle muestra fecha, DRV- y guía en lugar de IDs.").
+  "PQ-…" venía del mockup: la guía real es el `public_id` de la orden (`ORD_` y 22 caracteres, el patrón de
+  `listOrders.public_id`), el mismo valor de "Buscar guía (ORD_…)" de la barra superior.
+- AI-07 `route_planner`:
+  - `errors`: cada cambio (`createRoute`, `addRouteStop`, `removeRouteStop`, `reorderRouteStops`) dice su motivo por el
+    código del problema; solo VERSION_CONFLICT dice que la ruta cambió y la vuelve a leer; sesión, rol y MFA con los
+    textos compartidos y "Verificar identidad" de regreso a `/ops/routes` con la ruta mostrada; sin respuesta válida
+    nunca dice que se guardó. La Idempotency-Key de cada cambio sigue siendo nueva.
+  - `list`: todas las páginas de `listRoutes` en el orden del servidor (máximo 10, con aviso; un cursor repetido hace
+    fallar la lectura) y cada ruta como "Ruta del 12 de octubre de 2026" o "Ruta sin fecha".
+  - `add_order`: "Guía (ORD_…)" con la validación y el cliente de `listOrders?public_id=` de la barra superior (ninguna:
+    "No encontramos esa guía"; más de una u otra guía fallan cerrado) y luego `addRouteStop`; `?orderId=` llena la guía
+    leída con `getOrder` o deja el campo vacío.
+  - `detail`: nombre por fecha, "Repartidor DRV-…" de `listOrganizationDrivers` ("Repartidor no disponible" si no
+    aparece), estado y paradas; cada parada con su guía de `getOrder` (máximo 100, cancelable, en memoria) o "Guía no
+    disponible"; las etiquetas accesibles usan la guía o la posición.
+  - Fuentes nuevas `order_lookup` (`listOrders`) y `order_guides` (`getOrder`); `not_supported`: terminar o descartar
+    rutas.
+- Sin cambios en AI-04, AI-05, AI-06, AI-18, backend, roles, capacidades, migraciones ni flujos cross-module.
+
+## Bandeja: "Crear ruta nueva" por día (UI-PHASE3-ROUTES-DAILY-2026-10-12) — 2026-10-12
+
+- Pregunta y respuesta literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR
+  (AI-01 §7): "Rutas: el API no tiene forma de terminar ni cancelar una ruta, así que toda ruta se queda en borrador para
+  siempre. Por eso "Crear ruta nueva" en la bandeja (solo aparece si el repartidor no tiene ninguna ruta en borrador)
+  dejaría de aparecer desde el segundo día. ¿Qué hacemos?" → "Ruta por día (Recommended)" ("Sin cambiar el API: el paso
+  ofrece "Crear ruta nueva" cuando el repartidor no tiene ruta en borrador con fecha de hoy (Mazatlán), y las rutas de
+  hoy salen primero. Terminar o descartar rutas viejas queda para después del piloto."). No se eligieron "Ruta por día +
+  cerrar rutas" ("Lo anterior, más un ADR con operaciones nuevas para "Terminar ruta" (sin paradas pendientes) y
+  "Descartar ruta" (borrador sin paradas), para que las viejas salgan de las listas.") ni "Dejar como está".
+- AI-07 `work_inbox.bulk_add_to_route` (`route_order`, `no_route`) y `create_route` (`offered_when`, `outcome`,
+  `found`): "Crear ruta nueva" se ofrece cuando el repartidor no tiene una ruta en borrador con `scheduled_for` de hoy en
+  America/Mazatlan (una ruta sin fecha no cuenta), también debajo de sus rutas anteriores, que se pueden seguir eligiendo;
+  las rutas de hoy van primero y llevan "(hoy)"; tras una falla ambigua solo cuenta como encontrada una ruta de hoy. Las
+  demás reglas de UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11 no cambian. Rutas conserva el orden del servidor.
+  `work_inbox.not_supported` y `route_planner.not_supported`: terminar o descartar rutas viejas, después del piloto.
+- Sin cambios en AI-04, AI-05, AI-06, AI-18, backend, roles, capacidades, migraciones ni flujos cross-module.
+
 ## Bandeja y Rutas: "Crear ruta nueva" dentro del paso y selectores en "Crear ruta" (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11) — 2026-10-11
 
 - Pregunta y respuesta literales del project owner (2026-10-11), registradas en `decision-log.md` como cambio MAJOR

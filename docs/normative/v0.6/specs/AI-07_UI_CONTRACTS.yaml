@@ -88,6 +88,7 @@ routes:
     - UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11
     - UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11
     - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
+    - UI-PHASE3-ROUTES-DAILY-2026-10-12
   # UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: the app shell top bar offers "Buscar guía" to the roles that open the
   # order detail (DISPATCHER, PLATFORM_ADMIN with MFA). It searches only the exact tracking number through
   # GET /orders?public_id= (listOrders); a match opens /ops/orders/:id and anything else shows "No encontramos esa
@@ -218,9 +219,13 @@ routes:
     release: MVP-1
     # UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11: "Crear ruta" picks the driver, the city and the service area from
     # lists instead of pasted internal ids (route_planner.create_form).
+    # UI-PHASE3-ROUTES-NO-IDS-2026-10-12: errors by reason with the MFA step-up, readable dates, every page of the
+    # list, "Agregar entrega" by guía and a detail without internal ids (route_planner errors, list, add_order and
+    # detail).
     screen_contract: route_planner
     decisions:
     - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
+    - UI-PHASE3-ROUTES-NO-IDS-2026-10-12
   /driver/stops:
     roles:
     - own_driver
@@ -352,6 +357,7 @@ screen_contracts:
     - UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11
     - UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11
     - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
+    - UI-PHASE3-ROUTES-DAILY-2026-10-12
     authority: REST API + PostgreSQL
     sources:
       counts: GET /operations/queue-counts (getOperationsQueueCounts)
@@ -459,14 +465,16 @@ screen_contracts:
     # always with a preview before anything is sent.
     bulk_add_to_route:
       decision: UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11
-      decision_amendment: UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
+      decision_amendments:
+      - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
+      - UI-PHASE3-ROUTES-DAILY-2026-10-12
       sources:
         routes: GET /routes (listRoutes) with status=DRAFT and driver_id of the batch's driver, every page (at most 5),
           one after another; a route outside that request fails the read closed
         add: POST /routes/{routeId}/stops (addRouteStop) for one order after another
         check: GET /routes/{routeId} (getRoute) after a generic CONFLICT or the uniform 404, before the next order
         orders: GET /orders/{orderId} (getOrder) for every order of the batch, one after another, only when the driver
-          has no DRAFT route (create_route)
+          has no DRAFT route dated today in America/Mazatlan (create_route)
         cities: GET /cities (listCities), only to name the orders' city (create_route)
         create: POST /routes (createRoute), only from create_route
       flow: a sequence of the existing single-order operation, never a new cross-module flow (AI-13 §4) and never a
@@ -481,15 +489,28 @@ screen_contracts:
         sin fecha", plus "la más reciente", "la segunda más reciente"… when several share it) and current stops, newest
         first; no identifier, amount or assignment cost; the first confirmation fixes the route for the rest of the
         batch
-      no_route: when the driver has no DRAFT route the step says so and offers create_route when every order of the
-        batch is in one city; routes are also created in Rutas (opened in another tab, then "Buscar rutas de nuevo")
+      # UI-PHASE3-ROUTES-DAILY-2026-10-12 (project owner, 2026-10-12, "Ruta por día (Recommended)"): AI-05 has no
+      # operation that takes a route out of DRAFT, so every route stays DRAFT and the route of the day decides.
+      route_order: the routes whose scheduled_for is today's calendar date in America/Mazatlan (the read's date from
+        the step's injectable clock) come first, marked "(hoy)" in the list ("Ruta del 12 de octubre de 2026 (hoy) · 3
+        paradas", "(hoy, la más reciente)" when several share it); the rest follow in the server's order, newest to
+        oldest; the names keep the scheme above, so the preview and the confirmation never say "hoy"
+      no_route: when the driver has no DRAFT route dated today the step says so - "no tiene rutas en borrador" without
+        any, "no tiene una ruta en borrador con la fecha de hoy" with only older, later or undated ones, which stay
+        listed and can still be chosen - and offers create_route below them when every order of the batch is in one
+        city; routes are also created in Rutas (opened in another tab, then "Buscar rutas de nuevo")
       # UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11 (project owner, 2026-10-11, "Sí, en el paso (Recommended)": "Crea la
       # ruta en borrador para ese repartidor, con la ciudad de las órdenes y la fecha de hoy (hora de Mazatlán), y sigue
       # a la vista previa.").
       create_route:
         decision: UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
-        offered_when: '"Crear ruta nueva" appears only where the step says the driver has no DRAFT route (no run fixed
-          a route) and every order of the batch has the same city_id; never next to a list of DRAFT routes'
+        decision_amendment: UI-PHASE3-ROUTES-DAILY-2026-10-12
+        offered_when: '"Crear ruta nueva" appears only where the step says the driver has no DRAFT route whose
+          scheduled_for is today in America/Mazatlan (UI-PHASE3-ROUTES-DAILY-2026-10-12; a route without a date is not
+          today''s), no run fixed a route and every order of the batch has the same city_id; when the driver has older
+          DRAFT routes it appears below their list, never next to a DRAFT route of today; the rule is checked again when
+          it is pressed, so a day that changed in Mazatlán and already has a listed route reads the routes again and
+          creates nothing'
         city: every order of the batch is read with getOrder, one after another and cancelled when the step closes, for
           its Order.city_id; one shared city_id is the orders' city. Orders in different cities get no button and the
           step says that they are in different cities, that a route covers a single city and that routes are created
@@ -502,7 +523,8 @@ screen_contracts:
         idempotency: one Idempotency-Key per request, kept and reused only to resend that same request after a network
           or server failure; the button is disabled while the request is in flight, so the route is never created
           twice
-        outcome: the created route (DRAFT, version 1, no stops) is selected and the step continues straight to its
+        outcome: the created route (DRAFT, version 1, no stops) is selected - listed first as today's route, before the
+          older ones, an older route picked before is no longer selected - and the step continues straight to its
           preview; nothing else changes - the same preview, ConfirmDialog and addRouteStop run, with expected_version
           from the created route
         failures: 401, 403 and 403 MFA_REQUIRED (with "Verificar identidad" back to the inbox), the uniform 404 and the
@@ -513,6 +535,10 @@ screen_contracts:
           CONFLICT, which the server also answers when its store fails) the driver's DRAFT routes are listed again
           before the button comes back, so a route created anyway is found instead of duplicated; a network or server
           failure resends the same request with the same key
+        found: UI-PHASE3-ROUTES-DAILY-2026-10-12 - that new list counts as found only when it holds a DRAFT route of
+          the driver dated today in America/Mazatlan; then the button is not offered again and the step asks to choose
+          that route in the list (it is not selected for the dispatcher); older, later or undated routes listed again
+          are not the route asked for, so the button comes back next to them
         flow: one existing Routing operation (createRoute) before the existing addRouteStop sequence, never a new
           cross-module flow (AI-13 §4) nor an order status change; the backend and RLS decide the route (OWN ACTIVE
           driver eligible under DSP-001, city coherent with the driver)
@@ -558,13 +584,19 @@ screen_contracts:
       (OWN) to the route''s driver and no inbox queue lists them; bulk_add_to_route offers it when a bulk assignment
       ends'
     - creating a route from the inbox for a batch whose orders are in different cities - a route covers a single city
-      (createRoute takes one city_id), so those routes are created in Rutas; bulk_add_to_route.create_route creates the
-      route when every order of the batch shares its city (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)
+      (createRoute takes one city_id), so those routes are created in Rutas; bulk_add_to_route.create_route creates
+      today's route when the driver has no DRAFT route dated today and every order of the batch shares its city
+      (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11, UI-PHASE3-ROUTES-DAILY-2026-10-12)
+    - finishing or discarding the driver's older DRAFT routes - AI-05 has no operation that takes a route out of DRAFT,
+      so they stay listed (after today's) until after the pilot (UI-PHASE3-ROUTES-DAILY-2026-10-12;
+      route_planner.not_supported)
     - Órdenes menu item of the approved menu - no screen yet (Repartidores is /ops/drivers, UI-PHASE3-DRIVERS-2026-10-11)
   route_planner:
     release: MVP-1
     route: /ops/routes
-    decision_amendment: UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
+    decision_amendments:
+    - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
+    - UI-PHASE3-ROUTES-NO-IDS-2026-10-12
     authority: REST API + PostgreSQL
     sources:
       list: GET /routes
@@ -574,9 +606,14 @@ screen_contracts:
       remove_order: DELETE /routes/{routeId}/stops/{stopId}
       reorder: PUT /routes/{routeId}/stops/order
       # UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11: the selectors of create_form.
-      drivers: GET /drivers (listOrganizationDrivers), every page, the client of /ops/drivers
+      drivers: GET /drivers (listOrganizationDrivers), every page, the client of /ops/drivers; the same read names the
+        driver of the detail (UI-PHASE3-ROUTES-NO-IDS-2026-10-12)
       cities: GET /cities (listCities)
       service_areas: GET /service-areas?city_id= (listServiceAreas), once a city is chosen
+      # UI-PHASE3-ROUTES-NO-IDS-2026-10-12: add_order by guía and the guía of every stop.
+      order_lookup: GET /orders?public_id= (listOrders), the client of the top-bar "Buscar guía", only for add_order
+      order_guides: GET /orders/{orderId} (getOrder), the client of the order detail, for the stops of the route shown
+        and the ?orderId= prefill
     # UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11 (project owner, 2026-10-11; the UI-001 proposal names "Las rutas piden el
     # UUID del repartidor" as a problem to fix): "Crear ruta" picks from lists, never from pasted internal ids.
     create_form:
@@ -594,6 +631,60 @@ screen_contracts:
         MFA is missing, "Verificar identidad" back to Rutas
       submit: disabled until a driver and a city are chosen; createRoute then runs as before
       privacy: no internal identifier is typed or shown; nothing stored in the browser and nothing logged
+    # UI-PHASE3-ROUTES-NO-IDS-2026-10-12 (project owner, 2026-10-12, "Sí, todo (Recommended)": "Mensaje por motivo y
+    # verificar identidad, fechas legibles y todas las páginas, "Agregar entrega" por número de guía (PQ-…), y el
+    # detalle muestra fecha, DRV- y guía en lugar de IDs."). "PQ-…" came from the design mock-up: the guía of this
+    # system is the order public_id (ORD_ and 22 characters), the value the top-bar "Buscar guía (ORD_…)" takes.
+    errors:
+      decision: UI-PHASE3-ROUTES-NO-IDS-2026-10-12
+      source: the AI-05 problem code and MFA_REQUIRED of every route operation, read through the shared tenant
+        requester of the inbox
+      by_code: each change says its reason in es-MX, never the code nor an identifier - createRoute DRIVER_INELIGIBLE
+        (the driver cannot take routes in that city or service area), INVALID_REQUEST and the uniform 404 say no route
+        was created; addRouteStop DRIVER_INELIGIBLE, CONFLICT, an unknown code and the uniform 404 reuse the messages
+        of bulk_add_to_route; removeRouteStop and reorderRouteStops say the stop or the order could not change
+        (INVALID_STOP_SET - the new order does not match the route's stops); INVALID_REQUEST asks to refresh the
+        route
+      version_conflict: only VERSION_CONFLICT says the route changed while it was being edited, and only it reads the
+        route again (or says it could not)
+      session: 401, 403 and 403 MFA_REQUIRED use the shared session, role and MFA texts; MFA_REQUIRED offers
+        "Verificar identidad" back to /ops/routes with ?routeId= of the route shown
+      no_answer: a network or server failure or an unexpected answer never says the change was saved nor promises a
+        resend without duplicates - createRoute says it cannot confirm whether the route was created and asks to
+        refresh the list first; the other changes say the same of the change
+      idempotency: unchanged - every change sends its own fresh Idempotency-Key
+    list:
+      decision: UI-PHASE3-ROUTES-NO-IDS-2026-10-12
+      pages: every page of listRoutes, one after another, in the server's order (never reordered), up to 10 pages; a
+        longer list says some routes are not shown and a repeated cursor fails the read
+      display: each route by its date name ("Ruta del 12 de octubre de 2026" or "Ruta sin fecha", never YYYY-MM-DD),
+        status, stops and assignment cost total; a scheduled date that is not a real calendar date fails the read
+    add_order:
+      decision: UI-PHASE3-ROUTES-NO-IDS-2026-10-12
+      field: '"Guía (ORD_…)" instead of the order id'
+      resolve: the top-bar search validation (ORD_ and 22 Base64URL characters) refuses anything else before any call;
+        then listOrders?public_id= - no order says "No encontramos esa guía", more than one order or another public_id
+        fails closed; then addRouteStop with that order's id and the route's current expected_version; nothing is sent
+        when another route was opened meanwhile
+      prefill: ?orderId= (the dashboard's "Agregar a ruta") reads that order with getOrder and fills the field with its
+        guía; an order that cannot be read leaves the field empty; the id is never shown
+      after: a saved stop empties the field
+    detail:
+      decision: UI-PHASE3-ROUTES-NO-IDS-2026-10-12
+      header: the route's date name, its driver as "Repartidor DRV-…" from listOrganizationDrivers (any status; a
+        driver that read does not return, for example an inactive one, is "Repartidor no disponible"), its status, its
+        stops and its assignment cost total
+      stops: each stop by its guía, read with getOrder one order after another (at most 100 stops per route,
+        cancelled when another route is opened or the screen closes, cached by order while the screen is open); an
+        order that cannot be read is "Guía no disponible" and is read again with the route
+      actions: '"Mover orden ORD_… arriba", "Mover orden ORD_… abajo" and "Retirar orden ORD_… de la ruta" name the
+        stop by its guía, or by its position ("parada 2") when the guía is not available; the removal confirmation
+        too'
+      privacy: ids are keys and option values only, never text; nothing stored in the browser and nothing logged
+    not_supported:
+    - finishing or discarding a route - AI-05 has no operation that takes a route out of DRAFT (RouteStatus lists
+      PLANNED, ACTIVE, COMPLETED and CANCELLED, but nothing reaches them), so every route stays DRAFT and listed; the
+      owner left it for after the pilot (UI-PHASE3-ROUTES-DAILY-2026-10-12)
     mutation_roles:
     - dispatcher
     - platform_admin

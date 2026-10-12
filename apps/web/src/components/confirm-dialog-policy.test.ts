@@ -32,7 +32,7 @@ describe("confirmation before risky money and destructive actions", () => {
       ["pendingCodReconciliationConfirmation(", "codReconciliationConfirmation(", "codRecordConfirmation("],
       ["controller.reconcileFromList(order.id, record.id)", "controller.reconcile()", "controller.record(amount, reference)"],
     ],
-    ["src/operations/components/manual-routes-shell.tsx", ["removeRouteStopConfirmation("], ["state.removeStop(stop.id)"]],
+    ["src/operations/components/manual-routes-shell.tsx", ["removeRouteStopConfirmation("], ["controller.removeStop(stop.id)"]],
     ["src/operations/components/operations-order-card.tsx", ["externalOfferConfirmation("], ["void onPublishExternalOffer("]],
     ["src/operations/components/operations-driver-assignment.tsx", ["driverAssignmentConfirmation("], ["assign(driver, costCents)"]],
     // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: a batch is sent only from its confirmation.
