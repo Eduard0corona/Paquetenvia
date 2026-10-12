@@ -4,6 +4,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { ManualRoute, ManualRouteDetail } from "../contracts/manual-route";
 import { syntheticUuid } from "../contracts/ui-001-screens.fixtures";
+import type { CreateRouteFormState } from "../state/create-route-form-controller";
 import type { RouteGuide } from "../state/manual-routes-controller";
 import { RouteDetailView, RouteList, RoutesNoticeView } from "./manual-routes-shell";
 
@@ -13,12 +14,42 @@ const noop = () => undefined;
 
 const routeId = syntheticUuid(0x801);
 const otherRouteId = syntheticUuid(0x802);
+const thirdRouteId = syntheticUuid(0x803);
 const driverId = syntheticUuid(0x601);
+const otherDriverId = syntheticUuid(0x602);
+/** A driver listOrganizationDrivers did not return (for example an inactive one). */
+const unlistedDriverId = syntheticUuid(0x6ff);
 const orders = [syntheticUuid(0x101), syntheticUuid(0x102), syntheticUuid(0x103)];
 const stopIds = [syntheticUuid(0xa01), syntheticUuid(0xa02), syntheticUuid(0xa03)];
 const guide = "ORD_AbCdEfGhIjKlMnOpQrStUv";
 /** Every identifier of the fixtures, whole or as the 8-character fragment the screen used to show. */
-const identifiers = [routeId, otherRouteId, driverId, syntheticUuid(0x900), ...orders, ...stopIds];
+const identifiers = [
+  routeId,
+  otherRouteId,
+  thirdRouteId,
+  driverId,
+  otherDriverId,
+  unlistedDriverId,
+  syntheticUuid(0x900),
+  ...orders,
+  ...stopIds,
+];
+
+type RouteListDrivers = Pick<CreateRouteFormState, "drivers" | "driverReferences">;
+
+/** The listOrganizationDrivers read of the screen: DRV- references by driver id, any status. */
+const driversRead: RouteListDrivers = {
+  drivers: { kind: "ready", items: [] },
+  driverReferences: new Map([
+    [driverId, "DRV-0a1b2c3d"],
+    [otherDriverId, "DRV-9f8e7d6c"],
+  ]),
+};
+const driversLoading: RouteListDrivers = { drivers: { kind: "loading" }, driverReferences: new Map() };
+const driversFailed: RouteListDrivers = {
+  drivers: { kind: "failed", message: "No fue posible cargar los repartidores.", stepUpHref: null },
+  driverReferences: new Map(),
+};
 
 function expectNoIdentifier(html: string): void {
   // Not as text and not in any attribute: ids are React keys and option values only.
@@ -61,6 +92,20 @@ const guides: Record<string, RouteGuide> = {
   [orders[2]!]: { kind: "loading" },
 };
 
+function listHtml(routes: readonly ManualRoute[], drivers: RouteListDrivers = driversRead, selectedId: string | null = null): string {
+  return renderToStaticMarkup(createElement(RouteList, { routes, drivers, truncated: false, selectedId, onSelect: noop }));
+}
+
+/** The visible text of each row of the list, in the order rendered. */
+function rowTexts(html: string): string[] {
+  return [...html.matchAll(/<button[^>]*>([\s\S]*?)<\/button>/g)].map((match) => text(match[1] ?? ""));
+}
+
+/** The name of each row (its `<strong>`), in the order rendered. */
+function rowNames(html: string): string[] {
+  return [...html.matchAll(/<strong>([\s\S]*?)<\/strong>/g)].map((match) => text(match[1] ?? ""));
+}
+
 function detailHtml(overrides: Partial<Parameters<typeof RouteDetailView>[0]> = {}): string {
   return renderToStaticMarkup(
     createElement(RouteDetailView, {
@@ -80,25 +125,96 @@ function detailHtml(overrides: Partial<Parameters<typeof RouteDetailView>[0]> = 
 
 describe("route planner without internal ids (UI-PHASE3-ROUTES-NO-IDS-2026-10-12)", () => {
   it("lists every route by its date name, status, stops and cost, never by an id or a YYYY-MM-DD date", () => {
-    const html = renderToStaticMarkup(
-      createElement(RouteList, {
-        routes: [summary(routeId), summary(otherRouteId, { scheduled_for: null, stop_count: 1, status: "PLANNED" })],
-        truncated: false,
-        selectedId: routeId,
-        onSelect: noop,
-      }),
+    const html = listHtml(
+      [summary(routeId), summary(otherRouteId, { scheduled_for: null, stop_count: 1, status: "PLANNED" })],
+      driversRead,
+      routeId,
     );
     const visible = text(html);
-    expect(visible).toContain("Ruta del 12 de octubre de 2026 Borrador 3 paradas · $125.50");
-    expect(visible).toContain("Ruta sin fecha Planeada 1 parada · $125.50");
+    expect(visible).toContain("Ruta del 12 de octubre de 2026 · DRV-0a1b2c3d Borrador 3 paradas · $125.50");
+    expect(visible).toContain("Ruta sin fecha · DRV-0a1b2c3d Planeada 1 parada · $125.50");
     expect(visible).not.toMatch(/\d{4}-\d{2}-\d{2}/);
     expect(html).toContain('aria-current="true"');
     expect(visible).not.toContain("algunas no aparecen");
     expectNoIdentifier(html);
     const truncated = renderToStaticMarkup(
-      createElement(RouteList, { routes: [summary(routeId)], truncated: true, selectedId: null, onSelect: noop }),
+      createElement(RouteList, { routes: [summary(routeId)], drivers: driversRead, truncated: true, selectedId: null, onSelect: noop }),
     );
     expect(text(truncated)).toContain("Hay más rutas de las que esta lista muestra; algunas no aparecen.");
+  });
+
+  describe("the driver of each row (UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12)", () => {
+    // Several routes of the same day, in the server's order (not by date nor by driver).
+    const sameDay = [
+      summary(routeId, { driver_id: otherDriverId }),
+      summary(otherRouteId, { scheduled_for: "2026-10-11", stop_count: 1 }),
+      summary(thirdRouteId, { driver_id: driverId, stop_count: 0 }),
+    ];
+
+    it("names a known driver by its DRV- reference next to the date name", () => {
+      const html = listHtml(sameDay);
+      expect(rowNames(html)).toEqual([
+        "Ruta del 12 de octubre de 2026 · DRV-9f8e7d6c",
+        "Ruta del 11 de octubre de 2026 · DRV-0a1b2c3d",
+        "Ruta del 12 de octubre de 2026 · DRV-0a1b2c3d",
+      ]);
+      expect(rowTexts(html)).toEqual([
+        "Ruta del 12 de octubre de 2026 · DRV-9f8e7d6c Borrador 3 paradas · $125.50",
+        "Ruta del 11 de octubre de 2026 · DRV-0a1b2c3d Borrador 1 parada · $125.50",
+        "Ruta del 12 de octubre de 2026 · DRV-0a1b2c3d Borrador Sin paradas · $125.50",
+      ]);
+      expect(text(listHtml([summary(routeId, { scheduled_for: null })]))).toContain("Ruta sin fecha · DRV-0a1b2c3d Borrador");
+      expectNoIdentifier(html);
+    });
+
+    it("says Repartidor no disponible for a driver the read did not return, or when the read failed", () => {
+      const unlisted = listHtml([summary(routeId, { driver_id: unlistedDriverId }), sameDay[0]!]);
+      expect(rowNames(unlisted)).toEqual([
+        "Ruta del 12 de octubre de 2026 · Repartidor no disponible",
+        "Ruta del 12 de octubre de 2026 · DRV-9f8e7d6c",
+      ]);
+      const failed = listHtml(sameDay, driversFailed);
+      expect(rowNames(failed)).toEqual([
+        "Ruta del 12 de octubre de 2026 · Repartidor no disponible",
+        "Ruta del 11 de octubre de 2026 · Repartidor no disponible",
+        "Ruta del 12 de octubre de 2026 · Repartidor no disponible",
+      ]);
+      expect(text(failed)).not.toContain("No fue posible cargar los repartidores.");
+      expectNoIdentifier(unlisted);
+      expectNoIdentifier(failed);
+    });
+
+    it("shows nothing for the driver while the drivers are read", () => {
+      const html = listHtml(sameDay, driversLoading);
+      expect(rowNames(html)).toEqual([
+        "Ruta del 12 de octubre de 2026",
+        "Ruta del 11 de octubre de 2026",
+        "Ruta del 12 de octubre de 2026",
+      ]);
+      expect(rowTexts(html)[0]).toBe("Ruta del 12 de octubre de 2026 Borrador 3 paradas · $125.50");
+      expect(text(html)).not.toMatch(/DRV-|Repartidor|Cargando/);
+      expectNoIdentifier(html);
+    });
+
+    it("never renders an id, and each row's accessible name stays its text", () => {
+      const cases: Array<[RouteListDrivers, ManualRoute[]]> = [
+        [driversRead, sameDay],
+        [driversRead, [summary(routeId, { driver_id: unlistedDriverId })]],
+        [driversLoading, sameDay],
+        [driversFailed, sameDay],
+        // A read that returned no driver at all.
+        [{ drivers: { kind: "ready", items: [] }, driverReferences: new Map() }, sameDay],
+      ];
+      for (const [drivers, routes] of cases) {
+        const html = listHtml(routes, drivers, routes[0]!.id);
+        expectNoIdentifier(html);
+        expect(text(html)).not.toMatch(/undefined|null|\[object/);
+        // No aria-label nor aria-hidden: each button is named by what it shows (date name, driver, status, stops, cost).
+        expect(html).not.toMatch(/aria-label|aria-hidden|aria-labelledby/);
+        expect(html.match(/<button type="button"/g)).toHaveLength(routes.length);
+        expect(html.match(/aria-current="true"/g)).toHaveLength(1);
+      }
+    });
   });
 
   it("heads the detail with the date name, the DRV- driver, the status and the stops", () => {

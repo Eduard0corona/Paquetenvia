@@ -20,6 +20,9 @@ import { describeFailure } from "./tenant-error-messages";
  * UI-PHASE3-ROUTES-NO-IDS-2026-10-12: the same read of listOrganizationDrivers also names the driver of the route
  * detail by its DRV- reference, whatever its status (`driverReferences`); a driver that read did not return is
  * "Repartidor no disponible", never an id.
+ *
+ * UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12: that read also names the driver of every row of the route list
+ * (`routeListDriverText`); the screen makes no other drivers read.
  */
 export const routeFormPath = "/ops/routes";
 
@@ -241,15 +244,38 @@ export class CreateRouteFormController extends ExternalStore<CreateRouteFormStat
 
 export const routeDriverUnavailableText = "Repartidor no disponible";
 
+type RouteDriverSource = Pick<CreateRouteFormState, "drivers" | "driverReferences">;
+
+/**
+ * The DRV- reference of a route's driver from the listOrganizationDrivers read of the screen, any status: undefined
+ * while that read is in flight, null when it failed or did not return the driver (for example an inactive one).
+ */
+function routeDriverReference(state: RouteDriverSource, driverId: string): string | null | undefined {
+  if (state.drivers.kind === "loading") return undefined;
+  return (state.drivers.kind === "ready" ? state.driverReferences.get(driverId) : undefined) ?? null;
+}
+
 /**
  * UI-PHASE3-ROUTES-NO-IDS-2026-10-12: the driver of a route as the detail names it - "Repartidor DRV-0a1b2c3d" from
  * listOrganizationDrivers, any status - or "Repartidor no disponible" when that read failed or did not return the
  * driver (for example an inactive one); never its id.
  */
-export function routeDriverText(state: Pick<CreateRouteFormState, "drivers" | "driverReferences">, driverId: string): string {
-  if (state.drivers.kind === "loading") return "Cargando repartidor…";
-  const reference = state.drivers.kind === "ready" ? state.driverReferences.get(driverId) : undefined;
-  return reference === undefined ? routeDriverUnavailableText : `Repartidor ${reference}`;
+export function routeDriverText(state: RouteDriverSource, driverId: string): string {
+  const reference = routeDriverReference(state, driverId);
+  if (reference === undefined) return "Cargando repartidor…";
+  return reference === null ? routeDriverUnavailableText : `Repartidor ${reference}`;
+}
+
+/**
+ * UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12: the driver of a route as its row of the Rutas list names it, after the
+ * date name ("Ruta del 12 de octubre de 2026 · DRV-1a2b3c4d") - its DRV- reference from the same read as the detail,
+ * or "Repartidor no disponible" when that read failed or did not return the driver; null (nothing shown) while that
+ * read is in flight. Never its id.
+ */
+export function routeListDriverText(state: RouteDriverSource, driverId: string): string | null {
+  const reference = routeDriverReference(state, driverId);
+  if (reference === undefined) return null;
+  return reference ?? routeDriverUnavailableText;
 }
 
 /** Session, role and MFA (with the step-up back to Rutas) in their own words; anything else, the list's message. */
