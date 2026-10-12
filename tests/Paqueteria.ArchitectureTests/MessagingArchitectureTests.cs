@@ -14,6 +14,8 @@ public sealed class MessagingArchitectureTests
     private static readonly string[] OutboundHttpAllowlist =
     [
         MessagingDirectory,
+        // VOICE-001-PROVIDER-TWILIO-2026-10-11: the Twilio Programmable Voice adapter (see VoiceArchitectureTests).
+        "src/BuildingBlocks/Paqueteria.Infrastructure/Voice/",
         "src/Modules/Locations/Locations.Infrastructure/Geocoding/GoogleMaps/",
         "src/Modules/Locations/Locations.Infrastructure/DependencyInjection.cs",
     ];

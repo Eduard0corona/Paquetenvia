@@ -29,6 +29,74 @@
   cobro" (intento fallido). Datos de prueba hasta cerrar GATE-007. Sin cambios en AI-04, AI-06, AI-18, roles, permisos
   ni migraciones, y sin un flujo atómico nuevo.
 
+## Bandeja: "Agregar estas órdenes a una ruta…" al terminar una asignación en lote (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11) — 2026-10-11
+
+- Respuesta literal del project owner, registrada con su pregunta en `decision-log.md` como cambio MAJOR (AI-01 §7):
+  "Al terminar el lote (Recommended)" ("Después de "Asignar seleccionadas…" aparece "Agregar estas órdenes a una
+  ruta…" con las mismas órdenes y el mismo repartidor, con vista previa."). La fase 3 se aprobó con "avanza con la
+  fase 3".
+- AI-07 `work_inbox.bulk_add_to_route`: cuando un lote de "Asignar seleccionadas…" termina con al menos una orden
+  asignada, el panel ofrece "Agregar estas órdenes a una ruta…" solo con las órdenes que ese lote asignó y con su
+  repartidor. Solo se eligen rutas en borrador de ese repartidor (`listRoutes` con `status=DRAFT` y `driver_id`),
+  nombradas por fecha y paradas actuales, sin identificadores ni montos. La vista previa muestra la ruta, el
+  repartidor (`DRV-`) y las órdenes en el orden en que se agregan; la confirmación nombra la ruta, el repartidor y el
+  número de órdenes.
+- `addRouteStop` se envía una orden tras otra, cada una con su Idempotency-Key reutilizada al reenviar, con el
+  `expected_version` recién leído y después el de cada respuesta. Un VERSION_CONFLICT detiene el envío, vuelve a leer
+  la ruta y pide confirmar de nuevo. DRIVER_INELIGIBLE e INVALID_REQUEST responden solo por su orden. Un CONFLICT
+  genérico o el 404 también, pero el servidor los usa además para una ruta que dejó el borrador, así que antes de la
+  siguiente orden `getRoute` debe mostrar la misma ruta en borrador y la misma versión; si no, el envío se detiene como
+  con VERSION_CONFLICT. Un 403 MFA_REQUIRED ofrece "Verificar identidad". Resultado por fila con mensaje en español,
+  resumen sin ocultar fallas parciales y nueva lectura de la cola y los conteos. Es una secuencia de una operación
+  existente, no un flujo atómico nuevo de AI-13 §4.
+- La bandeja no crea rutas: si el repartidor no tiene una en borrador, la pantalla indica crearla en Rutas. Sin
+  cambios en AI-04, AI-05, AI-06, AI-18, backend, roles, capacidades ni migraciones.
+
+## Llamadas enmascaradas: confirmar con una tecla (VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11) — 2026-10-11
+
+- Pregunta y respuesta literales del project owner: "Llamadas enmascaradas: si contesta un buzón de voz, el saludo del
+  buzón puede decir el número del repartidor o del destinatario, y eso rompe el enmascarado. ¿Cómo lo evitamos?" →
+  "Confirmar con una tecla (Recommended)" ("Al repartidor le dice "Presiona 1 para llamar al destinatario". Al
+  destinatario: "Tiene una llamada sobre su envío; presione 1 para contestar" (texto neutro, sin marca). Si nadie
+  presiona, se cuelga sin enlazar. Gratis y no falla con buzones."); registrada como
+  `VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11` en `decision-log.md` y en `docs/adr/ADR-VOICE-001-MASKED-CALL-BRIDGE.md`.
+- AI-05: webhooks firmados `confirmTwilioDriverKeypress`, `screenTwilioRecipient` y `confirmTwilioRecipientKeypress`
+  (esquemas `TwilioKeypressForm` y `TwilioRecipientKeypressForm`); `RecipientCallAvailability.retry_after_seconds`;
+  descripciones de `requestRecipientCall` (tecla en ambos tramos, cualquier 5xx es ambiguo, reserva propia tras un
+  commit, solicitudes abandonadas), `receiveTwilioCallStatus` (nunca promueve una solicitud `FAILED`) y del celular del
+  repartidor (consultar y borrar con cualquier estado del perfil; registrar solo con perfil `ACTIVE`); entrada
+  `VOICE-001-VOICEMAIL-KEYPRESS` en `x-pilot-contract-deltas`.
+- AI-07: `driver_stop.recipient_call` (botón deshabilitado sin conexión solo tras confirmar la disponibilidad,
+  respuestas tardías descartadas, una nueva consulta al terminar la espera) y `driver_account` (borrar el celular con
+  cualquier estado del perfil).
+- AI-08: VOICE-001 agrega la decisión, criterios de aceptación (tecla, 5xx ambiguo, solicitudes abandonadas, ARCO) y
+  pruebas de las teclas.
+- AI-24 `voice_bridge`: `call`, `key_presses`, `resilience`, `request`, `webhooks`, `audit` y `erasure`.
+- Sin cambios en AI-06, AI-18 ni AI-12; la columna `bridge_stage` entra en la migración del lane Drivers
+  `20261011000100_AddDriverVoiceBridge`, que aún no se fusiona. No es un sexto flujo de AI-13 §4.
+
+## Llamadas enmascaradas repartidor–destinatario con Twilio (VOICE-001) — 2026-10-11
+
+- Preguntas y respuestas literales del project owner: "App del repartidor: hoy no ve el teléfono del destinatario.
+  ¿Debe poder llamarle desde la app?" → "Sí, con número enmascarado"; "Número enmascarado: … ¿Cómo seguimos?" →
+  "Investiga y propón (Recommended)"; "Número enmascarado: comparé proveedores. Azure Communication Services queda
+  descartado: no vende números mexicanos para llamar y Microsoft lo va a retirar. ¿Con cuál seguimos?" → "Twilio
+  (Recommended)". Registradas como `VOICE-001-MASKED-CALLS-2026-10-11` y `VOICE-001-PROVIDER-TWILIO-2026-10-11` (ADR:
+  Twilio como nuevo encargado de datos personales) en `decision-log.md` y en
+  `docs/adr/ADR-VOICE-001-MASKED-CALL-BRIDGE.md`.
+- AI-05: `getMyDriverPhone`, `registerMyDriverPhone`, `removeMyDriverPhone` (`/driver/me/phone`),
+  `getRecipientCallAvailability` y `requestRecipientCall` (`/driver/me/stops/{orderId}/recipient-call`, solo DRIVER,
+  `x-capability-matrix.voice_call_operations`, 404 uniforme, Idempotency-Key, 429, sin números en petición ni
+  respuesta) y los webhooks firmados `receiveTwilioCallStatus` y `answerTwilioInboundCall` (etiqueta Voice); entrada
+  `VOICE-001-MASKED-CALLS` en `x-pilot-contract-deltas`.
+- AI-07: `driver_stop.recipient_call` ("Llamar al destinatario" solo si el servidor lo permite; acción solo en línea,
+  nunca en la cola offline; "masked phone or relay") y `driver_account` (celular propio con consentimiento explícito).
+- AI-08: ítem VOICE-001 (MVP-1, P1, compuerta GATE-007; el piloto no usa números reales antes de resolver GATE-007).
+- AI-24 `voice_bridge`; AI-03 §15 añade `IVoiceBridgeProvider`; AI-04 `privacy_invariants` añade la regla de los
+  teléfonos de la llamada puente.
+- Sin cambios en AI-06, AI-18 ni AI-12: el lane Drivers `20261011000100_AddDriverVoiceBridge` agrega las columnas del
+  celular del repartidor y la tabla `drivers.recipient_call_requests`. No es un sexto flujo de AI-13 §4.
+
 ## Repartidores del despacho y selector de repartidor en liquidaciones (UI-PHASE3-DRIVERS-2026-10-11) — 2026-10-11
 
 - Respuestas literales del project owner: "avanza con la fase 3" (2026-10-09) y, el 2026-10-11, "Lista de consulta

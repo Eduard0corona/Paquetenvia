@@ -9,6 +9,7 @@ import {
   DriverStopsApiError,
 } from "../api/driver-stops-api";
 import { createExternalOffersApi } from "../api/external-offers-api";
+import { createDriverVoiceApi, type DriverVoiceApi } from "../api/voice-api";
 import { IndexedDbDriverStopsCache } from "../cache/driver-stops-cache";
 import {
   driverOperationLabel,
@@ -69,6 +70,7 @@ import {
   StopsSummary,
   stopRowLabel,
 } from "./driver-stop-details";
+import { RecipientCall } from "./recipient-call";
 import styles from "./driver-stops.module.css";
 
 const unavailableState: DriverStopsViewState = Object.freeze({
@@ -109,6 +111,21 @@ export function DriverStopsExperience() {
   );
   const headingRef = useRef<HTMLHeadingElement>(null);
   const identity = sessionIdentity(session);
+  // VOICE-001: online-only calls; never part of the offline queue.
+  const voiceApi = useMemo<DriverVoiceApi | null>(
+    () =>
+      session
+        ? createDriverVoiceApi(
+            resolveDriverApiBaseUrl(
+              window.location.origin,
+              process.env.NEXT_PUBLIC_API_BASE_URL,
+              process.env.NODE_ENV,
+            ),
+            session,
+          )
+        : null,
+    [session],
+  );
 
   useEffect(() => {
     const refreshSession = () => setSession(readBrowserDriverSession());
@@ -330,6 +347,7 @@ export function DriverStopsExperience() {
           headingRef={headingRef}
           synchronizedAt={state.synchronizedAt}
           offline={dataIsOffline}
+          voiceApi={voiceApi}
           operations={projection.operations.filter(
             (operation) => operation.orderId === route.orderId,
           )}
@@ -399,6 +417,7 @@ export function DriverStopsExperience() {
           headingRef={headingRef}
           synchronizedAt={state.synchronizedAt}
           offline={dataIsOffline}
+          voiceApi={null}
           operations={[]}
           mutating={operationsState.mutating}
           onEnqueue={() => Promise.resolve(false)}
@@ -649,6 +668,7 @@ function StopDetail({
   headingRef,
   synchronizedAt,
   offline,
+  voiceApi,
   operations,
   mutating,
   onEnqueue,
@@ -663,6 +683,7 @@ function StopDetail({
   headingRef: React.RefObject<HTMLHeadingElement | null>;
   synchronizedAt: string | null;
   offline: boolean;
+  voiceApi: DriverVoiceApi | null;
   operations: readonly DriverOfflineOperation[];
   mutating: boolean;
   onEnqueue: (kind: DriverOperationKind, blob?: Blob) => Promise<boolean>;
@@ -749,6 +770,13 @@ function StopDetail({
           disabled={mutating}
           onEnqueue={onEnqueue}
           onCollectCod={onCollectCod}
+        />
+        <RecipientCall
+          api={voiceApi}
+          orderId={stop.order_id}
+          stopType={stop.stop_type}
+          confirmedStatus={stop.confirmedStatus}
+          offline={offline}
         />
         <ConflictResolution
           stop={stop}

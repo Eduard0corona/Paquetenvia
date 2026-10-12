@@ -86,6 +86,7 @@ routes:
     decisions:
     - UI-PHASE3-INBOX-2026-10-10
     - UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11
+    - UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11
   # UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: the app shell top bar offers "Buscar guía" to the roles that open the
   # order detail (DISPATCHER, PLATFORM_ADMIN with MFA). It searches only the exact tracking number through
   # GET /orders?public_id= (listOrders); a match opens /ops/orders/:id and anything else shows "No encontramos esa
@@ -351,6 +352,7 @@ screen_contracts:
     decision_amendments:
     - UI-PHASE3-INBOX-TOTAL-2026-10-10
     - UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11
+    - UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11
     authority: REST API + PostgreSQL
     sources:
       counts: GET /operations/queue-counts (getOperationsQueueCounts)
@@ -359,6 +361,8 @@ screen_contracts:
         delivery_zone_id and cursor
       assign: the /ops/orders/:id assignment_picker sources (listAssignableDrivers, assignDriver), for one order and
         for bulk_assignment
+      route: GET /routes (listRoutes), GET /routes/{routeId} (getRoute) and POST /routes/{routeId}/stops
+        (addRouteStop), only for bulk_add_to_route (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11)
     roles: [DISPATCHER, PLATFORM_ADMIN with MFA]
     excluded_roles: VIEWER and every other role, exactly as for the operations dashboard and the queue counts; the
       shell does not offer the inbox to them and the API answers 403
@@ -413,6 +417,7 @@ screen_contracts:
       list, integer cents and confirmation naming driver and cost; the inbox and its counts are read again afterwards;
       unavailable while a bulk assignment is open)
     - bulk_assign_own ("Asignar seleccionadas…"; see bulk_assignment)
+    - bulk_add_to_route ("Agregar estas órdenes a una ruta…" once a bulk assignment ends; see bulk_add_to_route)
     - open_positions ("Mapa de posiciones" opens /ops/dashboard in its positions view)
     # UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11 (project owner, 2026-10-11, "Costo por orden (Recommended)"): the
     # approved design's "Asignar seleccionadas…", always with a preview before anything is sent.
@@ -448,6 +453,53 @@ screen_contracts:
         or of the uniform 404; a summary says how many were assigned; a partial failure is never hidden
       recovery: the inbox queue and the counts are read again after every run; changing the queue keeps the batch
         open, a session or organization change drops it
+    # UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11 (project owner, 2026-10-11, "Al terminar el lote (Recommended)"): the
+    # approved design's "Agregar a ruta…", offered when a bulk assignment ends with the same orders and the same driver,
+    # always with a preview before anything is sent.
+    bulk_add_to_route:
+      decision: UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11
+      sources:
+        routes: GET /routes (listRoutes) with status=DRAFT and driver_id of the batch's driver, every page (at most 5),
+          one after another; a route outside that request fails the read closed
+        add: POST /routes/{routeId}/stops (addRouteStop) for one order after another
+        check: GET /routes/{routeId} (getRoute) after a generic CONFLICT or the uniform 404, before the next order
+      flow: a sequence of the existing single-order operation, never a new cross-module flow (AI-13 §4) and never a
+        status change; the backend and RLS decide every stop again (DRAFT route, OWN ACCEPTED or ACTIVE assignment of
+        the route's driver, DSP-001 compatibility)
+      offered_when: a bulk_assignment run ended with at least one order assigned - "Agregar estas órdenes a una ruta…"
+        in the batch panel, never as a queue button nor on rows without an assignment; "Reintentar las pendientes" of
+        the assignment waits while the step is open
+      orders: only the orders that batch assigned, in batch order, all to the batch's driver; none is added or taken
+        out
+      route_choice: only the driver's DRAFT routes, named by scheduled date ("Ruta del 12 de octubre de 2026", "Ruta
+        sin fecha", plus "la más reciente", "la segunda más reciente"… when several share it) and current stops, newest
+        first; no identifier, amount or assignment cost; the first confirmation fixes the route for the rest of the
+        batch
+      no_route: when the driver has no DRAFT route the step says so and that routes are created in Rutas (opened in
+        another tab, then "Buscar rutas de nuevo"); the inbox creates no route (createRoute needs a city the inbox does
+        not hold)
+      preview: before anything is sent - the route, the driver DRV- reference and the orders in the order they are
+        added (Orden de envío, Guía, Destino); they go to the end of the route
+      confirmation: required (ConfirmDialog) naming the route with its current stops, the driver reference and the
+        number of orders
+      idempotency: one Idempotency-Key per order, kept with the same payload (route and expected_version) until the
+        server answers definitively and reused when that order is sent again
+      concurrency: expected_version is the version just listed, then the version of each authoritative answer; a
+        VERSION_CONFLICT stops the run, the routes are read again and the orders not added need a new confirmation
+      execution: one order after another; DRIVER_INELIGIBLE and INVALID_REQUEST answer for that order only and the
+        next order is sent; a generic CONFLICT (or an unknown code) or the uniform 404 also answers for that order, but
+        the server uses them for a route that left DRAFT or is gone too, so before the next order getRoute must show
+        the driver's same DRAFT route at the same version - otherwise, or when it cannot be read, the run stops like a
+        VERSION_CONFLICT and a route no longer DRAFT receives nothing more; session, role, MFA, network, server or an
+        unexpected answer stops the run and the rest stay "Sin enviar"; "Reintentar las pendientes" resends, with the
+        same keys and payloads, only the orders a network or server failure left without an answer
+      results: every row shows its own result - added to the route, or the es-MX message of its RoutingConflict code
+        (DRIVER_INELIGIBLE, VERSION_CONFLICT, CONFLICT, INVALID_REQUEST) or of the uniform 404; a summary says how many
+        were added; a partial failure is never hidden
+      mfa: PLATFORM_ADMIN adds stops only with MFA (addRouteStop); a 403 MFA_REQUIRED stops the run and offers
+        "Verificar identidad" back to the inbox
+      recovery: the inbox queue and the counts are read again after every run; the step lives in the batch panel, so a
+        session or organization change drops it
     recovery:
     - load, view change, refresh, assignment, realtime event (250 ms debounce), reconnect, visibility and 30 s polling
       read the REST queries and the counts again; a reconnect resynchronizes from that read
@@ -457,14 +509,16 @@ screen_contracts:
       and the batch
     - no internal identifier or personal data in the table; its only amount is the order total, never an assignment
       cost, margin, COD amount or tariff; the bulk assignment preview adds only the assignment cost the dispatcher
-      types for each order
+      types for each order; the bulk add to route shows no amount (not even the route's assignment cost total)
     forbidden:
-    - bulk status change without preview (the only bulk action, bulk_assignment, always shows its preview and a
-      confirmation first)
+    - bulk status change without preview (the bulk actions, bulk_assignment and bulk_add_to_route, always show their
+      preview and a confirmation first)
     - a queue, count or chip computed by filtering loaded rows
     not_supported:
-    - '"Agregar a ruta…" in bulk of the approved design - addRouteStop takes only orders already assigned (OWN) to the
-      route''s driver and no inbox queue lists them; a later change'
+    - '"Agregar a ruta…" as a queue button of the approved design - addRouteStop takes only orders already assigned
+      (OWN) to the route''s driver and no inbox queue lists them; bulk_add_to_route offers it when a bulk assignment
+      ends'
+    - creating a route from the inbox - createRoute needs a city the inbox does not hold; routes are created in Rutas
     - Órdenes menu item of the approved menu - no screen yet (Repartidores is /ops/drivers, UI-PHASE3-DRIVERS-2026-10-11)
   route_planner:
     release: MVP-1
@@ -669,6 +723,29 @@ screen_contracts:
         refuses DELIVERED without the recorded cash (COD_NOT_RECORDED)'
       rejections: each finance conflict code and COD_NOT_RECORDED has its own Spanish message; no code is shown
       not_paid: '"No pagó el cobro" is reported through the failed attempt (fail_attempt), outside this change'
+    recipient_call: VOICE-001-MASKED-CALLS-2026-10-11 ("Sí, con número enmascarado") and
+      VOICE-001-PROVIDER-TWILIO-2026-10-11 - the detail of a DELIVERY stop whose confirmed status is DELIVERING offers
+      "Llamar al destinatario" only when getRecipientCallAvailability answers available true; it sends
+      requestRecipientCall with a new Idempotency-Key (reused only to retry the same tap after a network failure) and
+      shows "Te estamos llamando a tu celular…" for PLACED or REQUESTED and a retry hint for UNCONFIRMED; it is an
+      online-only action - offline the button is shown disabled with "Necesitas conexión a internet para llamar" only
+      once getRecipientCallAvailability answered available true for the stop (before that nothing is shown), and the
+      action is never queued, cached or replayed by the offline queue; an answer that arrives after the stop changed
+      is ignored; after a 429 Retry-After or an availability RATE_LIMITED with retry_after_seconds the PWA checks the
+      availability again once when the wait is over; the PWA never receives, shows or stores a phone number of the
+      recipient (masked phone or relay); DRIVER_PHONE_REQUIRED points to "Cuenta"; the call itself asks the driver to
+      press 1 before the recipient is dialed (VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11)
+  driver_account:
+    route: /driver/stops (header "Cuenta")
+    decision: VOICE-001-MASKED-CALLS-2026-10-11
+    phone: shown only when getMyDriverPhone answers voice_calls_enabled true; the driver types their own mobile (ten
+      Mexican digits, optional +52, spaces and hyphens) and must tick the consent text "Acepto que este número se use
+      solo para conectar mis llamadas con los destinatarios de mis entregas. El destinatario nunca verá mi número y no
+      se usará para nada más. Puedo cambiarlo o borrarlo cuando quiera." (consent_version VOICE-001-CONSENT-V1) before
+      registerMyDriverPhone; the stored number is never displayed (only "Celular registrado" and the date); "Borrar mi
+      celular" calls removeMyDriverPhone, which works whatever the driver profile's status (ARCO; a driver whose
+      profile is not active is told it cannot register a new number but can erase the stored one); online only, the
+      field is cleared after saving and nothing is kept in browser storage
   external_driver_offers:
     release: MVP-1
     host_route: /driver/stops

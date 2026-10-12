@@ -376,6 +376,7 @@ Interfaces mínimas:
 - `IGeocodingProvider`
 - `IRoutingProvider`
 - `IMessagingProvider`
+- `IVoiceBridgeProvider` (VOICE-001-MASKED-CALLS-2026-10-11: llamada puente enmascarada repartidor-destinatario; adaptador Twilio Programmable Voice por VOICE-001-PROVIDER-TWILIO-2026-10-11)
 - `IPaymentProvider`
 - `IInvoiceProvider`
 - `IObjectStorageProvider`

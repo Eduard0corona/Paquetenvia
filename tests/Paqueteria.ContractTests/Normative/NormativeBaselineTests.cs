@@ -57,7 +57,7 @@ public sealed class NormativeBaselineTests
     {
         var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("specs", "AI-08_BACKLOG.yaml"));
         var items = root.Sequence("items").Children.Cast<YamlMappingNode>().ToArray();
-        Assert.Equal(65, items.Length);
+        Assert.Equal(66, items.Length);
         var byId = items.ToDictionary(item => item.Scalar("id"), StringComparer.Ordinal);
         Assert.Equal(items.Length, byId.Count);
         Assert.Contains("ARC-002", byId.Keys);

@@ -94,6 +94,19 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual([], guards.validate_settings([{"name": "Finance__OperationalTimeZone", "value": "America/Mazatlan"}], allow_sentinel=False))
         self.assertTrue(guards.validate_settings([{"name": "Finance__OperationalTimeZone", "value": "owner_decision_required"}], allow_sentinel=False))
 
+    def test_the_masked_call_bridge_cannot_be_enabled_from_the_settings_file(self):
+        # VOICE-001-PROVIDER-TWILIO-2026-10-11: Voice stays Disabled in the pilot; every Voice__ key is refused.
+        for name, value in {
+            "Voice__Provider": "Twilio",
+            "Voice__Twilio__WebhookBaseUri": "https://pilot.example.test",
+            "Voice__Twilio__Gate007DecisionId": "GATE-007-PILOT",
+        }.items():
+            with self.subTest(name=name):
+                failures = guards.validate_settings([{"name": name, "value": value}], allow_sentinel=False)
+                self.assertIn(f"setting {name} is platform-managed by apps.bicep and cannot be overridden", failures)
+        entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
+        self.assertFalse(any(entry["name"].startswith("Voice__") for entry in entries))
+
     def test_removed_global_pricing_policy_version_is_rejected(self):
         # PRC-POLICY-VERSION-PER-ORG: the version comes from each organization's tariff rules.
         failures = guards.validate_settings([{"name": "Pricing__PricingPolicyVersion", "value": "PRC-PILOT-v1"}], allow_sentinel=False)

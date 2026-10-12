@@ -16,6 +16,7 @@ import {
   type BulkEligibility,
   type BulkOrder,
 } from "../contracts/bulk-assignment";
+import { bulkRouteOffer, bulkRouteOfferText, type BulkRouteOffer } from "../contracts/bulk-route";
 import { vatIncludedLabel } from "../contracts/create-order";
 import { readOperationsSession } from "../session/operations-session";
 import {
@@ -25,9 +26,18 @@ import {
   type BulkDriversLoad,
   type BulkRowResult,
 } from "../state/bulk-assignment-controller";
+import { OperationsBulkRoute } from "./operations-bulk-route";
 
 /** The id of the panel heading; the inbox labels the panel's section with it. */
 export const bulkAssignmentTitleId = "inbox-bulk-title";
+const bulkRouteButtonId = "inbox-bulk-route";
+const bulkRouteHintId = "inbox-bulk-route-hint";
+
+/** "Agregar estas órdenes a una ruta…" opened with what the finished batch offered. */
+interface RouteStep {
+  readonly id: number;
+  readonly offer: BulkRouteOffer;
+}
 
 /**
  * UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11 ("Costo por orden"): "Asignar seleccionadas…".
@@ -38,6 +48,9 @@ export const bulkAssignmentTitleId = "inbox-bulk-title";
  * prefilled until the tariff table exists). Nothing is sent before the confirmation, which names
  * the driver, the number of orders and the sum of the costs; then each order is assigned on its
  * own and keeps its own result. The backend and RLS decide every assignment again.
+ * UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11 ("Al terminar el lote (Recommended)"): once the batch
+ * ends with assigned orders it offers "Agregar estas órdenes a una ruta…" with those orders and
+ * that driver only, a step with its own preview and confirmation (operations-bulk-route).
  */
 export function OperationsBulkAssignment({
   orders,
@@ -68,6 +81,9 @@ export function OperationsBulkAssignment({
   const [typed, setTyped] = useState<Readonly<Record<string, string>>>({});
   const [costErrors, setCostErrors] = useState<ReadonlyMap<string, string>>(new Map());
   const [formError, setFormError] = useState<string | null>(null);
+  const [routeStep, setRouteStep] = useState<RouteStep | null>(null);
+  const [routeRunning, setRouteRunning] = useState(false);
+  const routeStepCounter = useRef(0);
   const controllerRef = useRef<BulkAssignmentController | null>(null);
   const onChangedRef = useRef(onChanged);
   const { confirm, dialog } = useConfirmDialog();
@@ -107,6 +123,18 @@ export function OperationsBulkAssignment({
   const costs = parseBulkCosts(state.orders, typed);
   const count = state.orders.length;
   const sent = state.orders.filter((order) => isAnswered(state.results[order.orderId])).length;
+  // Only a finished batch with assigned orders offers its orders and driver for a route.
+  const routeOffer = routeStep === null ? bulkRouteOffer(state) : null;
+
+  const openRouteStep = (offer: BulkRouteOffer) => {
+    routeStepCounter.current += 1;
+    setRouteStep({ id: routeStepCounter.current, offer });
+  };
+  const cancelRouteStep = () => {
+    setRouteStep(null);
+    setRouteRunning(false);
+    window.setTimeout(() => document.getElementById(bulkRouteButtonId)?.focus(), 0);
+  };
 
   const remove = (orderId: string) => {
     controllerRef.current?.remove(orderId);
@@ -145,7 +173,12 @@ export function OperationsBulkAssignment({
         <h2 id={bulkAssignmentTitleId}>
           Asignar {count === 1 ? "1 orden seleccionada" : `${count} órdenes seleccionadas`}
         </h2>
-        <button type="button" className="btn btnSecondary" onClick={onClose} disabled={state.phase === "running"}>
+        <button
+          type="button"
+          className="btn btnSecondary"
+          onClick={onClose}
+          disabled={state.phase === "running" || routeRunning}
+        >
           Cerrar
         </button>
       </div>
@@ -309,12 +342,39 @@ export function OperationsBulkAssignment({
             Revisar y asignar {count === 1 ? "1 orden" : `${count} órdenes`}
           </button>
         )}
-        {state.phase === "done" && state.canRetry && (
+        {state.phase === "done" && state.canRetry && routeStep === null && (
           <button type="button" className="btn btnPrimary" onClick={() => void controllerRef.current?.retry()}>
             Reintentar las pendientes
           </button>
         )}
+        {routeOffer !== null && (
+          <button
+            id={bulkRouteButtonId}
+            type="button"
+            className="btn btnSecondary"
+            onClick={() => openRouteStep(routeOffer)}
+            aria-describedby={bulkRouteHintId}
+          >
+            Agregar estas órdenes a una ruta…
+          </button>
+        )}
       </div>
+      {routeOffer !== null && (
+        <p id={bulkRouteHintId} className="opsSummaryNote">
+          {bulkRouteOfferText(routeOffer)}
+        </p>
+      )}
+      {routeStep !== null && (
+        <OperationsBulkRoute
+          key={routeStep.id}
+          orders={routeStep.offer.orders}
+          driver={routeStep.offer.driver}
+          returnUrl={returnUrl}
+          onChanged={() => onChangedRef.current()}
+          onCancel={cancelRouteStep}
+          onRunningChange={setRouteRunning}
+        />
+      )}
       {dialog}
     </div>
   );
