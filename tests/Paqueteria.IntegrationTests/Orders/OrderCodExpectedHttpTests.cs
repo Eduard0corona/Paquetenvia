@@ -41,8 +41,8 @@ public sealed class OrderCodExpectedHttpTests : IClassFixture<OrderHttpWebApplic
         Assert.Equal(HttpStatusCode.Created, response.StatusCode);
         Assert.Equal(1, factory.CreateCallCount);
         Assert.Equal(expected, factory.LastCreateCommand!.CodExpectedCents);
-        var body = await response.Content.ReadAsStringAsync();
-        Assert.DoesNotContain("cod", body, StringComparison.OrdinalIgnoreCase);
+        using var order = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        AssertCarriesNoCod(order.RootElement, expected);
     }
 
     [Theory]
@@ -107,6 +107,57 @@ public sealed class OrderCodExpectedHttpTests : IClassFixture<OrderHttpWebApplic
         request.Headers.Add("X-Organization-Id", MockIdentityProfiles.ViewerOrganizationId.ToString("D"));
         request.Headers.Add("Idempotency-Key", key);
         return await client.SendAsync(request);
+    }
+
+    /// <summary>
+    /// The Order never carries COD: no property at any depth is a COD field and, for a declared amount, no property
+    /// holds that amount. It reads the parsed properties, never the raw text, whose random base64url public_id can
+    /// contain the letters "cod".
+    /// </summary>
+    private static void AssertCarriesNoCod(JsonElement order, long declared)
+    {
+        Assert.Equal(JsonValueKind.Object, order.ValueKind);
+        var properties = EnumerateProperties(order).ToArray();
+        Assert.DoesNotContain(properties, property => IsCodField(property.Name));
+        if (declared > 0)
+        {
+            Assert.DoesNotContain(properties, property =>
+                property.Value.ValueKind == JsonValueKind.Number &&
+                property.Value.TryGetInt64(out var amount) &&
+                amount == declared);
+        }
+    }
+
+    /// <summary>
+    /// Every AI-05 COD field has the word cod in its snake_case name (for example cod_expected_cents, cod,
+    /// cod_record, cod_expected_cents_total and requires_cod); code and the *_code names are other words.
+    /// </summary>
+    private static bool IsCodField(string name) =>
+        name.Split('_').Contains("cod", StringComparer.OrdinalIgnoreCase);
+
+    private static IEnumerable<JsonProperty> EnumerateProperties(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in value.EnumerateObject())
+            {
+                yield return property;
+                foreach (var nested in EnumerateProperties(property.Value))
+                {
+                    yield return nested;
+                }
+            }
+        }
+        else if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in value.EnumerateArray())
+            {
+                foreach (var nested in EnumerateProperties(item))
+                {
+                    yield return nested;
+                }
+            }
+        }
     }
 
     private static string Key() => $"orders-cod-{Guid.NewGuid():N}";
