@@ -72,8 +72,15 @@ confirmado (AI-12: nunca se confía en el payload). Nada más en la API usa `Con
 3. **Por qué SELECT por columna y no funciones definer.** Las lecturas de evidencia corren bajo FORCE RLS con una sola
    organización en contexto; convertirlas en funciones `SECURITY DEFINER` exigiría un ejecutor `BYPASSRLS` que lea
    entre tenants, más amplio que lo que se concede aquí. Cada columna concedida también la puede leer
-   `paqueteria_app`: la migración y las aserciones de baseline lo verifican, así que **la API no gana ninguna lectura**.
-   Su única capacidad nueva es tomar y cerrar mensajes de tiempo real, que es lo que el owner aprobó.
+   `paqueteria_app`: la migración y las aserciones de baseline lo verifican, así que **las lecturas de tablas no le dan
+   a la API ninguna columna nueva**. Su capacidad nueva es tomar y cerrar mensajes de tiempo real, que es lo que el
+   owner aprobó, y tomar mensajes sí es una lectura nueva: `claim_realtime_outbox` y `claim_location_outbox` son
+   funciones `SECURITY DEFINER` del ejecutor `BYPASSRLS` `paqueteria_outbox_executor` y corren sin contexto de tenant,
+   así que devuelven filas completas de **todos los tenants**: las de `platform.outbox_events` de la cola REALTIME y las
+   de `platform.location_outbox_events`, con `payload` (el de ubicación lleva `driver_id`, latitud y longitud del
+   repartidor), `tenant_context` y `owner_org_id`, columnas que `paqueteria_app` no puede leer. Es inherente a "tomar
+   mensajes": quien despacha la cola tiene que leer cada mensaje que toma. Los despachadores publican cada fila solo a
+   la audiencia que vuelven a derivar del estado confirmado bajo FORCE RLS y nunca registran el payload en logs.
 4. **`settle_outbox` compartido.** Es la función canónica de cierre del outbox de negocio. Solo cambia la fila cuyo
    `lease_token` vigente presenta el llamador, y este rol solo obtiene tokens de `claim_realtime_outbox` y
    `claim_location_outbox`; no puede leer el outbox para conocer los de otras colas. Por eso en la práctica solo
@@ -83,8 +90,10 @@ confirmado (AI-12: nunca se confía en el payload). Nada más en la API usa `Con
    está encendido; su login debe existir, parsear y ser distinto del de `ConnectionStrings:Paqueteria` y
    `ConnectionStrings:PaqueteriaWorker`). Cada transacción hace `SET LOCAL ROLE paqueteria_realtime`; un login que no
    es miembro falla antes de cualquier sentencia. La readiness `realtime_outbox_dispatcher` exige
-   `current_user = paqueteria_realtime`, NOBYPASSRLS, las seis funciones ejecutables y que el login **no** pueda
-   asumir `paqueteria_worker` ni `paqueteria_app`.
+   `current_user = paqueteria_realtime`, NOBYPASSRLS, las seis funciones ejecutables y que el login tenga la forma que
+   impone el aprovisionamiento (`LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`) y sea
+   miembro, directo o por cualquier cadena, de `paqueteria_realtime` y de **ningún otro** rol (ni `paqueteria_worker`,
+   ni `paqueteria_app`, ni migrator, bootstrap, maintenance o cualquier ejecutor).
 6. **Piloto.** El workflow genera, como para la API y el Worker, `pv_pilot_realtime` (contraseña de 64 hex, nunca
    impresa), guarda `pg-realtime-runtime-connection` y `pg-realtime-login-verifier` en Key Vault; el job de logins crea el
    login o renueva su clave (`LOGIN NOINHERIT NOBYPASSRLS`, miembro solo de `paqueteria_realtime`) desde el verificador SCRAM.
@@ -112,9 +121,25 @@ No es un flujo atómico cross-module nuevo (AI-13 §4) ni cambia AI-04, AI-05, A
 
 ## Riesgos residuales
 
+- Tomar mensajes lee entre tenants: con esta credencial, el proceso de la API lee por las dos funciones de reclamo las
+  filas completas de outbox REALTIME y de ubicación de todos los tenants, `payload` incluido (ubicación del
+  repartidor), `tenant_context` y `owner_org_id`, que `paqueteria_app` no puede leer (punto 3). Es la capacidad que
+  aprobó el owner; no hay otra vía de lectura entre tenants.
 - `settle_outbox` no comprueba la cola; ver punto 4 de la decisión.
 - En Azure la lane Notifications solo se migra desde historial vacío (`MigrateNotificationsAsync` con el puente E-002
   exige el estado `Pending`); limitación previa a este cambio. El piloto no se ha desplegado, así que su primer
   despliegue aplica la lane completa.
 - Las lecturas de evidencia siguen viendo, bajo RLS, las columnas que ven hoy (por ejemplo `orders.order_events.payload`
   y `dispatch.external_offers.commission_cents`); son las mismas que ya lee `paqueteria_app`.
+
+Pendientes de la revisión de seguridad, registrados sin implementar:
+
+- **`settle_realtime_outbox` (MINOR 2).** `security.settle_outbox` es compartido y no comprueba la cola. Una función
+  posterior `settle_realtime_outbox` debe exigir además `security.resolve_outbox_consumer(topic)='REALTIME'`. En Azure
+  la lane Notifications solo se migra desde historial vacío, así que primero hay que corregir ese camino.
+- **Deriva de privilegios de rutinas (MINOR 4).** La comprobación de la migración y de
+  `DatabaseBaselineAssertions` solo recorre los esquemas `security`, `platform`, `notifications` y `extensions`. Debe
+  recorrer todo esquema donde el rol tenga USAGE y señalar cualquier función `SECURITY DEFINER` que el rol pueda
+  ejecutar fuera de las seis.
+- **Duración del lease (límite previo).** Las funciones de reclamo aceptan un lease de cualquier duración (solo fijan
+  un mínimo de 10 s).

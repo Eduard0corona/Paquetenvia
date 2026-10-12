@@ -9,7 +9,8 @@ namespace Paqueteria.IntegrationTests.Realtime;
 /// <summary>
 /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the in-process dispatchers are ready only with their own login, as
 /// <c>paqueteria_realtime</c> (NOBYPASSRLS) with the six lease-token functions executable, and never with a login that
-/// can also assume the Worker role.
+/// can also assume any other role or that has a privileged attribute (the provisioned shape is
+/// <c>LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS</c>, member of that role only).
 /// </summary>
 [Collection(RealtimePostgreSqlKestrelCollection.Name)]
 public sealed class RealtimeOutboxReadinessPostgreSqlTests(
@@ -99,11 +100,29 @@ public sealed class RealtimeOutboxReadinessPostgreSqlTests(
         Assert.Equal(before, await database.ReadOutboxStateSnapshotAsync());
     }
 
-    [Fact]
-    public async Task A_realtime_login_that_can_also_assume_the_worker_role_is_unhealthy()
+    /// <summary>
+    /// Every other role AI-18 declares: the two runtime roles, the migrator, bootstrap, maintenance, every executor and
+    /// the master data loader. A login that is also a member of any of them could SET ROLE into it from the API process.
+    /// </summary>
+    [Theory]
+    [InlineData("paqueteria_worker")]
+    [InlineData("paqueteria_app")]
+    [InlineData("paqueteria_migrator")]
+    [InlineData("paqueteria_bootstrap")]
+    [InlineData("paqueteria_outbox_executor")]
+    [InlineData("paqueteria_maintenance")]
+    [InlineData("paqueteria_lifecycle_executor")]
+    [InlineData("paqueteria_cleanup_executor")]
+    [InlineData("paqueteria_registration_executor")]
+    [InlineData("paqueteria_session_executor")]
+    [InlineData("paqueteria_master_data_executor")]
+    [InlineData("paqueteria_master_data_loader")]
+    [InlineData("paqueteria_operator_outbox_executor")]
+    [InlineData("paqueteria_auto_close_executor")]
+    public async Task A_realtime_login_that_can_also_assume_another_role_is_unhealthy(string role)
     {
         var before = await database.ReadOutboxStateSnapshotAsync();
-        await database.SetRealtimeLoginWorkerMembershipAsync(granted: true);
+        await database.SetRealtimeLoginRoleMembershipAsync(role, granted: true);
         try
         {
             var result = await CheckAsync(database.RealtimeConnectionString);
@@ -113,7 +132,60 @@ public sealed class RealtimeOutboxReadinessPostgreSqlTests(
         }
         finally
         {
-            await database.SetRealtimeLoginWorkerMembershipAsync(granted: false);
+            await database.SetRealtimeLoginRoleMembershipAsync(role, granted: false);
+        }
+
+        Assert.Equal(HealthStatus.Healthy, (await CheckAsync(database.RealtimeConnectionString)).Status);
+    }
+
+    [Fact]
+    public async Task A_realtime_role_that_is_a_member_of_another_role_is_unhealthy()
+    {
+        // The login reaches paqueteria_worker through paqueteria_realtime; the membership check follows the chain.
+        var before = await database.ReadOutboxStateSnapshotAsync();
+        await database.SetRealtimeLoginRoleMembershipAsync(
+            "paqueteria_worker",
+            granted: true,
+            member: "paqueteria_realtime");
+        try
+        {
+            var result = await CheckAsync(database.RealtimeConnectionString);
+
+            Assert.Equal(HealthStatus.Unhealthy, result.Status);
+            Assert.Equal(before, await database.ReadOutboxStateSnapshotAsync());
+        }
+        finally
+        {
+            await database.SetRealtimeLoginRoleMembershipAsync(
+                "paqueteria_worker",
+                granted: false,
+                member: "paqueteria_realtime");
+        }
+
+        Assert.Equal(HealthStatus.Healthy, (await CheckAsync(database.RealtimeConnectionString)).Status);
+    }
+
+    [Theory]
+    [InlineData("BYPASSRLS", "NOBYPASSRLS")]
+    [InlineData("CREATEROLE", "NOCREATEROLE")]
+    [InlineData("INHERIT", "NOINHERIT")]
+    [InlineData("SUPERUSER", "NOSUPERUSER")]
+    [InlineData("CREATEDB", "NOCREATEDB")]
+    [InlineData("REPLICATION", "NOREPLICATION")]
+    public async Task A_realtime_login_with_a_privileged_attribute_is_unhealthy(string attribute, string reset)
+    {
+        var before = await database.ReadOutboxStateSnapshotAsync();
+        await database.SetRealtimeLoginAttributeAsync(attribute);
+        try
+        {
+            var result = await CheckAsync(database.RealtimeConnectionString);
+
+            Assert.Equal(HealthStatus.Unhealthy, result.Status);
+            Assert.Equal(before, await database.ReadOutboxStateSnapshotAsync());
+        }
+        finally
+        {
+            await database.SetRealtimeLoginAttributeAsync(reset);
         }
 
         Assert.Equal(HealthStatus.Healthy, (await CheckAsync(database.RealtimeConnectionString)).Status);

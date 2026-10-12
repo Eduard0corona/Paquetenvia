@@ -60,7 +60,8 @@ public sealed class DatabaseBaselineAssertions
     /// <summary>
     /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the role's exact column grants (schema.table.column:privilege), the
     /// columns the realtime evidence reads select, join or filter on under FORCE RLS. Each is also readable by
-    /// <c>paqueteria_app</c>, so the API gains no read.
+    /// <c>paqueteria_app</c>, so these table reads give the API no new column (its two claim functions, by design, return
+    /// whole REALTIME and location outbox rows of every tenant; see AI-18).
     /// </summary>
     public static IReadOnlyList<string> RealtimeDispatcherColumnGrants { get; } = Array.AsReadOnly(new[]
     {

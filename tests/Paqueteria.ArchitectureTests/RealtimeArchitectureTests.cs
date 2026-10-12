@@ -100,9 +100,12 @@ public sealed class RealtimeArchitectureTests
         Assert.Single(System.Text.RegularExpressions.Regex.Matches(source, "\"PaqueteriaWorker\""));
         Assert.Contains("new[] { \"Paqueteria\", \"PaqueteriaWorker\" }", source, StringComparison.Ordinal);
         Assert.DoesNotContain("GetConnectionString(\"PaqueteriaWorker\")", source, StringComparison.Ordinal);
-        // The Worker role appears once: in the readiness check that refuses a realtime login able to assume it.
-        Assert.Single(System.Text.RegularExpressions.Regex.Matches(source, "paqueteria_worker"));
-        Assert.Contains("NOT pg_has_role(session_user,'paqueteria_worker','MEMBER')", source, StringComparison.Ordinal);
+        // The Worker role is never named: the readiness check refuses a realtime login that is a member of any role
+        // other than paqueteria_realtime (the Worker role included) or that has a privileged attribute.
+        Assert.DoesNotContain("paqueteria_worker", source, StringComparison.Ordinal);
+        Assert.Contains("WHERE r.rolname NOT IN ('paqueteria_realtime', session_user)", source, StringComparison.Ordinal);
+        Assert.Contains("AND pg_has_role(session_user, r.oid, 'MEMBER')", source, StringComparison.Ordinal);
+        Assert.Contains("AND NOT login.rolinherit", source, StringComparison.Ordinal);
         Assert.DoesNotContain("SET LOCAL ROLE paqueteria_worker", source, StringComparison.Ordinal);
         Assert.Contains("SET LOCAL ROLE paqueteria_realtime;", source, StringComparison.Ordinal);
         Assert.Contains("public const string ConnectionStringName = \"PaqueteriaRealtime\";", source, StringComparison.Ordinal);

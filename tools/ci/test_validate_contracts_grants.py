@@ -121,6 +121,19 @@ class ExecutorGrantRuleTests(unittest.TestCase):
         )
         self.assertNotEqual(unrevoked, self.role_sql)
         self.assertTrue(self.validator.realtime_dispatcher_errors(unrevoked))
+        # The privileged roles are revoked from paqueteria_realtime too, like from the API and Worker runtime roles.
+        privileged_unrevoked = self.role_sql.replace(
+            "paqueteria_maintenance\n  FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;",
+            "paqueteria_maintenance\n  FROM paqueteria_app, paqueteria_worker;",
+        )
+        self.assertNotEqual(privileged_unrevoked, self.role_sql)
+        self.assertTrue(self.validator.realtime_dispatcher_errors(privileged_unrevoked))
+        executor_unrevoked = self.role_sql.replace(
+            "REVOKE paqueteria_auto_close_executor FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;",
+            "REVOKE paqueteria_auto_close_executor FROM paqueteria_app, paqueteria_worker;",
+        )
+        self.assertNotEqual(executor_unrevoked, self.role_sql)
+        self.assertTrue(self.validator.auto_close_errors(executor_unrevoked))
         commented = self.role_sql + "\n-- GRANT SELECT ON orders.orders TO paqueteria_realtime;\n"
         self.assertEqual([], self.validator.realtime_dispatcher_errors(commented))
 

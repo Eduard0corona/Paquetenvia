@@ -268,7 +268,7 @@ jobs:
         shell: bash
         run: |
           actual="$(sha256sum ./docs/normative/v0.6/database/AI-18_DATABASE_ROLE_MODEL.sql | cut -d ' ' -f 1)"
-          test "$actual" = "a92f8bd3befddaa0891cfbc0ef63a16ae5c18f81d54701f88570b34627b0eb27"
+          test "$actual" = "2a95220f8934f0431da096bb66028b60e2ab00fcdaa8b2c44d39bb43ec8f5700"
 
       - name: Test CI tooling
         run: python -m unittest discover -s ./tools/ci -p "test_*.py" -v

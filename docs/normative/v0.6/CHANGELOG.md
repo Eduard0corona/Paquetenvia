@@ -17,6 +17,12 @@
 - Piloto: secretos `pg-realtime-runtime-connection` y `pg-realtime-login-verifier`, login `pv_pilot_realtime`, la
   identidad de la API lee solo ese secreto nuevo; guardas P06 y P23. Sin cambios en AI-04, AI-05, AI-06, AI-12 ni en
   los flujos atómicos de AI-13 §4.
+- Correcciones de la revisión de seguridad (misma decisión): la readiness exige que el login tenga la forma
+  aprovisionada (`LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`) y no sea miembro,
+  directo o por cadena, de ningún rol fuera de `paqueteria_realtime`. AI-18 dice que las dos funciones de reclamo
+  devuelven filas completas de outbox REALTIME y de ubicación de todos los tenants (`payload` incluido), revoca cada
+  ejecutor también de `paqueteria_realtime` y precisa la aserción 37; AI-24 lista los pasos en el orden del código
+  (`BEGIN`, `SET LOCAL ROLE`, `set_config`).
 
 ## Despacho: "Órdenes" y filtro por fecha de creación en `listOrders` (UI-PHASE3-ORDERS-LIST-2026-10-12, ORD-LIST-DATE-FILTER-2026-10-12) — 2026-10-12
 

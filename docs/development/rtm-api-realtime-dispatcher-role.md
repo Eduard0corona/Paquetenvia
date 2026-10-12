@@ -15,15 +15,16 @@ arrancado. Local y CI le daban la conexión del Worker, por eso nadie lo vio. El
 
 | Amenaza | Sin este cambio (opción "la del Worker") | Con `paqueteria_realtime` |
 | --- | --- | --- |
-| Ejecución de código en el proceso de la API | lee y escribe todas las tablas de módulo como el Worker, reclama y cierra NOTIFICATIONS y DISPATCH, purga el outbox | solo reclama, cierra y reencola mensajes REALTIME y de ubicación; lee columnas que `paqueteria_app` ya lee |
+| Ejecución de código en el proceso de la API | lee y escribe todas las tablas de módulo como el Worker, reclama y cierra NOTIFICATIONS y DISPATCH, purga el outbox | solo reclama, cierra y reencola mensajes REALTIME y de ubicación; en tablas lee columnas que `paqueteria_app` ya lee, pero al reclamar lee las filas completas de outbox REALTIME y de ubicación de **todos** los tenants (`payload` con la ubicación del repartidor, `tenant_context`, `owner_org_id`), que `paqueteria_app` no lee |
 | Bug de SQL en el despachador | podría escribir cualquier tabla de módulo | sin INSERT, UPDATE ni DELETE en ninguna tabla |
 | Fuga de la cadena de conexión | equivale a filtrar la del Worker | solo el rol mínimo; se rota sola con `rotate_runtime_logins` |
 | Lectura entre tenants | RLS + contexto del despachador | igual: NOBYPASSRLS, FORCE RLS, una organización por transacción; `row_security=off` se rechaza |
 | Acceso directo al outbox | sin SELECT/UPDATE/DELETE, pero con todo lo demás | ningún privilegio sobre las dos tablas de outbox ni USAGE en `platform` |
-| Configuración equivocada (la del Worker o la de la API como "realtime") | — | no arranca: el login debe ser distinto; si no es miembro de `paqueteria_realtime`, `SET LOCAL ROLE` falla; la readiness es Unhealthy si el login puede asumir `paqueteria_worker` o `paqueteria_app` |
+| Configuración equivocada (la del Worker o la de la API como "realtime") | — | no arranca: el login debe ser distinto; si no es miembro de `paqueteria_realtime`, `SET LOCAL ROLE` falla; la readiness es Unhealthy si el login es miembro de cualquier otro rol (directo o por cadena) o tiene SUPERUSER, BYPASSRLS, CREATEROLE, CREATEDB, REPLICATION o INHERIT |
 
-Fuera del modelo: un atacante con la credencial de `paqueteria_app` ya puede fijar cualquier `app.current_org_ids`; este
-cambio no lo empeora, porque cada columna que lee `paqueteria_realtime` también la lee `paqueteria_app`.
+Fuera del modelo: un atacante con la credencial de `paqueteria_app` ya puede fijar cualquier `app.current_org_ids`; en
+lecturas de tabla este cambio no lo empeora, porque cada columna que lee `paqueteria_realtime` también la lee
+`paqueteria_app`. Las dos funciones de reclamo sí son una lectura nueva (ver "Lo que sí se lee de más").
 
 ## Privilegios exactos
 
@@ -65,7 +66,16 @@ lo recibe; no es dueño de nada.
 **Por qué columnas y no funciones definer.** Las lecturas de evidencia son las que mantienen el tiempo real cerrado
 ante fallas (AI-12: la audiencia sale del estado confirmado, nunca del payload). Pasarlas a funciones `SECURITY
 DEFINER` exigiría un ejecutor `BYPASSRLS` que lea entre tenants: más privilegio, no menos. Con columnas, FORCE RLS y una
-sola organización en contexto, y cada columna también legible por `paqueteria_app`, la API no gana ninguna lectura.
+sola organización en contexto, y cada columna también legible por `paqueteria_app`, las lecturas de tablas no le dan a
+la API ninguna columna nueva.
+
+**Lo que sí se lee de más: tomar mensajes.** `claim_realtime_outbox` y `claim_location_outbox` son funciones `SECURITY
+DEFINER` del ejecutor `BYPASSRLS` `paqueteria_outbox_executor` y corren sin contexto de tenant. Devuelven filas completas
+de todos los tenants: las de `platform.outbox_events` de la cola REALTIME y las de `platform.location_outbox_events`, con
+`payload` (el de ubicación lleva `driver_id`, latitud y longitud del repartidor), `tenant_context` y `owner_org_id`,
+columnas que `paqueteria_app` no puede leer. Es inherente a "tomar mensajes", lo que aprobó el owner: quien despacha la
+cola tiene que leer cada mensaje que toma. Los despachadores publican cada fila solo a la audiencia que vuelven a derivar
+del estado confirmado bajo FORCE RLS y no registran el payload en logs.
 
 **`settle_outbox`.** Es el cierre compartido del outbox de negocio. Solo cambia la fila cuyo `lease_token` vigente se
 presenta; este rol solo recibe tokens de sus dos funciones de reclamo y no puede leer el outbox, así que en la práctica
@@ -80,12 +90,22 @@ solo cierra mensajes de tiempo real. Una variante de `settle` limitada a REALTIM
 - `RealtimeDispatcherConnectionFactory` (antes `RealtimeWorkerConnectionFactory`); cada transacción hace
   `SET LOCAL ROLE paqueteria_realtime` después de `BEGIN`.
 - Readiness `realtime_outbox_dispatcher`: `current_user = paqueteria_realtime`, NOBYPASSRLS, las seis funciones
-  ejecutables y el login sin capacidad de asumir `paqueteria_worker` ni `paqueteria_app`.
+  ejecutables y el login con la misma forma que exige `RuntimeLoginProvisioner` (`LOGIN NOINHERIT NOSUPERUSER
+  NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`), miembro, directo o por cualquier cadena, de
+  `paqueteria_realtime` y de ningún otro rol (ni `paqueteria_worker`, `paqueteria_app`, migrator, bootstrap,
+  maintenance ni ejecutores).
 - Línea base: `DatabaseBaselineAssertions` (rol, conjunto exacto, subconjunto de `paqueteria_app`), mapa de rutinas
   E-002 (`_PLUS_RTMAPIROLE`, `paqueteria_realtime` como beneficiario de las seis rutinas), ACL del esquema `security`,
   `E002Guards.CanonicalRoles`, coordinador de migraciones y `validate_contracts.py`.
 - Login local `paqueteria_local_realtime` (DevSeed y `tools/dev-platform.ps1`): la API local recibe
   `ConnectionStrings__PaqueteriaRealtime` y ya no `ConnectionStrings__PaqueteriaWorker`.
+
+## Entorno local existente
+
+Después de traer este cambio, vuelva a ejecutar **una vez** `pwsh ./tools/dev-platform.ps1 Bootstrap`. `Start` solo
+hace bootstrap cuando falta el archivo de acceso, así que en un entorno local ya creado no crea el login
+`paqueteria_local_realtime` ni aplica el paso `20261012000100_AddRealtimeDispatcherRole`; sin ellos
+`/health/ready` reporta `realtime_outbox_dispatcher` Unhealthy y `Start` falla. `Bootstrap` es idempotente.
 
 ## Piloto
 
@@ -119,7 +139,24 @@ cambio, la primera corrida posterior detecta que faltan `pg-realtime-*` y los ge
   RLS y `row_security=off`; el login no asume otros roles; aserciones de línea base ante cada ampliación; Up, Down y
   reaplicación, por SQL y por EF sobre una base nueva.
 - Integración: entrega del outbox con la conexión nueva (suites `OutboxSignalRDelivery`, PWA del repartidor y del
-  tablero), readiness con login correcto, sin privilegios, con BYPASSRLS, con membresía del Worker y con la credencial
-  del Worker; arranque de la API con la configuración real del piloto (`PilotApiStartupConfigurationTests`).
+  tablero), readiness con login correcto, sin privilegios, con BYPASSRLS en el rol, con la credencial del Worker, con
+  el login miembro de cada uno de los otros 14 roles de AI-18 (uno por caso), con `paqueteria_realtime` miembro de
+  `paqueteria_worker`, y con el login en SUPERUSER, BYPASSRLS, CREATEROLE, CREATEDB, REPLICATION o INHERIT (cada caso
+  se revierte y vuelve a Healthy); arranque de la API con la configuración real del piloto
+  (`PilotApiStartupConfigurationTests`).
 - Unitarias: validación de opciones (falta, credencial reutilizada, cadena inválida, despachador apagado).
 - Guardas: `tools/azr-001` (P06, P23) y `tools/ci` (`realtime_dispatcher_errors`).
+
+## Pendientes
+
+Hallazgos de la revisión de seguridad que quedan registrados, sin implementar en este cambio:
+
+- **`settle_realtime_outbox` (MINOR 2).** `security.settle_outbox` es compartido y no comprueba la cola. Una función
+  posterior `settle_realtime_outbox` debe exigir además `security.resolve_outbox_consumer(topic)='REALTIME'`. En Azure
+  la lane Notifications solo se migra desde historial vacío, así que primero hay que corregir ese camino.
+- **Deriva de privilegios de rutinas (MINOR 4).** La comprobación de la migración (`20261012000100`) y de
+  `DatabaseBaselineAssertions` solo recorre los esquemas `security`, `platform`, `notifications` y `extensions`. Debe
+  recorrer todo esquema donde el rol tenga USAGE y señalar cualquier función `SECURITY DEFINER` que el rol pueda
+  ejecutar fuera de las seis.
+- **Duración del lease (límite previo).** `claim_realtime_outbox` y `claim_location_outbox` aceptan un lease de
+  cualquier duración (solo fijan un mínimo de 10 s).

@@ -585,8 +585,9 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
 - **Realtime dispatcher not ready:** `/health/ready` reports `realtime_outbox_dispatcher` unhealthy when
   `pg-realtime-runtime-connection` is missing or its login is not `pv_pilot_realtime` (member of
   `paqueteria_realtime` only), when the Notifications lane step `20261012000100_AddRealtimeDispatcherRole` has not
-  run, or when the login can also assume `paqueteria_worker`/`paqueteria_app`. Re-run the workflow (it regenerates a
-  missing secret and the logins job resets the membership).
+  run, or when the login is a member of any other role (directly or through a chain) or has SUPERUSER, BYPASSRLS,
+  CREATEROLE, CREATEDB, REPLICATION or INHERIT. Re-run the workflow (it regenerates a missing secret and the logins job
+  resets the attributes and the direct memberships).
 - **TLS:** connection strings use `SSL Mode=VerifyFull`. If the image's CA bundle ever lacks the
   PostgreSQL certificate chain, the migrate job fails at connect. Fix the CA bundle; do not downgrade
   to `Require` without an owner decision.

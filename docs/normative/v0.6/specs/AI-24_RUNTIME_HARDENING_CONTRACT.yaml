@@ -192,8 +192,8 @@ realtime_dispatcher_role:
       ConnectionStrings:PaqueteriaWorker
   role: paqueteria_realtime NOLOGIN NOBYPASSRLS (AI-18); member of no role, granted to no group role, owns nothing, no
     default privileges; each login is LOGIN NOINHERIT NOBYPASSRLS and a member of paqueteria_realtime only
-  transaction: BEGIN, set_config(..., true) tenant context, SET LOCAL ROLE paqueteria_realtime; one organization per
-    evidence read; row_security=off is refused
+  transaction: BEGIN, SET LOCAL ROLE paqueteria_realtime, then set_config(..., true) tenant context (both after BEGIN);
+    one organization per evidence read; row_security=off is refused
   grants:
     lane: Notifications 20261012000100_AddRealtimeDispatcherRole (its Down revokes every grant)
     execute:
@@ -209,7 +209,9 @@ realtime_dispatcher_role:
       platform.location_outbox_events; USAGE on platform; CREATE; the NOTIFICATIONS, DISPATCH and UNROUTED queues;
       claim_outbox and requeue_stale_outbox; purge, maintenance and other executor functions
   readiness: realtime_outbox_dispatcher is healthy only when current_user is paqueteria_realtime, NOBYPASSRLS, the six
-    functions exist and are executable, and the session login cannot assume paqueteria_worker or paqueteria_app
+    functions exist and are executable, and the session login has the provisioned shape (LOGIN NOINHERIT NOSUPERUSER
+    NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS) and is a member, directly or through any chain, of
+    paqueteria_realtime and of no other role
   pilot: Key Vault pg-realtime-runtime-connection (read by the API identity only) and pg-realtime-login-verifier (read
     by the logins job); login pv_pilot_realtime
   rollback: Realtime:OutboxDispatcher:Provider=Disabled (screens lose instant updates); Down of the lane step; never the

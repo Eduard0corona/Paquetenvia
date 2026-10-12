@@ -194,10 +194,11 @@ no incluyen payload, tokens, coordenadas, IDs, grupos ni PII.
 
 Readiness abre una transacción corta, aplica
 `SET LOCAL ROLE paqueteria_realtime`, ejecuta sólo introspección y hace rollback.
-Comprueba `current_user`, `NOBYPASSRLS`, que el login no pueda asumir
-`paqueteria_worker` ni `paqueteria_app`, existencia y privilegio `EXECUTE` de
-las seis firmas canónicas: claim, settle y requeue stale para business y
-location. No reclama filas, no crea leases y no ejecuta settle ni requeue.
+Comprueba `current_user`, `NOBYPASSRLS`, que el login tenga la forma
+aprovisionada (`LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE
+NOREPLICATION NOBYPASSRLS`) y no sea miembro, directo o por cadena, de ningún
+rol fuera de `paqueteria_realtime`, existencia y privilegio `EXECUTE` de las
+seis firmas canónicas: claim, settle y requeue stale para business y location. No reclama filas, no crea leases y no ejecuta settle ni requeue.
 Falta de cualquier firma/permiso o `BYPASSRLS` produce `unhealthy`; provider
 Disabled permanece `degraded`.
 

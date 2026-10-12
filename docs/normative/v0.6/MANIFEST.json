@@ -25,7 +25,7 @@
     {
       "path": "CANONICAL_SOURCE_OF_TRUTH.md",
       "bytes": 4696,
-      "sha256": "aa8d9fcef2be79855ab306d11aaf1853b7493caac018720f004ef71183d15e71"
+      "sha256": "5d6061c517485558767d460835fc553d5a79c40fc79a2d8c2153fb6e169a67ca"
     },
     {
       "path": "CHANGED_FILES_SINCE_V0.5.md",
@@ -34,13 +34,13 @@
     },
     {
       "path": "CHANGELOG.md",
-      "bytes": 138887,
-      "sha256": "1a75720f572b285949e71abd587955f83644464779afea8adf5df4f1e9f67325"
+      "bytes": 139509,
+      "sha256": "a420fd7df2654c9d7020ee2c90bda942e4b2aaadaae4b0e7e29f2c2f2dba41c2"
     },
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "dd26e6e38d6cbca4aae282518fb28b28f7ce6bdf26e3892995b6faef9d003104"
+      "sha256": "0c762791229b923cd7f5afbd9423188e190af1b5170a0d079128d3ebc23288bf"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
@@ -69,13 +69,13 @@
     },
     {
       "path": "database/AI-18_DATABASE_ROLE_MODEL.sql",
-      "bytes": 52963,
-      "sha256": "a92f8bd3befddaa0891cfbc0ef63a16ae5c18f81d54701f88570b34627b0eb27"
+      "bytes": 54453,
+      "sha256": "2a95220f8934f0431da096bb66028b60e2ab00fcdaa8b2c44d39bb43ec8f5700"
     },
     {
       "path": "decision-log.md",
-      "bytes": 255638,
-      "sha256": "2563951f4b4302e4ebd8fff622768a56b02bf3996e373d9b9c5c00cb17c1a75f"
+      "bytes": 255923,
+      "sha256": "9e30d295609a6b9fd165db5793c26c5d7e858f1838fe147ad5513853c877abb4"
     },
     {
       "path": "docs/AI-14_TECH_REFERENCES.md",
@@ -364,8 +364,8 @@
     },
     {
       "path": "specs/AI-24_RUNTIME_HARDENING_CONTRACT.yaml",
-      "bytes": 25890,
-      "sha256": "004c8f2d0264a0683d5e797af7c62e518d79ad16c596626ffd9e304b77b3eb9b"
+      "bytes": 26070,
+      "sha256": "a6027a07e3fd94acd2a02b5ab8f180c349116b3b1d9b1cbbbc6f463a661c9a73"
     },
     {
       "path": "tests/AI-09_ACCEPTANCE_TESTS.feature",
@@ -374,8 +374,8 @@
     },
     {
       "path": "tools/validate_contracts.py",
-      "bytes": 52608,
-      "sha256": "7b872d685b86ae6f8e8bd0d2f87e659986d3760411e6c08020874ef80958abb1"
+      "bytes": 52891,
+      "sha256": "a62d5d26c8948c6d07651604497f6c4c03ba5ddd9994fa059cedd2db9bc80a89"
     }
   ]
 }

@@ -1326,18 +1326,50 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
     }
 
     /// <summary>
-    /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: grants or revokes the Worker role to the realtime login, to prove a
-    /// realtime credential that could also assume the Worker role is never reported ready.
+    /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: grants or revokes one AI-18 role to the realtime login (or, with
+    /// <paramref name="member"/> set to <c>paqueteria_realtime</c>, to the realtime role itself), to prove a realtime
+    /// credential that could also assume any other role is never reported ready.
     /// </summary>
-    internal async Task SetRealtimeLoginWorkerMembershipAsync(bool granted)
+    internal async Task SetRealtimeLoginRoleMembershipAsync(
+        string role,
+        bool granted,
+        string member = "paqueteria_sec002_realtime")
     {
+        if (!System.Text.RegularExpressions.Regex.IsMatch(role, "^paqueteria_[a-z_]+$") ||
+            member is not ("paqueteria_sec002_realtime" or "paqueteria_realtime"))
+        {
+            throw new ArgumentException("Only an AI-18 role may be granted to the realtime login or role.", nameof(role));
+        }
+
         NpgsqlConnection.ClearAllPools();
         await using var connection = new NpgsqlConnection(_adminConnectionString);
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand(
-            granted
-                ? "GRANT paqueteria_worker TO paqueteria_sec002_realtime"
-                : "REVOKE paqueteria_worker FROM paqueteria_sec002_realtime",
+            granted ? $"GRANT {role} TO {member}" : $"REVOKE {role} FROM {member}",
+            connection);
+        await command.ExecuteNonQueryAsync();
+        NpgsqlConnection.ClearAllPools();
+    }
+
+    /// <summary>
+    /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: sets one role attribute of the realtime login (for example
+    /// <c>BYPASSRLS</c> or its reset <c>NOBYPASSRLS</c>), to prove a login outside the provisioned shape
+    /// (<c>LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS</c>) is never reported ready.
+    /// </summary>
+    internal async Task SetRealtimeLoginAttributeAsync(string attribute)
+    {
+        if (attribute is not ("SUPERUSER" or "NOSUPERUSER" or "BYPASSRLS" or "NOBYPASSRLS" or "CREATEROLE" or
+            "NOCREATEROLE" or "CREATEDB" or "NOCREATEDB" or "REPLICATION" or "NOREPLICATION" or "INHERIT" or
+            "NOINHERIT"))
+        {
+            throw new ArgumentException("Unsupported realtime login attribute.", nameof(attribute));
+        }
+
+        NpgsqlConnection.ClearAllPools();
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            $"ALTER ROLE paqueteria_sec002_realtime {attribute}",
             connection);
         await command.ExecuteNonQueryAsync();
         NpgsqlConnection.ClearAllPools();
