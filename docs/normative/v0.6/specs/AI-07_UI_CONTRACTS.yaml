@@ -957,8 +957,8 @@ screen_contracts:
       label: No se pudo entregar
       shown_when: a DELIVERY stop whose confirmed or projected status is DELIVERING, while no other action of the stop
         is held for attention and no delivery is saved on the phone, to a person whose roles in the organization are
-        known and are not also dispatch (dispatch_role, role_unknown); never on a pickup or a return (the phone has no
-        failed pickup)
+        known and are not also dispatch (dispatch_role, role_loading, role_unknown); never on a pickup or a return
+        (the phone has no failed pickup)
       dispatch_role: 'owner answer "Registrar desde Despacho (Recommended)" (2026-10-12): a person who also holds
         DISPATCHER or PLATFORM_ADMIN in the active organization is reported by the server as dispatch, which refuses
         the short report (409 INVALID_REQUEST); the stop does not offer "No se pudo entregar" and says "También eres
@@ -970,13 +970,17 @@ screen_contracts:
         organization and stays unchanged. The phone asks once per session start (a new sign-in or organization),
         uses the answer saved for the session''s partition at once and keeps the last successful one there
         (offline_cache), so a driver also reports offline. No photo is uploaded and nothing is stored'
-      role_unknown: 'ORG-MY-ROLES-2026-10-12: when the phone knows no answer for the session (the first start was
-        offline, the read failed with nothing saved, the API is earlier and answers 404, or the answer broke the
-        contract), "No se pudo entregar" is not offered (it fails closed) and the stop says "No se pudo confirmar tu
-        rol en esta organización, así que el intento fallido no se reporta desde el teléfono. Cierra sesión y vuelve
-        a entrar con conexión; si sigue igual, llama a despacho para que lo registre." A failed read keeps the answer
-        already saved; 401 or 403 removes it. The sign-in, the stops and every other action of the driver app work
-        as before, so no deploy order is needed between the web and the API'
+      role_loading: 'ORG-MY-ROLES-2026-10-12: while the read is on its way and no answer is known (right after every
+        sign-in, since logging out wipes the saved answer, or during a retry), "No se pudo entregar" is not offered
+        yet and the stop says nothing about the role: loading is not an error'
+      role_unknown: 'ORG-MY-ROLES-2026-10-12: when the phone knows no answer for the session and none is on its way
+        (the read failed with nothing saved, the API is earlier and answers 404, the answer broke the contract, or 401
+        or 403), "No se pudo entregar" is not offered (it fails closed) and the stop says "No pudimos confirmar tu rol.
+        Vuelve a abrir la app con conexión para reportar." - never asking to sign out, which would wipe what the phone
+        keeps offline. A failed read keeps the answer already saved and is made again when the connection returns or
+        the app is shown again, at most 5 times per session start and never after 401 or 403, which remove the
+        answer. The sign-in, the stops and every other action of the driver app work as before, so no deploy order
+        is needed between the web and the API'
       settled_report: a report REST already confirms (its transition accepted and the stop at a later version, for
         example after dispatch chose "Reintentar hoy") only waits to leave the queue and never holds back a new report
         of the same stop

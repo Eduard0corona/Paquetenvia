@@ -978,7 +978,8 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
         await ExpectTextAsync(
             page,
-            "No se pudo confirmar tu rol en esta organización, así que el intento fallido no se reporta desde el teléfono. Cierra sesión y vuelve a entrar con conexión; si sigue igual, llama a despacho para que lo registre.");
+            "No pudimos confirmar tu rol. Vuelve a abrir la app con conexión para reportar.");
+        Assert.DoesNotContain("Cierra sesión", await page.InnerTextAsync("main"), StringComparison.Ordinal);
         Assert.Equal(
             0,
             await page.GetByRole(AriaRole.Button, new() { Name = "No se pudo entregar" }).CountAsync());

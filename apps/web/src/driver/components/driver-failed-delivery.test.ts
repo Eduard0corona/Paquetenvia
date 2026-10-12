@@ -138,19 +138,25 @@ describe("\"No se pudo entregar\" on the stop", () => {
     expect(html).not.toContain("<input");
     // ORG-MY-ROLES-2026-10-12: the role comes from getMyOrganizationRoles (DriverRolesController), and the
     // controller that stores the report checks the same roles.
-    expect(experience).toContain("reportRole={driverReportRole(organizationRoles)}");
-    expect(experience).toContain("organizationRoles: () => rolesController.current.roles,");
+    expect(experience).toContain("reportRole={driverReportRoleOf(rolesState)}");
+    expect(experience).toContain("reportRole: () => driverReportRoleOf(rolesController.current),");
     expect(experience).toContain("void rolesController.start();");
   });
 
-  it("says the role could not be confirmed, with no form, when the session does not know the roles", () => {
+  it("says the role could not be confirmed, with no form and never asking to sign out, when no answer is known", () => {
     const html = section({ kind: "role-unknown" });
-    expect(text(html)).toBe(
-      "No se pudo confirmar tu rol en esta organización, así que el intento fallido no se reporta desde el teléfono. " +
-        "Cierra sesión y vuelve a entrar con conexión; si sigue igual, llama a despacho para que lo registre.",
-    );
+    expect(text(html)).toBe("No pudimos confirmar tu rol. Vuelve a abrir la app con conexión para reportar.");
+    expect(text(html)).not.toMatch(/sesi[oó]n/i);
     expect(html).not.toContain("<button");
     expect(html).not.toContain("<input");
+  });
+
+  it("shows nothing about the role while the roles are still loading (the report is just not offered yet)", () => {
+    // driverFailedDeliveryAvailability answers `hidden` for the `loading` report role.
+    expect(section({ kind: "hidden" })).toBe("");
+    // A new session starts as loading, never as unknown.
+    expect(experience).toContain("useState<DriverOrganizationRolesState>(\n    loadingRolesState,\n  )");
+    expect(experience).toMatch(/const loadingRolesState: DriverOrganizationRolesState = Object\.freeze\(\{\s+roles: null,\s+loading: true,/);
   });
 });
 
@@ -319,7 +325,11 @@ describe("AI-07 record", () => {
       "role_unknown: 'ORG-MY-ROLES-2026-10-12",
       "the API is earlier and answers 404",
       "it fails closed",
-      "A failed read keeps the answer already saved; 401 or 403 removes it",
+      '"No pudimos confirmar tu rol. Vuelve a abrir la app con conexión para reportar."',
+      "never asking to sign out, which would wipe what the phone keeps offline",
+      "A failed read keeps the answer already saved and is made again when the connection returns or the app is shown again, at most 5 times per session start and never after 401 or 403",
+      "role_loading: 'ORG-MY-ROLES-2026-10-12",
+      "the stop says nothing about the role: loading is not an error",
       "no deploy order is needed between the web and the API",
       "never holds back a new report of the same stop",
     ]) {

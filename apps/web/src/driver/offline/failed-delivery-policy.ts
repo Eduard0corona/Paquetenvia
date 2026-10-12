@@ -33,11 +33,13 @@ import {
  *   Despacho (Recommended)", 2026-10-12): the stop says to register the
  *   attempt from the order in Despacho.
  * - `role-unknown`: the report would be offered, but no answer of
- *   getMyOrganizationRoles is known for the session (never answered, or an
- *   older API without it): it is not offered (fails closed) and the stop says
- *   why.
+ *   getMyOrganizationRoles is known for the session and none is on its way (the
+ *   request failed with nothing saved, or an older API without it): it is not
+ *   offered (fails closed) and the stop says why.
  * - `hidden`: anything else (not a delivery, not at the door, another action
- *   of the stop needs attention first, or a delivery is already saved).
+ *   of the stop needs attention first, or a delivery is already saved), and
+ *   also while the person's roles are still loading with no answer known: the
+ *   report is not offered yet and nothing is said about the role.
  */
 export type DriverFailedDeliveryAvailability =
   | { readonly kind: "hidden" }
@@ -61,8 +63,8 @@ export type DriverFailedDeliveryAvailability =
 /**
  * `operations` are the projected operations of the stop's order (the queue as
  * the projection shows it, with derived statuses). `reportRole` is
- * driverReportRole of the person's roles: only `driver` is ever offered the
- * report.
+ * driverReportRoleOf what the phone knows of the person's roles: only `driver`
+ * is ever offered the report.
  */
 export function driverFailedDeliveryAvailability(
   stop: ProjectedDriverStop,
@@ -73,7 +75,14 @@ export function driverFailedDeliveryAvailability(
   if (availability.kind !== "offered" || reportRole === "driver") {
     return availability;
   }
-  return reportRole === "dispatch" ? dispatchRole : roleUnknown;
+  switch (reportRole) {
+    case "dispatch":
+      return dispatchRole;
+    case "loading":
+      return hidden;
+    case "unknown":
+      return roleUnknown;
+  }
 }
 
 function availabilityForDriver(
@@ -152,12 +161,21 @@ export const driverDispatchRoleReportMessage =
 
 /**
  * ORG-MY-ROLES-2026-10-12: shown in place of "No se pudo entregar" when no
- * answer of getMyOrganizationRoles is known for the session (the report fails
- * closed). Opening the app again with a connection reads them again.
+ * answer of getMyOrganizationRoles is known for the session and none is on its
+ * way (the report fails closed). The phone asks again when the connection
+ * returns or the app is opened again; it never asks the driver to sign out,
+ * which would lose the data saved on the phone.
  */
 export const driverRoleUnknownReportMessage =
-  "No se pudo confirmar tu rol en esta organización, así que el intento fallido no se reporta desde el teléfono. " +
-  "Cierra sesión y vuelve a entrar con conexión; si sigue igual, llama a despacho para que lo registre.";
+  "No pudimos confirmar tu rol. Vuelve a abrir la app con conexión para reportar.";
+
+/**
+ * ORG-MY-ROLES-2026-10-12: "Enviar reporte" while the roles are still loading
+ * with no answer known (the form is not offered then, so this only covers a
+ * race). Neutral: nothing is wrong yet.
+ */
+export const driverRoleLoadingReportMessage =
+  "Estamos confirmando tu rol. Intenta de nuevo en un momento.";
 
 export type DriverFailedReportCashHold = "recorded" | "saved" | null;
 

@@ -17,6 +17,7 @@ import {
   driverFailedReportIncident,
   driverIncidentMaybeOpenReportMessage,
   driverIncidentOpenReportMessage,
+  driverRoleLoadingReportMessage,
   driverRoleUnknownReportMessage,
   driverStaleReportMessage,
 } from "./failed-delivery-policy";
@@ -308,15 +309,31 @@ describe("when the stop offers \"No se pudo entregar\"", () => {
     },
   );
 
-  it("says why: register the attempt from Despacho (owner answer \"Registrar desde Despacho\"), or sign in again", () => {
+  it("offers nothing and says nothing about the role while the roles are loading", () => {
+    const at = (stop: DriverStop, operations: readonly DriverOfflineOperation[] = []) => {
+      const projection = projectDriverOperations([stop], operations);
+      return driverFailedDeliveryAvailability(projection.stops[0], projection.operations, "loading");
+    };
+    expect(at(deliveryStop())).toEqual({ kind: "hidden" });
+    expect(at(cashStop(false))).toEqual({ kind: "hidden" });
+    // Everything that is not the offer itself reads the same as for a driver.
+    expect(at(cashStop(true))).toEqual({ kind: "cod-recorded" });
+    expect(at(deliveryStop(), [failedDeliveryOperation()])).toEqual({ kind: "queued" });
+  });
+
+  it("says why: register the attempt from Despacho (owner answer \"Registrar desde Despacho\"), or open the app again with a connection", () => {
     expect(driverDispatchRoleReportMessage).toBe(
       "También eres despacho en esta organización, así que el intento fallido no se reporta desde el teléfono: " +
         "regístralo desde la orden en Despacho, donde eliges el motivo y el siguiente paso.",
     );
     expect(driverRoleUnknownReportMessage).toBe(
-      "No se pudo confirmar tu rol en esta organización, así que el intento fallido no se reporta desde el teléfono. " +
-        "Cierra sesión y vuelve a entrar con conexión; si sigue igual, llama a despacho para que lo registre.",
+      "No pudimos confirmar tu rol. Vuelve a abrir la app con conexión para reportar.",
     );
+    // Signing out would wipe what the phone keeps offline, so no role notice ever asks for it.
+    for (const message of [driverRoleUnknownReportMessage, driverRoleLoadingReportMessage]) {
+      expect(message).not.toMatch(/sesi[oó]n/i);
+    }
+    expect(driverRoleLoadingReportMessage).toBe("Estamos confirmando tu rol. Intenta de nuevo en un momento.");
   });
 });
 

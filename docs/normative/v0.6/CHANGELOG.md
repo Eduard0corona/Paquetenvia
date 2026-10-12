@@ -31,13 +31,15 @@
   La respuesta se guarda en el IndexedDB particionado existente (store `organization_roles` de la versión 4, que
   ningún teléfono ha abierto todavía, así que no sube de versión): la llave de partición, el esquema y los códigos de
   rol, nada más. Sale del teléfono con la partición ante 401 o 403 y con todas las instantáneas al cerrar sesión;
-  cualquier otra falla (sin conexión, 5xx, 404 de una API anterior, respuesta fuera de contrato) conserva la guardada.
-  Las reglas no cambian: con DISPATCHER o PLATFORM_ADMIN la parada dice que se registre desde Despacho; DRIVER sin
-  ellos reporta, también sin conexión; sin respuesta conocida el reporte no se ofrece (falla cerrado) con "No se pudo
-  confirmar tu rol en esta organización, así que el intento fallido no se reporta desde el teléfono. Cierra sesión y
-  vuelve a entrar con conexión; si sigue igual, llama a despacho para que lo registre."
-- AI-07 `driver_stop`: `failed_delivery.dispatch_role` y `role_unknown` citan esta consulta; `offline_cache` y
-  `details.retention` agregan la respuesta guardada.
+  cualquier otra falla (sin conexión, 5xx, 404 de una API anterior, respuesta fuera de contrato) conserva la guardada
+  y la consulta se repite al volver la conexión o al volver a verse la app (en línea, una a la vez, hasta 5 veces por
+  sesión, nunca después de 401 o 403). Las reglas no cambian: con DISPATCHER o PLATFORM_ADMIN la parada dice que se
+  registre desde Despacho; DRIVER sin ellos reporta, también sin conexión; mientras la primera consulta va en camino
+  el reporte todavía no se ofrece y no se dice nada del rol; sin respuesta conocida ni consulta en camino el reporte
+  no se ofrece (falla cerrado) con "No pudimos confirmar tu rol. Vuelve a abrir la app con conexión para reportar."
+  Ningún aviso de rol pide cerrar sesión, que borraría lo que el teléfono guarda sin conexión.
+- AI-07 `driver_stop`: `failed_delivery.dispatch_role`, `role_loading` y `role_unknown` citan esta consulta;
+  `offline_cache` y `details.retention` agregan la respuesta guardada.
 - Despliegue: no hace falta ningún orden. La web anterior nunca llama la consulta nueva, y esta web con una API anterior
   (404) solo deja de ofrecer "No se pudo entregar"; el inicio de sesión, las paradas y todo lo demás siguen igual.
   Rollback: revertir la web o la API, en cualquier orden, sin datos ni esquema que deshacer.

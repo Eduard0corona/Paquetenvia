@@ -25,8 +25,10 @@ import type {
 import {
   driverDispatchRoleReportMessage,
   driverFailedDeliveryAvailability,
+  driverRoleLoadingReportMessage,
   driverRoleUnknownReportMessage,
 } from "../offline/failed-delivery-policy";
+import { driverReportRoleOf } from "../contracts/organization-roles";
 import { projectDriverOperations } from "../offline/operation-projection";
 import type { DriverSession } from "../session/driver-session";
 import {
@@ -67,7 +69,7 @@ function placePhoto(type = "image/png", size = 3): Blob {
 
 async function harness(
   initial: readonly DriverOfflineOperation[] = [],
-  options: { readonly roles?: RolesAnswer } = {},
+  options: { readonly roles?: RolesAnswer | "pending" } = {},
 ) {
   const roles = await startedRolesController(session, options.roles ?? myOrganizationRolesAnswer("DRIVER"));
   const key = (await createDriverCachePartition(session)).key;
@@ -85,7 +87,7 @@ async function harness(
     api: {} as DriverSyncApi,
     refreshStops: async () => stopList([]),
     onAccessRevoked: vi.fn(),
-    organizationRoles: () => roles.current.roles,
+    reportRole: () => driverReportRoleOf(roles.current),
     schedulerFactory: () => scheduler as unknown as DriverSyncScheduler,
     now: () => new Date("2026-10-12T18:45:00.000Z"),
     randomUuid: () => newId,
@@ -221,6 +223,15 @@ describe("Enviar reporte", () => {
     const { controller, queue } = await harness([], { roles });
     await expect(controller.enqueueFailedDelivery(report(), placePhoto())).resolves.toEqual(
       refused(driverRoleUnknownReportMessage),
+    );
+    expect(queue.operations).toEqual([]);
+    expect(queue.proofs.size).toBe(0);
+  });
+
+  it("refuses a report, without the unknown-role notice, while the first roles request is still on its way", async () => {
+    const { controller, queue } = await harness([], { roles: "pending" });
+    await expect(controller.enqueueFailedDelivery(report(), placePhoto())).resolves.toEqual(
+      refused(driverRoleLoadingReportMessage),
     );
     expect(queue.operations).toEqual([]);
     expect(queue.proofs.size).toBe(0);

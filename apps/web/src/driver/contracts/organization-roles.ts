@@ -66,14 +66,39 @@ export function parseOrganizationRoleCodes(value: unknown): readonly string[] {
  *   report from the phone as dispatch's and refuses the short one, so the stop
  *   says to register the attempt in Despacho (owner answer "Registrar desde
  *   Despacho (Recommended)").
+ * - `loading`: no answer is known yet and a request for it is on its way (the
+ *   first one after a sign-in, or a retry). The report is not offered yet and
+ *   the stop says nothing about the role: it is not an error.
  * - `unknown`: no answer of getMyOrganizationRoles is known for the session
- *   (never answered, an older API without the operation, or a malformed
- *   value). The report is not offered (fails closed) and the stop says why;
- *   nothing else of the app changes.
+ *   and none is on its way (the request failed with nothing saved, an older
+ *   API without the operation, 401 or 403, or a malformed value). The report
+ *   is not offered (fails closed) and the stop says why; nothing else of the
+ *   app changes.
  */
-export type DriverReportRole = "driver" | "dispatch" | "unknown";
+export type DriverReportRole = "driver" | "dispatch" | "loading" | "unknown";
 
-export function driverReportRole(organizationRoles: unknown): DriverReportRole {
+/**
+ * ORG-MY-ROLES-2026-10-12: what the phone knows of the person's roles in the
+ * session's organization (DriverRolesController). `roles` is the answer of this
+ * page, or else the one saved for the session's partition, and null while none
+ * is known; `loading` is true while a request for them is on its way.
+ */
+export interface DriverOrganizationRolesState {
+  readonly roles: readonly string[] | null;
+  readonly loading: boolean;
+}
+
+/** Who reports, from what the phone knows now: a known answer decides; with none, `loading` or `unknown`. */
+export function driverReportRoleOf(
+  state: DriverOrganizationRolesState | null | undefined,
+): DriverReportRole {
+  if (state === null || state === undefined) return "unknown";
+  if (state.roles !== null) return driverReportRole(state.roles);
+  return state.loading ? "loading" : "unknown";
+}
+
+/** Who reports for a known answer (the role codes); anything else is `unknown`. */
+export function driverReportRole(organizationRoles: unknown): Exclude<DriverReportRole, "loading"> {
   let roles: readonly string[];
   try {
     roles = parseOrganizationRoleCodes(organizationRoles);

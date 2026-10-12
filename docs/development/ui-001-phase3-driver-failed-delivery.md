@@ -67,7 +67,8 @@ propios `GET /me/organization-roles` (`ORG-MY-ROLES-2026-10-12`, ver "Quien tamb
 | --- | --- |
 | DELIVERING (confirmado o por sincronizar), sin cobro guardado ni registrado | "No se pudo entregar" |
 | Igual, pero la persona también es DISPATCHER o PLATFORM_ADMIN en la organización | "También eres despacho en esta organización, así que el intento fallido no se reporta desde el teléfono: regístralo desde la orden en Despacho, donde eliges el motivo y el siguiente paso." Sin formulario |
-| Igual, pero el teléfono no conoce los roles de la persona en la organización (ninguna respuesta de `GET /me/organization-roles` en esta sesión ni guardada para su partición) | "No se pudo confirmar tu rol en esta organización, así que el intento fallido no se reporta desde el teléfono. Cierra sesión y vuelve a entrar con conexión; si sigue igual, llama a despacho para que lo registre." Sin formulario |
+| Igual, mientras la consulta de roles va en camino y no hay respuesta conocida (justo después de cada inicio de sesión, porque cerrar sesión borra la guardada, o durante un reintento) | Nada sobre el rol: el reporte todavía no se ofrece y no se muestra ningún aviso |
+| Igual, pero el teléfono no conoce los roles de la persona en la organización y no hay consulta en camino (ninguna respuesta de `GET /me/organization-roles` en esta sesión ni guardada para su partición) | "No pudimos confirmar tu rol. Vuelve a abrir la app con conexión para reportar." Sin formulario; nunca pide cerrar sesión, que borraría lo guardado en el teléfono |
 | Cobro guardado en el teléfono (en cola, reintentando o retenido) | "Hay un cobro guardado en el teléfono. Si fue un error, descártalo para poder reportar que no se pudo entregar." y "Descartar cobro guardado" (con la confirmación de siempre); si el cobro está retenido, se descarta desde su aviso |
 | Cobro registrado (`DriverStop.cod.recorded`, o el servidor ya aceptó el cobro y falta la confirmación REST) | "El cobro ya está registrado. Si no puedes entregar, llama a despacho: ellos deciden y coordinan la devolución del cobro." Sin número de teléfono: la app no tiene el de despacho |
 | Reporte guardado, esperando sincronizar | "Reporte guardado en el teléfono. Se enviará cuando haya conexión." El estado confirmado sigue "En reparto" y "Estado por sincronizar" dice "Intento fallido" |
@@ -104,12 +105,20 @@ propios `GET /me/organization-roles` (`ORG-MY-ROLES-2026-10-12`, ver "Quien tamb
 - En la PWA, `DriverRolesController` pide la consulta al instalarse la sesión del repartidor y en cada sesión nueva
   (otro inicio de sesión u otra organización son otra sesión y otra partición). Primero usa la respuesta guardada para
   la partición, luego pregunta: una respuesta correcta la reemplaza; 401 o 403 la borra; cualquier otra falla (sin
-  conexión, timeout, 5xx, el 404 de una API anterior o una respuesta fuera de contrato) conserva la guardada.
-  `driverReportRole` decide con esos roles: con DISPATCHER o PLATFORM_ADMIN, "dispatch" (el aviso de registrar desde
-  Despacho; el formulario no aparece y no se sube ninguna foto); con DRIVER y sin esos, "driver" (se ofrece, también
-  sin conexión); sin respuesta conocida (una respuesta fuera de contrato nunca se usa ni se guarda), "unknown": no se
-  ofrece (falla cerrado) y la parada lo explica. El controlador de operaciones aplica la misma regla antes de guardar nada. Se usa PLATFORM_ADMIN aunque el
-  servidor solo lo trate como despacho con MFA: el teléfono no sabe si hay MFA y así falla cerrado.
+  conexión, timeout, 5xx, el 404 de una API anterior o una respuesta fuera de contrato) conserva la guardada y vuelve
+  a preguntar cuando regresa la conexión (evento `online`) o la app vuelve a verse (`visibilitychange`), solo si el
+  teléfono está en línea, una consulta a la vez, como máximo 5 veces por sesión, nunca después de 401 o 403 y nunca
+  después de cerrar la sesión (los eventos se quitan y la consulta en camino se cancela).
+  `driverReportRoleOf` decide con lo que sabe el teléfono: con DISPATCHER o PLATFORM_ADMIN, "dispatch" (el aviso de
+  registrar desde Despacho; el formulario no aparece y no se sube ninguna foto); con DRIVER y sin esos, "driver" (se
+  ofrece, también sin conexión); sin respuesta conocida y con una consulta en camino, "loading": todavía no se ofrece y
+  no se dice nada del rol (pasa después de cada inicio de sesión, porque cerrar sesión borra la respuesta guardada);
+  sin respuesta conocida ni consulta en camino (una respuesta fuera de contrato nunca se usa ni se guarda), "unknown":
+  no se ofrece (falla cerrado) y la parada dice "No pudimos confirmar tu rol. Vuelve a abrir la app con conexión para
+  reportar." Ningún aviso de rol pide cerrar sesión: cerrar sesión con mala cobertura borra lo que el teléfono guarda
+  sin conexión. El controlador de operaciones aplica la misma regla antes de guardar nada ("loading" responde "Estamos
+  confirmando tu rol. Intenta de nuevo en un momento."). Se usa PLATFORM_ADMIN aunque el servidor solo lo trate como
+  despacho con MFA: el teléfono no sabe si hay MFA y así falla cerrado.
 - La respuesta se guarda en el IndexedDB particionado de siempre (`paquetenvia-driver-stops-v1`), store
   `organization_roles` con llave `partitionKey` (esquema 1: la llave de partición, el esquema y los códigos de rol; nada
   más). El store lo crea la misma subida a la versión 4 que agrega `FAILED_DELIVERY`: esa versión no ha llegado a
@@ -318,7 +327,11 @@ Vitest (`apps/web`):
   `no-store`, credenciales de la sesión) y la clasificación 401/403/404/5xx; el registro guardado (solo llave de
   partición, esquema y códigos; uno ajeno o con otra forma se rechaza; base sin el store); y el controlador: usa lo
   guardado sin conexión, lo reemplaza con cada respuesta correcta, lo borra con 401/403, lo conserva ante red, 5xx, 404
-  o respuesta fuera de contrato, y no escribe nada después de cerrarse.
+  o respuesta fuera de contrato, se lee como "loading" (nunca "unknown") mientras la primera consulta va en camino,
+  vuelve a preguntar tras una falla al regresar la conexión o al volver a verse (no si sigue sin conexión, ni después de
+  una respuesta), como máximo 5 veces, nunca después de 401/403, y no escribe ni pregunta nada después de cerrarse (un
+  reintento en camino se cancela). `failed-delivery-policy.test.ts` y `driver-failed-delivery.test.ts`: con "loading"
+  no se ofrece ni se dice nada; el aviso de rol desconocido nunca pide cerrar sesión.
 - `driver/cache/driver-database-upgrade.test.ts` y `driver/components/driver-stop-details-policy.test.ts`: la base
   nueva trae `organization_roles`, y "Cerrar sesión" y 401/403 la vacían con las instantáneas.
 - `driver/offline/driver-sync-scheduler.test.ts`: una acción aceptada cuya lectura de confirmación falla (red,
@@ -374,7 +387,9 @@ python3 docs/normative/v0.6/tools/validate_contracts.py
   El servidor sigue siendo la barrera: si ya es despacho, rechaza el reporte corto (409 `INVALID_REQUEST`, que dice
   registrar desde Despacho).
 - Un repartidor cuyo primer arranque de la sesión fue sin conexión (o contra una API anterior) no tiene respuesta
-  guardada y no puede reportar hasta un arranque con conexión contra la API nueva; despacho registra el intento.
+  guardada y no puede reportar hasta que una consulta responda: la app vuelve a preguntar al regresar la conexión o al
+  volver a verse, hasta 5 veces por sesión; después, hasta volver a abrir la app con conexión. Mientras tanto despacho
+  registra el intento.
 - Una persona con DRIVER y otro rol en la misma organización sin membresía por defecto recibe en `role` de
   `/me/organization-contexts` uno de los dos (como antes de este cambio); solo con DRIVER ahí entra a la app del
   repartidor.

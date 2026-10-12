@@ -1,4 +1,4 @@
-import { vi } from "vitest";
+import { expect, vi } from "vitest";
 import { createDriverOrganizationRolesApi } from "../api/organization-roles-api";
 import type { DriverOrganizationRolesCache } from "../cache/driver-roles-cache";
 import type { DriverCachePartition } from "../cache/driver-stops-cache";
@@ -59,22 +59,78 @@ export class MemoryRolesCache implements DriverOrganizationRolesCache {
 
 /**
  * A DriverRolesController started against `answer` through the real client
- * and its strict parser, so a test never injects the roles.
+ * and its strict parser, so a test never injects the roles. With "pending" the
+ * first request never answers: the roles stay loading.
  */
 export async function startedRolesController(
   session: DriverSession,
-  answer: RolesAnswer,
+  answer: RolesAnswer | "pending",
   cache: DriverOrganizationRolesCache = new MemoryRolesCache(),
 ): Promise<DriverRolesController> {
+  const fetcher =
+    answer === "pending"
+      ? vi.fn(() => new Promise<Response>(() => undefined))
+      : rolesFetch(answer);
   const controller = new DriverRolesController({
     session,
     api: createDriverOrganizationRolesApi({
       baseUrl: "https://api.synthetic.test",
       session,
-      fetch: rolesFetch(answer) as unknown as typeof fetch,
+      fetch: fetcher as unknown as typeof fetch,
+      timeoutMilliseconds: answer === "pending" ? 3_600_000 : undefined,
     }),
     cache,
+    window: quietWindow(),
   });
-  await controller.start();
+  const started = controller.start();
+  if (answer === "pending") {
+    await vi.waitFor(() => expect(fetcher).toHaveBeenCalledOnce());
+  } else {
+    await started;
+  }
   return controller;
+}
+
+/**
+ * A page for DriverRolesController that a test drives: online and visible
+ * until it says otherwise, and its `online` and `visibilitychange` events are
+ * dispatched by hand.
+ */
+export function testWindow(options: { readonly online?: boolean } = {}) {
+  const page = new EventTarget();
+  const document = Object.assign(new EventTarget(), {
+    visibilityState: "visible" as DocumentVisibilityState,
+  });
+  const navigator = { onLine: options.online ?? true };
+  return {
+    page,
+    document,
+    navigator,
+    window: {
+      addEventListener: page.addEventListener.bind(page),
+      removeEventListener: page.removeEventListener.bind(page),
+      navigator,
+      document,
+    } as unknown as Pick<
+      Window,
+      "addEventListener" | "removeEventListener" | "navigator" | "document"
+    >,
+    goOnline() {
+      navigator.onLine = true;
+      page.dispatchEvent(new Event("online"));
+    },
+    show() {
+      document.visibilityState = "visible";
+      document.dispatchEvent(new Event("visibilitychange"));
+    },
+    hide() {
+      document.visibilityState = "hidden";
+      document.dispatchEvent(new Event("visibilitychange"));
+    },
+  };
+}
+
+/** A page that never fires an event, so a test of something else never retries. */
+function quietWindow() {
+  return testWindow().window;
 }

@@ -15,7 +15,8 @@ import { IndexedDbDriverOrganizationRolesCache } from "../cache/driver-roles-cac
 import { IndexedDbDriverStopsCache } from "../cache/driver-stops-cache";
 import type { DriverFailedDeliveryReason } from "../contracts/failed-delivery";
 import {
-  driverReportRole,
+  driverReportRoleOf,
+  type DriverOrganizationRolesState,
   type DriverReportRole,
 } from "../contracts/organization-roles";
 import {
@@ -111,6 +112,12 @@ const unavailableExternalOffersState: ExternalOffersState = Object.freeze({
   pendingOfferId: null,
   message: null,
 });
+// ORG-MY-ROLES-2026-10-12: until the roles controller answers, the roles are
+// loading: the report is not offered and nothing is said about the role.
+const loadingRolesState: DriverOrganizationRolesState = Object.freeze({
+  roles: null,
+  loading: true,
+});
 const stopUnavailableForReport: DriverFailedDeliveryEnqueueResult =
   Object.freeze({
     stored: false,
@@ -126,10 +133,11 @@ export function DriverStopsExperience() {
   const [externalOffersState, setExternalOffersState] =
     useState<ExternalOffersState>(unavailableExternalOffersState);
   // ORG-MY-ROLES-2026-10-12: the person's own roles in the session's
-  // organization (getMyOrganizationRoles, saved per partition); null while unknown.
-  const [organizationRoles, setOrganizationRoles] = useState<
-    readonly string[] | null
-  >(null);
+  // organization (getMyOrganizationRoles, saved per partition) and whether a
+  // request for them is on its way.
+  const [rolesState, setRolesState] = useState<DriverOrganizationRolesState>(
+    loadingRolesState,
+  );
   const [route, setRoute] = useState<DriverStopsRoute | null>(null);
   const controllerRef = useRef<DriverStopsController | null>(null);
   const operationsControllerRef = useRef<DriverOperationsController | null>(
@@ -246,7 +254,7 @@ export function DriverStopsExperience() {
         }
       },
       onAccessRevoked: (category) => void controller.revokeAccess(category),
-      organizationRoles: () => rolesController.current.roles,
+      reportRole: () => driverReportRoleOf(rolesController.current),
     });
     controllerRef.current = controller;
     operationsControllerRef.current = operationsController;
@@ -256,7 +264,7 @@ export function DriverStopsExperience() {
       if (active) setState(next);
     });
     const unsubscribeRoles = rolesController.subscribe((next) => {
-      if (active) setOrganizationRoles(next.roles);
+      if (active) setRolesState(next);
     });
     const unsubscribeOperations = operationsController.subscribe((next) => {
       if (active) setOperationsState(next);
@@ -399,7 +407,7 @@ export function DriverStopsExperience() {
           operations={projection.operations.filter(
             (operation) => operation.orderId === route.orderId,
           )}
-          reportRole={driverReportRole(organizationRoles)}
+          reportRole={driverReportRoleOf(rolesState)}
           mutating={operationsState.mutating}
           onEnqueue={(kind, blob) =>
             stop && operationsControllerRef.current
@@ -759,7 +767,7 @@ function StopDetail({
   offline: boolean;
   voiceApi: DriverVoiceApi | null;
   operations: readonly DriverOfflineOperation[];
-  /** driverReportRole of the roles getMyOrganizationRoles answered (ORG-MY-ROLES-2026-10-12). */
+  /** driverReportRoleOf what the phone knows of the roles getMyOrganizationRoles answers (ORG-MY-ROLES-2026-10-12). */
   reportRole: DriverReportRole;
   mutating: boolean;
   onEnqueue: (kind: DriverOperationKind, blob?: Blob) => Promise<boolean>;

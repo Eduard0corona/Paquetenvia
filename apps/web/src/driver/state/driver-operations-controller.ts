@@ -44,6 +44,7 @@ import type { DriverSyncApi } from "../offline/driver-sync-api";
 import {
   driverDispatchRoleReportMessage,
   driverFailedReportIncident,
+  driverRoleLoadingReportMessage,
   driverRoleUnknownReportMessage,
 } from "../offline/failed-delivery-policy";
 import { OfflineOperationMaximumAgeHours } from "../offline/offline-operation-age";
@@ -52,7 +53,7 @@ import {
   validateDriverProof,
   type ValidatedDriverProof,
 } from "../proofs/proof-file";
-import { driverReportRole } from "../contracts/organization-roles";
+import type { DriverReportRole } from "../contracts/organization-roles";
 import type { DriverSession } from "../session/driver-session";
 
 export interface DriverOperationsState {
@@ -69,11 +70,12 @@ export interface DriverOperationsControllerOptions {
   readonly refreshStops: (signal?: AbortSignal) => Promise<DriverStopList>;
   readonly onAccessRevoked: (category: "unauthorized" | "forbidden") => void;
   /**
-   * ORG-MY-ROLES-2026-10-12: the person's own roles in the session's
-   * organization as DriverRolesController knows them now; absent or null means
-   * unknown, and "No se pudo entregar" is then refused (fails closed).
+   * ORG-MY-ROLES-2026-10-12: who reports, from the person's own roles in the
+   * session's organization as DriverRolesController knows them now
+   * (driverReportRoleOf); absent means `unknown`, and "No se pudo entregar" is
+   * then refused (fails closed).
    */
-  readonly organizationRoles?: () => readonly string[] | null;
+  readonly reportRole?: () => DriverReportRole;
   readonly telemetry?: DriverSyncTelemetry;
   readonly queue?: DriverOfflineQueue;
   readonly schedulerFactory?: (
@@ -422,10 +424,12 @@ export class DriverOperationsController {
     // nor PLATFORM_ADMIN files the report from the phone: the server treats a
     // person who is also dispatch as dispatch and refuses the short report
     // (owner answer "Registrar desde Despacho (Recommended)"), and unknown
-    // roles fail closed (ORG-MY-ROLES-2026-10-12).
-    switch (driverReportRole(this.options.organizationRoles?.() ?? null)) {
+    // roles fail closed (ORG-MY-ROLES-2026-10-12), also while they load.
+    switch (this.options.reportRole?.() ?? "unknown") {
       case "dispatch":
         return refuse(driverDispatchRoleReportMessage);
+      case "loading":
+        return refuse(driverRoleLoadingReportMessage);
       case "unknown":
         return refuse(driverRoleUnknownReportMessage);
       case "driver":
