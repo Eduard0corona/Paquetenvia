@@ -12,6 +12,8 @@ const string SyntheticSeedOptIn = "PAQUETERIA_SYNTHETIC_SEED_ENABLED";
 const string AdminConnectionEnvironment = "PAQUETERIA_LOCAL_ADMIN_CONNECTION";
 const string AppPasswordEnvironment = "PAQUETERIA_LOCAL_APP_PASSWORD";
 const string WorkerPasswordEnvironment = "PAQUETERIA_LOCAL_WORKER_PASSWORD";
+// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the API's in-process realtime dispatchers have their own login.
+const string RealtimePasswordEnvironment = "PAQUETERIA_LOCAL_REALTIME_PASSWORD";
 const string AppConnectionEnvironment = "PAQUETERIA_LOCAL_APP_CONNECTION";
 
 if ((args.Length != 1 || args[0] is not ("bootstrap" or "seed" or "status")) &&
@@ -46,7 +48,11 @@ await connection.OpenAsync();
 
 if (args[0] == "bootstrap")
 {
-    await BootstrapRuntimeRolesAsync(connection, Required(AppPasswordEnvironment), Required(WorkerPasswordEnvironment));
+    await BootstrapRuntimeRolesAsync(
+        connection,
+        Required(AppPasswordEnvironment),
+        Required(WorkerPasswordEnvironment),
+        Required(RealtimePasswordEnvironment));
 }
 
 if (args[0] is "bootstrap" or "seed")
@@ -99,10 +105,12 @@ static async Task IssueTrackingAsync(Guid orderId, string appConnection)
 static async Task BootstrapRuntimeRolesAsync(
     NpgsqlConnection connection,
     string appPassword,
-    string workerPassword)
+    string workerPassword,
+    string realtimePassword)
 {
     await EnsureLoginAsync(connection, "paqueteria_local_app", appPassword, "paqueteria_app");
     await EnsureLoginAsync(connection, "paqueteria_local_worker", workerPassword, "paqueteria_worker");
+    await EnsureLoginAsync(connection, "paqueteria_local_realtime", realtimePassword, "paqueteria_realtime");
 }
 
 static async Task EnsureLoginAsync(
@@ -238,13 +246,17 @@ static async Task ReportStatusAsync(NpgsqlConnection connection)
     const string sql = """
         SELECT
           EXISTS(SELECT 1 FROM pg_roles WHERE rolname='paqueteria_local_app' AND rolcanlogin AND NOT rolinherit AND NOT rolbypassrls),
-          EXISTS(SELECT 1 FROM pg_roles WHERE rolname='paqueteria_local_worker' AND rolcanlogin AND NOT rolinherit AND NOT rolbypassrls),
+          EXISTS(SELECT 1 FROM pg_roles WHERE rolname='paqueteria_local_worker' AND rolcanlogin AND NOT rolinherit AND NOT rolbypassrls)
+            AND EXISTS(SELECT 1 FROM pg_roles WHERE rolname='paqueteria_local_realtime' AND rolcanlogin AND NOT rolinherit AND NOT rolbypassrls),
           (SELECT count(*) FROM identity.users WHERE identity_subject IN ('local-subject-dispatcher-mfa','mock-subject-active-driver','mock-subject-external-driver')),
           (SELECT count(*) FROM organizations.organizations WHERE id IN ('11111111-1111-1111-1111-111111111111','33333333-3333-3333-3333-333333333333')),
           pg_has_role('paqueteria_local_app','paqueteria_app','member')
             AND NOT pg_has_role('paqueteria_local_app','paqueteria_worker','member'),
           pg_has_role('paqueteria_local_worker','paqueteria_worker','member')
-            AND NOT pg_has_role('paqueteria_local_worker','paqueteria_app','member'),
+            AND NOT pg_has_role('paqueteria_local_worker','paqueteria_app','member')
+            AND pg_has_role('paqueteria_local_realtime','paqueteria_realtime','member')
+            AND NOT pg_has_role('paqueteria_local_realtime','paqueteria_worker','member')
+            AND NOT pg_has_role('paqueteria_local_realtime','paqueteria_app','member'),
           NOT has_function_privilege('paqueteria_app','security.claim_notifications_outbox(text,integer,interval)','EXECUTE')
             AND has_function_privilege('paqueteria_worker','security.claim_notifications_outbox(text,integer,interval)','EXECUTE');
         """;
@@ -257,7 +269,7 @@ static async Task ReportStatusAsync(NpgsqlConnection connection)
         throw new InvalidOperationException("Local runtime roles or deterministic seed are incomplete.");
     }
 
-    Console.WriteLine("DevSeed ready: runtime roles=2, synthetic identities=3, organizations=2.");
+    Console.WriteLine("DevSeed ready: runtime roles=3, synthetic identities=3, organizations=2.");
 }
 
 static async Task ReportSyntheticSeedStatusAsync(NpgsqlConnection connection)

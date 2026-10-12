@@ -32,7 +32,7 @@ public sealed class RealtimeOutboxAudienceAndIsolationTests(
         await using var host = new RealtimeKestrelWebApplicationFactory(
             database.ApplicationConnectionString,
             recorder,
-            workerConnectionString: database.WorkerConnectionString);
+            realtimeConnectionString: database.RealtimeConnectionString);
         var baseAddress = host.Start();
         await using var operations = CreateOperationsConnection(baseAddress);
         await using var authorizedDriver = CreateDriverConnection(
@@ -184,7 +184,7 @@ public sealed class RealtimeOutboxAudienceAndIsolationTests(
         await using var host = new RealtimeKestrelWebApplicationFactory(
             database.ApplicationConnectionString,
             recorder,
-            workerConnectionString: database.WorkerConnectionString,
+            realtimeConnectionString: database.RealtimeConnectionString,
             logProvider: logs);
         var baseAddress = host.Start();
         await using var operations = CreateOperationsConnection(baseAddress);
@@ -331,7 +331,7 @@ public sealed class RealtimeOutboxAudienceAndIsolationTests(
         await using var host = new RealtimeKestrelWebApplicationFactory(
             database.ApplicationConnectionString,
             recorder,
-            workerConnectionString: database.WorkerConnectionString);
+            realtimeConnectionString: database.RealtimeConnectionString);
         host.Start();
 
         var businessPoison = await database.EnqueueBusinessPoisonAsync();

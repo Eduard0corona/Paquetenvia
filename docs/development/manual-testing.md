@@ -37,6 +37,13 @@ seeder con guardas de Development y opt-in explícito. También restaura las
 dependencias fijadas y construye API/Worker secuencialmente antes de iniciarlos.
 Ejecutarlo otra vez no crea duplicados.
 
+Entornos locales creados antes de RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12:
+vuelva a ejecutar `pwsh ./tools/dev-platform.ps1 Bootstrap` una vez después de
+traer ese cambio. `Start` sólo hace bootstrap cuando falta el archivo de acceso,
+así que en un entorno existente no crea el login `paqueteria_local_realtime` ni
+aplica el paso `20261012000100_AddRealtimeDispatcherRole`; sin ellos
+`/health/ready` reporta `realtime_outbox_dispatcher` Unhealthy y `Start` falla.
+
 Abra `http://127.0.0.1:3000/dev`. Active primero **Synthetic dispatcher (MFA)**
 y navegue a Operations. Después vuelva a `/dev`, cambie a **Synthetic own
 driver** y abra Driver PWA. El cambio elimina ambas sesiones en memoria antes de

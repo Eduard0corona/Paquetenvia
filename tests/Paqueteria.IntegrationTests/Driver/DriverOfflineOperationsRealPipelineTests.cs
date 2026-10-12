@@ -45,7 +45,7 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
         await using var api = new RealtimeKestrelWebApplicationFactory(
             database.ApplicationConnectionString,
             new RealtimeAuthorizationRecorder(),
-            workerConnectionString: database.WorkerConnectionString,
+            realtimeConnectionString: database.RealtimeConnectionString,
             allowedOrigin: nextOrigin,
             enableDispatch: true,
             enableDriverApiCors: true,

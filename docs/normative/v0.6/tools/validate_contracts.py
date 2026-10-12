@@ -245,7 +245,7 @@ def bff_session_errors(schema_sql: str, role_sql: str) -> list[str]:
             errors.append(f"{table} must stay pre-tenant: no RLS policy")
     for fragment in [
         "CREATE ROLE paqueteria_session_executor NOLOGIN BYPASSRLS;",
-        "REVOKE paqueteria_session_executor FROM paqueteria_app, paqueteria_worker;",
+        "REVOKE paqueteria_session_executor FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;",
         "REVOKE ALL ON identity.bff_sessions FROM paqueteria_app,paqueteria_worker;",
         "REVOKE ALL ON identity.bff_logout_jtis FROM paqueteria_app,paqueteria_worker;",
         "BFF-SESSION-TABLE-SHAPE",
@@ -276,7 +276,7 @@ def operator_outbox_errors(schema_sql: str, role_sql: str) -> list[str]:
     executable_roles = SQL_LINE_COMMENT.sub("", role_sql)
     for fragment in [
         "CREATE ROLE paqueteria_operator_outbox_executor NOLOGIN BYPASSRLS;",
-        "REVOKE paqueteria_operator_outbox_executor FROM paqueteria_app, paqueteria_worker;",
+        "REVOKE paqueteria_operator_outbox_executor FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;",
         "DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03",
         "search_path=pg_catalog, pg_temp",
     ] + OPERATOR_OUTBOX_FUNCTIONS:
@@ -306,7 +306,7 @@ def auto_close_errors(role_sql: str) -> list[str]:
     executable_roles = SQL_LINE_COMMENT.sub("", role_sql)
     for fragment in [
         "CREATE ROLE paqueteria_auto_close_executor NOLOGIN BYPASSRLS;",
-        "REVOKE paqueteria_auto_close_executor FROM paqueteria_app, paqueteria_worker;",
+        "REVOKE paqueteria_auto_close_executor FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;",
         "ORD-AUTO-CLOSE-2026-10-10",
         "search_path=pg_catalog, orders, pg_temp",
         AUTO_CLOSE_FUNCTION,
@@ -319,6 +319,51 @@ def auto_close_errors(role_sql: str) -> list[str]:
         errors.append("The auto-close discovery function is granted by the Orders lane, not by AI-18")
     if re.search(r"GRANT[^;]*\b(INSERT|UPDATE|DELETE|TRUNCATE)\b[^;]*TO\s+paqueteria_auto_close_executor", executable_roles):
         errors.append("The auto-close executor may only read owner_org_id and status of orders.orders")
+    return errors
+
+
+# RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the API's realtime dispatcher runtime role. AI-18 creates it with no
+# privilege; every grant (six lease-token functions, seven schemas, the evidence columns) belongs to the Notifications
+# lane step 20261012000100_AddRealtimeDispatcherRole, which verifies the exact set against the catalog.
+REALTIME_DISPATCHER_FUNCTIONS = [
+    "security.claim_realtime_outbox(text,integer,interval)",
+    "security.requeue_stale_realtime_outbox(interval,integer,integer)",
+    "security.settle_outbox(uuid,uuid,text,text,timestamptz)",
+    "security.claim_location_outbox(text,integer,interval)",
+    "security.settle_location_outbox(uuid,uuid,text,text,timestamptz)",
+    "security.requeue_stale_location_outbox(interval,integer,integer)",
+]
+
+
+def realtime_dispatcher_errors(role_sql: str) -> list[str]:
+    """RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12 ("Rol propio y mínimo"): the API's in-process realtime dispatchers
+    have their own NOLOGIN NOBYPASSRLS runtime role, created by AI-18 with no privilege, never granted to a group role,
+    and granted its exact privileges only by its Notifications lane step."""
+    errors = []
+    executable_roles = SQL_LINE_COMMENT.sub("", role_sql)
+    for fragment in [
+        "CREATE ROLE paqueteria_realtime NOLOGIN NOBYPASSRLS;",
+        "REVOKE paqueteria_realtime FROM paqueteria_app, paqueteria_worker, paqueteria_bootstrap;",
+        "REVOKE paqueteria_migrator, paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance\n"
+        "  FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;",
+        "RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12",
+        "Rol propio y mínimo (Recommended)",
+        "20261012000100_AddRealtimeDispatcherRole",
+        "SET LOCAL ROLE paqueteria_realtime",
+        "Every\n-- column it reads is also readable by paqueteria_app",
+        *REALTIME_DISPATCHER_FUNCTIONS,
+    ]:
+        if fragment not in role_sql:
+            errors.append(f"Missing realtime dispatcher role contract in AI-18: {fragment}")
+    if re.search(r"CREATE ROLE paqueteria_realtime\b[^;]*\bBYPASSRLS", executable_roles.replace("NOBYPASSRLS", "")):
+        errors.append("The realtime dispatcher role must be NOBYPASSRLS")
+    if re.search(r"GRANT\s+paqueteria_realtime\s+TO", executable_roles):
+        errors.append("Realtime dispatcher role membership granted contrary to RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12")
+    if grants_to_role(role_sql, "paqueteria_realtime"):
+        errors.append("The realtime dispatcher role is granted by its Notifications lane step, never by AI-18: "
+                      f"{grants_to_role(role_sql, 'paqueteria_realtime')}")
+    if re.search(r"ALTER\s+(ROLE|FUNCTION|TABLE)[^;]*OWNER\s+TO\s+paqueteria_realtime", executable_roles):
+        errors.append("The realtime dispatcher role must own nothing")
     return errors
 
 
@@ -708,7 +753,7 @@ def main() -> int:
     errors.extend(executor_grant_errors(role_sql))
     for fragment in [
         "CREATE ROLE paqueteria_lifecycle_executor NOLOGIN BYPASSRLS;",
-        "REVOKE paqueteria_lifecycle_executor FROM paqueteria_app, paqueteria_worker;",
+        "REVOKE paqueteria_lifecycle_executor FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;",
     ]:
         if fragment not in role_sql:
             errors.append(f"Missing lifecycle executor contract: {fragment}")
@@ -719,7 +764,7 @@ def main() -> int:
     checks.append("Lifecycle executor: dedicated NOLOGIN role, column-limited grants, no runtime membership")
     for fragment in [
         "CREATE ROLE paqueteria_cleanup_executor NOLOGIN BYPASSRLS;",
-        "REVOKE paqueteria_cleanup_executor FROM paqueteria_app, paqueteria_worker;",
+        "REVOKE paqueteria_cleanup_executor FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;",
         "OPS-003-CLEANUP-ROLE",
     ]:
         if fragment not in role_sql:
@@ -731,7 +776,7 @@ def main() -> int:
     # cross-tenant registration writes; it is never granted to a runtime role.
     for fragment in [
         "CREATE ROLE paqueteria_registration_executor NOLOGIN BYPASSRLS;",
-        "REVOKE paqueteria_registration_executor FROM paqueteria_app, paqueteria_worker;",
+        "REVOKE paqueteria_registration_executor FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;",
         "AUTH-OPEN-REGISTRATION",
         "security.register_identity_subject(text,uuid)",
         "security.create_self_service_organization(uuid,uuid,uuid,uuid,text,text,text,text)",
@@ -766,8 +811,8 @@ def main() -> int:
     for fragment in [
         "CREATE ROLE paqueteria_master_data_executor NOLOGIN BYPASSRLS;",
         "CREATE ROLE paqueteria_master_data_loader NOLOGIN NOBYPASSRLS;",
-        "REVOKE paqueteria_master_data_executor FROM paqueteria_app, paqueteria_worker;",
-        "REVOKE paqueteria_master_data_loader FROM paqueteria_app, paqueteria_worker;",
+        "REVOKE paqueteria_master_data_executor FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;",
+        "REVOKE paqueteria_master_data_loader FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;",
         "MDM-001-OPERATOR-LOADER",
         "security.load_master_data(uuid,uuid,json,bytea,boolean)",
         "search_path=pg_catalog, pg_temp",
@@ -796,6 +841,8 @@ def main() -> int:
     checks.append("Operator outbox executor: dedicated NOLOGIN role, exact column grants, lane-granted API-only functions")
     errors.extend(auto_close_errors(role_sql))
     checks.append("Auto-close executor: dedicated NOLOGIN role, two column grants, lane-granted Worker-only discovery function")
+    errors.extend(realtime_dispatcher_errors(role_sql))
+    checks.append("Realtime dispatcher role: dedicated NOLOGIN NOBYPASSRLS runtime role, no AI-18 grant, lane-granted lease-token functions")
     checks.append("BFF session store: pre-tenant table, session executor grants only, function-only runtime access")
     # D8-OUTBOX-LANE-DISPATCH: the DISPATCH lane is installed after the baseline by a module lane, so
     # the role model records its contract; it must never grant the lane to anyone but the Worker.

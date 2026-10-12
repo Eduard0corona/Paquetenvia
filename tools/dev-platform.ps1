@@ -138,7 +138,13 @@ function Get-RuntimeState {
         $runtime = [pscustomobject]@{
             appPassword = New-LocalSecret
             workerPassword = New-LocalSecret
+            realtimePassword = New-LocalSecret
         }
+        Write-JsonFile $runtimePath $runtime
+    }
+    elseif ($null -eq $runtime.psobject.Properties["realtimePassword"]) {
+        # RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: state written before the realtime dispatcher login existed.
+        $runtime | Add-Member -NotePropertyName realtimePassword -NotePropertyValue (New-LocalSecret)
         Write-JsonFile $runtimePath $runtime
     }
     return $runtime
@@ -182,6 +188,7 @@ function Get-Connections {
         Admin = "Host=$hostName;Port=$port;Database=$database;Username=$adminUser;Password=$adminPassword;Include Error Detail=false"
         App = "Host=$hostName;Port=$port;Database=$database;Username=paqueteria_local_app;Password=$($runtime.appPassword);Include Error Detail=false"
         Worker = "Host=$hostName;Port=$port;Database=$database;Username=paqueteria_local_worker;Password=$($runtime.workerPassword);Include Error Detail=false"
+        Realtime = "Host=$hostName;Port=$port;Database=$database;Username=paqueteria_local_realtime;Password=$($runtime.realtimePassword);Include Error Detail=false"
     }
 }
 
@@ -198,7 +205,7 @@ function Invoke-DevSeed([string] $Operation) {
     foreach ($name in @(
         "DOTNET_ENVIRONMENT", "PAQUETERIA_LOCAL_DEV_SEED_ENABLED",
         "PAQUETERIA_LOCAL_ADMIN_CONNECTION", "PAQUETERIA_LOCAL_APP_PASSWORD",
-        "PAQUETERIA_LOCAL_WORKER_PASSWORD")) {
+        "PAQUETERIA_LOCAL_WORKER_PASSWORD", "PAQUETERIA_LOCAL_REALTIME_PASSWORD")) {
         $previous[$name] = [Environment]::GetEnvironmentVariable($name, "Process")
     }
     try {
@@ -207,6 +214,7 @@ function Invoke-DevSeed([string] $Operation) {
         $env:PAQUETERIA_LOCAL_ADMIN_CONNECTION = $connections.Admin
         $env:PAQUETERIA_LOCAL_APP_PASSWORD = $connections.Runtime.appPassword
         $env:PAQUETERIA_LOCAL_WORKER_PASSWORD = $connections.Runtime.workerPassword
+        $env:PAQUETERIA_LOCAL_REALTIME_PASSWORD = $connections.Runtime.realtimePassword
         Invoke-Checked $dotnetCommand @("run", "--project", $devSeedProject, "--", $Operation)
     }
     finally {
@@ -309,7 +317,16 @@ function Set-HostConfiguration([string] $Kind) {
     $env:DOTNET_ENVIRONMENT = "Development"
     $env:ASPNETCORE_ENVIRONMENT = "Development"
     $env:ConnectionStrings__Paqueteria = if ($Kind -eq "Worker") { $connections.Worker } else { $connections.App }
-    $env:ConnectionStrings__PaqueteriaWorker = $connections.Worker
+    # RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the API never receives the Worker credential; its in-process realtime
+    # dispatchers use their own login (member of paqueteria_realtime only).
+    if ($Kind -eq "Worker") {
+        $env:ConnectionStrings__PaqueteriaWorker = $connections.Worker
+        $env:ConnectionStrings__PaqueteriaRealtime = $null
+    }
+    else {
+        $env:ConnectionStrings__PaqueteriaWorker = $null
+        $env:ConnectionStrings__PaqueteriaRealtime = $connections.Realtime
+    }
     $env:Authentication__Provider = "Mock"
     $env:IdentityBootstrap__Provider = "PostgreSql"
     $env:Tenancy__Provider = "PostgreSql"
@@ -361,12 +378,14 @@ function Clear-WebSensitiveEnvironment {
     foreach ($name in @(
         "ConnectionStrings__Paqueteria",
         "ConnectionStrings__PaqueteriaWorker",
+        "ConnectionStrings__PaqueteriaRealtime",
         "AWS_ACCESS_KEY_ID",
         "AWS_SECRET_ACCESS_KEY",
         "PAQUETERIA_LOCAL_ADMIN_CONNECTION",
         "PAQUETERIA_LOCAL_APP_CONNECTION",
         "PAQUETERIA_LOCAL_APP_PASSWORD",
-        "PAQUETERIA_LOCAL_WORKER_PASSWORD")) {
+        "PAQUETERIA_LOCAL_WORKER_PASSWORD",
+        "PAQUETERIA_LOCAL_REALTIME_PASSWORD")) {
         [Environment]::SetEnvironmentVariable($name, $null, "Process")
     }
 }

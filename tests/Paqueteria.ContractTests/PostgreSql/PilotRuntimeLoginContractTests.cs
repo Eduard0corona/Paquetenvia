@@ -26,13 +26,28 @@ public sealed class PilotRuntimeLoginContractTests(PostgreSqlContractFixture fix
         {
             var apiPassword = RandomPassword();
             var workerPassword = RandomPassword();
+            var realtimePassword = RandomPassword();
             Environment.SetEnvironmentVariable(variable, fixture.DeploymentConnectionString);
             Environment.SetEnvironmentVariable(RuntimeLoginProvisioner.ApiVerifierVariable, ScramVerifier(apiPassword));
             Environment.SetEnvironmentVariable(RuntimeLoginProvisioner.WorkerVerifierVariable, ScramVerifier(workerPassword));
+            Environment.SetEnvironmentVariable(RuntimeLoginProvisioner.RealtimeVerifierVariable, ScramVerifier(realtimePassword));
 
             Assert.Equal(0, await DatabaseMigratorProgram.RunAsync(["runtime-logins", "--connection-env", variable]));
             await AssertRuntimeShapeAsync(RuntimeLoginProvisioner.ApiLogin, apiPassword, "paqueteria_app", "paqueteria_worker");
             await AssertRuntimeShapeAsync(RuntimeLoginProvisioner.WorkerLogin, workerPassword, "paqueteria_worker", "paqueteria_app");
+            // RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the API's realtime login reaches neither the Worker nor the API role.
+            await AssertRuntimeShapeAsync(RuntimeLoginProvisioner.RealtimeLogin, realtimePassword, "paqueteria_realtime", "paqueteria_worker");
+            await AssertRuntimeShapeAsync(RuntimeLoginProvisioner.RealtimeLogin, realtimePassword, "paqueteria_realtime", "paqueteria_app");
+
+            // A Worker membership granted to the realtime login by hand is removed on the next run.
+            await ExecuteAdminAsync($"GRANT paqueteria_worker TO {RuntimeLoginProvisioner.RealtimeLogin}");
+            Assert.Equal(0, await DatabaseMigratorProgram.RunAsync(["runtime-logins", "--connection-env", variable]));
+            await AssertRuntimeShapeAsync(RuntimeLoginProvisioner.RealtimeLogin, realtimePassword, "paqueteria_realtime", "paqueteria_worker");
+
+            // Without its verifier no login is touched.
+            Environment.SetEnvironmentVariable(RuntimeLoginProvisioner.RealtimeVerifierVariable, null);
+            Assert.Equal(7, await DatabaseMigratorProgram.RunAsync(["runtime-logins", "--connection-env", variable]));
+            Environment.SetEnvironmentVariable(RuntimeLoginProvisioner.RealtimeVerifierVariable, ScramVerifier(realtimePassword));
 
             // A stale extra membership is removed and a re-run re-keys the login; the old password stops working.
             await ExecuteAdminAsync($"GRANT paqueteria_worker TO {RuntimeLoginProvisioner.ApiLogin}");
@@ -52,7 +67,8 @@ public sealed class PilotRuntimeLoginContractTests(PostgreSqlContractFixture fix
             RestoreEnvironment(saved);
             NpgsqlConnection.ClearAllPools();
             await ExecuteAdminAsync(
-                $"DROP ROLE IF EXISTS {RuntimeLoginProvisioner.ApiLogin}; DROP ROLE IF EXISTS {RuntimeLoginProvisioner.WorkerLogin};");
+                $"DROP ROLE IF EXISTS {RuntimeLoginProvisioner.ApiLogin}; DROP ROLE IF EXISTS {RuntimeLoginProvisioner.WorkerLogin}; " +
+                $"DROP ROLE IF EXISTS {RuntimeLoginProvisioner.RealtimeLogin};");
         }
     }
 
@@ -121,7 +137,13 @@ public sealed class PilotRuntimeLoginContractTests(PostgreSqlContractFixture fix
     }
 
     private static Dictionary<string, string?> SaveEnvironment(string connectionVariable) =>
-        new[] { connectionVariable, RuntimeLoginProvisioner.ApiVerifierVariable, RuntimeLoginProvisioner.WorkerVerifierVariable }
+        new[]
+            {
+                connectionVariable,
+                RuntimeLoginProvisioner.ApiVerifierVariable,
+                RuntimeLoginProvisioner.WorkerVerifierVariable,
+                RuntimeLoginProvisioner.RealtimeVerifierVariable,
+            }
             .ToDictionary(name => name, Environment.GetEnvironmentVariable, StringComparer.Ordinal);
 
     private static void RestoreEnvironment(Dictionary<string, string?> saved)

@@ -77,13 +77,16 @@ public sealed class E002SemanticAssertions
             .IsAppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         var orderAutoCloseApplied = await E002OrderAutoCloseStateReader
             .IsAppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        var realtimeDispatcherApplied = await E002NotificationStateReader
+            .IsRealtimeDispatcherRoleAppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         await AssertSchemaAclAsync(connection, transaction, "security",
-            await SecurityAclAsync(connection, transaction, cancellationToken).ConfigureAwait(false), violations,
+            await SecurityAclAsync(connection, transaction, realtimeDispatcherApplied, cancellationToken)
+                .ConfigureAwait(false), violations,
             cancellationToken).ConfigureAwait(false);
         var (identities, aclRows) = await AssertRoutineMapCoreAsync(
             connection, transaction, mapState, lif001Applied, dispatchLaneApplied, ops003Applied, reg001Applied,
             bffSessionApplied, bffPurgeApplied, reg002Applied, mdm001Applied, operatorOutboxApplied,
-            orderAutoCloseApplied, violations, cancellationToken).ConfigureAwait(false);
+            orderAutoCloseApplied, realtimeDispatcherApplied, violations, cancellationToken).ConfigureAwait(false);
         await AssertSecurityDefinerAsync(connection, transaction, violations, cancellationToken).ConfigureAwait(false);
         if (violations.Count != 0)
         {
@@ -94,7 +97,7 @@ public sealed class E002SemanticAssertions
             state,
             E002RoutineMap.Name(
                 mapState, lif001Applied, dispatchLaneApplied, ops003Applied, reg001Applied, bffSessionApplied, bffPurgeApplied,
-                reg002Applied, mdm001Applied, operatorOutboxApplied, orderAutoCloseApplied),
+                reg002Applied, mdm001Applied, operatorOutboxApplied, orderAutoCloseApplied, realtimeDispatcherApplied),
             identities,
             aclRows);
     }
@@ -132,9 +135,11 @@ public sealed class E002SemanticAssertions
             .IsAppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         // D8-OUTBOX-LANE-DISPATCH: the NTF-001 target is asserted when its own history row is written,
         // before the later DISPATCH lane migration of the same lane has run.
+        // RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: likewise before the realtime dispatcher role grants.
         await AssertRoutineMapCoreAsync(connection, transaction, E002RoutineMapState.Ntf001TargetApplied,
             lif001Applied, dispatchLaneApplied: false, ops003Applied, reg001Applied, bffSessionApplied, bffPurgeApplied,
-            reg002Applied, mdm001Applied, operatorOutboxApplied, orderAutoCloseApplied, violations, cancellationToken)
+            reg002Applied, mdm001Applied, operatorOutboxApplied, orderAutoCloseApplied, realtimeDispatcherApplied: false,
+            violations, cancellationToken)
             .ConfigureAwait(false);
         if (violations.Count != 0)
         {
@@ -257,7 +262,7 @@ public sealed class E002SemanticAssertions
         }
     }
 
-    private static IReadOnlyList<AclEntry> SecurityAcl(bool masterDataLoaderPresent)
+    private static IReadOnlyList<AclEntry> SecurityAcl(bool masterDataLoaderPresent, bool realtimeDispatcherApplied)
     {
         var expected = new List<AclEntry>
         {
@@ -278,16 +283,24 @@ public sealed class E002SemanticAssertions
             expected.Add(new("paqueteria_master_data_loader", "paqueteria_migrator", "USAGE", false));
         }
 
+        // RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the Notifications lane grants the realtime dispatcher role USAGE
+        // on security (to call its six lease-token routines); AI-18 creates the role with no privilege.
+        if (realtimeDispatcherApplied)
+        {
+            expected.Add(new("paqueteria_realtime", "paqueteria_migrator", "USAGE", false));
+        }
+
         return expected;
     }
 
     private static async Task<IReadOnlyList<AclEntry>> SecurityAclAsync(
-        NpgsqlConnection connection, NpgsqlTransaction? transaction, CancellationToken cancellationToken)
+        NpgsqlConnection connection, NpgsqlTransaction? transaction, bool realtimeDispatcherApplied,
+        CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand(
             "SELECT pg_catalog.to_regrole('paqueteria_master_data_loader') IS NOT NULL", connection, transaction);
         var present = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
-        return SecurityAcl(present);
+        return SecurityAcl(present, realtimeDispatcherApplied);
     }
 
     private static IReadOnlyList<AclEntry> NotificationsAcl(E002NotificationState state)
@@ -341,11 +354,12 @@ public sealed class E002SemanticAssertions
         NpgsqlConnection connection, NpgsqlTransaction? transaction, E002RoutineMapState mapState,
         bool lif001Applied, bool dispatchLaneApplied, bool ops003Applied, bool reg001Applied, bool bffSessionApplied,
         bool bffPurgeApplied, bool reg002Applied, bool mdm001Applied, bool operatorOutboxApplied,
-        bool orderAutoCloseApplied, ICollection<string> violations, CancellationToken cancellationToken)
+        bool orderAutoCloseApplied, bool realtimeDispatcherApplied, ICollection<string> violations,
+        CancellationToken cancellationToken)
     {
         var map = E002RoutineMap.Select(
             mapState, lif001Applied, dispatchLaneApplied, ops003Applied, reg001Applied, bffSessionApplied, bffPurgeApplied,
-            reg002Applied, mdm001Applied, operatorOutboxApplied, orderAutoCloseApplied);
+            reg002Applied, mdm001Applied, operatorOutboxApplied, orderAutoCloseApplied, realtimeDispatcherApplied);
         var expectedOids = new HashSet<uint>();
         var totalRows = 0;
         foreach (var routine in map)

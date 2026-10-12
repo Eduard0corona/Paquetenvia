@@ -27,7 +27,7 @@ public sealed class RealtimeReconnectKestrelTests(
         await using var host = new RealtimeKestrelWebApplicationFactory(
             database.ApplicationConnectionString,
             recorder,
-            workerConnectionString: database.WorkerConnectionString);
+            realtimeConnectionString: database.RealtimeConnectionString);
         var baseAddress = host.Start();
         await using var authorized = CreateOperationsConnection(
             baseAddress,
@@ -86,7 +86,7 @@ public sealed class RealtimeReconnectKestrelTests(
         await using var host = new RealtimeKestrelWebApplicationFactory(
             database.ApplicationConnectionString,
             recorder,
-            workerConnectionString: database.WorkerConnectionString);
+            realtimeConnectionString: database.RealtimeConnectionString);
         var baseAddress = host.Start();
         await using var authorized = CreateOperationsConnection(
             baseAddress,
