@@ -136,6 +136,27 @@ describe("settlements api", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("lists the payees with only a cursor and reads them fail-closed (UI-PHASE3-DRIVERS-2026-10-11)", async () => {
+    const payee = { driver_id: "d71e0000-0000-4000-8000-000000000002", driver_reference: "DRV-3d93b4c6", vehicle_type: "CAR" };
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(json(200, { items: [payee], next_cursor: "AwAAAAAAAAAAAAAAAAAAAAB" }))
+      .mockResolvedValueOnce(json(200, { items: [], next_cursor: null }))
+      .mockResolvedValueOnce(json(200, { items: [{ ...payee, status: "ACTIVE" }], next_cursor: null }));
+    vi.stubGlobal("fetch", fetchMock);
+    const api = createSettlementsApi("https://api.synthetic.test", bearer);
+
+    const first = await api.listPayees();
+    expect(lastCall(fetchMock)[0].toString()).toBe("https://api.synthetic.test/api/v1/settlement-payees");
+    expect(first).toEqual({ items: [payee], next_cursor: "AwAAAAAAAAAAAAAAAAAAAAB" });
+    await api.listPayees(first.next_cursor);
+    expect(lastCall(fetchMock)[0].search).toBe("?cursor=AwAAAAAAAAAAAAAAAAAAAAB");
+    // A payee carrying anything but id, reference and vehicle breaks the contract.
+    await expect(api.listPayees()).rejects.toMatchObject({ category: "invalid" });
+    await expect(api.listPayees("../other")).rejects.toMatchObject({ category: "invalid" });
+    expect(fetchMock).toHaveBeenCalledTimes(3);
+  });
+
   it("exports the persisted CSV as an in-memory attachment", async () => {
     const csv = "settlement_id,payee_type\r\n";
     const fetchMock = vi.fn().mockResolvedValue(

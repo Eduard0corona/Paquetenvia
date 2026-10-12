@@ -25,7 +25,7 @@ namespace Paqueteria.ContractTests.PostgreSql;
 /// </summary>
 [Collection(PostgreSqlContractCollection.Name)]
 [Trait("Category", "PostgreSqlContract")]
-public sealed class SettlementWorkflowPostgreSqlContractTests(PostgreSqlContractFixture fixture)
+public sealed partial class SettlementWorkflowPostgreSqlContractTests(PostgreSqlContractFixture fixture)
 {
     private static readonly DateTimeOffset Now = new(2026, 9, 22, 17, 0, 0, TimeSpan.Zero);
     private static readonly DateOnly PeriodFrom = new(2026, 9, 14);
@@ -763,6 +763,7 @@ public sealed class SettlementWorkflowPostgreSqlContractTests(PostgreSqlContract
         }
 
         public Guid OrganizationId => tenant.OrganizationId;
+        public Guid CityId => tenant.CityId;
         public Guid DispatcherUserId => tenant.UserId;
         public Guid FinanceUserId { get; } = Guid.NewGuid();
         public Guid AdminUserId { get; } = Guid.NewGuid();

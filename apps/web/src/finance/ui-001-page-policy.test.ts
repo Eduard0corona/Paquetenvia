@@ -93,6 +93,7 @@ describe("UI-001 page policy", () => {
       "/api/v1/orders/csv/commit",
       "/api/v1/orders/csv/preview",
       "/api/v1/quotes",
+      "/api/v1/settlement-payees",
       "/api/v1/settlements",
       "/api/v1/settlements/",
     ]);
@@ -109,6 +110,8 @@ describe("UI-001 page policy", () => {
       ["/cod-records/{codId}/reconcile:", "reconcileCod"],
       ["/orders/{orderId}/financials:", "getOrderFinancials"],
       ["/settlements:", "createSettlement"],
+      // UI-PHASE3-DRIVERS-2026-10-11: the payee picker of "Calcular liquidación".
+      ["/settlement-payees:", "listSettlementPayees"],
       ["/settlements/{settlementId}:", "getSettlement"],
       ["/settlements/{settlementId}/adjustments:", "addSettlementAdjustment"],
       ["/settlements/{settlementId}/approve:", "approveSettlement"],

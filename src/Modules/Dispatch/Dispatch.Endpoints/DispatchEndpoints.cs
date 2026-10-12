@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Dispatch.Application.Assignments;
 using Dispatch.Application.ExternalOffers;
+using Dispatch.Application.Fleet;
 using Dispatch.Application.Stops;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -45,6 +46,17 @@ public static class DispatchEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+
+        endpoints.MapGet("/api/v1/drivers", ListOrganizationDriversAsync)
+            .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
+            .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .WithName("listOrganizationDrivers")
+            .WithTags("Dispatch")
+            .Produces<OrganizationDriverPageResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status409Conflict)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
@@ -422,6 +434,90 @@ public static class DispatchEndpoints
             AssignableDriverCursorCodec.TryDecode(value[0], out cursor);
     }
 
+    /// <summary>
+    /// UI-PHASE3-DRIVERS-2026-10-11. The only query parameter is <c>cursor</c>, at most once and issued by this
+    /// operation; anything else is 409 INVALID_REQUEST before capability or any row is read. The capability is then
+    /// settled from the session and again inside the tenant transaction; the list has no resource of its own, so
+    /// there is no 404, and a store failure or a value outside the published vocabulary is 503.
+    /// </summary>
+    private static async Task<IResult> ListOrganizationDriversAsync(
+        HttpContext httpContext,
+        IOrganizationRequestSession session,
+        ITenantContext tenantContext,
+        IOrganizationDriversQuery query,
+        CancellationToken cancellationToken)
+    {
+        if (!TrySession(session, tenantContext, out var actorId))
+        {
+            return Forbidden();
+        }
+
+        if (!TryReadOrganizationDriversQuery(httpContext.Request.Query, out var afterDriverId))
+        {
+            return Conflict("INVALID_REQUEST");
+        }
+
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.ListOrganizationDrivers) is { } denied)
+        {
+            return denied;
+        }
+
+        try
+        {
+            var page = await query.ListAsync(
+                new ListOrganizationDriversQuery(
+                    actorId,
+                    tenantContext.OrganizationId,
+                    session.MfaSatisfied,
+                    afterDriverId),
+                cancellationToken);
+            return Results.Ok(new OrganizationDriverPageResponse(
+                page.Items.Select(item => new OrganizationDriverResponse(
+                    item.DriverId,
+                    item.DriverReference,
+                    item.VehicleType,
+                    item.Status,
+                    item.ActiveStopCount,
+                    item.LastPositionAt)).ToArray(),
+                page.NextCursor));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (AssignmentForbiddenException)
+        {
+            return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.ListOrganizationDrivers);
+        }
+        catch (AssignmentInfrastructureException)
+        {
+            return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Service Unavailable.");
+        }
+    }
+
+    public static bool TryReadOrganizationDriversQuery(IQueryCollection query, out Guid? afterDriverId)
+    {
+        afterDriverId = null;
+        if (query.Keys.Any(key => !string.Equals(key, "cursor", StringComparison.Ordinal)) ||
+            query.Any(pair => pair.Value.Count != 1))
+        {
+            return false;
+        }
+
+        if (!query.TryGetValue("cursor", out var value))
+        {
+            return true;
+        }
+
+        if (!OrganizationDriverCursorCodec.TryDecode(value[0], out var after))
+        {
+            return false;
+        }
+
+        afterDriverId = after;
+        return true;
+    }
+
     private static async Task<IResult> ListMyStopsAsync(
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
@@ -574,6 +670,22 @@ public sealed record AssignableDriverResponse(
 
 public sealed record AssignableDriverPageResponse(
     [property: JsonPropertyName("items")] IReadOnlyList<AssignableDriverResponse> Items,
+    [property: JsonPropertyName("next_cursor")] string? NextCursor);
+
+/// <summary>
+/// UI-PHASE3-DRIVERS-2026-10-11: a driver of the dispatcher's read-only list. The id is the stable key and is never
+/// shown; last_position_at is only the capture time of the latest position, never the position.
+/// </summary>
+public sealed record OrganizationDriverResponse(
+    [property: JsonPropertyName("driver_id")] Guid DriverId,
+    [property: JsonPropertyName("driver_reference")] string DriverReference,
+    [property: JsonPropertyName("vehicle_type")] string VehicleType,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("active_stop_count")] int ActiveStopCount,
+    [property: JsonPropertyName("last_position_at")] DateTimeOffset? LastPositionAt);
+
+public sealed record OrganizationDriverPageResponse(
+    [property: JsonPropertyName("items")] IReadOnlyList<OrganizationDriverResponse> Items,
     [property: JsonPropertyName("next_cursor")] string? NextCursor);
 
 public sealed record DriverStopResponse(

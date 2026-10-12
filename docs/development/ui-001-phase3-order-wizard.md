@@ -66,7 +66,10 @@ vigencia del precio. Ya no se muestran el código del tier, la versión de polí
 ## Pendiente (no se simula)
 
 - Libreta de direcciones del diseño aprobado: `createQuote` no acepta una ubicación guardada y `listLocations` no
-  devuelve la dirección en texto; AI-08 la ubica en BUS-001 (MVP-2).
+  devuelve la dirección en texto; AI-08 la ubica en BUS-001 (MVP-2). El owner lo confirmó en
+  `UI-PHASE3-ADDRESS-BOOK-MVP2-2026-10-11` ("Después del piloto (Recommended)": "Se queda en MVP-2, como dice el
+  backlog."), porque guardar direcciones y contactos es dato personal (GATE-007): en el piloto el asistente sigue
+  capturando las direcciones.
 - Selector de cuenta cliente: no hay operación que liste cuentas; el ID se sigue capturando como antes.
 
 ## Validación

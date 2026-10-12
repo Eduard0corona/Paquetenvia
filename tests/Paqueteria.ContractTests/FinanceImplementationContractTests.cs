@@ -320,13 +320,15 @@ public sealed class FinanceImplementationContractTests
 
     /// <summary>
     /// Every Finance source that may mention settlements at all: the ledger migration, the SET-001
-    /// domain, application, infrastructure and endpoint files, and the one composition line that
-    /// registers the settlement service. COD, Financials and every other FIN-001 source stay out.
+    /// domain, application, infrastructure and endpoint files, the settlement payee list
+    /// (UI-PHASE3-DRIVERS-2026-10-11) and the one composition line that registers the settlement service.
+    /// COD, Financials and every other FIN-001 source stay out.
     /// </summary>
     private static readonly string[] Set001SettlementSources =
     [
         "src/Modules/Finance/Finance.Application/Settlements/SettlementContracts.cs",
         "src/Modules/Finance/Finance.Application/Settlements/SettlementCsvWriter.cs",
+        "src/Modules/Finance/Finance.Application/Settlements/SettlementPayeeContracts.cs",
         "src/Modules/Finance/Finance.Domain/Settlements/SettlementModel.cs",
         "src/Modules/Finance/Finance.Domain/Settlements/SettlementPeriod.cs",
         "src/Modules/Finance/Finance.Domain/Settlements/SettlementSourcePolicy.cs",
@@ -334,6 +336,7 @@ public sealed class FinanceImplementationContractTests
         "src/Modules/Finance/Finance.Infrastructure/DependencyInjection.cs",
         "src/Modules/Finance/Finance.Infrastructure/Persistence/Migrations/20260925000100_EnforceSettlementLedgerIntegrity.cs",
         "src/Modules/Finance/Finance.Infrastructure/Settlements/DisabledSettlementService.cs",
+        "src/Modules/Finance/Finance.Infrastructure/Settlements/PostgreSqlSettlementService.Payees.cs",
         "src/Modules/Finance/Finance.Infrastructure/Settlements/PostgreSqlSettlementService.Persistence.cs",
         "src/Modules/Finance/Finance.Infrastructure/Settlements/PostgreSqlSettlementService.cs",
     ];
