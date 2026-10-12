@@ -11,17 +11,20 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
     private readonly Process _process;
     private readonly StringBuilder _output;
     private readonly FileStream _crossProcessLease;
+    private readonly NextEnvDeclarationSnapshot _nextEnvDeclaration;
 
     private DriverStopsNextServer(
         Process process,
         Uri baseAddress,
         StringBuilder output,
-        FileStream crossProcessLease)
+        FileStream crossProcessLease,
+        NextEnvDeclarationSnapshot nextEnvDeclaration)
     {
         _process = process;
         BaseAddress = baseAddress;
         _output = output;
         _crossProcessLease = crossProcessLease;
+        _nextEnvDeclaration = nextEnvDeclaration;
     }
 
     internal Uri BaseAddress { get; }
@@ -172,20 +175,33 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
     {
         await ServerGate.WaitAsync();
         FileStream? crossProcessLease = null;
+        NextEnvDeclarationSnapshot? nextEnvDeclaration = null;
         try
         {
             crossProcessLease = await AcquireCrossProcessLeaseAsync();
+            // Captured under the lease, so no other test Next process is
+            // rewriting the file at this point.
+            nextEnvDeclaration = NextEnvDeclarationSnapshot.Capture(
+                Path.Combine(FindRepositoryRoot(), "apps", "web"));
             return await StartOwnedAsync(
                 runtime,
                 apiBaseUrl,
                 requestedPort,
                 connectSources,
-                crossProcessLease);
+                crossProcessLease,
+                nextEnvDeclaration);
         }
         catch
         {
-            crossProcessLease?.Dispose();
-            ServerGate.Release();
+            try
+            {
+                nextEnvDeclaration?.Restore();
+            }
+            finally
+            {
+                crossProcessLease?.Dispose();
+                ServerGate.Release();
+            }
             throw;
         }
     }
@@ -195,7 +211,8 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
         string? apiBaseUrl,
         int? requestedPort,
         string? connectSources,
-        FileStream crossProcessLease)
+        FileStream crossProcessLease,
+        NextEnvDeclarationSnapshot nextEnvDeclaration)
     {
         var root = FindRepositoryRoot();
         var web = Path.Combine(root, "apps", "web");
@@ -271,7 +288,8 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
                             process,
                             address,
                             output,
-                            crossProcessLease);
+                            crossProcessLease,
+                            nextEnvDeclaration);
                     }
                 }
                 catch (HttpRequestException)
@@ -303,9 +321,57 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
         }
         finally
         {
-            _process.Dispose();
-            _crossProcessLease.Dispose();
-            ServerGate.Release();
+            try
+            {
+                _process.Dispose();
+                _nextEnvDeclaration.Restore();
+            }
+            finally
+            {
+                _crossProcessLease.Dispose();
+                ServerGate.Release();
+            }
+        }
+    }
+
+    /// <summary>
+    /// <c>next dev</c> rewrites the tracked <c>apps/web/next-env.d.ts</c> so
+    /// it imports <c>.next/dev/types</c> instead of <c>.next/types</c>;
+    /// Next.js 16.3 has no setting to skip that. The server puts back the
+    /// exact bytes it found once its process has stopped, also when startup
+    /// fails, so running the suites leaves the checkout unchanged.
+    /// </summary>
+    private sealed class NextEnvDeclarationSnapshot
+    {
+        private readonly string _path;
+        private readonly byte[]? _content;
+
+        private NextEnvDeclarationSnapshot(string path, byte[]? content)
+        {
+            _path = path;
+            _content = content;
+        }
+
+        internal static NextEnvDeclarationSnapshot Capture(string web)
+        {
+            var path = Path.Combine(web, "next-env.d.ts");
+            return new NextEnvDeclarationSnapshot(
+                path,
+                File.Exists(path) ? File.ReadAllBytes(path) : null);
+        }
+
+        internal void Restore()
+        {
+            if (_content is null)
+            {
+                File.Delete(_path);
+                return;
+            }
+            if (!File.Exists(_path) ||
+                !File.ReadAllBytes(_path).AsSpan().SequenceEqual(_content))
+            {
+                File.WriteAllBytes(_path, _content);
+            }
         }
     }
 

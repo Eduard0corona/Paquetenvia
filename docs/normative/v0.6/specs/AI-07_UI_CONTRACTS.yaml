@@ -236,10 +236,12 @@ routes:
     # UI-PHASE3-ROUTES-NO-IDS-2026-10-12: errors by reason with the MFA step-up, readable dates, every page of the
     # list, "Agregar entrega" by guía and a detail without internal ids (route_planner errors, list, add_order and
     # detail).
+    # UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12: each row of the list also names its driver by DRV- (route_planner.list).
     screen_contract: route_planner
     decisions:
     - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
     - UI-PHASE3-ROUTES-NO-IDS-2026-10-12
+    - UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12
   /driver/stops:
     roles:
     - own_driver
@@ -631,6 +633,7 @@ screen_contracts:
     decision_amendments:
     - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
     - UI-PHASE3-ROUTES-NO-IDS-2026-10-12
+    - UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12
     authority: REST API + PostgreSQL
     sources:
       list: GET /routes
@@ -641,7 +644,8 @@ screen_contracts:
       reorder: PUT /routes/{routeId}/stops/order
       # UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11: the selectors of create_form.
       drivers: GET /drivers (listOrganizationDrivers), every page, the client of /ops/drivers; the same read names the
-        driver of the detail (UI-PHASE3-ROUTES-NO-IDS-2026-10-12)
+        driver of the detail (UI-PHASE3-ROUTES-NO-IDS-2026-10-12) and of each row of the list
+        (UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12); the screen makes no other drivers read
       cities: GET /cities (listCities)
       service_areas: GET /service-areas?city_id= (listServiceAreas), once a city is chosen
       # UI-PHASE3-ROUTES-NO-IDS-2026-10-12: add_order by guía and the guía of every stop.
@@ -689,10 +693,20 @@ screen_contracts:
       idempotency: unchanged - every change sends its own fresh Idempotency-Key
     list:
       decision: UI-PHASE3-ROUTES-NO-IDS-2026-10-12
+      decision_amendment: UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12
       pages: every page of listRoutes, one after another, in the server's order (never reordered), up to 10 pages; a
         longer list says some routes are not shown and a repeated cursor fails the read
-      display: each route by its date name ("Ruta del 12 de octubre de 2026" or "Ruta sin fecha", never YYYY-MM-DD),
-        status, stops and assignment cost total; a scheduled date that is not a real calendar date fails the read
+      display: each route by its date name ("Ruta del 12 de octubre de 2026" or "Ruta sin fecha", never YYYY-MM-DD)
+        and its driver, status, stops and assignment cost total; a scheduled date that is not a real calendar date
+        fails the read
+      # UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12 (project owner, 2026-10-12, "Sí, DRV- en cada fila (Recommended)": "Cada
+      # ruta de la lista muestra "Ruta del 12 de octubre de 2026 · DRV-1a2b3c4d". Solo pantalla, sin cambiar el
+      # API."): several routes of the same day read alike without their driver.
+      driver: after the date name, "Ruta del 12 de octubre de 2026 · DRV-1a2b3c4d" - the DRV- reference from the
+        listOrganizationDrivers read the screen already makes for create_form and detail (any status; no other read);
+        a driver that read does not return, or a failed read, is "Ruta del 12 de octubre de 2026 · Repartidor no
+        disponible"; while that read is in flight the row shows its date name alone; never the driver id. The rows keep
+        the server's order and their date names, and each row's accessible name is its visible text
     add_order:
       decision: UI-PHASE3-ROUTES-NO-IDS-2026-10-12
       field: '"Guía (ORD_…)" instead of the order id'
