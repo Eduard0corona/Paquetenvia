@@ -6,6 +6,7 @@ using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Logging;
 using Paqueteria.Infrastructure.Observability;
+using Realtime.Application.Configuration;
 using WorkerProgram = WorkerHost::WorkerProgram;
 
 namespace Paqueteria.IntegrationTests.Observability;
@@ -19,6 +20,10 @@ public sealed class Obs003CycleTraceTests
 {
     private const string UnreachableDatabase =
         "Host=127.0.0.1;Port=1;Database=obs003;Username=unused;Password=unused;Timeout=1;Pooling=false";
+
+    // RTM: the API's realtime dispatcher logs in with its own role, distinct from the API and Worker logins.
+    private const string UnreachableRealtimeDatabase =
+        "Host=127.0.0.1;Port=1;Database=obs003;Username=unused_realtime;Password=unused;Timeout=1;Pooling=false";
 
     private static readonly TimeSpan Deadline = TimeSpan.FromSeconds(30);
 
@@ -126,7 +131,7 @@ public sealed class Obs003CycleTraceTests
                     ["Realtime:OutboxDispatcher:Business:PollIntervalMilliseconds"] = "100",
                     ["Realtime:OutboxDispatcher:Location:PollIntervalMilliseconds"] = "100",
                     ["ConnectionStrings:Paqueteria"] = UnreachableDatabase,
-                    ["ConnectionStrings:PaqueteriaWorker"] = UnreachableDatabase,
+                    [$"ConnectionStrings:{OutboxDispatcherOptions.ConnectionStringName}"] = UnreachableRealtimeDatabase,
                 }));
             builder.ConfigureLogging(logging => logging.AddProvider(logs));
         }
