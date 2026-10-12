@@ -7,6 +7,7 @@ import {
   createRouteConflictMessages,
   createRouteNotFoundMessage,
   isDraftRouteOf,
+  isTodaysRoute,
   routeStopConflictMessages,
   routeStopDefaultConflictMessage,
   routeStopNotFoundMessage,
@@ -36,23 +37,31 @@ import { describeFailure } from "./tenant-error-messages";
  * REST again after every run. Nothing is stored in the browser and nothing is logged.
  *
  * UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11 ("Sí, en el paso (Recommended)"): when the driver has
- * no DRAFT route (and no run fixed one), every order of the batch is read with getOrder, one after
- * another, for its city_id. One shared city offers "Crear ruta nueva": createRoute with the driver,
- * that city, no service area and today's date in Mazatlán, under an Idempotency-Key kept only to
- * resend that same request after a network or server failure. The created route is selected and
- * the step goes on to its usual preview, confirmation and addRouteStop run. Orders in different
+ * no DRAFT route for today (and no run fixed one), every order of the batch is read with getOrder,
+ * one after another, for its city_id. One shared city offers "Crear ruta nueva": createRoute with the
+ * driver, that city, no service area and today's date in Mazatlán, under an Idempotency-Key kept
+ * only to resend that same request after a network or server failure. The created route is selected
+ * and the step goes on to its usual preview, confirmation and addRouteStop run. Orders in different
  * cities get no button, and an order that cannot be read fails the read like the routes. A success
  * is never invented: after a failure that cannot say whether the route exists, the driver's DRAFT
  * routes are read again before the button comes back.
+ *
+ * UI-PHASE3-ROUTES-DAILY-2026-10-12 ("Ruta por día (Recommended)"): routes never leave DRAFT (AI-05
+ * has no operation for it), so "today" decides. "Crear ruta nueva" is offered when the driver has no
+ * DRAFT route whose scheduled_for is today in America/Mazatlan (from the injectable clock; a route
+ * without a date is not today's), also next to older DRAFT routes, which can still be chosen. The
+ * read keeps the date it was made for, so the step lists today's routes first. After an ambiguous
+ * failure only a DRAFT route dated today counts as found.
  */
 export type BulkRoutesLoad =
   | { readonly kind: "loading" }
-  | { readonly kind: "ready"; readonly routes: readonly ManualRoute[] }
+  /** `today`: the Mazatlán date (`YYYY-MM-DD`) the routes were read for; today's routes are listed first. */
+  | { readonly kind: "ready"; readonly routes: readonly ManualRoute[]; readonly today: string }
   | { readonly kind: "failed"; readonly message: string; readonly stepUpHref: string | null };
 
-/** "Crear ruta nueva", next to "the driver has no DRAFT route" only. */
+/** "Crear ruta nueva", where the step says the driver has no DRAFT route for today. */
 export type BulkRouteCreation =
-  /** Not offered: the routes are loading or failed, the driver has DRAFT routes, or a run fixed the route. */
+  /** Not offered: the routes are loading or failed, the driver has a DRAFT route for today, or a run fixed the route. */
   | { readonly kind: "none" }
   /** The orders are in different cities: a route covers one city, so routes are created in Rutas. */
   | { readonly kind: "mixed_cities" }
@@ -236,8 +245,8 @@ export class BulkRouteController {
   }
 
   /**
-   * Reads every DRAFT route of the driver, one page after another. When there is none and no run
-   * fixed a route, the orders' city decides whether "Crear ruta nueva" is offered.
+   * Reads every DRAFT route of the driver, one page after another. When none is dated today in
+   * Mazatlán and no run fixed a route, the orders' city decides whether "Crear ruta nueva" is offered.
    */
   public async loadRoutes(): Promise<void> {
     if (this.disposed || this.state.phase !== "choosing" || this.state.creation.kind === "creating") return;
@@ -246,17 +255,20 @@ export class BulkRouteController {
     try {
       const routes = await this.readAllRoutes();
       if (this.disposed || generation !== this.routesGeneration) return;
+      const today = todayInMazatlan(this.now());
       const fixed = this.state.route;
       // The fixed route takes the version and stops just read; a route no longer listed stays as it was.
       const route = fixed === null ? null : (routes.find((item) => item.id === fixed.id) ?? fixed);
-      const creation = fixed === null && routes.length === 0 ? await this.creationOffer() : none;
+      const hasToday = routes.some((item) => isTodaysRoute(item, today));
+      const creation = fixed === null && !hasToday ? await this.creationOffer() : none;
       if (this.disposed || generation !== this.routesGeneration) return;
       this.set({
         ...this.state,
-        routes: { kind: "ready", routes },
+        routes: { kind: "ready", routes, today },
         route,
         creation,
-        creationNotice: this.unconfirmedNotice(routes.length > 0 ? "found" : "none") ?? this.state.creationNotice,
+        // After an ambiguous failure only a DRAFT route dated today is the route that may have been created.
+        creationNotice: this.unconfirmedNotice(hasToday ? "found" : "none") ?? this.state.creationNotice,
       });
     } catch (error: unknown) {
       if (this.disposed || generation !== this.routesGeneration) return;
@@ -278,11 +290,18 @@ export class BulkRouteController {
   public async createRoute(): Promise<void> {
     const creation = this.state.creation;
     if (this.disposed || this.state.phase !== "choosing" || this.state.route !== null) return;
-    if (creation.kind !== "offered" || this.state.routes.kind !== "ready" || this.state.routes.routes.length > 0) return;
+    if (creation.kind !== "offered" || this.state.routes.kind !== "ready") return;
+    const scheduledFor = todayInMazatlan(this.now());
+    // The rule holds when it is pressed too: if the day changed in Mazatlán since the routes were read and the new
+    // day already has a listed DRAFT route, nothing is created and the routes are read again for that day.
+    if (this.state.routes.routes.some((item) => isTodaysRoute(item, scheduledFor))) {
+      await this.loadRoutes();
+      return;
+    }
     const body: CreateRouteBody = {
       driverId: this.driver.driverId,
       cityId: creation.cityId,
-      scheduledFor: todayInMazatlan(this.now()),
+      scheduledFor,
     };
     // The same request keeps its key until a definitive answer; another day or city is another request.
     const prepared = this.createKeys.prepare(createRouteScope, `${body.driverId}|${body.cityId}|${body.scheduledFor}`, () => body);
@@ -313,10 +332,12 @@ export class BulkRouteController {
     }
     if (this.disposed) return;
     this.createKeys.settle(createRouteScope);
-    // Straight to the preview: the created route is the driver's only DRAFT route, and it is selected.
+    // Straight to the preview: the created route is the driver's newest DRAFT route and today's only one, listed
+    // first (the server lists newest first) before the older ones, and it is selected.
+    const older = this.state.routes.kind === "ready" ? this.state.routes.routes : [];
     this.set({
       ...this.state,
-      routes: { kind: "ready", routes: [route] },
+      routes: { kind: "ready", routes: [route, ...older.filter((item) => item.id !== route.id)], today: body.scheduledFor },
       creation: none,
       createdRouteId: route.id,
       creationNotice: { tone: "info", text: createdRouteText(route, this.driver.driverReference), stepUpHref: null },
@@ -373,8 +394,8 @@ export class BulkRouteController {
   }
 
   /**
-   * Whether "Crear ruta nueva" is offered once the driver has no DRAFT route: every order of the
-   * batch is read with getOrder, one after another (cancelled with the step), for its city_id. One
+   * Whether "Crear ruta nueva" is offered once the driver has no DRAFT route for today: every order of
+   * the batch is read with getOrder, one after another (cancelled with the step), for its city_id. One
    * shared city offers it, named by listCities when that read works; different cities never do. An
    * order that cannot be read fails the whole read, so the button is never offered on a guess.
    */

@@ -8,6 +8,8 @@ import {
   CreateRouteFormController,
   maximumDriverPages,
   routeFormAreasFailedMessage,
+  routeDriverText,
+  routeDriverUnavailableText,
   routeFormCitiesFailedMessage,
   routeFormDriversFailedMessage,
   type CreateRouteFormApi,
@@ -309,5 +311,37 @@ describe("create route form (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)", () => {
       stepUpHref: null,
     });
     expect(controller.choice()).toBeNull();
+  });
+});
+
+describe("the driver of the route detail (UI-PHASE3-ROUTES-NO-IDS-2026-10-12)", () => {
+  it("names a driver of any status by its DRV- reference from the same read", async () => {
+    const { controller } = setup();
+    expect(routeDriverText(controller.getSnapshot(), active.driver_id)).toBe("Cargando repartidor…");
+    await controller.start();
+    const state = controller.getSnapshot();
+    expect(state.driverReferences).toEqual(
+      new Map([active, suspended, otherActive, pending].map((item) => [item.driver_id, item.driver_reference])),
+    );
+    expect(routeDriverText(state, active.driver_id)).toBe("Repartidor DRV-cccccccc");
+    // A SUSPENDED or PENDING driver cannot be chosen for a new route but still names its routes.
+    expect(routeDriverText(state, suspended.driver_id)).toBe("Repartidor DRV-bbbbbbbb");
+    expect(routeDriverText(state, pending.driver_id)).toBe("Repartidor DRV-dddddddd");
+    expect(state.drivers).toEqual({ kind: "ready", items: [otherActive, active] });
+  });
+
+  it("says Repartidor no disponible, never the id, for a driver the read did not return or a failed read", async () => {
+    const { controller, api } = setup();
+    await controller.start();
+    const missing = syntheticUuid(0x6ff);
+    expect(routeDriverText(controller.getSnapshot(), missing)).toBe(routeDriverUnavailableText);
+    api.driverPages = { "": () => Promise.reject(new TenantApiError("unavailable")) };
+    await controller.loadDrivers();
+    expect(controller.getSnapshot().driverReferences.size).toBe(0);
+    expect(routeDriverText(controller.getSnapshot(), active.driver_id)).toBe("Repartidor no disponible");
+    for (const text of [routeDriverText(controller.getSnapshot(), active.driver_id), routeDriverText(controller.getSnapshot(), missing)])
+      expect(text).not.toMatch(/[0-9a-f]{8}-/);
+    controller.stop();
+    expect(controller.getSnapshot().driverReferences.size).toBe(0);
   });
 });
