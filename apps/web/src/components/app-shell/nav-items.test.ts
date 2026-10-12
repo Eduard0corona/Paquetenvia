@@ -6,7 +6,8 @@ const keys = (role: string | null) => navItemsForRole(role).map((item) => item.k
 describe("app shell navigation by role", () => {
   it("derives every role's items from the capability mirror", () => {
     // UI-PHASE3-INBOX-2026-10-10: approved order "Bandeja · Órdenes · + Nueva orden · Rutas ·
-    // Incidencias · Importar CSV · Repartidores"; the board keeps the second place.
+    // Incidencias · Importar CSV · Repartidores"; the board keeps the second place and
+    // "Repartidores" (UI-PHASE3-DRIVERS-2026-10-11) closes the operations items.
     expect(keys("DISPATCHER")).toEqual([
       "inbox",
       "operations",
@@ -14,6 +15,7 @@ describe("app shell navigation by role", () => {
       "routes",
       "incidents",
       "csv-import",
+      "drivers",
       "cod",
     ]);
     // PLATFORM_ADMIN also holds listSettlements (AI-05 x-capability-matrix, MFA enforced by the API).
@@ -24,6 +26,7 @@ describe("app shell navigation by role", () => {
       "routes",
       "incidents",
       "csv-import",
+      "drivers",
       "cod",
       "settlements",
     ]);
@@ -59,9 +62,22 @@ describe("app shell navigation by role", () => {
       ["Rutas", "/ops/routes"],
       ["Incidencias", "/ops/incidents"],
       ["Importar CSV", "/ops/orders/import"],
+      ["Repartidores", "/ops/drivers"],
       ["Cobro contra entrega", "/finance/cod"],
       ["Liquidaciones", "/finance/settlements"],
     ]);
+  });
+
+  it("offers Repartidores right after Importar CSV, only to the driver picker roles (UI-PHASE3-DRIVERS-2026-10-11)", () => {
+    for (const role of ["DISPATCHER", "PLATFORM_ADMIN"]) {
+      const items = keys(role);
+      expect(items.indexOf("drivers"), role).toBe(items.indexOf("csv-import") + 1);
+    }
+    // FINANCE reads its payees only inside Liquidaciones; it never gets the dispatcher's list.
+    for (const role of ["FINANCE", "VIEWER", "DRIVER", "BUSINESS_ADMIN", "ALLY_ADMIN", "UNKNOWN"])
+      expect(keys(role), role).not.toContain("drivers");
+    expect(activeNavKey(navItemsForRole("DISPATCHER"), "/ops/drivers")).toBe("drivers");
+    expect(activeNavKey(navItemsForRole("FINANCE"), "/ops/drivers")).toBeNull();
   });
 
   it("marks the most specific item for the current path", () => {

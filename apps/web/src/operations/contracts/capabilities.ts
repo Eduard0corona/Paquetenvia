@@ -67,16 +67,28 @@ export const screenOperationsMatrix = {
   transitionOrder: ["DISPATCHER", "PLATFORM_ADMIN"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
+/**
+ * AI-05 `x-capability-matrix.driver_list_operations` (UI-PHASE3-DRIVERS-2026-10-11): the dispatcher's read-only
+ * driver list ("Repartidores") admits the roles of the assignment picker, and the settlement payee list admits the
+ * createSettlement roles; PLATFORM_ADMIN needs MFA for both and FINANCE never reads the dispatcher's list.
+ */
+export const driverListOperationsMatrix = {
+  listOrganizationDrivers: ["DISPATCHER", "PLATFORM_ADMIN"],
+  listSettlementPayees: ["FINANCE", "PLATFORM_ADMIN"],
+} as const satisfies Readonly<Record<string, readonly string[]>>;
+
 const allOperations: Readonly<Record<string, readonly string[]>> = {
   ...capabilityMatrix,
   ...financeOperationsMatrix,
   ...screenOperationsMatrix,
+  ...driverListOperationsMatrix,
 };
 
 export type CapabilityOperation =
   | keyof typeof capabilityMatrix
   | keyof typeof financeOperationsMatrix
-  | keyof typeof screenOperationsMatrix;
+  | keyof typeof screenOperationsMatrix
+  | keyof typeof driverListOperationsMatrix;
 
 /**
  * Operations that need a satisfied MFA challenge for a given role. D7-SETTLEMENT-MFA:
@@ -111,6 +123,8 @@ const mfaOperations: Readonly<Partial<Record<string, readonly CapabilityOperatio
     "listAssignableDrivers",
     "getOperationsQueueCounts",
     "transitionOrder",
+    "listOrganizationDrivers",
+    "listSettlementPayees",
   ],
 };
 

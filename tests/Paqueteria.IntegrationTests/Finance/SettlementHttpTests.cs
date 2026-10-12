@@ -14,7 +14,7 @@ namespace Paqueteria.IntegrationTests.Finance;
 /// 403 / 404 / 409 / 503 matrix of all seven operations, exact idempotent replay, the approval blockers
 /// with their stable codes, and the CSV export as a client downloads it.
 /// </summary>
-public sealed class SettlementHttpTests(SettlementHttpFixture fixture) : IClassFixture<SettlementHttpFixture>
+public sealed partial class SettlementHttpTests(SettlementHttpFixture fixture) : IClassFixture<SettlementHttpFixture>
 {
     private const string PeriodFrom = "2026-09-14";
     private const string PeriodTo = "2026-09-20";

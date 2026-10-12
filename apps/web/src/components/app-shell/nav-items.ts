@@ -19,6 +19,7 @@ export type NavKey =
   | "operations"
   | "new-order"
   | "csv-import"
+  | "drivers"
   | "routes"
   | "incidents"
   | "cod"
@@ -33,7 +34,8 @@ interface NavRule extends NavItem {
 /**
  * Display order of UI-PHASE3-INBOX-2026-10-10 (approved menu "Bandeja · Órdenes · + Nueva
  * orden · Rutas · Incidencias · Importar CSV · Repartidores"): the operations board keeps the
- * second place as "Tablero"; there is no Repartidores screen yet; the finance items follow.
+ * second place as "Tablero"; "Repartidores" (UI-PHASE3-DRIVERS-2026-10-11) closes the operations
+ * items; the finance items follow.
  */
 const rules: readonly NavRule[] = [
   {
@@ -78,6 +80,13 @@ const rules: readonly NavRule[] = [
     href: "/ops/orders/import",
     label: "Importar CSV",
     visible: (role) => canPerform(role, "previewOrderCsv"),
+  },
+  {
+    key: "drivers",
+    href: "/ops/drivers",
+    label: "Repartidores",
+    // The read-only driver list (listOrganizationDrivers): the roles of the assignment picker.
+    visible: (role) => canPerform(role, "listOrganizationDrivers"),
   },
   {
     key: "cod",
