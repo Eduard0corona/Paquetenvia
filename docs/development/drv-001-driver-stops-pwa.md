@@ -254,6 +254,19 @@ pwsh .\tests\Paqueteria.IntegrationTests\bin\Debug\net10.0\playwright.ps1 instal
 dotnet test .\tests\Paqueteria.IntegrationTests\Paqueteria.IntegrationTests.csproj --filter "Category=DriverStopsPwa"
 ```
 
+Las suites que usan el runtime de desarrollo (`DriverStopsNextServer.StartAsync`:
+el caso de DriverHub real y `OperationsDashboardPwa`) arrancan `next dev`, que
+reescribe el archivo versionado `apps/web/next-env.d.ts` para importar
+`./.next/dev/types/...` en lugar de `./.next/types/...`. Next 16.3 no tiene opción
+para evitarlo: escribe el archivo en cada arranque de desarrollo y su `distDir`
+de desarrollo es siempre `.next/dev`. Por eso `DriverStopsNextServer` guarda los
+bytes exactos del archivo bajo el lease entre procesos y los restaura cuando su
+proceso Next se detiene, también si el arranque falla; correr estas categorías
+deja `git status` limpio. Copiar la app a otro directorio también lo evitaría,
+pero obliga a duplicar `node_modules` de pnpm por corrida. Solo un proceso de
+prueba terminado a la fuerza (sin dispose) deja el cambio; se recupera con
+`git checkout -- apps/web/next-env.d.ts`.
+
 El job aislado `Validate driver stops PWA` instala el lockfile congelado y
 Chromium, y ejecuta toda la categoría. El aislamiento evita mezclar el proceso
 Next y sus recursos Docker con el job .NET general.
