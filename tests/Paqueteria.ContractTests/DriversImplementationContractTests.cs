@@ -94,8 +94,14 @@ public sealed class DriversImplementationContractTests
         Assert.Contains("endpoints.MapPost(VoiceWebhookPaths.RecipientScreen,", implementation, StringComparison.Ordinal);
         Assert.Contains("endpoints.MapPost(VoiceWebhookPaths.RecipientConfirm,", implementation, StringComparison.Ordinal);
 
+        // DRV-DISPATCH-CONTACT-2026-10-12: the dispatch number of the driver's organization, read-only.
+        Assert.Contains(
+            "public const string Path = \"/api/v1/driver/me/dispatch-contact\";",
+            implementation,
+            StringComparison.Ordinal);
+
         // Exactly these routes and operation ids, nothing else.
-        Assert.Equal(2, Count(implementation, "endpoints.MapGet("));
+        Assert.Equal(3, Count(implementation, "endpoints.MapGet("));
         Assert.Equal(7, Count(implementation, "endpoints.MapPost("));
         Assert.Equal(1, Count(implementation, "endpoints.MapPut("));
         Assert.Equal(1, Count(implementation, "endpoints.MapDelete("));
@@ -107,6 +113,7 @@ public sealed class DriversImplementationContractTests
                 "answerTwilioInboundCall",
                 "confirmTwilioDriverKeypress",
                 "confirmTwilioRecipientKeypress",
+                "getMyDispatchContact",
                 "getMyDriverPhone",
                 "getRecipientCallAvailability",
                 "publishDriverLocation",
