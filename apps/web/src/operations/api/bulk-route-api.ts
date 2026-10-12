@@ -1,6 +1,7 @@
 import { isDraftRouteOf, routeDateText } from "../contracts/bulk-route";
 import type { City } from "../contracts/locations";
 import {
+  isRouteCursor,
   parseManualRoute,
   parseManualRouteDetail,
   parseManualRoutePage,
@@ -16,10 +17,10 @@ import { assertUuid, createTenantRequester, readJson, TenantApiError } from "./t
 /**
  * UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11: the AI-05 Routing operations "Agregar estas
  * órdenes a una ruta…" uses - listRoutes, asked only for the DRAFT routes of one driver, getRoute,
- * to check the route after a generic conflict, and addRouteStop. Unlike routes-api (the route
- * planner), failures are {@link TenantApiError}s that carry the problem code (VERSION_CONFLICT,
- * DRIVER_INELIGIBLE…) and MFA_REQUIRED, so each order gets its own es-MX result and the MFA step-up.
- * An answer outside the request fails closed.
+ * to check the route after a generic conflict, and addRouteStop. Like routes-api (the route planner,
+ * UI-PHASE3-ROUTES-NO-IDS-2026-10-12), failures are {@link TenantApiError}s that carry the problem code
+ * (VERSION_CONFLICT, DRIVER_INELIGIBLE…) and MFA_REQUIRED, so each order gets its own es-MX result and
+ * the MFA step-up. An answer outside the request fails closed.
  *
  * UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11: "Crear ruta nueva" also reads each order of the batch
  * with the existing getOrder client (operations-api) for its city_id, names that city with
@@ -47,13 +48,6 @@ export interface CreateRouteBody {
   readonly cityId: string;
   /** `YYYY-MM-DD`. */
   readonly scheduledFor: string;
-}
-
-/** listRoutes cursors are opaque base64 text the server bounds to 256 characters. */
-const routeCursorPattern = /^[A-Za-z0-9+/]{1,254}={0,2}$/;
-
-function isRouteCursor(value: string): boolean {
-  return value.length <= 256 && routeCursorPattern.test(value);
 }
 
 export function createBulkRouteApi(baseUrl: string, session: OperationsSession): BulkRouteApi {

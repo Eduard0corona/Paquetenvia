@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
@@ -54,7 +55,7 @@ function choicesHtml(
   creation: BulkRouteCreation = { kind: "none" },
   notice: BulkRouteNotice | null = null,
 ): string {
-  const choices = routes.kind === "ready" ? draftRouteChoices(routes.routes) : [];
+  const choices = routes.kind === "ready" ? draftRouteChoices(routes.routes, routes.today) : [];
   return renderToStaticMarkup(
     createElement(BulkRouteChoices, {
       driverReference: driver.driverReference,
@@ -125,7 +126,8 @@ describe("bulk add to route step (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11)"
 
   it("lists only the driver's DRAFT routes by date and stops, newest first, and says where routes are created", () => {
     const routes = [route(1, { scheduled_for: null, stop_count: 0 }), route(2, { stop_count: 1 })];
-    const html = choicesHtml({ kind: "ready", routes }, routes[1]?.id ?? null);
+    // Read on a later day: none of them is today's, so the server's order stays.
+    const html = choicesHtml({ kind: "ready", routes, today: "2026-10-20" }, routes[1]?.id ?? null);
     const visible = text(html);
     expect(visible).toContain("Ruta en borrador de DRV-0a1b2c3d");
     expect(visible).toContain("Ruta sin fecha · sin paradas");
@@ -143,7 +145,7 @@ describe("bulk add to route step (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11)"
   });
 
   it("explains how to get a route when the driver has none, and shows loading and failures", () => {
-    const empty = text(choicesHtml({ kind: "ready", routes: [] }));
+    const empty = text(choicesHtml({ kind: "ready", routes: [], today: "2026-10-12" }));
     expect(empty).toContain("DRV-0a1b2c3d no tiene rutas en borrador. Crea una para este repartidor en Rutas y vuelve a buscar aquí.");
     expect(empty).toContain("Abrir Rutas en otra pestaña");
     expect(empty).not.toContain("De la más reciente");
@@ -208,14 +210,14 @@ describe("bulk add to route step (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11)"
       createElement(BulkRouteFixed, {
         route: fixed,
         choice: choice ?? null,
-        routes: { kind: "ready", routes: [route(1)] },
+        routes: { kind: "ready", routes: [route(1)], today: "2026-10-12" },
         canReload: false,
         onReload: noop,
       }),
     );
     expect(text(ready)).toBe("Ruta: Ruta del 12 de octubre de 2026 · 4 paradas");
     const gone = renderToStaticMarkup(
-      createElement(BulkRouteFixed, { route: fixed, choice: null, routes: { kind: "ready", routes: [] }, canReload: true, onReload: noop }),
+      createElement(BulkRouteFixed, { route: fixed, choice: null, routes: { kind: "ready", routes: [], today: "2026-10-12" }, canReload: true, onReload: noop }),
     );
     expect(text(gone)).toBe(`${bulkRouteGoneMessage} Leer la ruta de nuevo`);
     const loading = renderToStaticMarkup(
@@ -227,7 +229,7 @@ describe("bulk add to route step (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11)"
 
 describe("Crear ruta nueva in the step (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)", () => {
   it("offers it where the driver has no DRAFT route, saying what it creates, the city by name only", () => {
-    const html = choicesHtml({ kind: "ready", routes: [] }, null, offered);
+    const html = choicesHtml({ kind: "ready", routes: [], today: "2026-10-12" }, null, offered);
     const visible = text(html);
     expect(visible).toContain("DRV-0a1b2c3d no tiene rutas en borrador.");
     expect(visible).toContain(
@@ -249,19 +251,19 @@ describe("Crear ruta nueva in the step (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)
     expect(html).not.toContain('type="radio"');
     expect(visible).not.toMatch(/\$|MXN/);
     // Without the city's name it says "the orders' city".
-    const unnamed = text(choicesHtml({ kind: "ready", routes: [] }, null, { ...offered, cityName: null }));
+    const unnamed = text(choicesHtml({ kind: "ready", routes: [], today: "2026-10-12" }, null, { ...offered, cityName: null }));
     expect(unnamed).toContain("para DRV-0a1b2c3d en la ciudad de las órdenes, con la fecha de hoy (hora de Mazatlán)");
   });
 
   it("waits while the route is being created: the buttons cannot be pressed again", () => {
-    const html = choicesHtml({ kind: "ready", routes: [] }, null, { ...offered, kind: "creating" });
+    const html = choicesHtml({ kind: "ready", routes: [], today: "2026-10-12" }, null, { ...offered, kind: "creating" });
     expect(buttonTag(html, "Crear ruta nueva")).toContain('disabled=""');
     expect(buttonTag(html, "Buscar rutas de nuevo")).toContain('disabled=""');
     expect(text(html)).toContain("Creando la ruta en borrador…");
   });
 
   it("says why orders in different cities get no button, keeping Rutas and the new search", () => {
-    const html = choicesHtml({ kind: "ready", routes: [] }, null, { kind: "mixed_cities" });
+    const html = choicesHtml({ kind: "ready", routes: [], today: "2026-10-12" }, null, { kind: "mixed_cities" });
     const visible = text(html);
     expect(visible).toContain(`DRV-0a1b2c3d no tiene rutas en borrador. ${bulkRouteMixedCitiesMessage}`);
     expect(html).not.toContain("Crear ruta nueva");
@@ -270,7 +272,7 @@ describe("Crear ruta nueva in the step (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)
   });
 
   it("offers nothing next to DRAFT routes, nor while the routes or the orders cannot be read", () => {
-    const listed = choicesHtml({ kind: "ready", routes: [route(1)] }, null, { kind: "none" });
+    const listed = choicesHtml({ kind: "ready", routes: [route(1)], today: "2026-10-12" }, null, { kind: "none" });
     expect(listed).not.toContain("Crear ruta nueva");
     const failed = choicesHtml({ kind: "failed", message: "No fue posible cargar las rutas en borrador del repartidor. Intenta de nuevo.", stepUpHref: null });
     expect(failed).not.toContain("Crear ruta nueva");
@@ -280,7 +282,7 @@ describe("Crear ruta nueva in the step (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)
 
   it("shows the created route selected with its notice, and a refusal or an unconfirmed creation as a warning", () => {
     const created = route(9, { version: 1, stop_count: 0, scheduled_for: "2026-10-11", assignment_cost_cents_total: 0 });
-    const html = choicesHtml({ kind: "ready", routes: [created] }, created.id, { kind: "none" }, {
+    const html = choicesHtml({ kind: "ready", routes: [created], today: "2026-10-12" }, created.id, { kind: "none" }, {
       tone: "info",
       text: "Se creó «Ruta del 11 de octubre de 2026» en borrador para DRV-0a1b2c3d. Revisa la vista previa y confirma para agregar las órdenes.",
       stepUpHref: null,
@@ -290,7 +292,7 @@ describe("Crear ruta nueva in the step (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)
     expect(html).toContain('<p class="notice noticeInfo" role="status">Se creó «Ruta del 11 de octubre de 2026»');
     expect(html).not.toContain("Crear ruta nueva");
 
-    const refused = choicesHtml({ kind: "ready", routes: [] }, null, offered, {
+    const refused = choicesHtml({ kind: "ready", routes: [], today: "2026-10-12" }, null, offered, {
       tone: "warn",
       text: createRouteConflictMessages.DRIVER_INELIGIBLE ?? "",
       stepUpHref: null,
@@ -298,7 +300,7 @@ describe("Crear ruta nueva in the step (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)
     expect(refused).toContain(`<p class="notice noticeWarn" role="status">${createRouteConflictMessages.DRIVER_INELIGIBLE}`);
     expect(buttonTag(refused, "Crear ruta nueva")).not.toContain("disabled");
 
-    const mfa = choicesHtml({ kind: "ready", routes: [] }, null, offered, {
+    const mfa = choicesHtml({ kind: "ready", routes: [], today: "2026-10-12" }, null, offered, {
       tone: "warn",
       text: "No se creó la ruta: Esta acción requiere verificar tu identidad (MFA).",
       stepUpHref: "/login?mfa=required&return_url=%2Fops%2Finbox",
@@ -306,7 +308,7 @@ describe("Crear ruta nueva in the step (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)
     expect(text(mfa)).toContain("No se creó la ruta: Esta acción requiere verificar tu identidad (MFA). Verificar identidad");
     expect(mfa).toContain('href="/login?mfa=required&amp;return_url=%2Fops%2Finbox"');
 
-    const unconfirmed = choicesHtml({ kind: "ready", routes: [created] }, null, { kind: "none" }, {
+    const unconfirmed = choicesHtml({ kind: "ready", routes: [created], today: "2026-10-12" }, null, { kind: "none" }, {
       tone: "warn",
       text: unconfirmedRouteText("found", true, driver.driverReference),
       stepUpHref: null,
@@ -323,5 +325,63 @@ describe("Crear ruta nueva in the step (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)
     expect(text(html.slice(html.indexOf("<caption"), html.indexOf("</caption>")))).toBe(
       "Vista previa: 3 órdenes de DRV-0a1b2c3d a «Ruta del 11 de octubre de 2026». Se agregan al final de la ruta, una por una y en el orden de esta tabla.",
     );
+  });
+});
+
+describe("a route per day in the step (UI-PHASE3-ROUTES-DAILY-2026-10-12)", () => {
+  const today = "2026-10-12";
+  const older = [
+    route(1, { scheduled_for: "2026-10-11", stop_count: 3 }),
+    route(2, { scheduled_for: null, stop_count: 0 }),
+  ];
+
+  it("shows the older DRAFT routes and Crear ruta nueva together when none is dated today", () => {
+    const html = choicesHtml({ kind: "ready", routes: older, today }, older[0]?.id ?? null, offered);
+    const visible = text(html);
+    // The older routes stay choosable, in the server's order.
+    expect(html.match(/type="radio"/g)).toHaveLength(2);
+    expect(visible).toContain("Ruta del 11 de octubre de 2026 · 3 paradas");
+    expect(visible).toContain("Ruta sin fecha · sin paradas");
+    expect(visible).toContain("De la más reciente a la más antigua.");
+    expect(html).toContain(`checked="" value="${older[0]?.id}"`);
+    // Below them, what is missing (a route for today) and the button.
+    expect(visible).toContain("DRV-0a1b2c3d no tiene una ruta en borrador con la fecha de hoy.");
+    expect(visible).not.toContain("no tiene rutas en borrador");
+    expect(visible).toContain("«Crear ruta nueva» crea una ruta en borrador para DRV-0a1b2c3d en Culiacán, SIN");
+    expect(buttonTag(html, "Crear ruta nueva")).not.toContain("disabled");
+    expect(html.indexOf('type="radio"')).toBeLessThan(html.indexOf("Crear ruta nueva</button>"));
+    expect(visible).toContain("Las rutas también se crean en Rutas.");
+    expect(visible).not.toMatch(uuidText);
+    expect(visible).not.toMatch(/\$|MXN/);
+  });
+
+  it("says why orders in different cities get no button next to the older routes", () => {
+    const visible = text(choicesHtml({ kind: "ready", routes: older, today }, null, { kind: "mixed_cities" }));
+    expect(visible).toContain(
+      `DRV-0a1b2c3d no tiene una ruta en borrador con la fecha de hoy. ${bulkRouteMixedCitiesMessage}`,
+    );
+    expect(visible).toContain("Ruta del 11 de octubre de 2026 · 3 paradas");
+    expect(visible).not.toContain("Crear ruta nueva");
+  });
+
+  it("lists today's routes first, marked hoy, and offers no new route next to them", () => {
+    const routes = [older[0]!, route(3, { scheduled_for: today, stop_count: 1 }), older[1]!];
+    const html = choicesHtml({ kind: "ready", routes, today }, null, { kind: "none" });
+    const labels = [...html.matchAll(/<span>([^<]*)<\/span><\/label>/g)].map((match) => match[1]);
+    expect(labels).toEqual([
+      "Ruta del 12 de octubre de 2026 (hoy) · 1 parada",
+      "Ruta del 11 de octubre de 2026 · 3 paradas",
+      "Ruta sin fecha · sin paradas",
+    ]);
+    expect(text(html)).toContain("Primero las de hoy (hora de Mazatlán); las demás, de la más reciente a la más antigua.");
+    expect(html).not.toContain("Crear ruta nueva");
+    expect(html).not.toContain("no tiene una ruta en borrador con la fecha de hoy");
+  });
+
+  it("drops an older route chosen before when Crear ruta nueva is pressed, so the new route is the selected one", () => {
+    const step = readFileSync("src/operations/components/operations-bulk-route.tsx", "utf8");
+    const onCreate = step.slice(step.indexOf("onCreate={() => {"), step.indexOf("createRoute();"));
+    expect(onCreate).toContain("setRouteId(null);");
+    expect(step).toContain("draftRouteChoices(state.routes.routes, state.routes.today)");
   });
 });

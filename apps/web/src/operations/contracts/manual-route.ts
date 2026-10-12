@@ -1,5 +1,3 @@
-import { shortId } from "../../lib/short-id";
-
 export type RouteStatus = "DRAFT" | "PLANNED" | "ACTIVE" | "COMPLETED" | "CANCELLED";
 
 export interface ManualRoute {
@@ -53,19 +51,81 @@ export const routeStopStatusLabels: Readonly<Record<ManualRouteStop["status"], s
   SKIPPED: "Omitida",
 };
 
-/** Text of the confirmation shown before a stop leaves a route. */
-export function removeRouteStopConfirmation(stop: ManualRouteStop): {
+const months = [
+  "enero",
+  "febrero",
+  "marzo",
+  "abril",
+  "mayo",
+  "junio",
+  "julio",
+  "agosto",
+  "septiembre",
+  "octubre",
+  "noviembre",
+  "diciembre",
+] as const;
+
+/** A route's calendar date ("2026-10-12") in words ("12 de octubre de 2026"); null when it is not a real date. */
+export function routeDateText(value: string): string | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value);
+  if (match === null) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  if (year < 1000 || date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day)
+    return null;
+  return `${day} de ${months[month - 1]} de ${year}`;
+}
+
+/**
+ * UI-PHASE3-ROUTES-NO-IDS-2026-10-12: a route as people read it, by its scheduled date - "Ruta del 12 de octubre de
+ * 2026" or "Ruta sin fecha" - never by an identifier nor a `YYYY-MM-DD` value.
+ */
+export function routeName(route: Pick<ManualRoute, "scheduled_for">): string {
+  const date = route.scheduled_for === null ? null : routeDateText(route.scheduled_for);
+  return date === null ? "Ruta sin fecha" : `Ruta del ${date}`;
+}
+
+/** "Sin paradas", "1 parada", "3 paradas". */
+export function routeStopsText(count: number): string {
+  if (count === 0) return "Sin paradas";
+  return count === 1 ? "1 parada" : `${count} paradas`;
+}
+
+/**
+ * How the actions of a stop name it (UI-PHASE3-ROUTES-NO-IDS-2026-10-12): "orden ORD_…" by its guía, or "parada 2"
+ * by its position when the guía is not available; never an identifier.
+ */
+export function routeStopSubject(stop: Pick<ManualRouteStop, "sequence">, guide: string | null): string {
+  return guide === null ? `parada ${stop.sequence}` : `orden ${guide}`;
+}
+
+/** Text of the confirmation shown before a stop leaves a route: the stop, its type and, when known, its guía. */
+export function removeRouteStopConfirmation(
+  stop: ManualRouteStop,
+  guide: string | null,
+): {
   readonly title: string;
   readonly description: string;
   readonly confirmLabel: string;
 } {
+  const type = routeStopTypeLabels[stop.stop_type].toLowerCase();
   return {
     title: "¿Retirar parada?",
     description:
-      `Se retirará de la ruta la parada ${stop.sequence} (${routeStopTypeLabels[stop.stop_type].toLowerCase()} ` +
-      `de la orden ${shortId(stop.order_id)}). La orden quedará fuera de esta ruta.`,
+      `Se retirará de la ruta la parada ${stop.sequence} (${guide === null ? type : `${type} de la orden ${guide}`}). ` +
+      "La orden quedará fuera de esta ruta.",
     confirmLabel: "Retirar",
   };
+}
+
+/** listRoutes cursors are opaque base64 text the server bounds to 256 characters. */
+const routeCursorPattern = /^[A-Za-z0-9+/]{1,254}={0,2}$/;
+
+export function isRouteCursor(value: string): boolean {
+  return value.length <= 256 && routeCursorPattern.test(value);
 }
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -127,8 +187,9 @@ function isUuid(value: unknown): value is string {
 }
 
 function nullableUuid(value: unknown): boolean { return value === null || isUuid(value); }
+/** UI-PHASE3-ROUTES-NO-IDS-2026-10-12: a scheduled date is a real calendar date or none; anything else fails closed. */
 function nullableDate(value: unknown): boolean {
-  return value === null || (typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value));
+  return value === null || (typeof value === "string" && routeDateText(value) !== null);
 }
 function integer(value: unknown, minimum: number): value is number {
   return typeof value === "number" && Number.isInteger(value) && value >= minimum;

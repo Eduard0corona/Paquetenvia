@@ -23,18 +23,24 @@ describe("external offer confirmation", () => {
 });
 
 describe("route stop removal confirmation", () => {
-  it("names the stop and the order in human terms", () => {
-    const text = removeRouteStopConfirmation({
+  it("names the stop and the order in human terms, by its guía and never by an id", () => {
+    const stop = {
       id: "44444444-4444-4444-4444-444444444444",
       order_id: "66666666-6666-6666-6666-666666666666",
       sequence: 2,
       stop_type: "DELIVERY",
       status: "PENDING",
-    });
+    } as const;
+    const text = removeRouteStopConfirmation(stop, "ORD_AbCdEfGhIjKlMnOpQrStUv");
     expect(text.confirmLabel).toBe("Retirar");
     expect(text.description).toContain("parada 2");
     expect(text.description).toContain("entrega");
-    expect(text.description).toContain("66666666");
+    expect(text.description).toContain("ORD_AbCdEfGhIjKlMnOpQrStUv");
+    expect(text.description).not.toContain("66666666");
+    // UI-PHASE3-ROUTES-NO-IDS-2026-10-12: without the guía, the stop by its position only.
+    const unnamed = removeRouteStopConfirmation(stop, null);
+    expect(unnamed.description).toBe("Se retirará de la ruta la parada 2 (entrega). La orden quedará fuera de esta ruta.");
+    expect(unnamed.description).not.toMatch(/[0-9a-f]{8}/);
     expect(routeStatusLabels.DRAFT).toBe("Borrador");
   });
 });

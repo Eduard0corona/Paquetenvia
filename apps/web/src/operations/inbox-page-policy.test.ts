@@ -176,16 +176,22 @@ describe("work inbox page policy (UI-PHASE3-INBOX-2026-10-10)", () => {
     expect(step).toContain('<Link href="/ops/routes" target="_blank" rel="noopener noreferrer">');
   });
 
-  it("offers Crear ruta nueva only where the driver has no DRAFT route, then the usual preview", () => {
+  it("offers Crear ruta nueva only where the driver has no DRAFT route for today, then the usual preview", () => {
     const aiSeven = read(resolve(process.cwd(), "../../docs/normative/v0.6/specs/AI-07_UI_CONTRACTS.yaml"));
     expect(aiSeven).toContain("      create_route:\n        decision: UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11\n");
     expect(aiSeven).toContain("    - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11\n");
     expect(aiSeven).not.toContain("the inbox creates no route");
+    // UI-PHASE3-ROUTES-DAILY-2026-10-12: the route of the day decides, next to the older routes.
+    expect(aiSeven).toContain(
+      "        decision: UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11\n        decision_amendment: UI-PHASE3-ROUTES-DAILY-2026-10-12\n",
+    );
+    expect(aiSeven).not.toContain("never next to a list of DRAFT routes'");
     const step = read("src/operations/components/operations-bulk-route.tsx");
-    // A single button, inside the part that says the driver has no DRAFT route; the DRAFT route list has none.
+    // A single button, inside the part that says the driver has no DRAFT route for today (below the older routes).
     expect(step.match(/Crear ruta nueva\s*<\/button>/g)).toHaveLength(1);
+    expect(step).toContain('{routes.kind === "ready" && (choices.length === 0 || creation.kind !== "none") && (');
     const noDraft = step.slice(step.indexOf("function BulkRouteNoDraft("));
-    expect(noDraft).toContain("no tiene rutas en borrador.");
+    expect(noDraft).toContain("noTodayRouteText(driverReference, olderRoutes)");
     expect(noDraft).toContain('if (creation.kind === "offered" || creation.kind === "creating") {');
     expect(noDraft).toContain("disabled={creating}");
     expect(noDraft).toContain("bulkRouteMixedCitiesMessage");
@@ -193,9 +199,12 @@ describe("work inbox page policy (UI-PHASE3-INBOX-2026-10-10)", () => {
     // The created route is the selected one, and focus lands on the preview that now names it.
     expect(step).toContain("const selectedId = routeId ?? state.createdRouteId;");
     expect(step).toContain("document.getElementById(previewRegionId)?.focus()");
-    // Today in Mazatlán comes from the injected clock, never from the browser's local date.
+    // Today in Mazatlán comes from the injected clock, never from the browser's local date: for the request and for
+    // the routes read (UI-PHASE3-ROUTES-DAILY-2026-10-12).
     const routeController = read("src/operations/state/bulk-route-controller.ts");
-    expect(routeController).toContain("scheduledFor: todayInMazatlan(this.now()),");
+    expect(routeController).toContain("const scheduledFor = todayInMazatlan(this.now());");
+    expect(routeController).toContain("const today = todayInMazatlan(this.now());");
+    expect(routeController).toContain("const hasToday = routes.some((item) => isTodaysRoute(item, today));");
     expect(`${routeController}\n${read("src/operations/contracts/bulk-route.ts")}`).not.toMatch(
       /toLocaleDateString|getFullYear\(|getDate\(|toISOString\(\)\.slice/,
     );

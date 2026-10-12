@@ -241,7 +241,7 @@ describe("bulk add to route controller (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-1
     firstPage.resolve(page([target], "next-1"));
     await loading;
     expect(api.calls).toEqual([`list ${driver.driverId}`, `list ${driver.driverId}@next-1`]);
-    expect(controller.current.routes).toEqual({ kind: "ready", routes: [target, otherRoute] });
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [target, otherRoute], today: "2026-10-12" });
     expect(controller.current.phase).toBe("choosing");
     // Nothing is sent before a confirmation.
     expect(api.addCalls).toEqual([]);
@@ -256,7 +256,7 @@ describe("bulk add to route controller (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-1
     expect(controller.current.routes).toEqual({ kind: "failed", message: bulkRoutesUnavailableMessage, stepUpHref: null });
     failing = false;
     await controller.loadRoutes();
-    expect(controller.current.routes).toEqual({ kind: "ready", routes: [target] });
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [target], today: "2026-10-12" });
   });
 
   it("gives up after a repeated cursor or the page limit", async () => {
@@ -390,7 +390,7 @@ describe("bulk add to route controller (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-1
       `Se agregó 1 de 3 órdenes a la ruta. Revisa el motivo de las demás en su fila. ${bulkRouteChangedMessage}`,
     );
     // The routes were read again and the route is no longer among the DRAFT ones: nothing is sent.
-    expect(controller.current.routes).toEqual({ kind: "ready", routes: [otherRoute] });
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [otherRoute], today: "2026-10-12" });
     expect(sendableRouteOrders(controller.current)).toEqual([third]);
     await controller.execute(target.id);
     await controller.execute(otherRoute.id);
@@ -486,7 +486,7 @@ describe("bulk add to route controller (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-1
     api.lists = { "": () => Promise.resolve(page([otherRoute])) };
     await controller.execute(target.id);
     expect(controller.current.phase).toBe("choosing");
-    expect(controller.current.routes).toEqual({ kind: "ready", routes: [otherRoute] });
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [otherRoute], today: "2026-10-12" });
     // The fixed route is no longer listed: neither it nor another route receives the orders.
     await controller.execute(target.id);
     await controller.execute(otherRoute.id);
@@ -609,16 +609,17 @@ describe("Crear ruta nueva in the step (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)
       `order ${third.orderId}`,
       "cities",
     ]);
-    expect(controller.current.routes).toEqual({ kind: "ready", routes: [] });
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [], today: "2026-10-12" });
     expect(controller.current.creation).toEqual({ kind: "offered", cityId: cityA, cityName: "Culiacán, SIN" });
     // Nothing is created before the button is pressed.
     expect(api.createCalls).toEqual([]);
   });
 
-  it("is never offered next to the driver's DRAFT routes: no order is even read", async () => {
+  it("is never offered when the driver has a DRAFT route for today: no order is even read", async () => {
     const { controller, api } = setup();
     await controller.loadRoutes();
-    expect(controller.current.routes).toEqual({ kind: "ready", routes: [target, otherRoute] });
+    // target is dated 2026-10-12, today in Mazatlán at 18:00 UTC.
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [target, otherRoute], today: "2026-10-12" });
     expect(controller.current.creation).toEqual({ kind: "none" });
     expect(api.calls).toEqual([`list ${driver.driverId}`]);
     await controller.createRoute();
@@ -630,7 +631,7 @@ describe("Crear ruta nueva in the step (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)
     api.orderAnswers = { [third.orderId]: () => Promise.resolve({ id: third.orderId, city_id: cityB }) };
     const { controller } = setup(api);
     await controller.loadRoutes();
-    expect(controller.current.routes).toEqual({ kind: "ready", routes: [] });
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [], today: "2026-10-12" });
     expect(controller.current.creation).toEqual({ kind: "mixed_cities" });
     // No city name is needed: the step names no city.
     expect(api.calls).not.toContain("cities");
@@ -725,7 +726,7 @@ describe("Crear ruta nueva in the step (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)
     await controller.createRoute();
     const created = createdRoute(api.createCalls[0]!.body);
     expect(controller.current.phase).toBe("choosing");
-    expect(controller.current.routes).toEqual({ kind: "ready", routes: [created] });
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [created], today: "2026-10-12" });
     expect(controller.current.createdRouteId).toBe(created.id);
     expect(controller.current.creation).toEqual({ kind: "none" });
     expect(controller.current.creationNotice).toEqual({
@@ -770,7 +771,7 @@ describe("Crear ruta nueva in the step (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)
       await controller.createRoute();
       expect(controller.current.creationNotice, text).toEqual({ tone: "warn", text, stepUpHref });
       expect(controller.current.creation).toEqual({ kind: "offered", cityId: cityA, cityName: "Culiacán, SIN" });
-      expect(controller.current.routes).toEqual({ kind: "ready", routes: [] });
+      expect(controller.current.routes).toEqual({ kind: "ready", routes: [], today: "2026-10-12" });
       // A refusal created nothing for sure: the routes are not read again and no success is shown.
       expect(api.calls.filter((call) => call.startsWith("list"))).toHaveLength(1);
       expect(controller.current.createdRouteId).toBeNull();
@@ -823,7 +824,7 @@ describe("Crear ruta nueva in the step (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)
     await controller.loadRoutes();
     await controller.createRoute();
     const created = createdRoute(api.createCalls[0]!.body);
-    expect(controller.current.routes).toEqual({ kind: "ready", routes: [created] });
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [created], today: "2026-10-12" });
     expect(controller.current.creation).toEqual({ kind: "none" });
     expect(controller.current.creationNotice).toEqual({
       tone: "warn",
@@ -938,8 +939,159 @@ describe("Crear ruta nueva in the step (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)
     api.lists = { "": () => Promise.resolve(page([])) };
     await controller.execute(target.id);
     expect(controller.current.route).not.toBeNull();
-    expect(controller.current.routes).toEqual({ kind: "ready", routes: [] });
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [], today: "2026-10-12" });
     expect(controller.current.creation).toEqual({ kind: "none" });
     expect(api.calls.some((call) => call.startsWith("order"))).toBe(false);
+  });
+});
+
+describe("a route per day (UI-PHASE3-ROUTES-DAILY-2026-10-12)", () => {
+  const yesterday = route(3, { scheduled_for: "2026-10-11", version: 7, stop_count: 5 });
+  const undated = route(4, { scheduled_for: null, stop_count: 0 });
+  const tomorrow = route(5, { scheduled_for: "2026-10-13", stop_count: 0 });
+
+  /** A driver whose DRAFT routes are all older, undated or later: none is dated today. */
+  function withOlderRoutes(routes: readonly ManualRoute[] = [tomorrow, yesterday, undated], api = new FakeApi()): FakeApi {
+    api.lists = { "": () => Promise.resolve(page(routes)) };
+    return api;
+  }
+
+  it("offers Crear ruta nueva next to older DRAFT routes when none is dated today, and an older one can still be chosen", async () => {
+    const api = withOlderRoutes();
+    const { controller } = setup(api);
+    await controller.loadRoutes();
+    // The server's order is kept in the state; the step lists today's first (draftRouteChoices).
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [tomorrow, yesterday, undated], today: "2026-10-12" });
+    expect(controller.current.creation).toEqual({ kind: "offered", cityId: cityA, cityName: "Culiacán, SIN" });
+    expect(api.calls).toEqual([
+      `list ${driver.driverId}`,
+      `order ${first.orderId}`,
+      `order ${second.orderId}`,
+      `order ${third.orderId}`,
+      "cities",
+    ]);
+    // Choosing yesterday's route sends the orders there, from its version; nothing is created.
+    await controller.execute(yesterday.id);
+    expect(api.createCalls).toEqual([]);
+    expect(api.addCalls.map((call) => [call.routeId, call.expectedVersion])).toEqual([
+      [yesterday.id, 7],
+      [yesterday.id, 8],
+      [yesterday.id, 9],
+    ]);
+    expect(controller.current.creation).toEqual({ kind: "none" });
+  });
+
+  it("never counts a route without a date as today's", async () => {
+    const api = withOlderRoutes([undated]);
+    const { controller } = setup(api);
+    await controller.loadRoutes();
+    expect(controller.current.creation.kind).toBe("offered");
+    await controller.createRoute();
+    expect(api.createCalls[0]?.body.scheduledFor).toBe("2026-10-12");
+  });
+
+  it("follows the Mazatlán day: at 06:30 UTC on the 12th, a route of the 12th is not today's yet", async () => {
+    const dawn = withOlderRoutes([route(6, { scheduled_for: "2026-10-12" })]);
+    const early = setup(dawn, [first], { now: new Date("2026-10-12T06:30:00Z") });
+    await early.controller.loadRoutes();
+    expect(early.controller.current.routes).toMatchObject({ kind: "ready", today: "2026-10-11" });
+    expect(early.controller.current.creation.kind).toBe("offered");
+    await early.controller.createRoute();
+    expect(dawn.createCalls[0]?.body.scheduledFor).toBe("2026-10-11");
+
+    // From 07:00 UTC the 12th is today in Mazatlán and its route is today's route.
+    const morning = withOlderRoutes([route(6, { scheduled_for: "2026-10-12" })]);
+    const later = setup(morning, [first], { now: new Date("2026-10-12T07:00:00Z") });
+    await later.controller.loadRoutes();
+    expect(later.controller.current.routes).toMatchObject({ kind: "ready", today: "2026-10-12" });
+    expect(later.controller.current.creation).toEqual({ kind: "none" });
+    expect(morning.calls.some((call) => call.startsWith("order"))).toBe(false);
+  });
+
+  it("lists the created route first, before the older ones, and selects it", async () => {
+    const api = withOlderRoutes([yesterday, undated]);
+    const { controller } = setup(api);
+    await controller.loadRoutes();
+    await controller.createRoute();
+    const created = createdRoute(api.createCalls[0]!.body);
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [created, yesterday, undated], today: "2026-10-12" });
+    expect(controller.current.createdRouteId).toBe(created.id);
+    expect(controller.current.creation).toEqual({ kind: "none" });
+  });
+
+  it("after an ambiguous failure counts as found only a DRAFT route dated today", async () => {
+    // Re-listed with only the older routes: nothing of today, so the button comes back next to them.
+    const missing = withOlderRoutes([yesterday]);
+    missing.createAnswers = [() => Promise.reject(new TenantApiError("network"))];
+    const notFound = setup(missing);
+    await notFound.controller.loadRoutes();
+    await notFound.controller.createRoute();
+    expect(missing.calls.filter((call) => call.startsWith("list"))).toHaveLength(2);
+    expect(notFound.controller.current.creationNotice?.text).toBe(unconfirmedRouteText("none", true, driver.driverReference));
+    expect(notFound.controller.current.creation.kind).toBe("offered");
+    expect(notFound.controller.current.routes).toMatchObject({ kind: "ready", routes: [yesterday] });
+
+    // Re-listed with a route of today (created anyway): found, and no route is offered again.
+    const created = withOlderRoutes([yesterday]);
+    created.createAnswers = [
+      (body) => {
+        created.lists = { "": () => Promise.resolve(page([createdRoute(body), yesterday])) };
+        return Promise.reject(new TenantApiError("unavailable"));
+      },
+    ];
+    const found = setup(created);
+    await found.controller.loadRoutes();
+    await found.controller.createRoute();
+    expect(found.controller.current.creationNotice).toEqual({
+      tone: "warn",
+      text: unconfirmedRouteText("found", true, driver.driverReference),
+      stepUpHref: null,
+    });
+    expect(found.controller.current.creation).toEqual({ kind: "none" });
+    await found.controller.createRoute();
+    expect(created.createCalls).toHaveLength(1);
+    // The found route is chosen like any other: nothing is selected for the dispatcher.
+    expect(found.controller.current.createdRouteId).toBeNull();
+
+    // A route of another day appearing after the failure is not the one asked for.
+    const otherDay = withOlderRoutes([yesterday]);
+    otherDay.createAnswers = [
+      () => {
+        otherDay.lists = { "": () => Promise.resolve(page([tomorrow, yesterday])) };
+        return Promise.reject(new TenantApiError("conflict", "CONFLICT"));
+      },
+    ];
+    const other = setup(otherDay);
+    await other.controller.loadRoutes();
+    await other.controller.createRoute();
+    expect(other.controller.current.creationNotice?.text).toBe(unconfirmedRouteText("none", false, driver.driverReference));
+    expect(other.controller.current.creation.kind).toBe("offered");
+  });
+
+  it("creates nothing when the day changed and the new day already has a route: the routes are read again", async () => {
+    const api = withOlderRoutes([tomorrow]);
+    const { controller, clock } = setup(api, [first], { now: new Date("2026-10-13T06:59:00Z") });
+    await controller.loadRoutes();
+    // 23:59 of the 12th in Mazatlán: the 13th's route is not today's.
+    expect(controller.current.creation.kind).toBe("offered");
+    clock.now = new Date("2026-10-13T07:01:00Z");
+    await controller.createRoute();
+    expect(api.createCalls).toEqual([]);
+    expect(api.calls.filter((call) => call.startsWith("list"))).toHaveLength(2);
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [tomorrow], today: "2026-10-13" });
+    expect(controller.current.creation).toEqual({ kind: "none" });
+  });
+
+  it("keeps a fixed route's behaviour: a run fixes the route and nothing is offered afterwards", async () => {
+    const api = withOlderRoutes([yesterday]);
+    api.addAnswers = { [first.orderId]: [() => Promise.reject(new TenantApiError("conflict", "VERSION_CONFLICT"))] };
+    const { controller } = setup(api);
+    await controller.loadRoutes();
+    expect(controller.current.creation.kind).toBe("offered");
+    await controller.execute(yesterday.id);
+    // The run stopped and the routes were read again: the fixed route stays, no route is offered.
+    expect(controller.current.phase).toBe("choosing");
+    expect(controller.current.route?.id).toBe(yesterday.id);
+    expect(controller.current.creation).toEqual({ kind: "none" });
   });
 });

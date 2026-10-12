@@ -13,6 +13,8 @@ import {
   bulkRoutePreviewText,
   createRouteOfferText,
   draftRouteChoices,
+  draftRouteOrderText,
+  noTodayRouteText,
   ordersText,
   routeStopConflictMessages,
   stopCountText,
@@ -49,9 +51,14 @@ const createOfferId = "inbox-bulk-route-create-offer";
  * added on its own and keeps its own result. The backend and RLS decide every stop again.
  *
  * UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11 ("Sí, en el paso (Recommended)"): when the driver has
- * no DRAFT route and every order of the batch is in one city, "Crear ruta nueva" creates the DRAFT
- * route for that driver, in that city and for today (Mazatlán), and the step goes on to the preview
- * with it selected. Orders in different cities are sent to Rutas, where routes are also created.
+ * no DRAFT route for today and every order of the batch is in one city, "Crear ruta nueva" creates
+ * the DRAFT route for that driver, in that city and for today (Mazatlán), and the step goes on to
+ * the preview with it selected. Orders in different cities are sent to Rutas, where routes are also
+ * created.
+ *
+ * UI-PHASE3-ROUTES-DAILY-2026-10-12 ("Ruta por día (Recommended)"): today's routes are listed first
+ * and marked "hoy"; when the driver has only older DRAFT routes, they stay listed next to "Crear
+ * ruta nueva", so an older route can still be chosen.
  */
 export function OperationsBulkRoute({
   orders,
@@ -134,7 +141,7 @@ export function OperationsBulkRoute({
   }, [apiBaseUrl, batch, routeDriver, returnUrl]);
 
   const reference = routeDriver.driverReference;
-  const choices = state.routes.kind === "ready" ? draftRouteChoices(state.routes.routes) : [];
+  const choices = state.routes.kind === "ready" ? draftRouteChoices(state.routes.routes, state.routes.today) : [];
   const fixedId = state.route?.id ?? null;
   // The route "Crear ruta nueva" just created is the selected one until the person picks another.
   const selectedId = routeId ?? state.createdRouteId;
@@ -205,6 +212,8 @@ export function OperationsBulkRoute({
             }}
             onReload={reload}
             onCreate={() => {
+              // The route about to be created becomes the selected one, not an older route picked before.
+              setRouteId(null);
               setFormError(null);
               void controllerRef.current?.createRoute();
             }}
@@ -276,9 +285,10 @@ export function OperationsBulkRoute({
 
 /**
  * The driver's DRAFT routes before the first run: only they can be chosen, by date and current
- * stops, newest first. When the driver has none, "Crear ruta nueva" is offered if every order of
- * the batch is in one city (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11); routes are also created in
- * Rutas, opened in another tab.
+ * stops, today's first (Mazatlán, marked "hoy") and then newest first. When the driver has none for
+ * today, "Crear ruta nueva" is offered if every order of the batch is in one city
+ * (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11, UI-PHASE3-ROUTES-DAILY-2026-10-12), below the older
+ * routes when there are some; routes are also created in Rutas, opened in another tab.
  */
 export function BulkRouteChoices({
   driverReference,
@@ -323,9 +333,6 @@ export function BulkRouteChoices({
           )}
         </p>
       )}
-      {routes.kind === "ready" && choices.length === 0 && (
-        <BulkRouteNoDraft driverReference={driverReference} creation={creation} onCreate={onCreate} />
-      )}
       {choices.length > 0 && (
         <>
           <ul className="opsDriverChoices">
@@ -344,8 +351,16 @@ export function BulkRouteChoices({
               </li>
             ))}
           </ul>
-          <p className="fieldHint">De la más reciente a la más antigua.</p>
+          <p className="fieldHint">{draftRouteOrderText(choices)}</p>
         </>
+      )}
+      {routes.kind === "ready" && (choices.length === 0 || creation.kind !== "none") && (
+        <BulkRouteNoDraft
+          driverReference={driverReference}
+          olderRoutes={choices.length > 0}
+          creation={creation}
+          onCreate={onCreate}
+        />
       )}
       {notice !== null && (
         <p className={notice.tone === "info" ? "notice noticeInfo" : "notice noticeWarn"} role="status">
@@ -374,15 +389,19 @@ export function BulkRouteChoices({
 }
 
 /**
- * The driver has no DRAFT route (the only place "Crear ruta nueva" appears): the button when the
- * orders share one city, why not when they do not. Never an identifier: the city is its name.
+ * The driver has no DRAFT route for today (the only place "Crear ruta nueva" appears), either no
+ * DRAFT route at all or only older ones listed above: the button when the orders share one city,
+ * why not when they do not. Never an identifier: the city is its name.
  */
 function BulkRouteNoDraft({
   driverReference,
+  olderRoutes,
   creation,
   onCreate,
 }: {
   readonly driverReference: string;
+  /** The driver's older DRAFT routes are listed above, none of them dated today. */
+  readonly olderRoutes: boolean;
   readonly creation: BulkRouteCreation;
   readonly onCreate: () => void;
 }) {
@@ -391,7 +410,7 @@ function BulkRouteNoDraft({
     return (
       <div className="opsBulkRouteCreate">
         <p className="emptyState">
-          <strong>{driverReference} no tiene rutas en borrador.</strong>
+          <strong>{noTodayRouteText(driverReference, olderRoutes)}</strong>
         </p>
         <p id={createOfferId}>{createRouteOfferText(driverReference, creation.cityName)}</p>
         <button type="button" className="btn btnPrimary" onClick={onCreate} disabled={creating} aria-describedby={createOfferId}>
@@ -407,7 +426,7 @@ function BulkRouteNoDraft({
   }
   return (
     <p className="emptyState">
-      <strong>{driverReference} no tiene rutas en borrador.</strong>{" "}
+      <strong>{noTodayRouteText(driverReference, olderRoutes)}</strong>{" "}
       {creation.kind === "mixed_cities"
         ? bulkRouteMixedCitiesMessage
         : "Crea una para este repartidor en Rutas y vuelve a buscar aquí."}

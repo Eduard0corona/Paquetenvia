@@ -12,7 +12,10 @@ import {
   createRouteNotFoundMessage,
   createRouteOfferText,
   draftRouteChoices,
+  draftRouteOrderText,
   isDraftRouteOf,
+  isTodaysRoute,
+  noTodayRouteText,
   ordersText,
   routeDateText,
   routeStopConflictMessages,
@@ -253,22 +256,94 @@ describe("Crear ruta nueva (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)", () => {
     }
     expect(createRouteConflictMessages.DRIVER_INELIGIBLE).toContain("no puede tomar rutas en la ciudad de estas órdenes");
     expect(createRouteNotFoundMessage).toBe("No se creó la ruta: el repartidor o la ciudad ya no están disponibles.");
+    // UI-PHASE3-ROUTES-DAILY-2026-10-12: only a DRAFT route dated today counts as found.
     expect(unconfirmedRouteText("found", true, "DRV-0a1b2c3d")).toBe(
-      "No se pudo confirmar si la ruta se creó. Se buscaron de nuevo las rutas en borrador de DRV-0a1b2c3d: si la nueva " +
-        "ya aparece, elígela.",
+      "No se pudo confirmar si la ruta se creó, pero DRV-0a1b2c3d ya tiene una ruta en borrador con la fecha de hoy: " +
+        "elígela en la lista.",
     );
     expect(unconfirmedRouteText("none", true, "DRV-0a1b2c3d")).toBe(
-      "No se pudo confirmar si la ruta se creó y no aparece entre las rutas en borrador de DRV-0a1b2c3d. Puedes " +
-        "intentarlo de nuevo: se reenvía la misma solicitud sin duplicarla.",
+      "No se pudo confirmar si la ruta se creó y DRV-0a1b2c3d no tiene ninguna ruta en borrador con la fecha de hoy. " +
+        "Puedes intentarlo de nuevo: se reenvía la misma solicitud sin duplicarla.",
     );
     expect(unconfirmedRouteText("none", false, "DRV-0a1b2c3d")).toBe(
-      "No se pudo confirmar si la ruta se creó y no aparece entre las rutas en borrador de DRV-0a1b2c3d. Puedes " +
-        "intentarlo de nuevo.",
+      "No se pudo confirmar si la ruta se creó y DRV-0a1b2c3d no tiene ninguna ruta en borrador con la fecha de hoy. " +
+        "Puedes intentarlo de nuevo.",
     );
     expect(unconfirmedRouteText("unread", false, "DRV-0a1b2c3d")).toBe(
       "No se pudo confirmar si la ruta se creó. Busca las rutas de nuevo antes de intentarlo otra vez.",
     );
     for (const outcome of ["found", "none", "unread"] as const)
       expect(unconfirmedRouteText(outcome, true, "DRV-0a1b2c3d")).not.toMatch(/Se creó|se creó la ruta\./);
+  });
+});
+
+describe("a route per day (UI-PHASE3-ROUTES-DAILY-2026-10-12)", () => {
+  const today = "2026-10-12";
+
+  it("counts as today's only a route dated today, never an older, a later or an undated one", () => {
+    expect(isTodaysRoute(route(1, { scheduled_for: today }), today)).toBe(true);
+    expect(isTodaysRoute(route(1, { scheduled_for: "2026-10-11" }), today)).toBe(false);
+    expect(isTodaysRoute(route(1, { scheduled_for: "2026-10-13" }), today)).toBe(false);
+    expect(isTodaysRoute(route(1, { scheduled_for: null }), today)).toBe(false);
+  });
+
+  it("follows the Mazatlán day: 06:30 UTC on 12 October is still the 11th, so the 12th's route is not today's yet", () => {
+    const dawn = todayInMazatlan(new Date("2026-10-12T06:30:00Z"));
+    expect(dawn).toBe("2026-10-11");
+    expect(isTodaysRoute(route(1, { scheduled_for: "2026-10-12" }), dawn)).toBe(false);
+    expect(isTodaysRoute(route(1, { scheduled_for: "2026-10-11" }), dawn)).toBe(true);
+    const morning = todayInMazatlan(new Date("2026-10-12T07:00:00Z"));
+    expect(isTodaysRoute(route(1, { scheduled_for: "2026-10-12" }), morning)).toBe(true);
+  });
+
+  it("lists today's routes first, marked hoy, then the rest in the server order with the same names", () => {
+    const routes = [
+      route(1, { scheduled_for: "2026-10-13", stop_count: 0 }),
+      route(2, { scheduled_for: "2026-10-11", stop_count: 1 }),
+      route(3, { scheduled_for: today, stop_count: 4 }),
+      route(4, { scheduled_for: null, stop_count: 0 }),
+      route(5, { scheduled_for: today, stop_count: 2 }),
+      route(6, { scheduled_for: "2026-10-11", stop_count: 3 }),
+    ];
+    const choices = draftRouteChoices(routes, today);
+    expect(choices.map((choice) => choice.route.id)).toEqual([3, 5, 1, 2, 4, 6].map((counter) => syntheticUuid(0x800 + counter)));
+    expect(choices.map((choice) => choice.label)).toEqual([
+      "Ruta del 12 de octubre de 2026 (hoy, la más reciente) · 4 paradas",
+      "Ruta del 12 de octubre de 2026 (hoy, la segunda más reciente) · 2 paradas",
+      "Ruta del 13 de octubre de 2026 · sin paradas",
+      "Ruta del 11 de octubre de 2026 (la más reciente) · 1 parada",
+      "Ruta sin fecha · sin paradas",
+      "Ruta del 11 de octubre de 2026 (la segunda más reciente) · 3 paradas",
+    ]);
+    // The names keep the existing scheme: "hoy" marks only the label of the list.
+    expect(choices.map((choice) => choice.name)).toEqual([
+      "Ruta del 12 de octubre de 2026 (la más reciente)",
+      "Ruta del 12 de octubre de 2026 (la segunda más reciente)",
+      "Ruta del 13 de octubre de 2026",
+      "Ruta del 11 de octubre de 2026 (la más reciente)",
+      "Ruta sin fecha",
+      "Ruta del 11 de octubre de 2026 (la segunda más reciente)",
+    ]);
+    expect(choices.map((choice) => choice.today)).toEqual([true, true, false, false, false, false]);
+    const [single] = draftRouteChoices([route(7, { scheduled_for: today, stop_count: 1 })], today);
+    expect(single?.label).toBe("Ruta del 12 de octubre de 2026 (hoy) · 1 parada");
+    expect(single?.name).toBe("Ruta del 12 de octubre de 2026");
+    // Without a date to compare, the order and the labels are the server's (no route is today's).
+    expect(draftRouteChoices(routes).map((choice) => choice.route.id)).toEqual(routes.map((item) => item.id));
+    expect(draftRouteChoices(routes).every((choice) => !choice.label.includes("hoy"))).toBe(true);
+  });
+
+  it("says the order of the list", () => {
+    expect(draftRouteOrderText(draftRouteChoices([route(1, { scheduled_for: today }), route(2)], today))).toBe(
+      "Primero las de hoy (hora de Mazatlán); las demás, de la más reciente a la más antigua.",
+    );
+    expect(draftRouteOrderText(draftRouteChoices([route(1, { scheduled_for: "2026-10-11" })], today))).toBe(
+      "De la más reciente a la más antigua.",
+    );
+  });
+
+  it("says whether the driver has no DRAFT route at all or none for today", () => {
+    expect(noTodayRouteText("DRV-0a1b2c3d", false)).toBe("DRV-0a1b2c3d no tiene rutas en borrador.");
+    expect(noTodayRouteText("DRV-0a1b2c3d", true)).toBe("DRV-0a1b2c3d no tiene una ruta en borrador con la fecha de hoy.");
   });
 });
