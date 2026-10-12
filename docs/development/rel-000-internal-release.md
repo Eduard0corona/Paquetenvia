@@ -495,20 +495,35 @@ que sólo endurecen el control:
   `baseline_package_upgrades` de admisiones distintas forman una cadena en el orden de la
   política: cada paso empieza exactamente donde termina el anterior (`from_version` y
   `from_content_hash` iguales a `to_version` y `to_content_hash` del paso previo, misma
-  escritura del `id`) y no vuelve a una versión ya visitada. Cualquier otro encime entre
-  admisiones (un paso que no continúa la cadena, una segunda baja del mismo nodo, una baja y una
-  subida del mismo nodo, la misma versión adicional dos veces) se rechaza al cargar la política
-  con `DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT`; ninguna declaración reemplaza a otra. Al comparar,
-  el nodo base debe estar exactamente donde empieza un paso declarado y el nodo actual exactamente
-  donde termina ese paso o uno posterior: contra la base probada es un paso; contra el baseline
-  MVP-0 (`test_k`) es la cadena completa (6.0.0 → 10.0.9 → 10.0.10), sólo por esos pasos
-  declarados. La clave de uso de cada paso incluye la versión de llegada,
-  `upgrade:<lock>:<framework>:<id>@<to_version>`, y se acredita a la admisión que lo declara.
+  escritura del `id`) y no vuelve a una versión ni a un `content_hash` ya visitados. Cualquier
+  otro encime de bajas o subidas entre admisiones (un paso que no continúa la cadena, una
+  segunda baja del mismo nodo, una baja y una subida del mismo nodo) se rechaza al cargar la
+  política con `DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT`; ninguna declaración reemplaza a otra.
+  La misma versión adicional declarada dos veces (con cualquier mayúscula) sigue rechazándose
+  antes, en el registro, con `DEPENDENCY_ADMISSION_POLICY_INVALID`; el índice de enmiendas sólo
+  la marca como `DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT` si se le llama directamente con
+  admisiones sin validar.
+- **Comparación por pasos.** El nodo base debe estar exactamente donde empieza un paso declarado
+  y el nodo actual exactamente donde termina ese paso o uno posterior. Contra el baseline MVP-0
+  (`test_k`) es la cadena declarada desde su inicio hasta donde esté hoy el nodo: un prefijo
+  (6.0.0 → 10.0.9) mientras la admisión posterior no se entrega y 6.0.0 → 10.0.9 → 10.0.10
+  cuando sí, sólo por esos pasos declarados. Contra la base probada un PR entrega un solo paso,
+  pero no por la comparación (que acepta cualquier tramo de pasos consecutivos) sino por la
+  regla de una sola admisión de `validate_dependency_admission_source`: cada paso se acredita a
+  la admisión que lo declara (clave `upgrade:<lock>:<framework>:<id>@<to_version>`), una admisión
+  declara a lo sumo un paso por nodo y un PR sólo puede introducir los paquetes de una admisión
+  `ACTIVE`, desde su rama. Un salto sobre pasos de dos admisiones, o la rama de una admisión que
+  entrega el paso de otra, falla con `DEPENDENCY_ADMISSION_BRANCH_NOT_AUTHORIZED`.
 - **Subida sobre versión adicional.** Una subida que aterriza en una versión de
   `additional_package_versions` de la misma admisión, con su hash y en un lock nombrado por esa
   versión, entrega `id@version` en ese lock. Así la introducción contra la base probada deja de
   marcar como incompleta la subida de un nodo ya admitido; una versión adicional nombrada para un
   lock donde el nodo no subió sigue fallando con `DEPENDENCY_ADMISSION_INCOMPLETE`.
+
+Límite conocido (anterior a esta regla, sin cambio de comportamiento): un paso que baja de versión
+(`to_version` menor que `from_version`) se acepta si el owner lo declara exactamente; REL-000 no
+compara versiones con el orden de NuGet. Queda como seguimiento: decidir si una bajada exige una
+marca explícita o se rechaza.
 
 ## Rollback REL-000
 

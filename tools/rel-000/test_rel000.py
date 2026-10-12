@@ -5418,6 +5418,17 @@ class DependencyAdmissionAmendmentTests(unittest.TestCase):
                     dict(additional[1], version="6.0.0", content_hash=self.OLD_HASH),
                 ],
             },
+            # Another spelling of a visited version still carries the visited content hash.
+            "chain that revisits a content hash": {
+                "baseline_package_upgrades": [
+                    dict(upgrades[0], to_version="6.0.0.0", to_content_hash=self.OLD_HASH),
+                    upgrades[1],
+                ],
+                "additional_package_versions": [
+                    additional[0],
+                    dict(additional[1], version="6.0.0.0", content_hash=self.OLD_HASH),
+                ],
+            },
         }
         for label, overrides in cases.items():
             with self.subTest(label=label):
@@ -5488,6 +5499,127 @@ class DependencyAdmissionAmendmentTests(unittest.TestCase):
             lambda: self.chain_diff(tested_base, self.chained(additional_package_versions=widened)),
         )
         self.assertEqual(["Old.Async@10.0.10"], failure.details["missing_lock_packages"])
+
+    def test_the_same_additional_version_twice_is_rejected_when_the_policy_loads(self):
+        # DEP-AMEND already declares Shared.Abstractions 8.14.0; the registry rejects a
+        # second declaration (any casing) before the amendment index is built.
+        shared = self.admission()["additional_package_versions"][0]
+        for spelling in ("Shared.Abstractions", "shared.abstractions"):
+            with self.subTest(spelling=spelling):
+                duplicated = [
+                    *self.chain_admission()["additional_package_versions"],
+                    dict(shared, id=spelling),
+                ]
+                admissions = self.chained(additional_package_versions=duplicated)
+                self.assert_reason(
+                    "DEPENDENCY_ADMISSION_POLICY_INVALID",
+                    lambda: rel000.validate_remediation_policy(self.policy(admissions)),
+                )
+                # The index's own branch is defensive: reachable only by a direct call.
+                self.assert_reason(
+                    "DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT", lambda: rel000.admission_amendments(admissions)
+                )
+
+    # The single-step limit against a tested base comes from the single-admission rule of
+    # validate_dependency_admission_source: every step is credited to its own admission.
+
+    THIRD_DIRECT_HASH = "K" * 86 + "=="
+    THIRD_HASH = "J" * 86 + "=="
+
+    def third_admission(self) -> dict[str, Any]:
+        """A third admission that continues the Old.Async chain 10.0.10 -> 10.0.11."""
+
+        return {
+            "id": "DEP-THIRD",
+            "mode": rel000.DEPENDENCY_ADMISSION,
+            "status": "ACTIVE",
+            "owner_decision_id": "GOV-DEPENDENCY-ADMISSION-001",
+            "authorized_source_branch": "deps/third",
+            "ecosystem": "nuget",
+            "admitted_direct_packages": [
+                {"id": "Third.Direct", "version": "1.0.0", "content_hash": self.THIRD_DIRECT_HASH}
+            ],
+            "admitted_transitive_packages": [],
+            "additional_package_versions": [
+                {
+                    "id": "Old.Async",
+                    "version": "10.0.11",
+                    "content_hash": self.THIRD_HASH,
+                    "lock_files": ["app/packages.lock.json"],
+                }
+            ],
+            "baseline_package_upgrades": [
+                {
+                    "lock_file": "app/packages.lock.json",
+                    "framework": "net10.0",
+                    "id": "Old.Async",
+                    "from_version": "10.0.10",
+                    "from_content_hash": self.NEWER_HASH,
+                    "to_version": "10.0.11",
+                    "to_content_hash": self.THIRD_HASH,
+                }
+            ],
+            "allowed_dependency_files": ["Directory.Packages.props", "app/packages.lock.json"],
+            "required_dependency_files": ["Directory.Packages.props", "app/packages.lock.json"],
+            "allowed_project_files": ["app/App.csproj"],
+        }
+
+    def move_old_async(self, version: str, content_hash: str) -> None:
+        self.edit("app", lambda nodes: nodes["Old.Async"].update(resolved=version, contentHash=content_hash))
+
+    def test_a_jump_over_two_admissions_steps_is_rejected(self):
+        # Against the original base, 6.0.0 -> 10.0.10 would deliver DEP-AMEND's and DEP-CHAIN's steps.
+        self.move_old_async("10.0.10", self.NEWER_HASH)
+        for status in ("ACTIVE", "MERGED"):
+            for branch in ("deps/amend", "deps/chain"):
+                with self.subTest(first_admission=status, branch=branch):
+                    failure = self.assert_reason(
+                        "DEPENDENCY_ADMISSION_BRANCH_NOT_AUTHORIZED",
+                        lambda: self.chain_diff(
+                            self.base,
+                            [self.other(), self.admission(status=status), self.chain_admission()],
+                            branch,
+                        ),
+                    )
+                    self.assertEqual(["DEP-AMEND", "DEP-CHAIN"], failure.details["admission_ids"])
+
+    def test_a_three_step_chain_cannot_skip_the_middle_admission(self):
+        admissions = [*self.chained(), self.third_admission()]
+        rel000.validate_remediation_policy(self.policy(admissions))
+        self.assertEqual(
+            ["DEP-AMEND", "DEP-CHAIN", "DEP-THIRD"],
+            [
+                step["admission_id"]
+                for step in rel000.admission_amendments(admissions)["upgrades"][
+                    ("app/packages.lock.json", "net10.0", "old.async")
+                ]
+            ],
+        )
+        tested_base = self.promote_first_admission()
+        # 10.0.9 -> 10.0.11 from DEP-THIRD's branch would also deliver DEP-CHAIN's step.
+        self.move_old_async("10.0.11", self.THIRD_HASH)
+        for branch in ("deps/third", "deps/chain"):
+            with self.subTest(branch=branch):
+                failure = self.assert_reason(
+                    "DEPENDENCY_ADMISSION_BRANCH_NOT_AUTHORIZED",
+                    lambda: self.chain_diff(tested_base, admissions, branch),
+                )
+                self.assertEqual(["DEP-CHAIN", "DEP-THIRD"], failure.details["admission_ids"])
+
+    def test_the_later_branch_cannot_deliver_only_the_earlier_step(self):
+        # Against the original base, 6.0.0 -> 10.0.9 is DEP-AMEND's step only.
+        self.move_old_async("10.0.9", self.H["New"])
+        for status in ("ACTIVE", "MERGED"):
+            with self.subTest(first_admission=status):
+                failure = self.assert_reason(
+                    "DEPENDENCY_ADMISSION_BRANCH_NOT_AUTHORIZED",
+                    lambda: self.chain_diff(
+                        self.base,
+                        [self.other(), self.admission(status=status), self.chain_admission()],
+                        "deps/chain",
+                    ),
+                )
+                self.assertEqual("DEP-AMEND", failure.details["admission_id"])
 
     def test_committed_admissions_index_as_single_step_chains(self):
         policy = rel000.load_remediation_policy(REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH)

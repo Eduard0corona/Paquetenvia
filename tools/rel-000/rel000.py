@@ -1449,10 +1449,18 @@ def admission_amendments(
     chain: the exact steps declared by successive admissions, in policy order. A later
     admission may only continue a chain where it ends: same package spelling, its
     ``from_version`` and ``from_content_hash`` equal to the previous ``to_version`` and
-    ``to_content_hash``, and a version the chain has not visited. Any other overlap
-    between admissions (a step that does not continue the chain, a second removal of a
-    node, a removal and an upgrade of the same node, the same additional version twice)
-    fails with DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT; no declaration replaces another.
+    ``to_content_hash``, and neither a version nor a content hash the chain has already
+    visited. Any other overlap between admissions (a step that does not continue the
+    chain, a second removal of a node, a removal and an upgrade of the same node) fails
+    with DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT; no declaration replaces another.
+
+    The same additional version declared twice (any casing) never reaches this index
+    through the registry, which rejects it first with DEPENDENCY_ADMISSION_POLICY_INVALID;
+    the AMENDMENT_CONFLICT branch for it is defensive and only reachable when this
+    function is called directly with unvalidated admissions.
+
+    A downgrade step (``to_version`` lower than ``from_version``) is accepted when it is
+    exactly declared: REL-000 has no NuGet version-order check (known limit).
     """
 
     extras: dict[tuple[str, str], dict[str, Any]] = {}
@@ -1507,13 +1515,18 @@ def admission_amendments(
             chain = upgrades.setdefault(node, [])
             if chain:
                 last = chain[-1]
-                visited = {chain[0]["from_version"], *(step["to_version"] for step in chain)}
+                visited_versions = {chain[0]["from_version"], *(step["to_version"] for step in chain)}
+                visited_hashes = {
+                    chain[0]["from_content_hash"],
+                    *(step["to_content_hash"] for step in chain),
+                }
                 if (
                     last["admission_id"] == admission["id"]
                     or entry["id"] != last["id"]
                     or entry["from_version"] != last["to_version"]
                     or entry["from_content_hash"] != last["to_content_hash"]
-                    or entry["to_version"] in visited
+                    or entry["to_version"] in visited_versions
+                    or entry["to_content_hash"] in visited_hashes
                 ):
                     _amendment_conflict(
                         "An upgrade of an already upgraded lockfile node must continue its exact chain.",
@@ -5856,8 +5869,15 @@ def _declared_upgrade_steps(
 
     The base node must be exactly where one declared step starts and the current node
     exactly where the same or a later declared step ends (version and content hash).
-    Against the tested base this is normally one step; against the MVP-0 baseline it
-    may be the whole chain. Anything else returns ``None``.
+    Against the MVP-0 baseline this is the declared chain from its start up to wherever
+    the node sits now. Anything else returns ``None``.
+
+    This function accepts any run of consecutive declared steps. That a pull request
+    introduces exactly one step against its tested base is enforced elsewhere: each step
+    is credited to the admission that declares it, an admission declares at most one
+    step per node, and ``validate_dependency_admission_source`` admits the packages of
+    exactly one ACTIVE admission, from its own branch; anything else fails with
+    DEPENDENCY_ADMISSION_BRANCH_NOT_AUTHORIZED.
     """
 
     for start, first in enumerate(chain):

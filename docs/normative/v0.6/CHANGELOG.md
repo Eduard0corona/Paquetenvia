@@ -25,19 +25,25 @@
 - REL-000 (`tools/rel-000/rel000.py`), sólo más estricto:
   - Las `baseline_package_upgrades` de un mismo nodo (archivo de lock, framework e `id`) declaradas por admisiones
     distintas forman una cadena exacta en el orden de la política: cada paso empieza donde termina el anterior (versión
-    y `content_hash`) y no vuelve a una versión visitada. Cualquier otro encime entre admisiones se rechaza al cargar
-    la política con el código nuevo `DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT`; antes la última declaración reemplazaba
-    en silencio a la anterior.
-  - Un nodo se acepta sólo si se movió por pasos declarados consecutivos: un paso contra la base probada y la cadena
-    completa contra el baseline MVP-0 (`test_k`), por ejemplo 6.0.0 → 10.0.9 → 10.0.10.
+    y `content_hash`) y no vuelve a una versión ni a un `content_hash` visitados. Cualquier otro encime de subidas o
+    bajas entre admisiones se rechaza al cargar la política con el código nuevo
+    `DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT`; antes la última declaración reemplazaba en silencio a la anterior. La
+    misma versión adicional declarada dos veces sigue fallando antes con `DEPENDENCY_ADMISSION_POLICY_INVALID`.
+  - Un nodo se acepta sólo si se movió por pasos declarados consecutivos. Contra el baseline MVP-0 (`test_k`) es la
+    cadena declarada hasta donde esté hoy el nodo (6.0.0 → 10.0.9, y 6.0.0 → 10.0.9 → 10.0.10 cuando se entregue el
+    paso siguiente). Contra la base probada es un paso, porque cada paso se acredita a su admisión y un PR sólo
+    introduce los paquetes de una admisión, desde su rama (`DEPENDENCY_ADMISSION_BRANCH_NOT_AUTHORIZED` si no).
   - Una subida que aterriza en una versión de `additional_package_versions` de la misma admisión entrega ese
     `id@version` en ese lock; sin esto, la subida de un nodo ya admitido (Azure.Core 1.61.0 de ADP-001) quedaba
     siempre incompleta.
   - La clave de uso de cada paso es `upgrade:<lock>:<framework>:<id>@<to_version>` y se acredita a la admisión que
     lo declara. AUTH-001-OIDC y ADP-001-AZURE validan igual que antes.
+  - Límite conocido, sin cambio en este PR y como seguimiento: un paso que baja de versión se acepta si está declarado
+    exactamente; REL-000 no compara versiones con el orden de NuGet.
 - Pruebas nuevas en `DependencyAdmissionAmendmentTests` con datos sintéticos: cadena aceptada contra la base probada
-  y contra el baseline, paso con otra versión o hash de partida, encimes entre admisiones, subida a una versión no
-  declarada, rama y entrega completa, y las admisiones registradas como cadenas de un paso.
+  y contra el baseline, paso con otra versión o hash de partida, encimes entre admisiones (también un hash visitado
+  con otra escritura de versión), la misma versión adicional dos veces, subida a una versión no declarada, saltos
+  sobre pasos de dos admisiones, rama y entrega completa, y las admisiones registradas como cadenas de un paso.
 - Sin cambios en contratos normativos AI-xx, AI-08, `security-remediation-policy.json`, paquetes, lock files,
   workflows ni código de la aplicación. La entrada de admisión de OBS-003 (fase 4, PR 4: exportador 1.10.0 y
   Azure.Core 1.63) va después; el owner admite su lista exacta por paquete al aprobarla.

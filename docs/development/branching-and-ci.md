@@ -64,7 +64,7 @@ A **new** package (MVP-1 onward) needs an owner-approved entry in `dependency_ad
     exact version and hash that this admission admits, keeping its node type. A node that an
     earlier admission already upgraded may only be moved again as the next exact step of that
     chain: same lock file, framework and id, starting at the earlier step's exact version and
-    hash, never revisiting a version (GOV-REL000-CHAINED-UPGRADES-2026-10-12). An upgrade that
+    hash, never revisiting a version or content hash (GOV-REL000-CHAINED-UPGRADES-2026-10-12). An upgrade that
     lands on this admission's declared additional version delivers that version in that lock
     file;
   - `baseline_package_removals`: one exact baseline node removed from one lock file (a node the
