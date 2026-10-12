@@ -462,6 +462,7 @@
           "Dispatch.Application": "[1.0.0, )",
           "Dispatch.Domain": "[1.0.0, )",
           "Drivers.Application": "[1.0.0, )",
+          "Locations.Application": "[1.0.0, )",
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
           "Orders.Application": "[1.0.0, )",
           "Orders.Domain": "[1.0.0, )",

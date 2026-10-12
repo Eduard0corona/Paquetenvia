@@ -49,12 +49,14 @@ public sealed class DispatchImplementationContractTests
             "assignment_type", "cost_cents", "driver_id", "route_id");
         AssertJsonProperties<AssignmentResponse>("cost", "driver_id", "id", "order_id", "route_id", "status");
         AssertJsonProperties<MoneyResponse>("amount_cents", "currency");
+        AssertJsonProperties<DriverStopListResponse>("completed_today", "stops");
         AssertJsonProperties<DriverStopResponse>(
             "address_summary",
             "aggregate_version",
             "cod",
             "contact_full_name",
             "contact_short_name",
+            "details_available",
             "navigation",
             "order_id",
             "order_public_id",
@@ -107,6 +109,7 @@ public sealed class DispatchImplementationContractTests
         // a ciphertext or a key version.
         var stopNames = new[]
             {
+                typeof(DriverStopListResponse),
                 typeof(DriverStopResponse),
                 typeof(DriverStopServiceWindowResponse),
                 typeof(DriverStopCodResponse),
@@ -192,6 +195,7 @@ public sealed class DispatchImplementationContractTests
                 "cod",
                 "contact_full_name",
                 "contact_short_name",
+                "details_available",
                 "navigation",
                 "order_id",
                 "order_public_id",
@@ -201,11 +205,40 @@ public sealed class DispatchImplementationContractTests
                 "zone_name",
             ],
             RequiredPropertyNames(stop));
+        var stopList = schemas.Mapping("DriverStopList");
+        Assert.Equal(["completed_today", "stops"], RequiredPropertyNames(stopList));
+        Assert.Equal("false", stopList.Scalar("additionalProperties"));
+        Assert.Equal(
+            "#/components/schemas/DriverStop",
+            stopList.Mapping("properties").Mapping("stops").Mapping("items").Scalar("$ref"));
+        Assert.Equal("0", stopList.Mapping("properties").Mapping("completed_today").Scalar("minimum"));
+        var listMyStops = root.Mapping("paths").Mapping("/driver/me/stops").Mapping("get");
+        Assert.Equal(
+            "#/components/schemas/DriverStopList",
+            listMyStops.Mapping("responses").Mapping("200").Mapping("content").Mapping("application/json")
+                .Mapping("schema").Scalar("$ref"));
+        Assert.Equal(
+            ["200", "401", "403", "409", "503"],
+            listMyStops.Mapping("responses").Children.Keys.Cast<YamlScalarNode>().Select(value => value.Value));
+        var detailsParameter = listMyStops.Sequence("parameters").Children.OfType<YamlMappingNode>()
+            .Single(parameter => parameter.Children.ContainsKey(new YamlScalarNode("name")));
+        Assert.Equal("details", detailsParameter.Scalar("name"));
+        Assert.Equal("query", detailsParameter.Scalar("in"));
+        Assert.Equal("boolean", detailsParameter.Mapping("schema").Scalar("type"));
+        Assert.Equal("true", detailsParameter.Mapping("schema").Scalar("default"));
         var stopProperties = stop.Mapping("properties");
         Assert.Equal(
             ["address_text", "latitude", "longitude", "references"],
             RequiredPropertyNames(stopProperties.Mapping("navigation")));
         Assert.Equal("false", stopProperties.Mapping("navigation").Scalar("additionalProperties"));
+        Assert.Equal(
+            ["object", "null"],
+            stopProperties.Mapping("navigation").Sequence("type").Children.Cast<YamlScalarNode>()
+                .Select(value => value.Value));
+        Assert.Equal("boolean", stopProperties.Mapping("details_available").Scalar("type"));
+        Assert.Equal(
+            Dispatch.Domain.DriverStopZoneName.MaximumLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            stopProperties.Mapping("zone_name").Scalar("maxLength"));
         Assert.Equal(["expected", "recorded"], RequiredPropertyNames(stopProperties.Mapping("cod")));
         Assert.Equal(
             "#/components/schemas/Money",

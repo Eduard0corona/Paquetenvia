@@ -901,32 +901,47 @@ paths:
       description: >-
         DSP-002 stops of the requesting driver's own ACCEPTED or ACTIVE assignments in the selected organization, in
         route order, resolved from the actor (no driver id is accepted). UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11
-        (project owner, 2026-10-11, "Sí, como el diseño" and "Completo en recolección"): each stop also carries what
-        the driver needs at the door - the contact name (the full name on a PICKUP stop, the short name on DELIVERY
-        and RETURN stops), the operating zone, the order's service window, the cash to collect on a DELIVERY stop and
-        the navigation target (exact point and full address text with references). These fields exist only
-        in this response, for these stops: no other driver, organization or role receives them, and a stop that is no
-        longer assigned is no longer returned. The protected address and contact name are decrypted server-side with
-        the ADP-001 envelope in one batch after the tenant transaction; when the protector is unavailable or a stored
-        value is rejected the whole response fails closed with 503 and nothing is returned. GATE-003: the server
-        computes no route, distance or ETA.
+        (project owner, 2026-10-11, "Sí, como el diseño", "Completo en recolección", "Completo, como recolección" and
+        "Solo el número"): each stop also carries what the driver needs at the door - the contact name (the full name
+        on PICKUP and RETURN stops, the short name on DELIVERY stops), the operating zone, the order's service window,
+        the cash to collect on a DELIVERY stop and the navigation target (exact point and full address text with
+        references) - and the list carries completed_today, a count of the driver's stops completed today in
+        America/Mazatlan time with no data about those stops. These fields exist only in this response, for these
+        stops: no other driver, organization or role receives them, and a stop that is no longer assigned is no longer
+        returned. The protected address and contact name are decrypted server-side with the ADP-001 envelope, through
+        the Locations module, in one batch after the tenant transaction. A stop whose details cannot be read (an
+        unavailable key service, a stored value rejected for its row, no configured protector) is still listed, with
+        details_available false and null contact names and navigation; a value is never partial and the response does
+        not fail because of it. details=false skips the protected details for every stop and makes no key service
+        call: the driver app uses it to confirm the actions it synchronizes. Every answer carries Cache-Control
+        no-store. GATE-003: the server computes no route, distance or ETA.
       responses:
         '200':
-          description: Active assigned stops only
+          description: Active assigned stops only, and the count of today's completed stops
           content:
             application/json:
               schema:
-                type: array
-                items:
-                  $ref: '#/components/schemas/DriverStop'
+                $ref: '#/components/schemas/DriverStopList'
         '401':
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/DispatchAssignmentConflict'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
+      - name: details
+        in: query
+        required: false
+        description: >-
+          UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 - true (the default) includes the protected details of each stop;
+          false returns the same stops with details_available false and no key service call. Any other value, another
+          parameter or a repeated one is 409 INVALID_REQUEST.
+        schema:
+          type: boolean
+          default: true
   /orders/{orderId}/proofs:
     post:
       tags:
@@ -4136,15 +4151,42 @@ components:
           type:
           - string
           - 'null'
+    DriverStopList:
+      type: object
+      additionalProperties: false
+      description: >-
+        UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 - the answer of listMyStops: the requesting driver's stops and how many
+        of the driver's stops were completed today.
+      required:
+      - stops
+      - completed_today
+      properties:
+        stops:
+          type: array
+          maxItems: 500
+          items:
+            $ref: '#/components/schemas/DriverStop'
+        completed_today:
+          type: integer
+          format: int32
+          minimum: 0
+          description: >-
+            UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (project owner, 2026-10-11, "Solo el número": "El servidor manda
+            cuántas paradas terminó hoy (hora de Mazatlán), sin datos de esas paradas.") - the number of order status
+            changes to PICKED_UP (a pickup done), DELIVERED (a delivery done) or RETURNED (a return done) that the
+            requesting driver made (event actor) on orders of the selected organization the driver is or was assigned
+            to, during the calendar day in America/Mazatlan that contains the request time. A failed attempt, a
+            reschedule or a change made by someone else is not counted. Only the count is returned.
     DriverStop:
       type: object
       description: >-
         One stop of the requesting driver's own ACCEPTED or ACTIVE assignments (listMyStops). The location a stop
         heads to is the origin for PICKUP and RETURN and the destination for DELIVERY.
-        UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 adds contact_short_name, contact_full_name, zone_name,
-        service_window, cod and navigation; every member is always present and an absent value is null. No phone,
-        full name of a delivery or return contact, cost, internal id other than order_id, ciphertext or key version
-        is returned.
+        UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 adds details_available, contact_short_name, contact_full_name,
+        zone_name, service_window, cod and navigation; every member is always present and an absent value is null.
+        No phone, full name of a delivery contact, cost, internal id other than order_id, ciphertext or key version
+        is returned. Text values are sent normalized: Unicode format characters count as white space and a value that
+        is blank after that is null.
       required:
       - order_id
       - aggregate_version
@@ -4152,6 +4194,7 @@ components:
       - stop_type
       - status
       - address_summary
+      - details_available
       - contact_short_name
       - contact_full_name
       - zone_name
@@ -4178,6 +4221,13 @@ components:
           type: string
         address_summary:
           type: string
+        details_available:
+          type: boolean
+          description: >-
+            UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 - true when the protected details of this stop were read:
+            navigation is present and the contact name is present when the location has one. false when they were not
+            requested (details=false) or could not be read: contact_short_name, contact_full_name and navigation are
+            then null. zone_name, service_window and cod do not depend on it.
         contact_short_name:
           type:
           - string
@@ -4185,11 +4235,12 @@ components:
           minLength: 1
           maxLength: 64
           description: >-
-            UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 - on DELIVERY and RETURN stops, the short form of the contact name
-            of the stop's location, derived on read and never stored: the initial of the first word, a period, a space
-            and the last word ("María López" gives "M. López", "María López Pérez" gives "M. Pérez"); a single word is
-            kept as typed; words split on white space, the initial upper-cased, a longer last word cut to fit. null on
-            PICKUP stops (they carry contact_full_name) and when the location has no contact name.
+            UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 - on DELIVERY stops only, the short form of the contact name of
+            the stop's location, derived on read and never stored: the initial of the first word, a period, a space and
+            the last word ("María López" gives "M. López", "María López Pérez" gives "M. Pérez"); a single word is kept
+            as typed; words split on white space and format characters, the initial upper-cased, every part cut on a
+            whole character to fit and an initial that alone does not fit left out. null on PICKUP and RETURN stops
+            (they carry contact_full_name), when details_available is false and when the location has no contact name.
         contact_full_name:
           type:
           - string
@@ -4197,19 +4248,21 @@ components:
           minLength: 1
           maxLength: 200
           description: >-
-            UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (project owner, 2026-10-11, "Completo en recolección") - on a
-            PICKUP stop only, the full contact name of the pickup location (often a business, "Farmacia Las
-            Quintas"), white space collapsed to single spaces and a longer name cut at the bound with an ellipsis.
-            null on DELIVERY and RETURN stops, whose contact the driver sees only as contact_short_name, and when the
-            location has no contact name.
+            UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (project owner, 2026-10-11, "Completo en recolección" and
+            "Completo, como recolección") - on PICKUP and RETURN stops only, the full contact name of the location
+            (often a business, "Farmacia Las Quintas"; the sender a return goes back to is the pickup contact), white
+            space and format characters collapsed to single spaces and a longer name cut at the bound with an
+            ellipsis. null on DELIVERY stops, whose contact the driver sees only as contact_short_name, when
+            details_available is false and when the location has no contact name.
         zone_name:
           type:
           - string
           - 'null'
           minLength: 1
+          maxLength: 200
           description: >-
-            UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 - name of the operating zone of the stop's location; null when the
-            location has none.
+            UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 - name of the operating zone of the stop's location, normalized and
+            cut at the bound with an ellipsis; null when the location has none.
         service_window:
           type:
           - object
@@ -4250,7 +4303,9 @@ components:
             order whose cod_expected_cents is positive; null on every other stop. expected.amount_cents is the order's
             cod_expected_cents (int64 MXN cents); the driver records it with recordCodCollection.
         navigation:
-          type: object
+          type:
+          - object
+          - 'null'
           additionalProperties: false
           required:
           - latitude
@@ -4279,9 +4334,10 @@ components:
           description: >-
             UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 - where the stop is: the exact point of its location and its full
             address text, decrypted server-side, with the references the dispatcher gave (null when none). A longer
-            stored text is cut at the bound and ends with an ellipsis. The driver app opens the phone's map app on the
-            point ("Cómo llegar"); the server computes no route, distance or ETA (GATE-003). The app may keep these
-            values on the phone only for currently assigned stops (AI-07 screen_contracts.driver_stop.details).
+            stored text is cut at the bound and ends with an ellipsis. null when details_available is false. The driver
+            app opens the phone's map app on the point ("Cómo llegar"); the server computes no route, distance or ETA
+            (GATE-003). The app may keep these values on the phone only for currently assigned stops (AI-07
+            screen_contracts.driver_stop.offline_cache).
         contact_token:
           type: string
           description: Protected relay token; never a raw telephone number.

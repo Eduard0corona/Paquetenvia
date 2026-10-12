@@ -1,25 +1,15 @@
+using System.Text;
 using Dispatch.Application.Stops;
 using Dispatch.Domain;
-using Dispatch.Infrastructure;
-using Dispatch.Infrastructure.Stops;
-using Locations.Application.Geocoding;
-using Locations.Infrastructure.Geocoding;
-using Microsoft.Extensions.Configuration;
-using Microsoft.Extensions.DependencyInjection;
-using Paqueteria.Infrastructure.Security.Pii;
-using Paqueteria.UnitTests.Security;
 
 namespace Paqueteria.UnitTests.Dispatch;
 
 /// <summary>
-/// UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the short contact name rule, the address/references split and the
-/// readers that turn the protected location values into the driver's stop details.
+/// UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the contact name rule per stop type, the text normalization and bounds
+/// the driver's stop details are sent with, and the redaction of every result that carries them.
 /// </summary>
 public sealed class DriverStopDetailsTests
 {
-    private static readonly Guid Tenant = Guid.Parse("10000000-0000-4000-8000-000000000001");
-    private static readonly Guid LocationId = Guid.Parse("20000000-0000-4000-8000-000000000002");
-
     [Theory]
     [InlineData("María López", "M. López")]
     [InlineData("María López Pérez", "M. Pérez")]
@@ -29,6 +19,8 @@ public sealed class DriverStopDetailsTests
     [InlineData("álvaro\tGarcía", "Á. García")]
     [InlineData("María", "María")]
     [InlineData("Ñ", "Ñ")]
+    [InlineData("María​López", "M. López")]
+    [InlineData("﻿María López﻿", "M. López")]
     public void The_short_name_is_the_first_initial_and_the_last_word(string contact, string expected)
     {
         Assert.Equal(expected, DriverStopContactName.Shorten(contact));
@@ -38,7 +30,9 @@ public sealed class DriverStopDetailsTests
     [InlineData(null)]
     [InlineData("")]
     [InlineData("   ")]
-    public void A_missing_contact_name_has_no_short_name(string? contact)
+    [InlineData("﻿")]
+    [InlineData("﻿​ ⁠\t")]
+    public void A_name_blank_after_normalization_is_absent(string? contact)
     {
         Assert.Null(DriverStopContactName.Shorten(contact));
         Assert.Null(DriverStopContactName.Full(contact));
@@ -49,18 +43,18 @@ public sealed class DriverStopDetailsTests
     }
 
     [Fact]
-    public void A_pickup_shows_the_full_name_and_the_other_stops_only_the_short_one()
+    public void Pickups_and_returns_show_the_full_name_and_deliveries_only_the_short_one()
     {
-        // The owner's answer "Completo en recolección": the full name on a pickup, the short name at the door.
+        // The owner's answers "Completo en recolección" and "Completo, como recolección".
         Assert.Equal(
             new DriverStopContact("Farmacia Las Quintas", null),
             DriverStopContactName.ForStop(DriverStopType.Pickup, "  Farmacia \t Las\nQuintas "));
         Assert.Equal(
-            new DriverStopContact(null, "M. Pérez"),
-            DriverStopContactName.ForStop(DriverStopType.Delivery, "María López Pérez"));
+            new DriverStopContact("Farmacia Las Quintas", null),
+            DriverStopContactName.ForStop(DriverStopType.Return, "Farmacia﻿ Las Quintas"));
         Assert.Equal(
             new DriverStopContact(null, "M. Pérez"),
-            DriverStopContactName.ForStop(DriverStopType.Return, "María López Pérez"));
+            DriverStopContactName.ForStop(DriverStopType.Delivery, "María López Pérez"));
         Assert.DoesNotContain("Farmacia", new DriverStopContact("Farmacia Las Quintas", null).ToString(), StringComparison.Ordinal);
     }
 
@@ -73,217 +67,155 @@ public sealed class DriverStopDetailsTests
         Assert.EndsWith("…", full, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void The_short_name_stays_within_its_bound_on_a_text_element_boundary()
+    [Theory]
+    [InlineData(1)]
+    [InlineData(62)]
+    [InlineData(63)]
+    [InlineData(64)]
+    [InlineData(200)]
+    [InlineData(5_000)]
+    public void A_first_grapheme_of_any_length_never_breaks_the_short_name(int combiningMarks)
     {
-        var shortName = DriverStopContactName.Shorten("Ana " + string.Concat(Enumerable.Repeat("👩‍💻", 40)));
+        // "e" followed by combining acute accents is one text element of any length; it used to make the remaining
+        // room negative and throw, failing the whole stop list with 500.
+        var initial = "e" + new string('́', combiningMarks);
+        var shortName = DriverStopContactName.Shorten(initial + " López");
         Assert.NotNull(shortName);
         Assert.True(shortName!.Length <= DriverStopContactName.MaximumLength);
-        Assert.StartsWith("A. 👩‍💻", shortName, StringComparison.Ordinal);
-        Assert.Equal(0, (shortName.Length - 3) % "👩‍💻".Length);
-        Assert.True(DriverStopContactName.Shorten(new string('x', 200))!.Length <= DriverStopContactName.MaximumLength);
+        Assert.EndsWith("López", shortName, StringComparison.Ordinal);
+        // A full name whose first grapheme alone exceeds the bound has nothing left to show: it is absent.
+        var fullName = DriverStopContactName.Full(initial + " López");
+        Assert.True(fullName is null || fullName.Length <= DriverStopContactName.MaximumFullLength);
+        Assert.Equal(combiningMarks < 199, fullName is not null);
     }
 
     [Fact]
-    public void The_address_and_its_references_are_split_back_as_Locations_stored_them()
+    public void Pathological_names_never_throw_and_always_fit()
     {
-        Assert.True(DriverStopAddressText.TrySplit(
-            "Calle Sintética 100, Tres Ríos\nReferences: Portón azul\nfrente al parque",
-            out var address,
-            out var references));
-        Assert.Equal("Calle Sintética 100, Tres Ríos", address);
-        Assert.Equal("Portón azul\nfrente al parque", references);
+        var names = new List<string>
+        {
+            new('́', 300),
+            "Ana " + new string('́', 300),
+            "Ana " + string.Concat(Enumerable.Repeat("👩‍💻", 40)),
+            string.Concat(Enumerable.Repeat("🇲🇽", 100)) + " López",
+            "x " + string.Concat(Enumerable.Repeat("é̂̃", 100)),
+            new string('x', 10_000),
+            string.Join(' ', Enumerable.Repeat("palabra", 2_000)),
+            "\uD83D",
+            "\uDC00 \uD83D",
+            "مريم الحسيني",
+            "‮أحمد‬ علي",
+        };
+        var random = new Random(20261012);
+        for (var sample = 0; sample < 500; sample++)
+        {
+            var builder = new StringBuilder();
+            var length = random.Next(0, 300);
+            for (var index = 0; index < length; index++)
+            {
+                builder.Append(random.Next(10) switch
+                {
+                    0 => ' ',
+                    1 => '́',
+                    2 => '﻿',
+                    3 => (char)random.Next(0xD800, 0xE000),
+                    _ => (char)random.Next(0x20, 0x2FFF),
+                });
+            }
 
-        Assert.True(DriverStopAddressText.TrySplit(" Calle Sintética 200 ", out address, out references));
-        Assert.Equal("Calle Sintética 200", address);
-        Assert.Null(references);
+            names.Add(builder.ToString());
+        }
 
-        Assert.True(DriverStopAddressText.TrySplit("Calle Sintética 300\nReferences:  ", out address, out references));
-        Assert.Equal("Calle Sintética 300", address);
-        Assert.Null(references);
+        foreach (var name in names)
+        {
+            var shortName = DriverStopContactName.Shorten(name);
+            var fullName = DriverStopContactName.Full(name);
+            var sample = string.Join(' ', name.Take(40).Select(character => ((int)character).ToString("X4")));
+            Assert.True(
+                shortName is null || (shortName.Length is > 0 and <= DriverStopContactName.MaximumLength),
+                $"short {shortName?.Length}: {sample}");
+            Assert.True(
+                fullName is null || (fullName.Length is > 0 and <= DriverStopContactName.MaximumFullLength),
+                $"full {fullName?.Length}: {sample}");
+            Assert.True(shortName is null || shortName.Trim().Length > 0, $"blank short: {sample}");
+        }
     }
 
     [Theory]
-    [InlineData(null)]
-    [InlineData("")]
-    [InlineData("   ")]
-    [InlineData("\nReferences: solo referencias")]
-    public void A_text_without_address_fails_closed(string? text)
+    [InlineData(10, false, "abc", "abc")]
+    [InlineData(3, false, "abcdef", "abc")]
+    [InlineData(4, true, "abcdef", "abc…")]
+    [InlineData(0, false, "abc", "")]
+    [InlineData(-5, true, "abc", "")]
+    [InlineData(1, true, "abc", "")]
+    public void Fit_cuts_on_whole_text_elements_and_never_throws(int bound, bool ellipsis, string value, string expected)
     {
-        Assert.False(DriverStopAddressText.TrySplit(text, out _, out _));
+        Assert.Equal(expected, DriverStopText.Fit(value, bound, ellipsis));
     }
 
     [Fact]
-    public void Long_texts_are_cut_at_their_bounds_with_an_ellipsis()
+    public void Fit_never_splits_a_grapheme()
     {
-        Assert.True(DriverStopAddressText.TrySplit(
-            new string('a', 1500) + DriverStopAddressText.ReferencesSeparator + new string('r', 900),
-            out var address,
-            out var references));
+        var family = "👩‍👩‍👧‍👦";
+        Assert.Equal(string.Empty, DriverStopText.Fit(family, family.Length - 1, ellipsis: false));
+        Assert.Equal("a", DriverStopText.Fit("a" + family, family.Length, ellipsis: false));
+        Assert.Equal("a…", DriverStopText.Fit("a" + family + "b", family.Length + 1, ellipsis: true));
+    }
+
+    [Fact]
+    public void Format_characters_count_as_white_space()
+    {
+        Assert.Equal("Tres Ríos", DriverStopText.NormalizeLine("﻿ Tres​​Ríos ⁠"));
+        Assert.Null(DriverStopText.NormalizeLine("﻿​"));
+        Assert.Equal("Calle 1\nInterior B", DriverStopText.NormalizeText("﻿ Calle 1\nInterior B ​"));
+        Assert.Null(DriverStopText.NormalizeText(" \n﻿ "));
+    }
+
+    [Fact]
+    public void Zone_names_are_normalized_and_bounded_like_the_driver_app_expects()
+    {
+        Assert.Equal("Tres Ríos", DriverStopZoneName.Normalize(" Tres﻿ Ríos "));
+        Assert.Null(DriverStopZoneName.Normalize("​"));
+        var longName = DriverStopZoneName.Normalize(new string('z', 900));
+        Assert.Equal(DriverStopZoneName.MaximumLength, longName!.Length);
+        Assert.EndsWith("…", longName, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void The_address_and_its_references_are_normalized_and_bounded()
+    {
+        Assert.True(DriverStopAddressText.TryNormalize(
+            " Calle Sintética 100, Tres Ríos ", " Portón azul\nfrente al parque ", out var address, out var references));
+        Assert.Equal("Calle Sintética 100, Tres Ríos", address);
+        Assert.Equal("Portón azul\nfrente al parque", references);
+
+        Assert.True(DriverStopAddressText.TryNormalize("Calle Sintética 200", "﻿  ", out address, out references));
+        Assert.Equal("Calle Sintética 200", address);
+        Assert.Null(references);
+
+        Assert.True(DriverStopAddressText.TryNormalize(
+            new string('a', 1_500), new string('r', 900), out address, out references));
         Assert.Equal(DriverStopAddressText.MaximumAddressLength, address.Length);
         Assert.EndsWith("…", address, StringComparison.Ordinal);
         Assert.Equal(DriverStopAddressText.MaximumReferencesLength, references!.Length);
         Assert.EndsWith("…", references, StringComparison.Ordinal);
     }
 
-    [Fact]
-    public void The_separator_is_the_one_Locations_writes()
-    {
-        var source = File.ReadAllText(Path.Combine(
-            RepositoryRoot(), "src", "Modules", "Locations", "Locations.Infrastructure", "Locations",
-            "PostgreSqlLocationService.cs"));
-        Assert.Contains("$\"{command.AddressText}\\nReferences: {command.References}\"", source, StringComparison.Ordinal);
-        Assert.Equal("\nReferences: ", DriverStopAddressText.ReferencesSeparator);
-    }
-
-    [Fact]
-    public void The_envelope_purposes_are_the_Locations_columns()
-    {
-        Assert.Equal(AzureKeyVaultLocationPiiProtector.AddressTextPurpose, EnvelopeDriverStopLocationReader.AddressTextPurpose);
-        Assert.Equal(AzureKeyVaultLocationPiiProtector.ContactNamePurpose, EnvelopeDriverStopLocationReader.ContactNamePurpose);
-    }
-
-    [Fact]
-    public async Task The_envelope_reader_decrypts_what_the_Locations_protector_sealed()
-    {
-        var vault = new FakePiiKeyVault();
-        var envelope = new PiiEnvelopeProtector(vault);
-        var sealedWithContact = await new AzureKeyVaultLocationPiiProtector(envelope).ProtectAsync(
-            new LocationPiiValues(Tenant, LocationId, "Calle Sintética 1\nReferences: Portón", "María López Pérez", "6670000000"),
-            default);
-        var otherLocation = Guid.NewGuid();
-        var sealedWithoutContact = await new AzureKeyVaultLocationPiiProtector(envelope).ProtectAsync(
-            new LocationPiiValues(Tenant, otherLocation, "Calle Sintética 2", null, null),
-            default);
-
-        var texts = await new EnvelopeDriverStopLocationReader(envelope).ReadAsync(
-            [
-                new ProtectedDriverStopLocation(
-                    Tenant,
-                    LocationId,
-                    sealedWithContact.KeyVersion,
-                    sealedWithContact.AddressTextCiphertext,
-                    sealedWithContact.ContactNameCiphertext),
-                new ProtectedDriverStopLocation(
-                    Tenant,
-                    otherLocation,
-                    sealedWithoutContact.KeyVersion,
-                    sealedWithoutContact.AddressTextCiphertext,
-                    null),
-            ],
-            default);
-
-        Assert.Equal(
-            [
-                new DriverStopLocationText("Calle Sintética 1\nReferences: Portón", "María López Pérez"),
-                new DriverStopLocationText("Calle Sintética 2", null),
-            ],
-            texts);
-        Assert.DoesNotContain("Calle", texts[0].ToString(), StringComparison.Ordinal);
-        Assert.DoesNotContain("María", texts[0].ToString(), StringComparison.Ordinal);
-    }
-
-    [Fact]
-    public async Task A_value_bound_to_another_row_or_tenant_fails_the_whole_batch_closed()
-    {
-        var envelope = new PiiEnvelopeProtector(new FakePiiKeyVault());
-        var sealedValue = await new AzureKeyVaultLocationPiiProtector(envelope).ProtectAsync(
-            new LocationPiiValues(Tenant, LocationId, "Calle Sintética 1", "María López", null),
-            default);
-        var reader = new EnvelopeDriverStopLocationReader(envelope);
-
-        foreach (var location in new[]
-                 {
-                     new ProtectedDriverStopLocation(Guid.NewGuid(), LocationId, sealedValue.KeyVersion, sealedValue.AddressTextCiphertext, null),
-                     new ProtectedDriverStopLocation(Tenant, Guid.NewGuid(), sealedValue.KeyVersion, sealedValue.AddressTextCiphertext, null),
-                     new ProtectedDriverStopLocation(Tenant, LocationId, sealedValue.KeyVersion, sealedValue.ContactNameCiphertext!, null),
-                     new ProtectedDriverStopLocation(Tenant, LocationId, sealedValue.KeyVersion, [1, 2, 3], null),
-                 })
-        {
-            var exception = await Assert.ThrowsAsync<DriverStopsPiiUnavailableException>(() =>
-                reader.ReadAsync([location], default));
-            Assert.DoesNotContain("Calle", exception.ToString(), StringComparison.Ordinal);
-            Assert.DoesNotContain("María", exception.ToString(), StringComparison.Ordinal);
-        }
-    }
-
-    [Fact]
-    public async Task An_unreachable_key_vault_fails_closed()
-    {
-        var vault = new FakePiiKeyVault();
-        var envelope = new PiiEnvelopeProtector(vault);
-        var sealedValue = await new AzureKeyVaultLocationPiiProtector(envelope).ProtectAsync(
-            new LocationPiiValues(Tenant, LocationId, "Calle Sintética 1", null, null),
-            default);
-        vault.FailOn = FakePiiKeyVault.Failure.Unwrap;
-
-        await Assert.ThrowsAsync<DriverStopsPiiUnavailableException>(() =>
-            new EnvelopeDriverStopLocationReader(envelope).ReadAsync(
-                [new ProtectedDriverStopLocation(Tenant, LocationId, sealedValue.KeyVersion, sealedValue.AddressTextCiphertext, null)],
-                default));
-    }
-
-    [Fact]
-    public async Task The_synthetic_reader_never_decrypts_and_the_disabled_one_fails_closed()
-    {
-        var digest = new DeterministicMockLocationPiiProtector().Protect("Calle Real 1", DeterministicMockLocationPiiProtector.KeyVersion);
-        var texts = await new SyntheticDriverStopLocationReader().ReadAsync(
-            [
-                new ProtectedDriverStopLocation(Tenant, LocationId, DeterministicMockLocationPiiProtector.KeyVersion, digest, digest),
-                new ProtectedDriverStopLocation(Tenant, LocationId, DeterministicMockLocationPiiProtector.KeyVersion, digest, null),
-            ],
-            default);
-
-        Assert.Equal(
-            [
-                new DriverStopLocationText(SyntheticDriverStopLocationReader.AddressPlaceholder, SyntheticDriverStopLocationReader.ContactNamePlaceholder),
-                new DriverStopLocationText(SyntheticDriverStopLocationReader.AddressPlaceholder, null),
-            ],
-            texts);
-        await Assert.ThrowsAsync<DriverStopsPiiUnavailableException>(() =>
-            new DisabledDriverStopLocationReader().ReadAsync(
-                [new ProtectedDriverStopLocation(Tenant, LocationId, DeterministicMockLocationPiiProtector.KeyVersion, digest, null)],
-                default));
-    }
-
     [Theory]
-    [InlineData("AzureKeyVault", DriverStopLocationProtection.Envelope)]
-    [InlineData("azurekeyvault", DriverStopLocationProtection.Envelope)]
-    [InlineData("Mock", DriverStopLocationProtection.Synthetic)]
-    [InlineData("Disabled", DriverStopLocationProtection.Disabled)]
-    [InlineData("", DriverStopLocationProtection.Disabled)]
-    [InlineData(null, DriverStopLocationProtection.Disabled)]
-    [InlineData("Plaintext", DriverStopLocationProtection.Disabled)]
-    public void Stop_details_are_read_back_the_way_Locations_protected_them(
-        string? setting,
-        DriverStopLocationProtection expected)
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("   ")]
+    [InlineData("﻿​")]
+    public void A_blank_address_is_reported_as_unavailable(string? addressText)
     {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?> { ["Locations:PiiProtector"] = setting })
-            .Build();
-        Assert.Equal(expected, DriverStopLocationProtectionSetting.Resolve(configuration));
+        Assert.False(DriverStopAddressText.TryNormalize(addressText, "Portón", out _, out _));
     }
 
-    [Theory]
-    [InlineData("Mock", typeof(SyntheticDriverStopLocationReader))]
-    [InlineData("Disabled", typeof(DisabledDriverStopLocationReader))]
-    public void The_dispatch_composition_selects_the_reader_from_the_Locations_setting(string setting, Type expected)
+    [Fact]
+    public void Completed_stops_are_the_three_statuses_that_close_a_stop_in_Mazatlan_time()
     {
-        var configuration = new ConfigurationBuilder()
-            .AddInMemoryCollection(new Dictionary<string, string?>
-            {
-                ["Locations:PiiProtector"] = setting,
-                ["Dispatch:Provider"] = "Disabled",
-            })
-            .Build();
-        var services = new ServiceCollection();
-        services.AddSingleton<IConfiguration>(configuration);
-        services.AddLogging();
-        services.AddDispatchInfrastructure(configuration);
-        using var provider = services.BuildServiceProvider();
-        using var scope = provider.CreateScope();
-
-        Assert.IsType(expected, scope.ServiceProvider.GetRequiredService<IDriverStopLocationReader>());
+        Assert.Equal(["PICKED_UP", "DELIVERED", "RETURNED"], DriverStopsCompletedToday.CompletingStatuses);
+        Assert.Equal("America/Mazatlan", DriverStopsCompletedToday.TimeZone);
     }
 
     [Fact]
@@ -296,27 +228,17 @@ public sealed class DriverStopDetailsTests
             "DELIVERY",
             "DELIVERING",
             "Resumen",
+            true,
             "M. López",
             "Farmacia Las Quintas",
             "Tres Ríos",
             null,
             new DriverStopCodResult(125_000, false),
             new DriverStopNavigationResult(24.8, -107.39, "Calle Sintética 1", "Portón"));
-        var text = stop.ToString() + stop.Navigation;
+        var text = stop.ToString() + stop.Navigation + new DriverStopListResult([stop], 2);
         foreach (var value in new[] { "M. López", "Farmacia", "Tres Ríos", "Calle", "Portón", "24.8", "125000" })
         {
             Assert.DoesNotContain(value, text, StringComparison.Ordinal);
         }
-    }
-
-    private static string RepositoryRoot()
-    {
-        var directory = new DirectoryInfo(AppContext.BaseDirectory);
-        while (directory is not null && !File.Exists(Path.Combine(directory.FullName, "Paqueteria.sln")))
-        {
-            directory = directory.Parent;
-        }
-
-        return directory?.FullName ?? throw new InvalidOperationException("Repository root not found.");
     }
 }

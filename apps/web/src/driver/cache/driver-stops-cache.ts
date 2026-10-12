@@ -15,9 +15,10 @@ export const DriverStopsStoreName = "snapshots";
  */
 export const DriverDatabaseVersion = 3 as const;
 /**
- * Schema 2 snapshots carry the stop details (short contact name, zone,
- * window, cash to collect and navigation target). They exist only for the
- * stops the last successful REST response returned.
+ * Schema 2 snapshots carry the stop details (contact name, zone, window, cash
+ * to collect and navigation target, or that they are unavailable) and the
+ * count of today's completed stops. They exist only for the stops the last
+ * successful REST response returned.
  */
 export const DriverStopsSnapshotSchemaVersion = 2 as const;
 /** @deprecated Use DriverStopsSnapshotSchemaVersion for persisted snapshots. */
@@ -34,6 +35,11 @@ export interface DriverStopsSnapshot {
   readonly schemaVersion: typeof DriverStopsSnapshotSchemaVersion;
   readonly synchronizedAt: string;
   readonly stops: readonly DriverStop[];
+  /**
+   * The driver's stops completed on the Mazatlán day of `synchronizedAt`, as
+   * the server counted them; null when no answer carried the count yet.
+   */
+  readonly completedToday: number | null;
 }
 
 export interface DriverStopsCache {
@@ -139,6 +145,7 @@ function validateSnapshot(
     "schemaVersion",
     "synchronizedAt",
     "stops",
+    "completedToday",
   ]);
   if (
     keys.length !== allowed.size ||
@@ -146,7 +153,10 @@ function validateSnapshot(
     record.partitionKey !== expectedPartitionKey ||
     record.schemaVersion !== DriverStopsSchemaVersion ||
     typeof record.synchronizedAt !== "string" ||
-    !isUtcTimestamp(record.synchronizedAt)
+    !isUtcTimestamp(record.synchronizedAt) ||
+    (record.completedToday !== null &&
+      (!Number.isSafeInteger(record.completedToday) ||
+        (record.completedToday as number) < 0))
   ) {
     throw new DriverStopsCacheError();
   }
@@ -156,6 +166,7 @@ function validateSnapshot(
       schemaVersion: DriverStopsSchemaVersion,
       synchronizedAt: record.synchronizedAt,
       stops: parseDriverStops(record.stops),
+      completedToday: record.completedToday as number | null,
     });
   } catch (error) {
     if (error instanceof DriverStopsContractError) {

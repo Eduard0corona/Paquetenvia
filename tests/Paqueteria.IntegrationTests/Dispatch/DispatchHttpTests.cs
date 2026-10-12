@@ -528,64 +528,32 @@ public sealed class DispatchHttpTests : IClassFixture<DispatchHttpWebApplication
         using var viewer = StopRequest(MockIdentityProfiles.ActiveViewer);
         using var viewerResponse = await client.SendAsync(viewer);
         Assert.Equal(HttpStatusCode.Forbidden, viewerResponse.StatusCode);
+        Assert.Equal("no-store", viewerResponse.Headers.CacheControl?.ToString());
 
-        factory.SetStops(
-        [
-            new DriverStopResult(
-                Guid.Parse("00000000-0000-0000-0000-000000000701"),
-                12,
-                "ORD_SYNTHETIC",
-                "DELIVERY",
-                "DELIVERING",
-                "Synthetic summary",
-                "M. Sintético",
-                null,
-                "Zona Sintética",
-                new DriverStopServiceWindowResult(
-                    new DateTimeOffset(2026, 10, 11, 20, 0, 0, TimeSpan.Zero),
-                    new DateTimeOffset(2026, 10, 11, 22, 0, 0, TimeSpan.Zero)),
-                new DriverStopCodResult(125_000, false),
-                new DriverStopNavigationResult(24.8, -107.39, "Calle Sintética 1", "Portón sintético")),
-            new DriverStopResult(
-                Guid.Parse("00000000-0000-0000-0000-000000000702"),
-                3,
-                "ORD_SYNTHETIC_PICKUP",
-                "PICKUP",
-                "ASSIGNED",
-                "Synthetic origin",
-                null,
-                "Farmacia Sintética",
-                null,
-                null,
-                null,
-                new DriverStopNavigationResult(24.81, -107.4, "Calle Sintética 2", null)),
-        ]);
+        factory.SetStops(SyntheticStops(), completedToday: 2);
         using var driver = StopRequest(MockIdentityProfiles.ActiveDriver);
         using var driverResponse = await client.SendAsync(driver);
         Assert.Equal(HttpStatusCode.OK, driverResponse.StatusCode);
+        // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: decrypted addresses and names are never stored by any cache.
+        Assert.True(driverResponse.Headers.CacheControl?.NoStore);
+        Assert.True(factory.LastStopsIncludedDetails);
         var body = await driverResponse.Content.ReadAsStringAsync();
         using var json = JsonDocument.Parse(body);
-        var stops = json.RootElement.EnumerateArray().ToArray();
-        Assert.Equal(2, stops.Length);
+        Assert.Equal(
+            ["completed_today", "stops"],
+            json.RootElement.EnumerateObject().Select(value => value.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(2, json.RootElement.GetProperty("completed_today").GetInt32());
+        var stops = json.RootElement.GetProperty("stops").EnumerateArray().ToArray();
+        Assert.Equal(3, stops.Length);
         foreach (var stop in stops)
         {
-            // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: every member is present; absent values are JSON null.
-            Assert.Equal(
-                [
-                    "address_summary",
-                    "aggregate_version",
-                    "cod",
-                    "contact_full_name",
-                    "contact_short_name",
-                    "navigation",
-                    "order_id",
-                    "order_public_id",
-                    "service_window",
-                    "status",
-                    "stop_type",
-                    "zone_name",
-                ],
-                stop.EnumerateObject().Select(value => value.Name).Order(StringComparer.Ordinal));
+            // Every member is present; absent values are JSON null.
+            Assert.Equal(StopMembers, stop.EnumerateObject().Select(value => value.Name).Order(StringComparer.Ordinal));
+        }
+
+        foreach (var stop in stops.Take(2))
+        {
+            Assert.True(stop.GetProperty("details_available").GetBoolean());
             Assert.Equal(
                 ["address_text", "latitude", "longitude", "references"],
                 stop.GetProperty("navigation").EnumerateObject().Select(value => value.Name).Order(StringComparer.Ordinal));
@@ -620,6 +588,13 @@ public sealed class DispatchHttpTests : IClassFixture<DispatchHttpWebApplication
         Assert.Equal(JsonValueKind.Null, pickup.GetProperty("cod").ValueKind);
         Assert.Equal(JsonValueKind.Null, pickup.GetProperty("navigation").GetProperty("references").ValueKind);
 
+        // A stop whose details could not be read is still listed, with the explicit signal and no partial details.
+        var unreadable = stops[2];
+        Assert.False(unreadable.GetProperty("details_available").GetBoolean());
+        Assert.Equal(JsonValueKind.Null, unreadable.GetProperty("navigation").ValueKind);
+        Assert.Equal(JsonValueKind.Null, unreadable.GetProperty("contact_full_name").ValueKind);
+        Assert.Equal("RETURNING", unreadable.GetProperty("status").GetString());
+
         Assert.DoesNotContain("contact_token", body, StringComparison.Ordinal);
         Assert.DoesNotContain("phone", body, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("cost", body, StringComparison.OrdinalIgnoreCase);
@@ -630,24 +605,110 @@ public sealed class DispatchHttpTests : IClassFixture<DispatchHttpWebApplication
     }
 
     [Fact]
-    public async Task GET_stops_fails_closed_with_503_when_the_protected_details_cannot_be_read()
+    public async Task GET_stops_with_details_false_returns_no_protected_value()
     {
-        factory.SetStopDetailsUnavailable(true);
-        try
+        factory.SetStops(SyntheticStops(), completedToday: 1);
+        using var driver = StopRequest(MockIdentityProfiles.ActiveDriver, "?details=false");
+        using var response = await client.SendAsync(driver);
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        Assert.False(factory.LastStopsIncludedDetails);
+        var body = await response.Content.ReadAsStringAsync();
+        using var json = JsonDocument.Parse(body);
+        Assert.Equal(1, json.RootElement.GetProperty("completed_today").GetInt32());
+        foreach (var stop in json.RootElement.GetProperty("stops").EnumerateArray())
         {
-            using var driver = StopRequest(MockIdentityProfiles.ActiveDriver);
-            using var response = await client.SendAsync(driver);
-            Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
-            var body = await response.Content.ReadAsStringAsync();
-            Assert.Contains("Service unavailable.", body, StringComparison.Ordinal);
-            Assert.DoesNotContain("address", body, StringComparison.OrdinalIgnoreCase);
-            Assert.DoesNotContain("navigation", body, StringComparison.OrdinalIgnoreCase);
+            Assert.Equal(StopMembers, stop.EnumerateObject().Select(value => value.Name).Order(StringComparer.Ordinal));
+            Assert.False(stop.GetProperty("details_available").GetBoolean());
+            Assert.Equal(JsonValueKind.Null, stop.GetProperty("navigation").ValueKind);
+            Assert.Equal(JsonValueKind.Null, stop.GetProperty("contact_short_name").ValueKind);
+            Assert.Equal(JsonValueKind.Null, stop.GetProperty("contact_full_name").ValueKind);
         }
-        finally
-        {
-            factory.SetStopDetailsUnavailable(false);
-        }
+
+        Assert.DoesNotContain("Calle", body, StringComparison.Ordinal);
+        Assert.DoesNotContain("Sintético\"", body, StringComparison.Ordinal);
+        Assert.Contains("\"recorded\":false", body, StringComparison.Ordinal);
     }
+
+    [Theory]
+    [InlineData("?details=maybe")]
+    [InlineData("?details=TRUE")]
+    [InlineData("?details=")]
+    [InlineData("?details=true&details=false")]
+    [InlineData("?cursor=abc")]
+    public async Task GET_stops_rejects_any_other_query_with_409(string query)
+    {
+        using var driver = StopRequest(MockIdentityProfiles.ActiveDriver, query);
+        using var response = await client.SendAsync(driver);
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+        Assert.True(response.Headers.CacheControl?.NoStore);
+        Assert.Contains("INVALID_REQUEST", await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    private static readonly string[] StopMembers =
+    [
+        "address_summary",
+        "aggregate_version",
+        "cod",
+        "contact_full_name",
+        "contact_short_name",
+        "details_available",
+        "navigation",
+        "order_id",
+        "order_public_id",
+        "service_window",
+        "status",
+        "stop_type",
+        "zone_name",
+    ];
+
+    private static DriverStopResult[] SyntheticStops() =>
+    [
+        new(
+            Guid.Parse("00000000-0000-0000-0000-000000000701"),
+            12,
+            "ORD_SYNTHETIC",
+            "DELIVERY",
+            "DELIVERING",
+            "Synthetic summary",
+            true,
+            "M. Sintético",
+            null,
+            "Zona Sintética",
+            new DriverStopServiceWindowResult(
+                new DateTimeOffset(2026, 10, 11, 20, 0, 0, TimeSpan.Zero),
+                new DateTimeOffset(2026, 10, 11, 22, 0, 0, TimeSpan.Zero)),
+            new DriverStopCodResult(125_000, false),
+            new DriverStopNavigationResult(24.8, -107.39, "Calle Sintética 1", "Portón sintético")),
+        new(
+            Guid.Parse("00000000-0000-0000-0000-000000000702"),
+            3,
+            "ORD_SYNTHETIC_PICKUP",
+            "PICKUP",
+            "ASSIGNED",
+            "Synthetic origin",
+            true,
+            null,
+            "Farmacia Sintética",
+            null,
+            null,
+            null,
+            new DriverStopNavigationResult(24.81, -107.4, "Calle Sintética 2", null)),
+        new(
+            Guid.Parse("00000000-0000-0000-0000-000000000703"),
+            7,
+            "ORD_SYNTHETIC_RETURN",
+            "RETURN",
+            "RETURNING",
+            "Synthetic origin",
+            false,
+            null,
+            null,
+            "Zona Sintética",
+            null,
+            null,
+            null),
+    ];
 
     [Fact]
     public async Task EXT001_create_list_and_accept_use_the_contracted_actor_derived_surface()
@@ -749,9 +810,9 @@ public sealed class DispatchHttpTests : IClassFixture<DispatchHttpWebApplication
         return request;
     }
 
-    private static HttpRequestMessage StopRequest(string profile)
+    private static HttpRequestMessage StopRequest(string profile, string query = "")
     {
-        var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/driver/me/stops");
+        var request = new HttpRequestMessage(HttpMethod.Get, "/api/v1/driver/me/stops" + query);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", profile);
         request.Headers.Add(
             "X-Organization-Id",

@@ -52,8 +52,13 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
     internal static readonly Guid DispatcherAdminNoMfaId =
         Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa32");
 
-    internal void SetStops(IReadOnlyList<DriverStopResult> stops) => service.Stops = stops;
-    internal void SetStopDetailsUnavailable(bool unavailable) => service.StopDetailsUnavailable = unavailable;
+    internal void SetStops(IReadOnlyList<DriverStopResult> stops, int completedToday = 0)
+    {
+        service.Stops = stops;
+        service.CompletedToday = completedToday;
+    }
+
+    internal bool? LastStopsIncludedDetails => service.LastStopsIncludedDetails;
     internal int AssignableDriverReads => service.AssignableDriverReads;
     internal ListAssignableDriversQuery? LastAssignableDriversQuery => service.LastAssignableDriversQuery;
     internal int OrganizationDriverReads => service.OrganizationDriverReads;
@@ -201,7 +206,8 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
         private int invocations;
 
         public IReadOnlyList<DriverStopResult> Stops { get; set; } = [];
-        public bool StopDetailsUnavailable { get; set; }
+        public int CompletedToday { get; set; }
+        public bool? LastStopsIncludedDetails { get; set; }
         public int Effects => Volatile.Read(ref effects);
         public int Invocations => Volatile.Read(ref invocations);
 
@@ -294,9 +300,10 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
             stored[(organizationId, key)] = new Stored(signature, result, state);
         }
 
-        public Task<IReadOnlyList<DriverStopResult>> ListCurrentDriverStopsAsync(
+        public Task<DriverStopListResult> ListCurrentDriverStopsAsync(
             Guid actorId,
             Guid organizationId,
+            bool includeDetails,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -305,9 +312,18 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
                 throw new DriverStopsForbiddenException();
             }
 
-            return StopDetailsUnavailable
-                ? throw new DriverStopsPiiUnavailableException()
-                : Task.FromResult(Stops);
+            LastStopsIncludedDetails = includeDetails;
+            var stops = includeDetails
+                ? Stops
+                : Stops.Select(stop => stop with
+                    {
+                        DetailsAvailable = false,
+                        ContactShortName = null,
+                        ContactFullName = null,
+                        Navigation = null,
+                    })
+                    .ToArray();
+            return Task.FromResult(new DriverStopListResult(stops, CompletedToday));
         }
 
         public Task<ExternalOfferResult> CreateAsync(

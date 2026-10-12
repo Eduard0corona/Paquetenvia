@@ -58,6 +58,8 @@ public sealed class DispatchArchitectureTests
         Assert.DoesNotContain("Orders.Infrastructure", references);
         Assert.DoesNotContain("Drivers.Infrastructure", references);
         Assert.DoesNotContain("Locations.Infrastructure", references);
+        // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the stop details are read through the Locations port only.
+        Assert.Contains("Locations.Application", references);
         Assert.Contains("Orders.Domain", references);
         Assert.Contains("Orders.Application", references);
         Assert.Contains("Drivers.Application", references);

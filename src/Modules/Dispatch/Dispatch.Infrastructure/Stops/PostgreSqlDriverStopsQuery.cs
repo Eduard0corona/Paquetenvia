@@ -2,11 +2,13 @@ using System.Diagnostics.Metrics;
 using Dispatch.Application.Stops;
 using Dispatch.Domain;
 using Dispatch.Infrastructure.Persistence;
+using Locations.Application.Locations;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
+using Paqueteria.Application;
 using Paqueteria.Application.Tenancy;
 using Paqueteria.Infrastructure.Tenancy;
 
@@ -14,16 +16,20 @@ namespace Dispatch.Infrastructure.Stops;
 
 public sealed class PostgreSqlDriverStopsQuery(
     TenantTransactionContext<DispatchDbContext> transactionContext,
-    IDriverStopLocationReader locationReader,
+    ILocationPiiReader locationReader,
+    IClock clock,
     ILogger<PostgreSqlDriverStopsQuery> logger) : IDriverStopsQuery
 {
     private static readonly Meter Meter = new("Paqueteria.Dispatch");
     private static readonly Histogram<long> StopsCount =
         Meter.CreateHistogram<long>("dispatch.driver_stops.count");
+    private static readonly Counter<long> DetailsUnavailableCount =
+        Meter.CreateCounter<long>("dispatch.driver_stops.details_unavailable");
 
-    public async Task<IReadOnlyList<DriverStopResult>> ListCurrentDriverStopsAsync(
+    public async Task<DriverStopListResult> ListCurrentDriverStopsAsync(
         Guid actorId,
         Guid organizationId,
+        bool includeDetails,
         CancellationToken cancellationToken)
     {
         if (actorId == Guid.Empty || organizationId == Guid.Empty)
@@ -31,7 +37,8 @@ public sealed class PostgreSqlDriverStopsQuery(
             throw new DriverStopsForbiddenException();
         }
 
-        var rows = await transactionContext.ExecuteAsync(
+        var now = clock.UtcNow;
+        var (rows, completedToday) = await transactionContext.ExecuteAsync(
             new TenantDatabaseExecutionContext(actorId, [organizationId]),
             async (dbContext, token) =>
             {
@@ -49,30 +56,129 @@ public sealed class PostgreSqlDriverStopsQuery(
                     throw new DriverStopsForbiddenException();
                 }
 
-                return await ReadStopsAsync(
+                var stops = await ReadStopsAsync(
                     connection,
                     transaction,
                     driverId.Value,
                     organizationId,
                     token);
+                var completed = await CountCompletedTodayAsync(
+                    connection,
+                    transaction,
+                    actorId,
+                    driverId.Value,
+                    organizationId,
+                    now,
+                    token);
+                return (stops, completed);
             },
             cancellationToken);
 
-        // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the protected address and contact name are read in one batch
-        // only after the tenant transaction closed, and only for the requesting driver's own stops. Any value that
-        // cannot be read fails the whole response closed (503); nothing personal is logged.
-        IReadOnlyList<DriverStopResult> result = rows.Count == 0
-            ? []
-            : await ReadDetailsAsync(rows, cancellationToken);
+        // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the protected address and contact name are read in one batch only
+        // after the tenant transaction closed, only for the requesting driver's own stops and only when asked for. A
+        // stop whose details cannot be read is still listed, with details_available false and no partial details;
+        // the response never fails because of them and nothing personal is logged (only a count).
+        var texts = includeDetails && rows.Count > 0
+            ? await ReadLocationTextsAsync(rows, cancellationToken)
+            : null;
+        var stops = new DriverStopResult[rows.Count];
+        var unavailable = 0;
+        for (var index = 0; index < rows.Count; index++)
+        {
+            stops[index] = ToResult(rows[index], texts?[index], includeDetails, out var detailsMissing);
+            if (detailsMissing)
+            {
+                unavailable++;
+            }
+        }
 
-        StopsCount.Record(result.Count);
+        StopsCount.Record(stops.Length);
+        if (unavailable > 0)
+        {
+            DetailsUnavailableCount.Add(unavailable);
+            logger.LogWarning(
+                "Dispatch driver stop details unavailable; tenant {TenantId}; actor {ActorId}; stops {Count}",
+                organizationId,
+                actorId,
+                unavailable);
+        }
+
         logger.LogInformation(
-            "Dispatch driver stops result; tenant {TenantId}; actor {ActorId}; count {Count}",
+            "Dispatch driver stops result; tenant {TenantId}; actor {ActorId}; count {Count}; details {Details}",
             organizationId,
             actorId,
-            result.Count);
-        return result;
+            stops.Length,
+            includeDetails);
+        return new DriverStopListResult(stops, completedToday);
     }
+
+    private async Task<IReadOnlyList<LocationPiiText?>?> ReadLocationTextsAsync(
+        IReadOnlyList<StopRow> rows,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var texts = await locationReader.ReadAsync(
+                rows.Select(row => row.Location.Protected).ToArray(),
+                cancellationToken);
+            return texts.Count == rows.Count ? texts : null;
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (Exception)
+        {
+            // The reader never returns a partial value; any failure leaves every stop without details.
+            return null;
+        }
+    }
+
+    private static DriverStopResult ToResult(
+        StopRow row,
+        LocationPiiText? text,
+        bool includeDetails,
+        out bool detailsMissing)
+    {
+        string? shortName = null;
+        string? fullName = null;
+        DriverStopNavigationResult? navigation = null;
+        if (text is not null &&
+            IsCoordinate(row.Location.Latitude, 90) &&
+            IsCoordinate(row.Location.Longitude, 180) &&
+            DriverStopAddressText.TryNormalize(text.AddressText, text.References, out var address, out var references))
+        {
+            // The owner's answers "Completo en recolección" and "Completo, como recolección": the full name on a
+            // PICKUP or RETURN stop, the short name on a DELIVERY stop; the other form stays null.
+            var contact = DriverStopContactName.ForStop(row.StopKind, text.ContactName);
+            shortName = contact.ShortName;
+            fullName = contact.FullName;
+            navigation = new DriverStopNavigationResult(
+                row.Location.Latitude,
+                row.Location.Longitude,
+                address,
+                references);
+        }
+
+        detailsMissing = includeDetails && navigation is null;
+        return new DriverStopResult(
+            row.OrderId,
+            row.AggregateVersion,
+            row.OrderPublicId,
+            row.StopKind.ToContractValue(),
+            row.Status,
+            row.Location.AddressSummary,
+            navigation is not null,
+            shortName,
+            fullName,
+            DriverStopZoneName.Normalize(row.Location.ZoneName),
+            row.ServiceWindow,
+            row.Cod,
+            navigation);
+    }
+
+    private static bool IsCoordinate(double value, double bound) =>
+        double.IsFinite(value) && value >= -bound && value <= bound;
 
     private static async Task<Guid?> ResolveDriverIdAsync(
         NpgsqlConnection connection,
@@ -101,63 +207,49 @@ public sealed class PostgreSqlDriverStopsQuery(
         return result is Guid id ? id : null;
     }
 
-    private async Task<IReadOnlyList<DriverStopResult>> ReadDetailsAsync(
-        IReadOnlyList<StopRow> rows,
+    /// <summary>
+    /// UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (owner answer "Solo el número"): counts the status changes to
+    /// PICKED_UP, DELIVERED or RETURNED that this driver made today, in America/Mazatlan time, on orders of the
+    /// selected organization the driver is or was assigned to (<see cref="DriverStopsCompletedToday"/>). Only the
+    /// count leaves the database; the day bounds are computed by PostgreSQL from the request time, in its own
+    /// time zone database.
+    /// </summary>
+    private static async Task<int> CountCompletedTodayAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid actorId,
+        Guid driverId,
+        Guid organizationId,
+        DateTimeOffset now,
         CancellationToken cancellationToken)
     {
-        IReadOnlyList<DriverStopLocationText> texts;
-        try
-        {
-            texts = await locationReader.ReadAsync(
-                rows.Select(row => row.Location.Protected).ToArray(),
-                cancellationToken);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (DriverStopsPiiUnavailableException)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            throw new DriverStopsPiiUnavailableException(exception);
-        }
-
-        if (texts.Count != rows.Count)
-        {
-            throw new DriverStopsPiiUnavailableException();
-        }
-
-        var stops = new DriverStopResult[rows.Count];
-        for (var index = 0; index < rows.Count; index++)
-        {
-            var row = rows[index];
-            if (!DriverStopAddressText.TrySplit(texts[index].AddressText, out var address, out var references))
-            {
-                throw new DriverStopsPiiUnavailableException();
-            }
-
-            // The owner's answer "Completo en recolección": the full name on a PICKUP stop, the short name on
-            // DELIVERY and RETURN stops; the other form stays null.
-            var contact = DriverStopContactName.ForStop(row.StopKind, texts[index].ContactName);
-            stops[index] = new DriverStopResult(
-                row.OrderId,
-                row.AggregateVersion,
-                row.OrderPublicId,
-                row.StopKind.ToContractValue(),
-                row.Status,
-                row.Location.AddressSummary,
-                contact.ShortName,
-                contact.FullName,
-                row.Location.ZoneName,
-                row.ServiceWindow,
-                row.Cod,
-                new DriverStopNavigationResult(row.Location.Latitude, row.Location.Longitude, address, references));
-        }
-
-        return stops;
+        const string sql =
+            """
+            SELECT count(*)::integer
+            FROM orders.order_events e
+            WHERE e.actor_id=@actor_id
+              AND (e.owner_org_id=@organization_id OR e.operator_org_id=@organization_id)
+              AND e.event_type='ORDER_STATUS_CHANGED'
+              AND e.payload->>'new_status' = ANY(@completing)
+              AND e.occurred_at >= (date_trunc('day', @now AT TIME ZONE @zone) AT TIME ZONE @zone)
+              AND e.occurred_at < ((date_trunc('day', @now AT TIME ZONE @zone) + interval '1 day') AT TIME ZONE @zone)
+              AND EXISTS (
+                SELECT 1 FROM dispatch.assignments a
+                WHERE a.order_id=e.order_id AND a.driver_id=@driver_id
+              )
+            """;
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
+        command.Parameters.Add(P("actor_id", NpgsqlDbType.Uuid, actorId));
+        command.Parameters.Add(P("driver_id", NpgsqlDbType.Uuid, driverId));
+        command.Parameters.Add(P("organization_id", NpgsqlDbType.Uuid, organizationId));
+        command.Parameters.Add(P(
+            "completing",
+            NpgsqlDbType.Array | NpgsqlDbType.Text,
+            DriverStopsCompletedToday.CompletingStatuses.ToArray()));
+        command.Parameters.Add(P("now", NpgsqlDbType.TimestampTz, now.ToUniversalTime()));
+        command.Parameters.Add(P("zone", NpgsqlDbType.Text, DriverStopsCompletedToday.TimeZone));
+        var result = await command.ExecuteScalarAsync(cancellationToken);
+        return result is int count ? count : 0;
     }
 
     private static async Task<IReadOnlyList<StopRow>> ReadStopsAsync(
@@ -306,7 +398,7 @@ public sealed class PostgreSqlDriverStopsQuery(
     private const int DestinationColumns = 22;
 
     private static StopLocationRow ReadLocation(NpgsqlDataReader reader, int first, string addressSummary) => new(
-        new ProtectedDriverStopLocation(
+        new StoredLocationPii(
             reader.GetGuid(first + 1),
             reader.GetGuid(first),
             reader.GetString(first + 2),
@@ -345,7 +437,7 @@ public sealed class PostgreSqlDriverStopsQuery(
 
     /// <summary>The location the stop heads to; the point and the zone name are not personal on their own.</summary>
     private sealed record StopLocationRow(
-        ProtectedDriverStopLocation Protected,
+        StoredLocationPii Protected,
         string AddressSummary,
         double Latitude,
         double Longitude,

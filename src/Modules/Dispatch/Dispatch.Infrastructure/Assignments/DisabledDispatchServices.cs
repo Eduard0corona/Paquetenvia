@@ -13,9 +13,10 @@ public sealed class DisabledAssignmentService : IAssignmentService
 
 public sealed class DisabledDriverStopsQuery : IDriverStopsQuery
 {
-    public Task<IReadOnlyList<DriverStopResult>> ListCurrentDriverStopsAsync(
+    public Task<DriverStopListResult> ListCurrentDriverStopsAsync(
         Guid actorId,
         Guid organizationId,
+        bool includeDetails,
         CancellationToken cancellationToken) =>
         throw new DriverStopsForbiddenException();
 }

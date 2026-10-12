@@ -1,12 +1,13 @@
 using Dispatch.Application.Stops;
-using Dispatch.Infrastructure.Stops;
 using Finance.Application;
 using Finance.Application.Cod;
 using Finance.Infrastructure;
 using Finance.Infrastructure.Cod;
 using Finance.Infrastructure.Persistence;
 using Locations.Application.Geocoding;
+using Locations.Application.Locations;
 using Locations.Infrastructure.Geocoding;
+using Locations.Infrastructure.Locations;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -20,8 +21,9 @@ namespace Paqueteria.ContractTests.PostgreSql;
 
 /// <summary>
 /// UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 against real PostgreSQL with FORCE RLS: a driver reads the details of
-/// their own ACCEPTED or ACTIVE assignments only, decrypted with the ADP-001 envelope after the tenant transaction,
-/// together with the zone, the service window and the cash the door collection must satisfy.
+/// their own ACCEPTED or ACTIVE assignments only, decrypted through the Locations port after the tenant transaction,
+/// together with the zone, the service window, the cash the door collection must satisfy and the count of today's
+/// completed stops.
 /// </summary>
 public sealed partial class DispatchPostgreSqlContractTests
 {
@@ -37,10 +39,12 @@ public sealed partial class DispatchPostgreSqlContractTests
         {
             await SealLocationAsync(
                 scenario, envelope, scenario.OriginLocationId, 24.80, -107.40,
-                "Calle Sintética 10, Centro\nReferences: Portón verde", "Farmacia Las Quintas", null);
+                LocationAddressText.Compose("Calle Sintética 10, Centro", "Portón verde"), "Farmacia Las Quintas", null);
             await SealLocationAsync(
                 scenario, envelope, scenario.DestinationLocationId, 24.81, -107.39,
-                "Calle Sintética 20, Tres Ríos\nReferences: Casa azul\nfrente al parque", "María López Pérez", zone.ZoneId);
+                LocationAddressText.Compose("Calle Sintética 20, Tres Ríos", "Casa azul\nfrente al parque"),
+                "María López Pérez",
+                zone.ZoneId);
             var windowFrom = new DateTimeOffset(2026, 10, 11, 20, 0, 0, TimeSpan.Zero);
             await scenario.ExecuteAdminAsync(
                 """
@@ -54,11 +58,11 @@ public sealed partial class DispatchPostgreSqlContractTests
                 P("order", scenario.OrderId));
             await CreateAssignmentService(fixture.AppDataSource)
                 .CreateOwnDriverAssignmentAsync(Command(scenario), default);
-            var query = CreateStopsQuery(fixture.AppDataSource, new EnvelopeDriverStopLocationReader(envelope));
+            var query = CreateStopsQuery(fixture.AppDataSource, new EnvelopeLocationPiiReader(envelope));
 
-            var pickup = Assert.Single(await query.ListCurrentDriverStopsAsync(
-                scenario.DriverUserId, scenario.OrganizationId, default));
+            var pickup = await SingleStopAsync(query, scenario);
             Assert.Equal("PICKUP", pickup.StopType);
+            Assert.True(pickup.DetailsAvailable);
             // The owner's answer "Completo en recolección": the full name at pickup, never the short one.
             Assert.Equal("Farmacia Las Quintas", pickup.ContactFullName);
             Assert.Null(pickup.ContactShortName);
@@ -71,8 +75,7 @@ public sealed partial class DispatchPostgreSqlContractTests
                 pickup.Navigation);
 
             await SetOrderStatusAsync(scenario, "IN_TRANSIT");
-            var delivery = Assert.Single(await query.ListCurrentDriverStopsAsync(
-                scenario.DriverUserId, scenario.OrganizationId, default));
+            var delivery = await SingleStopAsync(query, scenario);
             Assert.Equal("DELIVERY", delivery.StopType);
             // At the door only the short name; the recipient's full name never leaves the server.
             Assert.Equal("M. Pérez", delivery.ContactShortName);
@@ -92,17 +95,19 @@ public sealed partial class DispatchPostgreSqlContractTests
             var mismatch = await Assert.ThrowsAsync<FinanceConflictException>(() =>
                 cod.RecordAsync(DoorCollection(scenario, DoorCodCents - 1), default));
             Assert.Equal(FinanceConflictCode.CodAmountMismatch, mismatch.Code);
-            Assert.Equal(
-                new DriverStopCodResult(DoorCodCents, false),
-                Assert.Single(await query.ListCurrentDriverStopsAsync(
-                    scenario.DriverUserId, scenario.OrganizationId, default)).Cod);
+            Assert.Equal(new DriverStopCodResult(DoorCodCents, false), (await SingleStopAsync(query, scenario)).Cod);
 
             var recorded = await cod.RecordAsync(DoorCollection(scenario, DoorCodCents), default);
             Assert.Equal(("RECORDED", DoorCodCents), (recorded.Status, recorded.AmountCents));
-            Assert.Equal(
-                new DriverStopCodResult(DoorCodCents, true),
-                Assert.Single(await query.ListCurrentDriverStopsAsync(
-                    scenario.DriverUserId, scenario.OrganizationId, default)).Cod);
+            Assert.Equal(new DriverStopCodResult(DoorCodCents, true), (await SingleStopAsync(query, scenario)).Cod);
+
+            // The owner's answer "Completo, como recolección": the return goes back to the pickup contact, in full.
+            await SetOrderStatusAsync(scenario, "RETURNING");
+            var returning = await SingleStopAsync(query, scenario);
+            Assert.Equal("RETURN", returning.StopType);
+            Assert.Equal("Farmacia Las Quintas", returning.ContactFullName);
+            Assert.Null(returning.ContactShortName);
+            Assert.Null(returning.Cod);
 
             // Nothing the driver saw reaches the audit log or the outbox.
             Assert.Equal(0, await Adp001FakeKeyVault.CountPlaintextInAuditAndOutboxAsync(
@@ -133,33 +138,31 @@ public sealed partial class DispatchPostgreSqlContractTests
             var query = CreateStopsQuery(fixture.AppDataSource, reader);
 
             // The assigned driver reads their own stop, and only its location is handed to the reader.
-            var own = Assert.Single(await query.ListCurrentDriverStopsAsync(
-                scenario.DriverUserId, scenario.OrganizationId, default));
+            var own = await SingleStopAsync(query, scenario);
             Assert.Equal(scenario.OrderId, own.OrderId);
             Assert.Equal([scenario.OriginLocationId], reader.TakeLocationIds());
 
             // Another driver of the same organization, without an assignment, reads nothing and nothing is decrypted.
-            Assert.Empty(await query.ListCurrentDriverStopsAsync(
-                unassignedDriverUserId, scenario.OrganizationId, default));
+            Assert.Empty((await query.ListCurrentDriverStopsAsync(
+                unassignedDriverUserId, scenario.OrganizationId, true, default)).Stops);
             Assert.Empty(reader.TakeLocationIds());
 
             // Another organization's context is refused before any stop is read.
             await Assert.ThrowsAsync<DriverStopsForbiddenException>(() =>
-                query.ListCurrentDriverStopsAsync(scenario.DriverUserId, foreign.OrganizationId, default));
+                query.ListCurrentDriverStopsAsync(scenario.DriverUserId, foreign.OrganizationId, true, default));
             Assert.Empty(reader.TakeLocationIds());
 
             // The other tenant's driver reads only their own order's stop.
-            var foreignStop = Assert.Single(await query.ListCurrentDriverStopsAsync(
-                foreign.DriverUserId, foreign.OrganizationId, default));
+            var foreignStop = await SingleStopAsync(query, foreign);
             Assert.Equal(foreign.OrderId, foreignStop.OrderId);
             Assert.Equal([foreign.OriginLocationId], reader.TakeLocationIds());
 
-            // A stop that is no longer assigned to the driver disappears from the snapshot, details included.
+            // A stop that is no longer assigned to the driver disappears from the list, details included.
             await scenario.ExecuteAdminAsync(
                 "UPDATE dispatch.assignments SET status='CANCELLED' WHERE order_id=@order;",
                 P("order", scenario.OrderId));
-            Assert.Empty(await query.ListCurrentDriverStopsAsync(
-                scenario.DriverUserId, scenario.OrganizationId, default));
+            Assert.Empty((await query.ListCurrentDriverStopsAsync(
+                scenario.DriverUserId, scenario.OrganizationId, true, default)).Stops);
             Assert.Empty(reader.TakeLocationIds());
         }
         finally
@@ -173,46 +176,150 @@ public sealed partial class DispatchPostgreSqlContractTests
     }
 
     [PostgreSqlContractFact]
-    public async Task Driver_stop_details_fail_closed_when_a_protected_value_cannot_be_read()
+    public async Task A_stop_whose_details_cannot_be_read_is_still_listed_without_them()
     {
         await using var scenario = await DispatchScenario.CreateAsync(fixture);
-        var envelope = new PiiEnvelopeProtector(new Adp001FakeKeyVault());
+        var vault = new Adp001FakeKeyVault();
+        var envelope = new PiiEnvelopeProtector(vault);
+        var zone = await CreateZoneAsync(scenario, "Centro");
+        try
+        {
+            await scenario.ExecuteAdminAsync(
+                "UPDATE locations.locations SET operating_zone_id=@zone WHERE id=@origin;",
+                P("zone", zone.ZoneId),
+                P("origin", scenario.OriginLocationId));
+            await CreateAssignmentService(fixture.AppDataSource)
+                .CreateOwnDriverAssignmentAsync(Command(scenario), default);
+            var query = CreateStopsQuery(fixture.AppDataSource, new EnvelopeLocationPiiReader(envelope));
+
+            // The synthetic scenario's placeholder bytes are not an envelope: the stop is listed, without details.
+            AssertWithoutDetails(await SingleStopAsync(query, scenario), "Centro");
+
+            // A value sealed for another row (here, the destination's) is never accepted for the pickup location.
+            var sealedForDestination = await new AzureKeyVaultLocationPiiProtector(envelope).ProtectAsync(
+                new LocationPiiValues(
+                    scenario.OrganizationId, scenario.DestinationLocationId, "Calle Sintética 30", "Ana Ruiz", null),
+                default);
+            await scenario.ExecuteAdminAsync(
+                """
+                UPDATE locations.locations
+                SET address_ciphertext=@address,contact_name_ciphertext=@contact,pii_key_version=@version
+                WHERE id=@origin;
+                """,
+                P("address", sealedForDestination.AddressTextCiphertext),
+                P("contact", sealedForDestination.ContactNameCiphertext!),
+                P("version", sealedForDestination.KeyVersion),
+                P("origin", scenario.OriginLocationId));
+            AssertWithoutDetails(await SingleStopAsync(query, scenario), "Centro");
+
+            // The same values sealed for the pickup row are read back.
+            await SealLocationAsync(
+                scenario, envelope, scenario.OriginLocationId, 24.80, -107.40, "Calle Sintética 30", "Ana Ruiz", zone.ZoneId);
+            var pickup = await SingleStopAsync(query, scenario);
+            Assert.True(pickup.DetailsAvailable);
+            Assert.Equal("Ana Ruiz", pickup.ContactFullName);
+            Assert.Equal(new DriverStopNavigationResult(24.80, -107.40, "Calle Sintética 30", null), pickup.Navigation);
+
+            // An unavailable key service never fails the list: the stop stays, without details.
+            vault.Unavailable = true;
+            AssertWithoutDetails(await SingleStopAsync(query, scenario), "Centro");
+        }
+        finally
+        {
+            await DeleteZoneAsync(scenario, zone);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Details_false_lists_the_stops_without_reading_any_protected_value()
+    {
+        await using var scenario = await DispatchScenario.CreateAsync(fixture);
+        await scenario.ExecuteAdminAsync(
+            "UPDATE orders.orders SET cod_expected_cents=@cod WHERE id=@order;",
+            P("cod", DoorCodCents),
+            P("order", scenario.OrderId));
         await CreateAssignmentService(fixture.AppDataSource)
             .CreateOwnDriverAssignmentAsync(Command(scenario), default);
-        var query = CreateStopsQuery(fixture.AppDataSource, new EnvelopeDriverStopLocationReader(envelope));
+        await SetOrderStatusAsync(scenario, "DELIVERING");
+        var reader = new RecordingStopLocationReader();
+        var query = CreateStopsQuery(fixture.AppDataSource, reader);
 
-        // The synthetic scenario's placeholder bytes are not an envelope.
-        await Assert.ThrowsAsync<DriverStopsPiiUnavailableException>(() =>
-            query.ListCurrentDriverStopsAsync(scenario.DriverUserId, scenario.OrganizationId, default));
+        var confirmation = Assert.Single((await query.ListCurrentDriverStopsAsync(
+            scenario.DriverUserId, scenario.OrganizationId, false, default)).Stops);
 
-        // A value sealed for another row (here, the destination's) is never accepted for the pickup location.
-        var sealedForDestination = await new AzureKeyVaultLocationPiiProtector(envelope).ProtectAsync(
-            new LocationPiiValues(
-                scenario.OrganizationId, scenario.DestinationLocationId, "Calle Sintética 30", "Ana Ruiz", null),
-            default);
-        await scenario.ExecuteAdminAsync(
-            """
-            UPDATE locations.locations
-            SET address_ciphertext=@address,contact_name_ciphertext=@contact,pii_key_version=@version
-            WHERE id=@origin;
-            """,
-            P("address", sealedForDestination.AddressTextCiphertext),
-            P("contact", sealedForDestination.ContactNameCiphertext!),
-            P("version", sealedForDestination.KeyVersion),
-            P("origin", scenario.OriginLocationId));
-        var exception = await Assert.ThrowsAsync<DriverStopsPiiUnavailableException>(() =>
-            query.ListCurrentDriverStopsAsync(scenario.DriverUserId, scenario.OrganizationId, default));
-        Assert.DoesNotContain("Calle", exception.ToString(), StringComparison.Ordinal);
-        Assert.DoesNotContain("Ana", exception.ToString(), StringComparison.Ordinal);
+        Assert.Empty(reader.TakeLocationIds());
+        Assert.False(confirmation.DetailsAvailable);
+        Assert.Null(confirmation.Navigation);
+        Assert.Null(confirmation.ContactShortName);
+        Assert.Null(confirmation.ContactFullName);
+        // What a queued action is confirmed against is still there: status, version and the cash.
+        Assert.Equal("DELIVERING", confirmation.Status);
+        Assert.Equal(new DriverStopCodResult(DoorCodCents, false), confirmation.Cod);
+    }
 
-        // The same values sealed for the pickup row are read back.
-        await SealLocationAsync(
-            scenario, envelope, scenario.OriginLocationId, 24.80, -107.40, "Calle Sintética 30", "Ana Ruiz", null);
-        var pickup = Assert.Single(await query.ListCurrentDriverStopsAsync(
-            scenario.DriverUserId, scenario.OrganizationId, default));
-        Assert.Equal("Ana Ruiz", pickup.ContactFullName);
-        Assert.Null(pickup.ContactShortName);
-        Assert.Equal(new DriverStopNavigationResult(24.80, -107.40, "Calle Sintética 30", null), pickup.Navigation);
+    [PostgreSqlContractFact]
+    public async Task Completed_today_counts_only_the_drivers_own_completions_of_the_Mazatlan_day()
+    {
+        await using var scenario = await DispatchScenario.CreateAsync(fixture);
+        await CreateAssignmentService(fixture.AppDataSource)
+            .CreateOwnDriverAssignmentAsync(Command(scenario), default);
+        // 2026-10-11 in America/Mazatlan (UTC-7) runs from 07:00Z to 07:00Z the next day.
+        var version = 100;
+        async Task EventAsync(string status, string occurredAt, Guid? actor = null) =>
+            await scenario.ExecuteAdminAsync(
+                """
+                INSERT INTO orders.order_events(
+                  id,order_id,owner_org_id,aggregate_version,event_type,payload,actor_id,occurred_at)
+                VALUES (@id,@order,@org,@version,'ORDER_STATUS_CHANGED',@payload::jsonb,@actor,@occurred);
+                """,
+                P("id", Guid.NewGuid()),
+                P("order", scenario.OrderId),
+                P("org", scenario.OrganizationId),
+                P("version", version++),
+                P("payload", $$"""{"previous_status":"X","new_status":"{{status}}"}"""),
+                P("actor", actor ?? scenario.DriverUserId),
+                P("occurred", DateTimeOffset.Parse(occurredAt, System.Globalization.CultureInfo.InvariantCulture)));
+        await EventAsync("PICKED_UP", "2026-10-11T07:00:00Z");
+        await EventAsync("RETURNED", "2026-10-11T12:00:00Z");
+        await EventAsync("DELIVERED", "2026-10-12T06:59:59Z");
+        await EventAsync("DELIVERED", "2026-10-11T06:59:59Z");
+        await EventAsync("DELIVERED", "2026-10-12T07:00:00Z");
+        await EventAsync("FAILED_ATTEMPT", "2026-10-11T10:00:00Z");
+        await EventAsync("IN_TRANSIT", "2026-10-11T10:00:00Z");
+        await EventAsync("DELIVERED", "2026-10-11T10:00:00Z", scenario.DispatcherUserId);
+
+        async Task<int> CompletedAtAsync(string now) =>
+            (await CreateStopsQuery(
+                    fixture.AppDataSource,
+                    now: DateTimeOffset.Parse(now, System.Globalization.CultureInfo.InvariantCulture))
+                .ListCurrentDriverStopsAsync(scenario.DriverUserId, scenario.OrganizationId, false, default))
+            .CompletedToday;
+
+        Assert.Equal(3, await CompletedAtAsync("2026-10-11T20:00:00Z"));
+        Assert.Equal(3, await CompletedAtAsync("2026-10-11T07:00:00Z"));
+        Assert.Equal(3, await CompletedAtAsync("2026-10-12T06:59:59Z"));
+        // Just before midnight in Mazatlán the previous day counts; just after it, only the new day's delivery.
+        Assert.Equal(1, await CompletedAtAsync("2026-10-11T06:59:59Z"));
+        Assert.Equal(1, await CompletedAtAsync("2026-10-12T07:00:00Z"));
+        Assert.Equal(0, await CompletedAtAsync("2026-10-13T12:00:00Z"));
+    }
+
+    private static async Task<DriverStopResult> SingleStopAsync(
+        global::Dispatch.Infrastructure.Stops.PostgreSqlDriverStopsQuery query,
+        DispatchScenario scenario) =>
+        Assert.Single((await query.ListCurrentDriverStopsAsync(
+            scenario.DriverUserId, scenario.OrganizationId, true, default)).Stops);
+
+    private static void AssertWithoutDetails(DriverStopResult stop, string zoneName)
+    {
+        Assert.False(stop.DetailsAvailable);
+        Assert.Null(stop.Navigation);
+        Assert.Null(stop.ContactShortName);
+        Assert.Null(stop.ContactFullName);
+        Assert.Equal("PICKUP", stop.StopType);
+        Assert.Equal(zoneName, stop.ZoneName);
+        Assert.Equal("READY origin summary", stop.AddressSummary);
+        Assert.DoesNotContain("Calle", stop.ToString(), StringComparison.Ordinal);
     }
 
     private Task SetOrderStatusAsync(DispatchScenario scenario, string status) =>
@@ -341,13 +448,13 @@ public sealed partial class DispatchPostgreSqlContractTests
     }
 
     /// <summary>Records which locations a stops read handed over for decryption; it never decrypts anything.</summary>
-    private sealed class RecordingStopLocationReader : IDriverStopLocationReader
+    private sealed class RecordingStopLocationReader : ILocationPiiReader
     {
         private readonly List<Guid> _locationIds = [];
-        private readonly SyntheticDriverStopLocationReader _inner = new();
+        private readonly SyntheticLocationPiiReader _inner = new();
 
-        public Task<IReadOnlyList<DriverStopLocationText>> ReadAsync(
-            IReadOnlyList<ProtectedDriverStopLocation> locations,
+        public Task<IReadOnlyList<LocationPiiText?>> ReadAsync(
+            IReadOnlyList<StoredLocationPii> locations,
             CancellationToken cancellationToken)
         {
             _locationIds.AddRange(locations.Select(location => location.LocationId));

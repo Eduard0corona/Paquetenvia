@@ -96,6 +96,7 @@ internal static class SolutionCatalog
         [
             "Paqueteria.Application",
             "Drivers.Application",
+            "Locations.Application",
             "Orders.Application",
             "Orders.Domain",
         ],
@@ -105,7 +106,8 @@ internal static class SolutionCatalog
             "Organizations.Endpoints",
             "Paqueteria.Application",
         ],
-        allowedCrossModuleDependencies: ["Drivers", "Orders", "Organizations"]);
+        // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: Locations only through its application port (ILocationPiiReader).
+        allowedCrossModuleDependencies: ["Drivers", "Locations", "Orders", "Organizations"]);
 
     internal static readonly ModuleDefinition Realtime = Module(
         "Realtime",

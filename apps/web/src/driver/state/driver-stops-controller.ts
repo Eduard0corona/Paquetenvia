@@ -10,7 +10,7 @@ import {
   type DriverStopsCache,
   type DriverStopsSnapshot,
 } from "../cache/driver-stops-cache";
-import type { DriverStop } from "../contracts/driver-stop";
+import type { DriverStop, DriverStopList } from "../contracts/driver-stop";
 import type {
   DriverStopsRealtimeFactory,
 } from "../realtime/driver-stops-realtime";
@@ -38,6 +38,47 @@ export interface DriverStopsViewState {
   readonly synchronizedAt: string | null;
   readonly realtime: "updated" | "reconnecting" | "offline";
   readonly refreshing: boolean;
+  /**
+   * UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 ("Hoy · N paradas · K hechas"):
+   * the driver's stops completed on the Mazatlán day of `synchronizedAt`, as
+   * the server counted them; null when unknown.
+   */
+  readonly completedToday: number | null;
+}
+
+/**
+ * UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: a confirmation read
+ * (`details=false`) never wipes the details the phone already holds. A stop
+ * keeps them while it is still the same stop (same order and stop type); a
+ * stop the server no longer returns leaves the list, details included; a new
+ * stop, or one that now heads to another place, has none until the next full
+ * read, which the caller schedules.
+ */
+export function mergeConfirmedStops(
+  previous: readonly DriverStop[],
+  confirmed: readonly DriverStop[],
+): { readonly stops: readonly DriverStop[]; readonly missingDetails: boolean } {
+  const known = new Map(previous.map((stop) => [stop.order_id, stop]));
+  let missingDetails = false;
+  const stops = confirmed.map((stop): DriverStop => {
+    const earlier = known.get(stop.order_id);
+    if (
+      earlier &&
+      earlier.stop_type === stop.stop_type &&
+      earlier.details_available
+    ) {
+      return Object.freeze({
+        ...stop,
+        details_available: true,
+        contact_short_name: earlier.contact_short_name,
+        contact_full_name: earlier.contact_full_name,
+        navigation: earlier.navigation,
+      });
+    }
+    if (!stop.details_available) missingDetails = true;
+    return stop;
+  });
+  return { stops: Object.freeze(stops), missingDetails };
 }
 
 export interface DriverStopsControllerOptions {
@@ -59,6 +100,7 @@ const initialState: DriverStopsViewState = Object.freeze({
   synchronizedAt: null,
   realtime: "updated",
   refreshing: false,
+  completedToday: null,
 });
 
 export class DriverStopsController {
@@ -103,13 +145,29 @@ export class DriverStopsController {
     await this.refresh("manual");
   }
 
+  /**
+   * The read the sync scheduler confirms queued actions with
+   * (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11): without protected details, so
+   * it never depends on the key service, and merged into the saved snapshot
+   * without wiping the details it holds. A disposed controller (logout) or an
+   * aborted pass never answers with an empty list: it throws "cancelled", so
+   * no queued action is ever taken for missing.
+   */
   public async refreshForSync(
     signal?: AbortSignal,
   ): Promise<readonly DriverStop[]> {
-    if (this.disposed || !this.partition) return [];
-    const stops = await this.options.api.listStops(signal);
-    await this.acceptAuthoritativeStops(stops);
-    return stops;
+    if (this.disposed || !this.partition || signal?.aborted) {
+      throw new DriverStopsApiError("cancelled");
+    }
+    const list = await this.options.api.listStops(signal, { details: false });
+    if (this.disposed || signal?.aborted) {
+      throw new DriverStopsApiError("cancelled");
+    }
+    this.reportRejected(list);
+    const merged = mergeConfirmedStops(this.state.stops, list.stops);
+    await this.acceptAuthoritativeStops(merged.stops, list.completedToday);
+    if (merged.missingDetails) this.scheduleRefresh();
+    return list.stops;
   }
 
   public async revokeAccess(
@@ -126,6 +184,7 @@ export class DriverStopsController {
       synchronizedAt: null,
       realtime: "offline",
       refreshing: false,
+      completedToday: null,
     });
   }
 
@@ -173,13 +232,14 @@ export class DriverStopsController {
     });
 
     try {
-      const stops = await this.options.api.listStops(request.signal);
+      const list = await this.options.api.listStops(request.signal);
       if (this.disposed || request.signal.aborted) {
         return [];
       }
-      await this.acceptAuthoritativeStops(stops);
+      this.reportRejected(list);
+      await this.acceptAuthoritativeStops(list.stops, list.completedToday);
       await this.ensureRealtime();
-      return stops;
+      return list.stops;
     } catch (error) {
       if (this.disposed || request.signal.aborted) {
         return [];
@@ -213,6 +273,7 @@ export class DriverStopsController {
         synchronizedAt: null,
         realtime: "offline",
         refreshing: false,
+        completedToday: null,
       });
       return;
     }
@@ -242,6 +303,7 @@ export class DriverStopsController {
         synchronizedAt: snapshot.synchronizedAt,
         realtime: "offline",
         refreshing: false,
+        completedToday: snapshot.completedToday,
       });
     } else {
       this.setState({
@@ -250,12 +312,29 @@ export class DriverStopsController {
         synchronizedAt: null,
         realtime: "offline",
         refreshing: false,
+        completedToday: null,
       });
+    }
+  }
+
+  private reportRejected(list: DriverStopList): void {
+    if (list.droppedCount > 0) {
+      this.options.telemetry.stopsRejected?.(
+        "dropped",
+        driverStopCountBucket(list.droppedCount),
+      );
+    }
+    if (list.degradedCount > 0) {
+      this.options.telemetry.stopsRejected?.(
+        "degraded",
+        driverStopCountBucket(list.degradedCount),
+      );
     }
   }
 
   private async acceptAuthoritativeStops(
     stops: readonly DriverStop[],
+    completedToday: number,
   ): Promise<void> {
     if (!this.partition || this.disposed) return;
     const synchronizedAt = this.now().toISOString();
@@ -263,6 +342,7 @@ export class DriverStopsController {
       schemaVersion: DriverStopsSchemaVersion,
       synchronizedAt,
       stops,
+      completedToday,
     });
     await this.options.cache.replaceSnapshot(this.partition, snapshot);
     this.options.telemetry.loadCompleted(
@@ -275,6 +355,7 @@ export class DriverStopsController {
       synchronizedAt,
       realtime: "updated",
       refreshing: false,
+      completedToday,
     });
   }
 

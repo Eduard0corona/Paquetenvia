@@ -460,7 +460,7 @@ public sealed class PendingMembershipPostgreSqlContractTests(PostgreSqlContractF
 
         // REG-DRIVER-PROFILE-LATER: driver operations resolve the ACTIVE driver profile first and refuse without it.
         await Assert.ThrowsAsync<DriverStopsForbiddenException>(() =>
-            StopsQuery().ListCurrentDriverStopsAsync(user, organization, CancellationToken.None));
+            StopsQuery().ListCurrentDriverStopsAsync(user, organization, true, CancellationToken.None));
     }
 
     [PostgreSqlContractFact]
@@ -575,7 +575,8 @@ public sealed class PendingMembershipPostgreSqlContractTests(PostgreSqlContractF
             .Options;
         return new PostgreSqlDriverStopsQuery(
             new TenantTransactionContext<DispatchDbContext>(new DispatchDbContext(dbOptions, state), state),
-            new SyntheticDriverStopLocationReader(),
+            new global::Locations.Infrastructure.Locations.SyntheticLocationPiiReader(),
+            new global::Paqueteria.Infrastructure.SystemClock(),
             NullLogger<PostgreSqlDriverStopsQuery>.Instance);
     }
 

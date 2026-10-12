@@ -270,6 +270,21 @@
           "Paqueteria.Domain": "[1.0.0, )"
         }
       },
+      "locations.application": {
+        "type": "Project",
+        "dependencies": {
+          "Locations.Domain": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
+      "locations.domain": {
+        "type": "Project",
+        "dependencies": {
+          "NetTopologySuite": "[2.6.0, )",
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
       "orders.application": {
         "type": "Project",
         "dependencies": {
@@ -367,6 +382,12 @@
         "dependencies": {
           "Microsoft.EntityFrameworkCore": "10.0.10"
         }
+      },
+      "NetTopologySuite": {
+        "type": "CentralTransitive",
+        "requested": "[2.6.0, )",
+        "resolved": "2.6.0",
+        "contentHash": "1B1OTacTd4QtFyBeuIOcThwSSLUdRZU3bSFIwM8vk36XiZlBMi3K36u74e4OqwwHRHUuJC1PhbDx4hyI266X1Q=="
       },
       "Npgsql": {
         "type": "CentralTransitive",
