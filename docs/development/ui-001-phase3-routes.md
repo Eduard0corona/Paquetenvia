@@ -1,8 +1,9 @@
 # UI-001 fase 3: Rutas, "Crear ruta" con selectores, sin IDs internos y con errores por motivo
 
-Decisiones: `UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11` (abajo) y `UI-PHASE3-ROUTES-NO-IDS-2026-10-12` (sección "Rutas sin
-IDs internos y con errores por motivo"); la regla de "Crear ruta nueva" por día de la bandeja es
-`UI-PHASE3-ROUTES-DAILY-2026-10-12` (`ui-001-phase3-inbox.md`).
+Decisiones: `UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11` (abajo), `UI-PHASE3-ROUTES-NO-IDS-2026-10-12` (sección "Rutas sin
+IDs internos y con errores por motivo") y `UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12` (sección "El repartidor en cada fila
+de la lista"); la regla de "Crear ruta nueva" por día de la bandeja es `UI-PHASE3-ROUTES-DAILY-2026-10-12`
+(`ui-001-phase3-inbox.md`).
 
 Decisión: `UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11` (cambio MAJOR de AI-01 §7; la fila de `decision-log.md` es su
 registro ADR). Fase 3 aprobada con "avanza con la fase 3"; la propuesta UX aprobada (UI-001) nombra "Las rutas piden el
@@ -124,6 +125,33 @@ el patrón de `listOrders.public_id` en AI-05), el mismo valor que pide "Buscar 
 - Nada se guarda en localStorage, sessionStorage ni consola; sin datos personales. Los ids solo son llaves y valores de
   opciones, nunca texto.
 
+## El repartidor en cada fila de la lista (UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12)
+
+Pregunta literal al owner (2026-10-12): "En la lista de Rutas, varias rutas del mismo día se ven iguales ("Ruta del 12
+de octubre de 2026") sin decir de qué repartidor son. ¿Agrego el DRV- a cada fila?". Respuesta literal: "Sí, DRV- en
+cada fila (Recommended)", cuya opción decía "Cada ruta de la lista muestra "Ruta del 12 de octubre de 2026 ·
+DRV-1a2b3c4d". Solo pantalla, sin cambiar el API." No elegida: "No por ahora" ("La lista queda como está; el repartidor
+se ve al abrir la ruta."). Contrato: AI-07 `route_planner.list` (`decision_amendment`, `display` y `driver`), la nota de
+`sources.drivers` y `decision_amendments`. AI-05 no cambia.
+
+- Cada fila de la lista (`RouteList` en `components/manual-routes-shell.tsx`) dice, en su línea en negritas, el nombre
+  por fecha y el repartidor: "Ruta del 12 de octubre de 2026 · DRV-1a2b3c4d" (o "Ruta sin fecha · DRV-…"). Debajo siguen
+  igual el estado, las paradas y el costo total.
+- Fuente: la misma lectura de `listOrganizationDrivers` que ya hace la pantalla para "Crear ruta" y para el encabezado
+  del detalle (`driverReferences` de `state/create-route-form-controller.ts`, cualquier estado, todas las páginas hasta
+  10). `ManualRoutesShell` pasa `form.state` a la lista; no hay una segunda lectura.
+- `routeListDriverText` (junto a `routeDriverText`, en el mismo archivo, con la misma búsqueda por id):
+  - repartidor en la lectura: su referencia sola, "DRV-1a2b3c4d";
+  - repartidor que la lectura no trae (por ejemplo uno inactivo, o más allá de las 10 páginas) o lectura fallida:
+    "Repartidor no disponible", igual que el detalle;
+  - mientras la lectura está en curso (al entrar, al cambiar de sesión u organización, con "Intentar de nuevo"): nada;
+    la fila muestra solo el nombre por fecha, sin "·" suelto ni "Cargando…".
+  - Nunca el id del repartidor ni un fragmento suyo.
+- La lista conserva el orden del servidor y los nombres por fecha (`routeName`, sin cambios). La fila sigue sin
+  `aria-label`: su nombre accesible es el texto que muestra (fecha, repartidor, estado, paradas y costo), y
+  `aria-current` marca la ruta abierta.
+- Nada se guarda en el navegador ni se registra en consola.
+
 ## Pendiente
 
 - Terminar o descartar rutas: AI-05 no tiene operación que saque una ruta de DRAFT (`RouteStatus` tiene PLANNED,
@@ -149,6 +177,8 @@ Las pruebas de navegador `ManualRoutesPwaPlaywrightTests` (build de producción 
   guía (`/api/v1/orders?public_id=` simulado), rechaza una guía desconocida y una con otro formato, reordena, recibe un
   VERSION_CONFLICT (relee la ruta), un DRIVER_INELIGIBLE (sin releer) y un MFA_REQUIRED con "Verificar identidad" de
   regreso a la ruta, y en otra organización muestra "Repartidor no disponible" y la guía de su parada; ningún id se ve.
+  Con UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12 también comprueba la fila de la lista: "Ruta del 30 de agosto de 2026 ·
+  DRV-55555555" y, en la otra organización, "Ruta del 15 de septiembre de 2026 · Repartidor no disponible".
 - `Planner_prefills_the_guia_of_orderId_and_names_every_stop_by_guia` abre Rutas con `?orderId=` y comprueba la guía
   en el campo y en la parada (`/api/v1/orders/{id}` simulado), que se puede agregar y que una orden ilegible deja el
   campo vacío.
@@ -163,3 +193,7 @@ Revertir el commit de UI-PHASE3-ROUTES-NO-IDS-2026-10-12 (el mismo de UI-PHASE3-
 a su cliente anterior: el mensaje único "La ruta cambió mientras la editabas…" para todo 409, sin "Verificar
 identidad", fechas `YYYY-MM-DD`, solo la primera página, "ID de la orden" y los IDs cortos del detalle; AI-07 vuelve a
 su texto anterior. No hay datos, esquema, API ni migración que deshacer.
+
+Revertir el commit de UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12 quita el repartidor de las filas de la lista (vuelven a
+decir solo "Ruta del 12 de octubre de 2026"); el detalle lo sigue mostrando. AI-07 vuelve a su texto anterior y la
+integridad se regenera. No hay datos, esquema, API ni migración que deshacer.

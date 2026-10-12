@@ -1,5 +1,21 @@
 # Changelog
 
+## Rutas: el repartidor (DRV-) en cada fila de la lista (UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12) — 2026-10-12
+
+- Pregunta y respuesta literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR
+  (AI-01 §7): "En la lista de Rutas, varias rutas del mismo día se ven iguales ("Ruta del 12 de octubre de 2026") sin
+  decir de qué repartidor son. ¿Agrego el DRV- a cada fila?" → "Sí, DRV- en cada fila (Recommended)" ("Cada ruta de la
+  lista muestra "Ruta del 12 de octubre de 2026 · DRV-1a2b3c4d". Solo pantalla, sin cambiar el API."); no elegida: "No
+  por ahora" ("La lista queda como está; el repartidor se ve al abrir la ruta.").
+- AI-07 `route_planner.list` (`decision_amendment`, `display` y `driver`), `sources.drivers` y `decision_amendments`;
+  la ruta `/ops/routes` suma la decisión. Cada fila dice "Ruta del 12 de octubre de 2026 · DRV-1a2b3c4d" con la
+  referencia de la misma lectura de `listOrganizationDrivers` que ya hacen "Crear ruta" y el encabezado del detalle
+  (cualquier estado; ninguna lectura más). Un repartidor que esa lectura no trae, o una lectura fallida, es "Repartidor
+  no disponible", como en el detalle; mientras se lee, la fila muestra solo el nombre por fecha; nunca el id. Se
+  conservan el orden del servidor, los nombres por fecha, el estado, las paradas y el costo total; el nombre accesible
+  de cada fila sigue siendo su texto.
+- Sin cambios en AI-04, AI-05, AI-06, AI-18, backend, roles, capacidades, migraciones ni flujos cross-module.
+
 ## Roles propios en la organización activa: `GET /me/organization-roles` (ORG-MY-ROLES-2026-10-12) — 2026-10-12
 
 - Preguntas y respuestas literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR
