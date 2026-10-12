@@ -203,7 +203,7 @@ Docker Compose incluye:
 Crear librería común con:
 
 - ActivitySource/Meter;
-- enrichment tenant/correlation sin PII;
+- enrichment tenant/correlation sin PII; el tenant es el seudónimo HMAC de la organización (nunca el id real) y el actor solo su tipo de rol, únicamente en trazas y logs, nunca en métricas ni alertas (OBS-003-TENANT-PSEUDONYM-2026-10-12);
 - health checks;
 - métricas de HTTP, hubs, outbox, workers, DB y proveedores;
 - dashboards/runbooks mínimos.
