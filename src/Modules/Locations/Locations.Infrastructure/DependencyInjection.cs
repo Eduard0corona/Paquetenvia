@@ -13,6 +13,7 @@ using Microsoft.Extensions.Options;
 using Npgsql;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
+using Paqueteria.Application.Locations;
 using Paqueteria.Application.Security;
 using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
@@ -104,6 +105,19 @@ public static class DependencyInjection
             serviceProvider => serviceProvider.GetRequiredService<IOptions<LocationsOptions>>().Value.PiiProtector ==
                 LocationPiiProtectorKind.AzureKeyVault);
         services.AddSingleton<AzureKeyVaultLocationPiiProtector>();
+        // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the values are read back the way they were protected, from the
+        // same bound option, so a module that shows a location never repeats the mode, purposes or storage format.
+        services.AddSingleton<DisabledLocationPiiReader>();
+        services.AddSingleton<SyntheticLocationPiiReader>();
+        services.AddSingleton(serviceProvider =>
+            new EnvelopeLocationPiiReader(serviceProvider.GetRequiredService<IPiiEnvelopeProtector>()));
+        services.AddScoped<ILocationPiiReader>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<LocationsOptions>>().Value.PiiProtector switch
+            {
+                LocationPiiProtectorKind.Mock => serviceProvider.GetRequiredService<SyntheticLocationPiiReader>(),
+                LocationPiiProtectorKind.AzureKeyVault => serviceProvider.GetRequiredService<EnvelopeLocationPiiReader>(),
+                _ => serviceProvider.GetRequiredService<DisabledLocationPiiReader>(),
+            });
 
         services.AddSingleton<DisabledLocationService>();
         services.AddScoped<PostgreSqlLocationService>();

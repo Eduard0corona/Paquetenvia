@@ -52,6 +52,12 @@ public sealed partial class ObservabilityArchitectureTests
         "DeadBefore",
         "StartedAt",
         "CompletedAt",
+        // ORD-AUTO-CLOSE-2026-10-10: per-cycle attempt counts of the order auto-close job.
+        "Closed",
+        "NotEligible",
+        "Superseded",
+        "Failed",
+        "Attempted",
     };
 
     private static readonly HashSet<string> MetricTags = new(StringComparer.Ordinal)

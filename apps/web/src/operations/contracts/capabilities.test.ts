@@ -3,12 +3,14 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   canAuthorizeLowPrice,
+  canOpenWorkInbox,
   canSearchOrders,
   canListPendingCod,
   lowPriceAuthorizationMatrix,
   lowPriceAuthorizationRequiresMfa,
   canPerform,
   capabilityMatrix,
+  driverListOperationsMatrix,
   financeOperationsMatrix,
   screenOperationsMatrix,
   mayHandleExactCoordinates,
@@ -123,6 +125,40 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
     expect(requiresMfa("DISPATCHER", "getOperationsQueueCounts")).toBe(false);
   });
 
+  it("mirrors AI-05 driver_list_operations: the picker roles and the createSettlement roles (UI-PHASE3-DRIVERS-2026-10-11)", () => {
+    // Only the section's own rows, whatever section follows it.
+    const start = openApi.indexOf("\n  driver_list_operations:\n");
+    expect(start).toBeGreaterThan(openApi.indexOf("x-capability-matrix:"));
+    const rows: Record<string, string[]> = {};
+    for (const line of openApi.slice(start + 1).split("\n").slice(1)) {
+      const match = /^ {4}(\w+): \[([A-Z_, ]+)\]$/.exec(line);
+      if (match === null) break;
+      rows[match[1]] = match[2].split(",").map((role) => role.trim());
+    }
+    expect(rows).toEqual({
+      listOrganizationDrivers: ["DISPATCHER", "PLATFORM_ADMIN"],
+      listSettlementPayees: ["FINANCE", "PLATFORM_ADMIN"],
+    });
+    expect(driverListOperationsMatrix).toEqual(rows);
+    expect(driverListOperationsMatrix.listOrganizationDrivers).toEqual(screenOperationsMatrix.listAssignableDrivers);
+    expect(driverListOperationsMatrix.listSettlementPayees).toEqual(capabilityMatrix.createSettlement);
+
+    const capabilities = tenantCapabilities.replace(/\s+/g, " ");
+    expect(capabilities).toContain('Create("listOrganizationDrivers", Dispatcher, PlatformAdminMfa)');
+    expect(capabilities).toContain('ListSettlementPayees = Settlement("listSettlementPayees")');
+    for (const operation of ["listOrganizationDrivers", "listSettlementPayees"] as const) {
+      expect(requiresMfa("PLATFORM_ADMIN", operation), operation).toBe(true);
+      for (const role of ["VIEWER", "DRIVER", "CUSTOMER_SUPPORT", "BUSINESS_ADMIN", null])
+        expect(canPerform(role, operation), `${role} ${operation}`).toBe(false);
+    }
+    expect(canPerform("DISPATCHER", "listOrganizationDrivers")).toBe(true);
+    expect(canPerform("FINANCE", "listOrganizationDrivers")).toBe(false);
+    expect(canPerform("FINANCE", "listSettlementPayees")).toBe(true);
+    expect(canPerform("DISPATCHER", "listSettlementPayees")).toBe(false);
+    expect(requiresMfa("FINANCE", "listSettlementPayees")).toBe(false);
+    expect(requiresMfa("DISPATCHER", "listOrganizationDrivers")).toBe(false);
+  });
+
   it("offers the tracking-number search to the roles that open the order detail (UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05)", () => {
     expect(canSearchOrders("DISPATCHER")).toBe(true);
     expect(canSearchOrders("PLATFORM_ADMIN")).toBe(true);
@@ -130,11 +166,36 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
       expect(canSearchOrders(role), String(role)).toBe(false);
   });
 
+  it("offers the work inbox to exactly the dashboard and queue-count roles (UI-PHASE3-INBOX-2026-10-10)", () => {
+    expect(canOpenWorkInbox("DISPATCHER")).toBe(true);
+    expect(canOpenWorkInbox("PLATFORM_ADMIN")).toBe(true);
+    for (const role of ["VIEWER", "DRIVER", "FINANCE", "CUSTOMER_SUPPORT", "BUSINESS_ADMIN", "ALLY_ADMIN", null])
+      expect(canOpenWorkInbox(role), String(role)).toBe(false);
+    // Same roles as getOperationsQueueCounts, which the inbox tabs read.
+    for (const role of ["DISPATCHER", "PLATFORM_ADMIN", "VIEWER", "FINANCE", "DRIVER"])
+      expect(canOpenWorkInbox(role), role).toBe(canPerform(role, "getOperationsQueueCounts"));
+  });
+
+  it("confirms the new order with transitionOrder, PLATFORM_ADMIN only with MFA (UI-PHASE3-ORDER-WIZARD-2026-10-10)", () => {
+    expect(screenOperationsMatrix.transitionOrder).toEqual(["DISPATCHER", "PLATFORM_ADMIN"]);
+    // Every role that creates an order from the screen can also confirm it.
+    expect(screenOperationsMatrix.transitionOrder).toEqual([...capabilityMatrix.createOrder]);
+    expect(requiresMfa("PLATFORM_ADMIN", "transitionOrder")).toBe(true);
+    expect(requiresMfa("DISPATCHER", "transitionOrder")).toBe(false);
+    expect(requiresMfa("PLATFORM_ADMIN", "createOrder")).toBe(false);
+    for (const role of ["VIEWER", "FINANCE", "DRIVER", "CUSTOMER_SUPPORT", null])
+      expect(canPerform(role, "transitionOrder"), String(role)).toBe(false);
+    expect(tenantCapabilities.replace(/\s+/g, " ")).toContain(
+      'Create("transitionOrder", Dispatcher, PlatformAdminMfa, Driver)',
+    );
+  });
+
   it("each mirrored operation exists in AI-05", () => {
     for (const operation of [
       ...Object.keys(capabilityMatrix),
       ...Object.keys(financeOperationsMatrix),
       ...Object.keys(screenOperationsMatrix),
+      ...Object.keys(driverListOperationsMatrix),
     ]) {
       expect(openApi).toContain(`operationId: ${operation}`);
     }

@@ -4,6 +4,8 @@ import Link from "next/link";
 import type { OperationsDashboardOrder } from "../contracts/operations-dashboard";
 import {
   assignmentTypeLabel,
+  operatorLabel,
+  ownerLabel,
   serviceTypeLabel,
   timelineLabel,
 } from "../contracts/operations-formatters";
@@ -14,18 +16,29 @@ import { PageHeader } from "../../components/ui/page-header";
 import { StatusBadge } from "../../components/ui/status-badge";
 import { useOperationsOrderDetail } from "../state/use-operations-order-detail";
 import { OperationsDriverAssignment } from "./operations-driver-assignment";
+import { OperationsFailedAttempt } from "./operations-failed-attempt";
 import { OperationsNextStep } from "./operations-next-step";
 import { OperationsTrackingLink } from "./operations-tracking-link";
 
 export function OperationsOrderDetailShell({
   orderId,
+  inboxHref = null,
 }: {
   readonly orderId: string;
+  /** UI-PHASE3-INBOX-2026-10-10: the inbox view this detail was opened from, if any. */
+  readonly inboxHref?: string | null;
 }) {
   const state = useOperationsOrderDetail(orderId);
+  const backToInbox =
+    inboxHref === null ? null : (
+      <Link className="btnLink opsBackLink" href={inboxHref}>
+        <span aria-hidden="true">←</span> Volver a la bandeja
+      </Link>
+    );
   if (state.notFound) {
     return (
       <div className="page">
+        {backToInbox}
         <PageHeader title="Orden no disponible" description="No es posible mostrar esta orden." />
         <div className="opsFormActions">
           <Link className="btn btnSecondary" href="/ops/dashboard">
@@ -38,6 +51,7 @@ export function OperationsOrderDetailShell({
   if (state.accessUnavailable) {
     return (
       <div className="page">
+        {backToInbox}
         <PageHeader
           title="Acceso no disponible"
           description="No es posible mostrar información de operaciones."
@@ -48,6 +62,7 @@ export function OperationsOrderDetailShell({
   if (state.order === null || state.projection === null) {
     return (
       <div className="page" aria-busy={state.loading}>
+        {backToInbox}
         <PageHeader
           title="Detalle de orden"
           description={state.error ?? "Cargando información operativa…"}
@@ -59,6 +74,7 @@ export function OperationsOrderDetailShell({
   const { order, projection } = state;
   return (
     <div className="page" aria-busy={state.loading}>
+      {backToInbox}
       <PageHeader
         eyebrow="Orden"
         title={order.public_id}
@@ -83,8 +99,8 @@ export function OperationsOrderDetailShell({
         variant="grid"
         label="Resumen de la orden"
         items={[
-          { label: "Dueño", value: projection.owner.display_name },
-          { label: "Opera", value: projection.operator?.display_name ?? "Sin operador" },
+          { label: "Dueño", value: ownerLabel(projection.owner) },
+          { label: "Opera", value: operatorLabel(projection.operator) },
           { label: "Cliente", value: projection.client?.display_name ?? "No disponible" },
           { label: "Servicio", value: serviceTypeLabel(order.service_type) },
           { label: "Zona", value: projection.delivery_zone?.name ?? "Sin zona asignada" },
@@ -116,9 +132,12 @@ export function OperationsOrderDetailShell({
         </p>
       )}
 
+      <OperationsFailedAttempt orderId={order.id} status={order.status} version={order.version} />
+
       <OperationsNextStep
         orderId={order.id}
         publicId={order.public_id}
+        status={order.status}
         version={order.version}
         allowedTransitions={order.allowed_transitions}
         onOrderChanged={state.refresh}

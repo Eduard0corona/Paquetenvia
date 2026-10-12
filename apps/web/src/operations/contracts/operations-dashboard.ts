@@ -31,7 +31,11 @@ export type OperationsCostWarning =
 
 export interface OperationsOrganizationSummary {
   readonly organization_id: string;
-  readonly display_name: string;
+  /**
+   * OBS-001-OPERATED-OWNER-NAME-2026-10-12: the active organization's own name; `null` for the other party of the
+   * order (the owner of an order it only operates, or the operator of an order it owns), whose row RLS hides.
+   */
+  readonly display_name: string | null;
 }
 
 export interface OperationsClientSummary {
@@ -81,6 +85,11 @@ export interface OperationsDashboardOrder {
   readonly delivery_zone: OperationsZoneSummary | null;
   readonly assignment: OperationsAssignmentSummary | null;
   readonly latest_driver_location: OperationsDriverLocation | null;
+  /**
+   * UI-PHASE3-INBOX-TOTAL-2026-10-10: the order total in integer MXN cents with IVA included, the same
+   * value and shape as the order's `total` (AI-05 Order.total).
+   */
+  readonly total: OperationsMoney;
   readonly cost_warning: OperationsCostWarning | null;
   readonly unassigned_alert: boolean;
 }
@@ -102,6 +111,11 @@ export interface OperationsDashboardFilters {
   readonly createdFrom?: string;
   readonly createdTo?: string;
   readonly unassigned?: boolean;
+  /**
+   * UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: `price_review=true` lists only the orders with a cost warning
+   * that have not finished (the inbox "Precio por revisar" list; the same rule as queues.price_review).
+   */
+  readonly priceReview?: boolean;
   readonly cursor?: string;
 }
 

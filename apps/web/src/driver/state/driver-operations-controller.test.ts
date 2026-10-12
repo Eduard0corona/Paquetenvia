@@ -11,6 +11,9 @@ import {
   type DriverOfflineOperation,
   type DriverProofBlobRecord,
 } from "../offline/operation-contract";
+import { projectDriverOperations } from "../offline/operation-projection";
+import type { ValidatedDriverProof } from "../proofs/proof-file";
+import { stopList, withStopDetails } from "../contracts/driver-stop.fixtures";
 import type { DriverSession } from "../session/driver-session";
 import {
   DriverOperationsController,
@@ -150,6 +153,95 @@ describe("driver operations conflict resolution", () => {
   });
 });
 
+describe("driver operations enqueue result (photo preview)", () => {
+  const pickupProof = {
+    orderId,
+    kind: "PICKUP_PROOF" as const,
+    projectedStatus: "AT_PICKUP" as const,
+    projectedVersion: 4,
+  };
+
+  it("resolves true once the action and the same photo Blob are stored", async () => {
+    const harness = await createHarness([]);
+    const photo = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], {
+      type: "image/png",
+    });
+
+    await expect(harness.controller.enqueue(pickupProof, photo)).resolves.toBe(true);
+
+    expect(harness.queue.operations).toHaveLength(1);
+    expect(harness.queue.operations[0]).toMatchObject({
+      kind: "PICKUP_PROOF",
+      expectedVersion: 4,
+      contentType: "image/png",
+      sizeBytes: 4,
+    });
+    expect(harness.queue.proofs.get(harness.queue.operations[0].id)?.blob).toBe(photo);
+    expect(harness.controller.current.message).toBe(
+      "Acción guardada. Se sincronizará cuando haya conexión.",
+    );
+    await harness.controller.dispose();
+  });
+
+  it("resolves false and stores nothing when the queue refuses the photo", async () => {
+    const harness = await createHarness([]);
+    const gif = new Blob([new Uint8Array([0x47, 0x49, 0x46])], { type: "image/gif" });
+
+    await expect(harness.controller.enqueue(pickupProof, gif)).resolves.toBe(false);
+
+    expect(harness.queue.operations).toEqual([]);
+    expect(harness.queue.proofs.size).toBe(0);
+    expect(harness.controller.current).toMatchObject({
+      mutating: false,
+      message:
+        "No fue posible guardar la foto. Verifica tipo, tamaño y espacio disponible.",
+    });
+    await harness.controller.dispose();
+  });
+
+  it("keeps a stored action as saved and deduplicated when the queue cannot be read back", async () => {
+    const harness = await createHarness([]);
+    const listOperations = vi
+      .spyOn(harness.queue, "listOperations")
+      .mockRejectedValueOnce(new Error("synthetic read failure"));
+    const photo = new Blob([new Uint8Array([0x89, 0x50, 0x4e, 0x47])], {
+      type: "image/png",
+    });
+
+    await expect(harness.controller.enqueue(pickupProof, photo)).resolves.toBe(true);
+
+    expect(listOperations).toHaveBeenCalled();
+    expect(harness.queue.operations).toHaveLength(1);
+    expect(harness.controller.current).toMatchObject({
+      mutating: false,
+      message: "Acción guardada. Se sincronizará cuando haya conexión.",
+    });
+    expect(harness.controller.current.operations.map((value) => value.id)).toEqual([
+      harness.queue.operations[0].id,
+    ]);
+    expect(harness.scheduler.requestSync).toHaveBeenCalledWith(false);
+
+    // The same step again is recognised as already queued: no second operation.
+    await expect(harness.controller.enqueue(pickupProof, photo)).resolves.toBe(false);
+    expect(harness.queue.operations).toHaveLength(1);
+    await harness.controller.dispose();
+  });
+
+  it("resolves false when the step no longer matches the stop", async () => {
+    const harness = await createHarness([]);
+
+    await expect(
+      harness.controller.enqueue(
+        { ...pickupProof, projectedStatus: "ASSIGNED" },
+        new Blob([new Uint8Array([1])], { type: "image/png" }),
+      ),
+    ).resolves.toBe(false);
+
+    expect(harness.queue.operations).toEqual([]);
+    await harness.controller.dispose();
+  });
+});
+
 describe("driver operations OPS-003 expiry notice", () => {
   it("tells the driver in Spanish that the action expired after 72 hours", () => {
     expect(driverOperationExpiredMessage(["DELIVERY_PROOF"])).toBe(
@@ -181,8 +273,10 @@ describe("driver operations OPS-003 expiry notice", () => {
         transitionOrder: vi.fn(),
         createProofUploadSession: vi.fn(),
         finalizeProof: vi.fn(),
+        recordCodCollection: vi.fn(),
+        openFailedDeliveryIncident: vi.fn(),
       } as DriverSyncApi,
-      refreshStops: async () => [],
+      refreshStops: async () => stopList([]),
       onAccessRevoked: vi.fn(),
       schedulerFactory: (options) => {
         schedulerOptions = options;
@@ -241,6 +335,176 @@ function operation(
   });
 }
 
+describe("cash collection at the door (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11)", () => {
+  const collection = {
+    orderId,
+    orderPublicId: "ORD_abcdefghijklmnopqrstuv",
+    amountCents: 125_000,
+    projectedStatus: "DELIVERING" as const,
+    projectedVersion: 9,
+  };
+
+  it("queues exactly the stop's amount with the tracking number and phone time as reference", async () => {
+    const harness = await createHarness([]);
+
+    await expect(harness.controller.enqueueCodCollection(collection)).resolves.toBe(true);
+
+    expect(harness.queue.operations).toHaveLength(1);
+    const [operation] = harness.queue.operations;
+    expect(operation).toMatchObject({
+      kind: "COD_COLLECTION",
+      orderId,
+      expectedVersion: 9,
+      clientOccurredAt: "2026-07-26T12:01:00.000Z",
+      cod: {
+        amountCents: 125_000,
+        idempotencyKey: `drv2-${replacementId}-cod`,
+      },
+    });
+    expect(operation.cod?.reference).toMatch(
+      /^ORD_abcdefghijklmnopqrstuv \d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}[+-]\d{2}:\d{2}$/,
+    );
+    expect(harness.controller.current.message).toBe(
+      "Cobro guardado. Se registrará cuando haya conexión.",
+    );
+    expect(harness.scheduler.requestSync).toHaveBeenCalledWith(false);
+    await harness.controller.dispose();
+  });
+
+  it("never queues a second collection for the same order", async () => {
+    const harness = await createHarness([]);
+    await harness.controller.enqueueCodCollection(collection);
+
+    await expect(harness.controller.enqueueCodCollection(collection)).resolves.toBe(false);
+
+    expect(harness.queue.operations).toHaveLength(1);
+    await harness.controller.dispose();
+  });
+
+  it("refuses a stop that is not at the door yet", async () => {
+    const harness = await createHarness([]);
+
+    await expect(
+      harness.controller.enqueueCodCollection({ ...collection, projectedStatus: "IN_TRANSIT" }),
+    ).resolves.toBe(false);
+
+    expect(harness.queue.operations).toEqual([]);
+    expect(harness.controller.current.message).toBe(
+      "Actualiza la parada antes de registrar el cobro.",
+    );
+    await harness.controller.dispose();
+  });
+
+  it("retries a held collection while the stop is still at the door, whatever its version", async () => {
+    const held = {
+      ...createDriverOfflineOperation({
+        partitionKey,
+        orderId,
+        kind: "COD_COLLECTION",
+        expectedVersion: 9,
+        cod: { amountCents: 125_000, reference: "ORD_X 2026-07-26T05:00:00-07:00" },
+        now: () => new Date("2026-07-26T12:00:00.000Z"),
+        randomUuid: () => operationId,
+      }),
+      status: "NEEDS_ATTENTION" as const,
+      safeError: "VERSION_CONFLICT" as const,
+      rejectionCode: "CONFLICT" as const,
+    };
+    const harness = await createHarness(held);
+
+    await harness.controller.retrySame(operationId, "DELIVERING", 12);
+
+    expect(harness.queue.operations[0]).toMatchObject({
+      id: operationId,
+      status: "PENDING",
+      safeError: null,
+      rejectionCode: null,
+      cod: held.cod,
+    });
+    await harness.controller.rebuildForCurrentVersion(operationId, "DELIVERING", 12);
+    expect(harness.queue.operations.map((value) => value.id)).toEqual([operationId]);
+    expect(harness.controller.current.message).toBe(
+      "Reintenta el cobro o descártalo y vuelve a registrarlo.",
+    );
+    await harness.controller.dispose();
+  });
+
+  it("after discarding a held collection the delivery waits for the cash and a new collection goes first", async () => {
+    const held = {
+      ...createDriverOfflineOperation({
+        partitionKey,
+        orderId,
+        kind: "COD_COLLECTION",
+        expectedVersion: 9,
+        cod: { amountCents: 125_000, reference: "ORD_X 2026-07-26T05:00:00-07:00" },
+        now: () => new Date("2026-07-26T12:00:00.000Z"),
+        randomUuid: () => operationId,
+      }),
+      status: "NEEDS_ATTENTION" as const,
+      safeError: "VERSION_CONFLICT" as const,
+      rejectionCode: "COD_AMOUNT_MISMATCH" as const,
+    };
+    const deliveryId = "66666666-6666-4666-8666-666666666666";
+    const delivery = {
+      ...createDriverOfflineOperation({
+        partitionKey,
+        orderId,
+        kind: "DELIVERY_PROOF",
+        expectedVersion: 9,
+        proof: { contentType: "image/png", sizeBytes: 1, sha256: "a".repeat(64) },
+        now: () => new Date("2026-07-26T12:00:30.000Z"),
+        randomUuid: () => deliveryId,
+      }),
+      status: "BLOCKED" as const,
+    };
+    const atTheDoor = withStopDetails({
+      order_id: orderId,
+      aggregate_version: 9,
+      order_public_id: collection.orderPublicId,
+      stop_type: "DELIVERY",
+      status: "DELIVERING",
+      address_summary: "Zona sintética",
+      cod: { expected: { currency: "MXN", amount_cents: 125_000 }, recorded: false },
+    });
+    const harness = await createHarness([held, delivery]);
+
+    await harness.controller.discard(operationId, "DELIVERING", 9);
+
+    expect(harness.queue.operations).toEqual([
+      expect.objectContaining({ id: deliveryId, status: "PENDING", safeError: null }),
+    ]);
+    const waiting = projectDriverOperations([atTheDoor], harness.queue.operations);
+    expect(waiting.stops[0]).toMatchObject({
+      projectedStatus: "DELIVERING",
+      projectedVersion: 9,
+      attentionCount: 0,
+      codCollection: "pending",
+      deliveryAwaitingCash: true,
+    });
+
+    // "Recibí" again: the collection is newer than the delivery but goes first.
+    await expect(
+      harness.controller.enqueueCodCollection({
+        ...collection,
+        projectedStatus: waiting.stops[0].projectedStatus,
+        projectedVersion: waiting.stops[0].projectedVersion,
+      }),
+    ).resolves.toBe(true);
+    const ready = projectDriverOperations([atTheDoor], harness.queue.operations);
+    expect(ready.stops[0]).toMatchObject({
+      projectedStatus: "DELIVERED",
+      projectedVersion: 10,
+      codCollection: "queued",
+      deliveryAwaitingCash: false,
+    });
+    expect(ready.operations.map((value) => value.kind)).toEqual([
+      "COD_COLLECTION",
+      "DELIVERY_PROOF",
+    ]);
+    await harness.controller.dispose();
+  });
+});
+
 async function createHarness(
   initial: DriverOfflineOperation | readonly DriverOfflineOperation[],
   withProof = false,
@@ -263,6 +527,8 @@ async function createHarness(
     start: vi.fn(),
     requestSync: vi.fn().mockResolvedValue(undefined),
     dispose: vi.fn().mockResolvedValue(undefined),
+    pause: vi.fn().mockResolvedValue(undefined),
+    resume: vi.fn(),
   } as unknown as DriverSyncScheduler;
   const controller = new DriverOperationsController({
     session,
@@ -271,8 +537,10 @@ async function createHarness(
       transitionOrder: vi.fn(),
       createProofUploadSession: vi.fn(),
       finalizeProof: vi.fn(),
+      recordCodCollection: vi.fn(),
+      openFailedDeliveryIncident: vi.fn(),
     } as DriverSyncApi,
-    refreshStops: async () => [],
+    refreshStops: async () => stopList([]),
     onAccessRevoked: vi.fn(),
     schedulerFactory: () => scheduler,
     now: () => new Date("2026-07-26T12:01:00.000Z"),
@@ -291,7 +559,8 @@ class MemoryQueue implements DriverOfflineQueue {
   }
 
   public async listOperations(): Promise<readonly DriverOfflineOperation[]> {
-    return this.operations;
+    // A fresh frozen list, like IndexedDbDriverOfflineQueue: no aliasing with the store.
+    return Object.freeze([...this.operations]);
   }
 
   public async readProof(
@@ -302,10 +571,22 @@ class MemoryQueue implements DriverOfflineQueue {
   }
 
   public async enqueue(
-    _partition: DriverCachePartition,
+    partition: DriverCachePartition,
     value: DriverOfflineOperation,
+    proof?: ValidatedDriverProof,
   ): Promise<void> {
     this.operations.push(value);
+    if (proof) {
+      this.proofs.set(value.id, {
+        schemaVersion: 1,
+        partitionKey: partition.key,
+        operationId: value.id,
+        blob: proof.blob,
+        contentType: proof.contentType,
+        sizeBytes: proof.sizeBytes,
+        sha256: proof.sha256,
+      });
+    }
   }
 
   public async replaceOperation(

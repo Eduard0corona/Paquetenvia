@@ -28,8 +28,20 @@ import {
   type SettlementPage,
   type SettlementStatus,
 } from "../contracts/settlement";
+import { sortSettlementPayees, unknownPayeeLabel, type SettlementPayee } from "../contracts/settlement-payee";
 
 export const settlementsPath = "/finance/settlements";
+
+/**
+ * UI-PHASE3-DRIVERS-2026-10-11: the payee list is read page by page up to this many pages (100 drivers each); a
+ * longer list is cut and the screen says so. The pilot fleets fit in one page.
+ */
+export const maximumPayeePages = 10;
+
+export const payeeListFailedMessage =
+  "No fue posible cargar la lista de repartidores. Pulsa Actualizar para intentarlo de nuevo.";
+export const payeeListTruncatedMessage =
+  "La lista de repartidores es más larga de lo que esta pantalla muestra; algunos no aparecen.";
 
 const actionOperations: Readonly<Record<SettlementAction, CapabilityOperation>> = {
   adjust: "addSettlementAdjustment",
@@ -57,6 +69,7 @@ const settlementOperations: readonly CapabilityOperation[] = [
   "listSettlements",
   "getSettlement",
   "createSettlement",
+  "listSettlementPayees",
   ...Object.values(actionOperations),
 ];
 
@@ -74,6 +87,17 @@ export function settlementMfaHint(
   if (actions.some((action) => actionNeedsMfa(role, action)))
     return "Aprobar y marcar pagada requieren verificar tu identidad (MFA).";
   return null;
+}
+
+/**
+ * UI-PHASE3-DRIVERS-2026-10-11: how the screen names a settlement's payee - its DRV- reference from the payee list;
+ * "…" while that list is still loading; "sin referencia" when the list failed or does not have the payee (it was cut
+ * short, or the payee is not a driver of the organization). The internal id is never shown.
+ */
+export function payeeLabel(state: Pick<SettlementsState, "payees" | "payeesStatus">, payeeId: string): string {
+  const payee = state.payees.find((candidate) => candidate.driver_id === payeeId);
+  if (payee !== undefined) return payee.driver_reference;
+  return state.payeesStatus === "loading" ? "…" : unknownPayeeLabel;
 }
 
 export function settlementReturnUrl(settlementId: string | null): string {
@@ -99,6 +123,14 @@ export interface SettlementsState {
   readonly stepUpHref: string | null;
   /** Changes on tenant switch so forms holding typed data remount empty. */
   readonly formKey: number;
+  /**
+   * UI-PHASE3-DRIVERS-2026-10-11: the drivers createSettlement accepts (listSettlementPayees), by reference. They
+   * feed the payee picker and filter and name every settlement's payee by its DRV- reference.
+   */
+  readonly payees: readonly SettlementPayee[];
+  readonly payeesStatus: "idle" | "loading" | "ready" | "failed";
+  /** More payees exist than {@link maximumPayeePages} pages hold. */
+  readonly payeesTruncated: boolean;
 }
 
 export interface SettlementsDependencies {
@@ -125,6 +157,9 @@ const initialState: SettlementsState = {
   message: null,
   stepUpHref: null,
   formKey: 0,
+  payees: [],
+  payeesStatus: "idle",
+  payeesTruncated: false,
 };
 
 /**
@@ -178,7 +213,7 @@ export class SettlementsController extends ExternalStore<SettlementsState> {
       return;
     }
     this.update({ phase: "ready", role, canCreate: canPerform(role, "createSettlement") });
-    await this.refresh();
+    await Promise.all([this.loadPayees(), this.refresh()]);
     const initial = this.dependencies.initialSelection?.() ?? null;
     if (generation === this.generation && initial !== null && isCanonicalUuid(initial)) {
       await this.select(initial);
@@ -195,12 +230,54 @@ export class SettlementsController extends ExternalStore<SettlementsState> {
   public async applyFilters(filters: SettlementFilters): Promise<void> {
     if (buildSettlementSearch(filters) === null) {
       this.update({
-        errors: ["Revisa los filtros: ID de repartidor válido, estado válido y un periodo con fin posterior al inicio."],
+        errors: ["Revisa los filtros: un repartidor de la lista, un estado válido y un periodo con fin posterior al inicio."],
       });
       return;
     }
     this.update({ filters, errors: [] });
     await this.refresh();
+  }
+
+  /** "Actualizar": the settlements and the payee list again from REST. */
+  public async reload(): Promise<void> {
+    await Promise.all([this.loadPayees(), this.refresh()]);
+  }
+
+  /**
+   * UI-PHASE3-DRIVERS-2026-10-11: every page of listSettlementPayees, up to {@link maximumPayeePages}. A failure
+   * keeps the payees already loaded (the settlement list keeps working) and says the list could not be read.
+   */
+  public async loadPayees(): Promise<void> {
+    const api = this.api;
+    const state = this.getSnapshot();
+    if (api === null || state.phase !== "ready" || !canPerform(state.role, "listSettlementPayees")) return;
+    if (state.payeesStatus === "loading") return;
+    const generation = this.generation;
+    this.update({ payeesStatus: "loading" });
+    try {
+      const payees: SettlementPayee[] = [];
+      const seen = new Set<string>();
+      let cursor: string | null = null;
+      let truncated = false;
+      for (let page = 0; ; page += 1) {
+        if (page === maximumPayeePages) {
+          truncated = true;
+          break;
+        }
+        const result = await api.listPayees(cursor, this.controller?.signal);
+        if (generation !== this.generation) return;
+        payees.push(...result.items);
+        if (result.next_cursor === null) break;
+        // A repeated cursor would page forever: stop and report the list as unreadable.
+        if (seen.has(result.next_cursor)) throw new TenantApiError("invalid");
+        seen.add(result.next_cursor);
+        cursor = result.next_cursor;
+      }
+      const unique = [...new Map(payees.map((payee) => [payee.driver_id, payee])).values()];
+      this.update({ payees: sortSettlementPayees(unique), payeesStatus: "ready", payeesTruncated: truncated });
+    } catch {
+      if (generation === this.generation) this.update({ payeesStatus: "failed" });
+    }
   }
 
   /** Fetches the first page again (load, refresh and after every write). */
@@ -279,13 +356,26 @@ export class SettlementsController extends ExternalStore<SettlementsState> {
     return state.selecting === null ? state.selected : null;
   }
 
-  public async create(body: CreateSettlementBody): Promise<void> {
-    if (!this.getSnapshot().canCreate) return;
-    const errors = validateCreateSettlement(body);
+  /**
+   * Validates a calculation before its confirmation: the body createSettlement would
+   * receive, or null after showing why it cannot be sent.
+   */
+  public prepareCreate(body: CreateSettlementBody): CreateSettlementBody | null {
+    if (!this.getSnapshot().canCreate) return null;
+    const errors = [...validateCreateSettlement(body)];
+    // UI-PHASE3-DRIVERS-2026-10-11: only a driver the payee list returned may be settled from this screen.
+    if (isCanonicalUuid(body.driver_id) && this.payee(body.driver_id) === null)
+      errors.unshift("Elige un repartidor de la lista.");
     if (errors.length > 0) {
       this.update({ errors, message: null });
-      return;
+      return null;
     }
+    this.update({ errors: [] });
+    return body;
+  }
+
+  public async create(body: CreateSettlementBody): Promise<void> {
+    if (this.prepareCreate(body) === null) return;
     await this.write("create", JSON.stringify(body), body, (api, key, payload, signal) =>
       api.create(payload, key, signal), null);
   }
@@ -357,6 +447,11 @@ export class SettlementsController extends ExternalStore<SettlementsState> {
 
   public get activeSession(): OperationsSession | null {
     return this.session;
+  }
+
+  /** The listed payee with this driver id, or null when the payee list does not have it. */
+  public payee(driverId: string): SettlementPayee | null {
+    return this.getSnapshot().payees.find((payee) => payee.driver_id === driverId) ?? null;
   }
 
   private async write<T>(

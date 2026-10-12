@@ -159,10 +159,13 @@ export interface CreateSettlementBody {
   readonly period_to: string;
 }
 
+/** UI-PHASE3-DRIVERS-2026-10-11: the payee is picked from the list, never typed. */
+export const settlementPayeeRequiredMessage = "Elige al repartidor que vas a liquidar.";
+
 /** CreateSettlementRequest: period_to not before period_from, at most 366 days. */
 export function validateCreateSettlement(body: CreateSettlementBody): readonly string[] {
   const errors: string[] = [];
-  if (!isCanonicalUuid(body.driver_id)) errors.push("El ID del repartidor no es válido.");
+  if (!isCanonicalUuid(body.driver_id)) errors.push(settlementPayeeRequiredMessage);
   const validDates = isCalendarDate(body.period_from) && isCalendarDate(body.period_to);
   if (!validDates) errors.push("Captura fechas de periodo válidas (AAAA-MM-DD).");
   if (validDates) {

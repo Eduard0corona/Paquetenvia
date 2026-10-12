@@ -73,22 +73,43 @@ routes:
         visibility, polling or filter change)
       failure: the indicators show "Sin dato" and the list keeps working; a response that breaks the contract is
         discarded
+    # UI-PHASE3-INBOX-2026-10-10: shown as "Tablero" in the app shell, after Bandeja; DISPATCHER and PLATFORM_ADMIN
+    # land on /ops/inbox instead, and /ops/dashboard?view=positions opens the positions view directly.
+  # UI-PHASE3-INBOX-2026-10-10 (project owner, 2026-10-09, "avanza con la fase 3"): the dispatcher's work inbox
+  # ("Bandeja de trabajo"), built only on existing operations; the backend and RLS remain the barrier.
+  /ops/inbox:
+    roles:
+    - platform_admin
+    - dispatcher
+    release: MVP-1
+    screen_contract: work_inbox
+    decisions:
+    - UI-PHASE3-INBOX-2026-10-10
+    - UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11
+    - UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11
+    - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
+    - UI-PHASE3-ROUTES-DAILY-2026-10-12
   # UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: the app shell top bar offers "Buscar guía" to the roles that open the
   # order detail (DISPATCHER, PLATFORM_ADMIN with MFA). It searches only the exact tracking number through
   # GET /orders?public_id= (listOrders); a match opens /ops/orders/:id and anything else shows "No encontramos esa
   # guía", the same text for a malformed, missing or other-organization number. No personal data is searchable.
+  # UI-PHASE3-ORDER-WIZARD-2026-10-10 (project owner, 2026-10-09 "avanza con la fase 3"; 2026-10-10 "Confirmada
+  # (Recommended)"): "Nueva orden" is a four-step wizard that creates the order and then confirms it, so an order
+  # captured here leaves the screen CONFIRMED; the backend and RLS remain the barrier.
   /ops/orders/new:
     roles:
     - platform_admin
     - dispatcher
     release: MVP-0
+    screen_contract: create_order
+    decisions:
+    - UI-PHASE3-ORDER-WIZARD-2026-10-10
     steps:
-    - origin
-    - destination
-    - package
-    - service_window
-    - quote
-    - acceptance
+    - where ("1. Dónde") - origin and destination
+    - what ("2. Qué se envía") - packages
+    - service_and_price ("3. Servicio y precio") - service type, consolidated route, optional delivery window, COD,
+      client account and the quote
+    - confirm ("4. Confirmar") - who pays and the acceptance; creates the order and confirms it
   /ops/orders/:id:
     roles:
     - authorized
@@ -135,9 +156,15 @@ routes:
       # claim (resolution) reason their guards require.
       - es-MX labels - RESCHEDULED "Reprogramar entrega", RETURNING "Iniciar devolución", RETURNED "Marcar como
         devuelta", CLAIM_OPEN "Abrir reclamación", CLAIM_RESOLVED "Resolver reclamación"
+      # INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11 (project owner, 2026-10-11, "Despacho decide"): from
+      # FAILED_ATTEMPT the dispatcher chooses the next step; getOrder lists only the exits the failed attempt's
+      # decision and custody allow (OrderDetail.allowed_transitions).
+      - from FAILED_ATTEMPT the es-MX labels are the decision - RESCHEDULED "Reprogramar", DELIVERING "Reintentar
+        hoy" (the same assigned driver tries again today) and RETURNING "Regresar"; DELIVERING is offered only from
+        FAILED_ATTEMPT
       - transitions the screen does not offer here are not shown - ASSIGNED (assignment picker), FAILED_ATTEMPT
         (needs incident_id, recorded from Incidencias) and the driver steps AT_PICKUP, PICKED_UP, IN_TRANSIT,
-        DELIVERING and DELIVERED
+        DELIVERING (except the FAILED_ATTEMPT retry) and DELIVERED
       input: reason (required, at most 500 characters); for required_metadata restricted_goods_acknowledged a
         required checkbox sends the JSON literal true
       confirmation: required (ConfirmDialog) naming the order and the action
@@ -156,6 +183,27 @@ routes:
           personal data
         - an absent, malformed or unknown code shows the generic 409 message
         - the order is still fetched again after the answer; the code never changes the offered actions by itself
+        - DISPATCH_DECISION_REQUIRED (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11) "El siguiente paso de este
+          intento fallido lo decide el despacho."
+    # INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11 (project owner, 2026-10-11): an order in FAILED_ATTEMPT shows
+    # why the attempt failed and whether dispatch still has to decide; REST is the source of truth.
+    failed_attempt:
+      decision: INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11
+      shown_when: the order is FAILED_ATTEMPT
+      sources:
+        incident: GET /incidents?order_id= (listIncidents), the newest incident of the order
+      roles: [DISPATCHER, PLATFORM_ADMIN with MFA]
+      display:
+      - the reason with its es-MX label - RECIPIENT_ABSENT "No había nadie", ADDRESS_NOT_FOUND "Dirección
+        incorrecta", RECIPIENT_REFUSED "Rechazó el paquete", PAYMENT_UNAVAILABLE "No pagó el cobro",
+        ACCESS_RESTRICTED "Acceso restringido", PACKAGE_DAMAGED "Paquete dañado", SECURITY_RISK "Riesgo de
+        seguridad"
+      - a null next_action says the driver reported it and dispatch chooses in "Siguiente paso" (reprogramar,
+        reintentar hoy o regresar); a recorded one names the next step dispatch already chose
+      - the attention deadline (sla_due_at, America/Mazatlan)
+      - no description, evidence identifier, incident identifier or personal data
+      recovery: refetched with the order; a failed read says the reason could not be read and never blocks
+        "Siguiente paso"
   /ops/routes:
     roles:
     - platform_admin
@@ -169,16 +217,35 @@ routes:
     read_only_roles:
     - customer_support
     release: MVP-1
+    # UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11: "Crear ruta" picks the driver, the city and the service area from
+    # lists instead of pasted internal ids (route_planner.create_form).
+    # UI-PHASE3-ROUTES-NO-IDS-2026-10-12: errors by reason with the MFA step-up, readable dates, every page of the
+    # list, "Agregar entrega" by guía and a detail without internal ids (route_planner errors, list, add_order and
+    # detail).
+    screen_contract: route_planner
+    decisions:
+    - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
+    - UI-PHASE3-ROUTES-NO-IDS-2026-10-12
   /driver/stops:
     roles:
     - own_driver
     - external_driver
     release: MVP-0
     offline: true
+  # UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (project owner, 2026-10-09 "avanza con la fase 3"; 2026-10-11 "Sí, como
+  # el diseño (Recommended)", "Google Maps (Recommended)" and "Solo confirma el monto (Recommended)"): the stop shows
+  # what the driver needs at the door, "Cómo llegar" opens Google Maps and the driver records the cash collected
+  # (screen_contracts.driver_stop). The backend and RLS remain the barrier.
+  # UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 (project owner, 2026-10-12 "Solo si hay cobro (Recommended)" and "No,
+  # llama a despacho (Recommended)"): fail_attempt and incident are "No se pudo entregar" at the door, reason and photo,
+  # queued offline; dispatch decides what follows (screen_contracts.driver_stop.failed_delivery).
   /driver/stops/:id:
     roles:
     - assigned_driver
     release: MVP-0
+    decisions:
+    - UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11
+    - UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12
     actions:
     - check_in
     - pickup_proof
@@ -186,6 +253,8 @@ routes:
     - delivery_proof
     - fail_attempt
     - incident
+    - navigate
+    - cod_collection
   /track/:token:
     roles:
     - public
@@ -206,6 +275,11 @@ routes:
     - finance
     - platform_admin
     release: MVP-1
+    # UI-PHASE3-DRIVERS-2026-10-11 (project owner, 2026-10-11, "Sí, con referencia DRV- (Recommended)"): "Calcular
+    # liquidación" picks the payee from a list and a predefined period; payees are named by their DRV- reference.
+    screen_contract: settlement_desk
+    decisions:
+    - UI-PHASE3-DRIVERS-2026-10-11
   # UI-001-SCREENS-CSV-INC-COD (project owner, 2026-09-28): CSV import, incident and COD
   # screens built only on existing AI-05 operations; D5-CAPABILITY-MATRIX and the MFA
   # step-up still apply and the backend remains the authorization barrier.
@@ -241,8 +315,21 @@ routes:
     - UI-001-SCREENS-CSV-INC-COD
     - FINANCE-COD-RECONCILIATION
     - FINANCE-COD-MFA-2026-09-27
+  # UI-PHASE3-DRIVERS-2026-10-11 (project owner, 2026-10-11, "Lista de consulta (Recommended)"): the dispatcher's
+  # read-only "Repartidores" list, the last operations item of the approved menu; the backend and RLS remain the
+  # barrier.
+  /ops/drivers:
+    roles:
+    - platform_admin
+    - dispatcher
+    release: MVP-1
+    screen_contract: driver_roster
+    decisions:
+    - UI-PHASE3-DRIVERS-2026-10-11
 screen_contracts:
   dispatch_dashboard:
+    decision_amendments:
+    - OBS-001-OPERATED-OWNER-NAME-2026-10-12
     must_show:
     - public_id
     - owner_brand
@@ -261,6 +348,13 @@ screen_contracts:
     - operator_org
     - service_type
     - date
+    # OBS-001-OPERATED-OWNER-NAME-2026-10-12 (project owner, 2026-10-11, "Pick the minimal option consistent with
+    # owner_org_id ≠ operator_org_id semantics"): no SECURITY DEFINER lookup of another organization's name.
+    organization_names: owner_brand and the operator are the names RLS lets the active organization read, only its
+      own (AI-06 organizations_tenant); the other party of an order, that is the owner of an order it only operates or
+      the operator of an order it owns, shows "Otra organización" on the card and in the order detail, never its id,
+      and the owner_org and operator_org filters offer only organizations with a visible name; a page holding such an
+      order loads instead of failing
     actions:
     - open_order
     - assign_own
@@ -275,9 +369,255 @@ screen_contracts:
       assignment_scope: existing OWN assignment only
       navigation: /ops/routes
       optimistic_ui_as_authority: forbidden
+  work_inbox:
+    release: MVP-1
+    route: /ops/inbox
+    decision: UI-PHASE3-INBOX-2026-10-10
+    decision_amendments:
+    - UI-PHASE3-INBOX-TOTAL-2026-10-10
+    - UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11
+    - UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11
+    - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
+    - UI-PHASE3-ROUTES-DAILY-2026-10-12
+    authority: REST API + PostgreSQL
+    sources:
+      counts: GET /operations/queue-counts (getOperationsQueueCounts)
+      list: GET /operations/dashboard (OBS-001 read model, ADR-OBS-001, not declared in AI-05) with its filters only -
+        unassigned, price_review (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11), status, service_type,
+        delivery_zone_id and cursor
+      assign: the /ops/orders/:id assignment_picker sources (listAssignableDrivers, assignDriver), for one order and
+        for bulk_assignment
+      route: GET /routes (listRoutes), GET /routes/{routeId} (getRoute) and POST /routes/{routeId}/stops
+        (addRouteStop), only for bulk_add_to_route (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11)
+      create_route: GET /orders/{orderId} (getOrder), GET /cities (listCities) and POST /routes (createRoute), only for
+        bulk_add_to_route.create_route (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)
+    roles: [DISPATCHER, PLATFORM_ADMIN with MFA]
+    excluded_roles: VIEWER and every other role, exactly as for the operations dashboard and the queue counts; the
+      shell does not offer the inbox to them and the API answers 403
+    landing: DISPATCHER and PLATFORM_ADMIN land on /ops/inbox after login and after an organization switch away from a
+      page their role cannot use; FINANCE (/finance/cod), DRIVER (/driver/stops) and every other role (/ops/dashboard)
+      keep their landing
+    navigation: the shell lists Bandeja (/ops/inbox) first, then Tablero (/ops/dashboard), + Nueva orden, Rutas,
+      Incidencias, Importar CSV, Repartidores (/ops/drivers, UI-PHASE3-DRIVERS-2026-10-11) and the finance items the
+      role holds; the order detail belongs to Bandeja
+    queues:
+    - Sin asignar (queues.unassigned) - dashboard unassigned=true
+    - Requiere atención (queues.needs_attention) - FAILED_ATTEMPT, RESCHEDULED, RETURNING and CLAIM_OPEN, one dashboard
+      query per status
+    # UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11 (project owner, 2026-10-11, "Solo órdenes activas (Recommended)"):
+    # list and count hold only the orders that have not finished; a finished order leaves them by itself.
+    - Precio por revisar (queues.price_review) - dashboard price_review=true in one query, the orders with a
+      cost_warning that have not finished, every status except the UI-STATUS-GROUPS-2026-10-05 group Terminadas
+      (DELIVERED, RETURNED, CLAIM_RESOLVED, CLOSED and CANCELLED); nobody marks anything; no status chip; a row outside
+      that rule fails the read closed
+    - Entregadas sin cerrar (queues.delivered_not_closed) - dashboard status=DELIVERED
+    - En ruta (queues.en_route) - IN_TRANSIT and DELIVERING, one dashboard query per status
+    counts: each queue shows its getOperationsQueueCounts value, which covers every order of the organization and never
+      applies the chips (the screen says so); the queues show "Sin dato" when the counts fail and the list keeps working
+    merge: the queries of one queue are merged newest first by updated_at and order id, the dashboard order; a row is
+      shown only once every query that still has pages reached it, so "Cargar más" never places an older row above a
+      shown one nor skips one
+    filters: chips are server filters of the dashboard queries only - one status of a multi-status queue (Precio por
+      revisar offers none), service type and delivery zone (zones seen in the loaded rows); "Limpiar filtros" removes
+      them; search stays the shell's "Buscar guía" (exact tracking number)
+    url_state: queue, status, service_type and zone live in the /ops/inbox query; a row opens /ops/orders/:id carrying
+      the view, and the detail offers "Volver a la bandeja" to that canonical inbox URL only
+    table:
+      columns:
+      - Selección (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11; present when a loaded row can be selected - a checkbox
+        only on rows with unassigned_alert, "Seleccionar todas" in the header for the loaded selectable rows, at most
+        20 per batch)
+      - Guía (public_id, link to the order)
+      - Estado (exact AI-04 label with its status-group color; "Precio por revisar" when cost_warning is set)
+      - Destino (delivery zone name; the read model carries no address and addresses stay out of lists)
+      - Ventana de entrega (delivery_window in America/Mazatlan; "Horario de la zona" when absent)
+      - Repartidor (DRV- reference)
+      - Total ("Total (IVA incluido)"; the dashboard item total, the order total in integer MXN cents with IVA
+        included, the same value and shape as AI-05 Order.total, shown with the shared MXN formatter and never as a
+        floating-point value; UI-PHASE3-INBOX-TOTAL-2026-10-10)
+      states: loading, empty per queue, error keeping the rows ("No fue posible actualizar la bandeja."), no session
+        and access unavailable
+      footer: '"Mostrando N de M <cola> · seleccionadas: K" as in the approved design - M is the queue''s server count,
+        said only without chips and while it is not below N; the selection part only with the selection column'
+    actions:
+    - open_order (the guide, "Abrir" or a click on the row)
+    - assign_own ("Asignar" only on rows with unassigned_alert, the /ops/orders/:id assignment_picker with the same
+      list, integer cents and confirmation naming driver and cost; the inbox and its counts are read again afterwards;
+      unavailable while a bulk assignment is open)
+    - bulk_assign_own ("Asignar seleccionadas…"; see bulk_assignment)
+    - bulk_add_to_route ("Agregar estas órdenes a una ruta…" once a bulk assignment ends; see bulk_add_to_route)
+    - open_positions ("Mapa de posiciones" opens /ops/dashboard in its positions view)
+    # UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11 (project owner, 2026-10-11, "Costo por orden (Recommended)"): the
+    # approved design's "Asignar seleccionadas…", always with a preview before anything is sent.
+    bulk_assignment:
+      decision: UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11
+      sources:
+        list: GET /orders/{orderId}/assignable-drivers (listAssignableDrivers) for every order of the batch, every
+          page, one order after another
+        assign: POST /orders/{orderId}/assignments (assignDriver, assignment_type OWN, route_id null) for one order
+          after another
+      flow: a sequence of the existing single-order operations, never a new cross-module flow (AI-13 §4) and never a
+        status change; the backend and RLS decide every assignment again
+      selection: only rows with unassigned_alert; at most 20 orders per batch and the screen says so; the batch is the
+        selection taken when "Asignar seleccionadas…" is pressed, and the selection is frozen while the batch is open
+      drivers: only drivers eligible for every order of the batch can be picked (DRV- reference, vehicle and
+        deliveries in progress; no name, phone or id); every other driver is listed with the orders that keep it out
+        and the es-MX reason; an order whose list cannot be read says why and can be read again or taken out of the
+        batch
+      preview: one row per order before anything is sent - Guía, Destino (delivery zone), Total (IVA incluido) and
+        Costo de la asignación (MXN) typed for that order, empty and required, parsed to integer cents (int64) without
+        floating point, zero allowed as in the assignment_picker; nothing is prefilled until the tariff table exists;
+        the sum of the costs in integer cents (a sum beyond a safe integer is refused)
+      confirmation: required (ConfirmDialog) naming the driver reference, the number of orders and the sum of the
+        costs
+      idempotency: one Idempotency-Key per order, kept with the same payload until the server answers definitively and
+        reused when that order is sent again
+      execution: one order after another; a 409 or 404 answers for that order only and the next order is sent; any
+        other failure (session, role, MFA, network, server or an unexpected answer) stops the batch and the rest stay
+        "Sin enviar"; "Reintentar las pendientes" resends, with the same keys and payloads, only the orders left
+        without an answer by a network or server failure
+      results: every row shows its own result - assigned to the driver, or the es-MX message of its
+        DispatchAssignmentConflictProblem code (DRIVER_INELIGIBLE, DRIVER_DOCUMENT_EXPIRED, CONFLICT, INVALID_REQUEST)
+        or of the uniform 404; a summary says how many were assigned; a partial failure is never hidden
+      recovery: the inbox queue and the counts are read again after every run; changing the queue keeps the batch
+        open, a session or organization change drops it
+    # UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11 (project owner, 2026-10-11, "Al terminar el lote (Recommended)"): the
+    # approved design's "Agregar a ruta…", offered when a bulk assignment ends with the same orders and the same driver,
+    # always with a preview before anything is sent.
+    bulk_add_to_route:
+      decision: UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11
+      decision_amendments:
+      - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
+      - UI-PHASE3-ROUTES-DAILY-2026-10-12
+      sources:
+        routes: GET /routes (listRoutes) with status=DRAFT and driver_id of the batch's driver, every page (at most 5),
+          one after another; a route outside that request fails the read closed
+        add: POST /routes/{routeId}/stops (addRouteStop) for one order after another
+        check: GET /routes/{routeId} (getRoute) after a generic CONFLICT or the uniform 404, before the next order
+        orders: GET /orders/{orderId} (getOrder) for every order of the batch, one after another, only when the driver
+          has no DRAFT route dated today in America/Mazatlan (create_route)
+        cities: GET /cities (listCities), only to name the orders' city (create_route)
+        create: POST /routes (createRoute), only from create_route
+      flow: a sequence of the existing single-order operation, never a new cross-module flow (AI-13 §4) and never a
+        status change; the backend and RLS decide every stop again (DRAFT route, OWN ACCEPTED or ACTIVE assignment of
+        the route's driver, DSP-001 compatibility)
+      offered_when: a bulk_assignment run ended with at least one order assigned - "Agregar estas órdenes a una ruta…"
+        in the batch panel, never as a queue button nor on rows without an assignment; "Reintentar las pendientes" of
+        the assignment waits while the step is open
+      orders: only the orders that batch assigned, in batch order, all to the batch's driver; none is added or taken
+        out
+      route_choice: only the driver's DRAFT routes, named by scheduled date ("Ruta del 12 de octubre de 2026", "Ruta
+        sin fecha", plus "la más reciente", "la segunda más reciente"… when several share it) and current stops, newest
+        first; no identifier, amount or assignment cost; the first confirmation fixes the route for the rest of the
+        batch
+      # UI-PHASE3-ROUTES-DAILY-2026-10-12 (project owner, 2026-10-12, "Ruta por día (Recommended)"): AI-05 has no
+      # operation that takes a route out of DRAFT, so every route stays DRAFT and the route of the day decides.
+      route_order: the routes whose scheduled_for is today's calendar date in America/Mazatlan (the read's date from
+        the step's injectable clock) come first, marked "(hoy)" in the list ("Ruta del 12 de octubre de 2026 (hoy) · 3
+        paradas", "(hoy, la más reciente)" when several share it); the rest follow in the server's order, newest to
+        oldest; the names keep the scheme above, so the preview and the confirmation never say "hoy"
+      no_route: when the driver has no DRAFT route dated today the step says so - "no tiene rutas en borrador" without
+        any, "no tiene una ruta en borrador con la fecha de hoy" with only older, later or undated ones, which stay
+        listed and can still be chosen - and offers create_route below them when every order of the batch is in one
+        city; routes are also created in Rutas (opened in another tab, then "Buscar rutas de nuevo")
+      # UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11 (project owner, 2026-10-11, "Sí, en el paso (Recommended)": "Crea la
+      # ruta en borrador para ese repartidor, con la ciudad de las órdenes y la fecha de hoy (hora de Mazatlán), y sigue
+      # a la vista previa.").
+      create_route:
+        decision: UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
+        decision_amendment: UI-PHASE3-ROUTES-DAILY-2026-10-12
+        offered_when: '"Crear ruta nueva" appears only where the step says the driver has no DRAFT route whose
+          scheduled_for is today in America/Mazatlan (UI-PHASE3-ROUTES-DAILY-2026-10-12; a route without a date is not
+          today''s), no run fixed a route and every order of the batch has the same city_id; when the driver has older
+          DRAFT routes it appears below their list, never next to a DRAFT route of today; the rule is checked again when
+          it is pressed, so a day that changed in Mazatlán and already has a listed route reads the routes again and
+          creates nothing'
+        city: every order of the batch is read with getOrder, one after another and cancelled when the step closes, for
+          its Order.city_id; one shared city_id is the orders' city. Orders in different cities get no button and the
+          step says that they are in different cities, that a route covers a single city and that routes are created
+          in Rutas, keeping "Abrir Rutas en otra pestaña" and "Buscar rutas de nuevo"; an order that cannot be read
+          gets no button and the step shows its unavailable message. The city is named by listCities (name and state)
+          and never by its id; the name is left out when it cannot be read
+        request: createRoute with driver_id of the batch's driver, city_id of the orders' city, service_area_id null and
+          scheduled_for today's calendar date in America/Mazatlan (YYYY-MM-DD), never the device's date nor the UTC
+          date
+        idempotency: one Idempotency-Key per request, kept and reused only to resend that same request after a network
+          or server failure; the button is disabled while the request is in flight, so the route is never created
+          twice
+        outcome: the created route (DRAFT, version 1, no stops) is selected - listed first as today's route, before the
+          older ones, an older route picked before is no longer selected - and the step continues straight to its
+          preview; nothing else changes - the same preview, ConfirmDialog and addRouteStop run, with expected_version
+          from the created route
+        failures: 401, 403 and 403 MFA_REQUIRED (with "Verificar identidad" back to the inbox), the uniform 404 and the
+          RoutingConflict codes that refuse the route (DRIVER_INELIGIBLE - the driver cannot take routes in the orders'
+          city, because its city is another or it is not enabled today; INVALID_REQUEST) say in es-MX, without codes or
+          identifiers, that no route was created and keep the button; a success is never invented - after a failure
+          that cannot say whether the route exists (no answer, a server failure, an unexpected answer or a generic
+          CONFLICT, which the server also answers when its store fails) the driver's DRAFT routes are listed again
+          before the button comes back, so a route created anyway is found instead of duplicated; a network or server
+          failure resends the same request with the same key
+        found: UI-PHASE3-ROUTES-DAILY-2026-10-12 - that new list counts as found only when it holds a DRAFT route of
+          the driver dated today in America/Mazatlan; then the button is not offered again and the step asks to choose
+          that route in the list (it is not selected for the dispatcher); older, later or undated routes listed again
+          are not the route asked for, so the button comes back next to them
+        flow: one existing Routing operation (createRoute) before the existing addRouteStop sequence, never a new
+          cross-module flow (AI-13 §4) nor an order status change; the backend and RLS decide the route (OWN ACTIVE
+          driver eligible under DSP-001, city coherent with the driver)
+        privacy: no identifier on screen, nothing stored in the browser and nothing logged
+      preview: before anything is sent - the route, the driver DRV- reference and the orders in the order they are
+        added (Orden de envío, Guía, Destino); they go to the end of the route
+      confirmation: required (ConfirmDialog) naming the route with its current stops, the driver reference and the
+        number of orders
+      idempotency: one Idempotency-Key per order, kept with the same payload (route and expected_version) until the
+        server answers definitively and reused when that order is sent again
+      concurrency: expected_version is the version just listed, then the version of each authoritative answer; a
+        VERSION_CONFLICT stops the run, the routes are read again and the orders not added need a new confirmation
+      execution: one order after another; DRIVER_INELIGIBLE and INVALID_REQUEST answer for that order only and the
+        next order is sent; a generic CONFLICT (or an unknown code) or the uniform 404 also answers for that order, but
+        the server uses them for a route that left DRAFT or is gone too, so before the next order getRoute must show
+        the driver's same DRAFT route at the same version - otherwise, or when it cannot be read, the run stops like a
+        VERSION_CONFLICT and a route no longer DRAFT receives nothing more; session, role, MFA, network, server or an
+        unexpected answer stops the run and the rest stay "Sin enviar"; "Reintentar las pendientes" resends, with the
+        same keys and payloads, only the orders a network or server failure left without an answer
+      results: every row shows its own result - added to the route, or the es-MX message of its RoutingConflict code
+        (DRIVER_INELIGIBLE, VERSION_CONFLICT, CONFLICT, INVALID_REQUEST) or of the uniform 404; a summary says how many
+        were added; a partial failure is never hidden
+      mfa: PLATFORM_ADMIN adds stops only with MFA (addRouteStop); a 403 MFA_REQUIRED stops the run and offers
+        "Verificar identidad" back to the inbox
+      recovery: the inbox queue and the counts are read again after every run; the step lives in the batch panel, so a
+        session or organization change drops it
+    recovery:
+    - load, view change, refresh, assignment, realtime event (250 ms debounce), reconnect, visibility and 30 s polling
+      read the REST queries and the counts again; a reconnect resynchronizes from that read
+    - optimistic UI is never authoritative; a 401 or 403 clears the rows and stops the realtime hub
+    privacy:
+    - no browser persistence and no client logging; an organization switch clears rows, zones, counts, the selection
+      and the batch
+    - no internal identifier or personal data in the table; its only amount is the order total, never an assignment
+      cost, margin, COD amount or tariff; the bulk assignment preview adds only the assignment cost the dispatcher
+      types for each order; the bulk add to route shows no amount (not even the route's assignment cost total)
+    forbidden:
+    - bulk status change without preview (the bulk actions, bulk_assignment and bulk_add_to_route, always show their
+      preview and a confirmation first)
+    - a queue, count or chip computed by filtering loaded rows
+    not_supported:
+    - '"Agregar a ruta…" as a queue button of the approved design - addRouteStop takes only orders already assigned
+      (OWN) to the route''s driver and no inbox queue lists them; bulk_add_to_route offers it when a bulk assignment
+      ends'
+    - creating a route from the inbox for a batch whose orders are in different cities - a route covers a single city
+      (createRoute takes one city_id), so those routes are created in Rutas; bulk_add_to_route.create_route creates
+      today's route when the driver has no DRAFT route dated today and every order of the batch shares its city
+      (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11, UI-PHASE3-ROUTES-DAILY-2026-10-12)
+    - finishing or discarding the driver's older DRAFT routes - AI-05 has no operation that takes a route out of DRAFT,
+      so they stay listed (after today's) until after the pilot (UI-PHASE3-ROUTES-DAILY-2026-10-12;
+      route_planner.not_supported)
+    - Órdenes menu item of the approved menu - no screen yet (Repartidores is /ops/drivers, UI-PHASE3-DRIVERS-2026-10-11)
   route_planner:
     release: MVP-1
     route: /ops/routes
+    decision_amendments:
+    - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
+    - UI-PHASE3-ROUTES-NO-IDS-2026-10-12
     authority: REST API + PostgreSQL
     sources:
       list: GET /routes
@@ -286,6 +626,87 @@ screen_contracts:
       add_order: POST /routes/{routeId}/stops
       remove_order: DELETE /routes/{routeId}/stops/{stopId}
       reorder: PUT /routes/{routeId}/stops/order
+      # UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11: the selectors of create_form.
+      drivers: GET /drivers (listOrganizationDrivers), every page, the client of /ops/drivers; the same read names the
+        driver of the detail (UI-PHASE3-ROUTES-NO-IDS-2026-10-12)
+      cities: GET /cities (listCities)
+      service_areas: GET /service-areas?city_id= (listServiceAreas), once a city is chosen
+      # UI-PHASE3-ROUTES-NO-IDS-2026-10-12: add_order by guía and the guía of every stop.
+      order_lookup: GET /orders?public_id= (listOrders), the client of the top-bar "Buscar guía", only for add_order
+      order_guides: GET /orders/{orderId} (getOrder), the client of the order detail, for the stops of the route shown
+        and the ?orderId= prefill
+    # UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11 (project owner, 2026-10-11; the UI-001 proposal names "Las rutas piden el
+    # UUID del repartidor" as a problem to fix): "Crear ruta" picks from lists, never from pasted internal ids.
+    create_form:
+      decision: UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
+      fields:
+      - Repartidor (flota propia) - a select of the drivers listOrganizationDrivers returns with status ACTIVE
+        (createRoute takes an OWN ACTIVE driver), by DRV- reference, each shown as its DRV- reference with the vehicle
+        and status labels of the Repartidores screen; never the driver id
+      - Ciudad - a select of listCities, each city shown by name and state
+      - Área de servicio (opcional) - once a city is chosen, a select of the ACTIVE service areas listServiceAreas
+        returns for it, plus the empty option "Toda la ciudad" (service_area_id null); choosing another city resets
+        it to "Toda la ciudad"
+      - Fecha - the date input, unchanged
+      states: loading, empty and error for each list in es-MX; an error offers to read the list again and, when only
+        MFA is missing, "Verificar identidad" back to Rutas
+      submit: disabled until a driver and a city are chosen; createRoute then runs as before
+      privacy: no internal identifier is typed or shown; nothing stored in the browser and nothing logged
+    # UI-PHASE3-ROUTES-NO-IDS-2026-10-12 (project owner, 2026-10-12, "Sí, todo (Recommended)": "Mensaje por motivo y
+    # verificar identidad, fechas legibles y todas las páginas, "Agregar entrega" por número de guía (PQ-…), y el
+    # detalle muestra fecha, DRV- y guía en lugar de IDs."). "PQ-…" came from the design mock-up: the guía of this
+    # system is the order public_id (ORD_ and 22 characters), the value the top-bar "Buscar guía (ORD_…)" takes.
+    errors:
+      decision: UI-PHASE3-ROUTES-NO-IDS-2026-10-12
+      source: the AI-05 problem code and MFA_REQUIRED of every route operation, read through the shared tenant
+        requester of the inbox
+      by_code: each change says its reason in es-MX, never the code nor an identifier - createRoute DRIVER_INELIGIBLE
+        (the driver cannot take routes in that city or service area), INVALID_REQUEST and the uniform 404 say no route
+        was created; addRouteStop DRIVER_INELIGIBLE, CONFLICT, an unknown code and the uniform 404 reuse the messages
+        of bulk_add_to_route; removeRouteStop and reorderRouteStops say the stop or the order could not change
+        (INVALID_STOP_SET - the new order does not match the route's stops); INVALID_REQUEST of a stop change asks to
+        refresh the route
+      version_conflict: only VERSION_CONFLICT says the route changed while it was being edited, and only it reads the
+        route again (or says it could not)
+      session: 401, 403 and 403 MFA_REQUIRED use the shared session, role and MFA texts; MFA_REQUIRED offers
+        "Verificar identidad" back to /ops/routes with ?routeId= of the route shown
+      no_answer: a network or server failure or an unexpected answer never says the change was saved nor promises a
+        resend without duplicates - createRoute says it cannot confirm whether the route was created and asks to
+        refresh the list first; the other changes say the same of the change
+      idempotency: unchanged - every change sends its own fresh Idempotency-Key
+    list:
+      decision: UI-PHASE3-ROUTES-NO-IDS-2026-10-12
+      pages: every page of listRoutes, one after another, in the server's order (never reordered), up to 10 pages; a
+        longer list says some routes are not shown and a repeated cursor fails the read
+      display: each route by its date name ("Ruta del 12 de octubre de 2026" or "Ruta sin fecha", never YYYY-MM-DD),
+        status, stops and assignment cost total; a scheduled date that is not a real calendar date fails the read
+    add_order:
+      decision: UI-PHASE3-ROUTES-NO-IDS-2026-10-12
+      field: '"Guía (ORD_…)" instead of the order id'
+      resolve: the top-bar search validation (ORD_ and 22 Base64URL characters) refuses anything else before any call;
+        then listOrders?public_id= - no order says "No encontramos esa guía", more than one order or another public_id
+        fails closed; then addRouteStop with that order's id and the route's current expected_version; nothing is sent
+        when another route was opened meanwhile
+      prefill: ?orderId= (the dashboard's "Agregar a ruta") reads that order with getOrder and fills the field with its
+        guía; an order that cannot be read leaves the field empty; the id is never shown
+      after: a saved stop empties the field
+    detail:
+      decision: UI-PHASE3-ROUTES-NO-IDS-2026-10-12
+      header: the route's date name, its driver as "Repartidor DRV-…" from listOrganizationDrivers (any status; a
+        driver that read does not return, for example an inactive one, is "Repartidor no disponible"), its status, its
+        stops and its assignment cost total
+      stops: each stop by its guía, read with getOrder one order after another (at most 100 stops per route,
+        cancelled when another route is opened or the screen closes, cached by order while the screen is open);
+        "Cargando guía…" while it is read; an order that cannot be read, or a stop beyond the 100th, is "Guía no
+        disponible", and a failed read is tried again with the route
+      actions: '"Mover orden ORD_… arriba", "Mover orden ORD_… abajo" and "Retirar orden ORD_… de la ruta" name the
+        stop by its guía, or by its position ("parada 2") when the guía is not available; the removal confirmation
+        too'
+      privacy: ids are keys and option values only, never text; nothing stored in the browser and nothing logged
+    not_supported:
+    - finishing or discarding a route - AI-05 has no operation that takes a route out of DRAFT (RouteStatus lists
+      PLANNED, ACTIVE, COMPLETED and CANCELLED, but nothing reaches them), so every route stays DRAFT and listed; the
+      owner left it for after the pilot (UI-PHASE3-ROUTES-DAILY-2026-10-12)
     mutation_roles:
     - dispatcher
     - platform_admin
@@ -319,6 +740,61 @@ screen_contracts:
     - EXTERNAL routing is unavailable
     - ALLY_CAPACITY routing is unavailable
   create_order:
+    # UI-PHASE3-ORDER-WIZARD-2026-10-10 (project owner, 2026-10-09 "avanza con la fase 3"; 2026-10-10, asked how the
+    # order must end after the four steps, "Confirmada (Recommended)"): the wizard creates the order and confirms it
+    # with the step 4 checkboxes, so it is ready to prepare. Every rule below still applies, step by step.
+    wizard:
+      decision: UI-PHASE3-ORDER-WIZARD-2026-10-10
+      route: /ops/orders/new
+      sources:
+        quote: POST /quotes (createQuote)
+        order: POST /orders (createOrder)
+        confirm: POST /orders/{orderId}/transitions (transitionOrder), the same client as the order detail next_step
+      steps:
+      - Dónde - origin and destination; address (8 characters or more), contact, phone (10 Mexican digits, optional
+        +52), latitude and longitude (shown to DISPATCHER and PLATFORM_ADMIN and still required by createQuote) and
+        references; createQuote checks the Culiacán coverage
+      - Qué se envía - 1 to 20 packages with description, weight in grams, declared value in MXN (integer cents) and
+        optional measures in millimeters
+      - Servicio y precio - service type, consolidated route, optional delivery window (America/Mazatlan, at most 12
+        hours), COD in MXN (at most 20,000.00), client account id typed as before (no list operation exists) and
+        "Calcular precio"; "Autorizar envío de bajo monto" with its required reason stays in this step for
+        DISPATCHER and PLATFORM_ADMIN, and a total of 52 MXN or less, IVA included, without consolidated route or
+        authorization does not leave it
+      - Confirmar - only who pays and two required checkboxes - the customer saw the breakdown and accepted the terms
+        and privacy notice in force (versions from configuration, never typed nor shown as codes) and the shipment
+        holds no prohibited goods
+      navigation: a stepper shows completed, current and pending steps; "Siguiente" validates only the current step
+        and shows each message next to its field; "Atrás" and the completed steps of the stepper go back without
+        losing data; a later step is never reached without validating the earlier ones
+      summary: fixed beside the steps on wide screens and stacked on phones (after the fields, before them on the last
+        step); it restates the capture and, once calculated, the price breakdown - net, IVA, total "IVA incluido" and
+        the rule applied in words - so the breakdown is shown before confirmation
+      price: dropped as soon as anything it was calculated from changes (addresses, packages, service type,
+        consolidated route, client account, authorization); an expired or used price is dropped at "Siguiente" or
+        on confirmation and calculated again
+      submit: createOrder, then transitionOrder DRAFT -> CONFIRMED with reason "Confirmada al crear la orden",
+        metadata restricted_goods_acknowledged true from the step 4 checkbox and expected_version of the created order
+      idempotency: one Idempotency-Key per createOrder payload and one per confirmation, each reused for a retry after
+        a network or server failure until a definitive answer; retrying the confirmation never sends createOrder again
+      outcome:
+      - confirmed - "Orden creada y confirmada" with the tracking number, the status the server returned and links to
+        the order detail and to capture another order
+      - confirmation refused - the order stays in DRAFT and the screen says so, with the ORD-002-GUARD-CODES-2026-10-05
+        message (or the MFA step-up back to the order detail) and a link to the order detail, whose next_step confirms
+        it; it never says the order was confirmed
+      - no valid answer - the screen says it cannot tell whether the order was confirmed, offers to retry the
+        confirmation (same key) after a network or server failure and links to the order detail
+      - order refused (createOrder 409) - no order exists; the screen returns to "Servicio y precio" to calculate the
+        price again
+      mfa: PLATFORM_ADMIN confirms only with MFA (transitionOrder); the last step says so beforehand
+      accessibility: es-MX copy without identifiers or internal codes, 44 px targets, keyboard operable, focus on the
+        step title after a step change and on the first field with a message after a refused step, usable from 320 px
+      privacy: the draft lives in memory only, is cleared on an organization switch and is never logged
+      not_supported:
+      - address book - createQuote cannot reference a saved location and listLocations returns no address text; it
+        belongs to BUS-001 (MVP-2)
+      - client account picker - there is no operation that lists client accounts
     validation:
     - Culiacán coverage
     - phone format
@@ -356,12 +832,261 @@ screen_contracts:
   driver_stop:
     offline_cache:
     - assigned stop minimum data
+    - 'the contact name and the full address (with references and the exact point) of the stops currently assigned
+      to the driver - UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (project owner, 2026-10-11, "Sí, como el diseño
+      (Recommended)": "Solo de sus paradas asignadas. Se borra del teléfono cuando la parada deja de estar asignada o
+      al cerrar sesión."); they leave the phone as details.retention says'
+    - the count of the driver's stops completed today (a number, no data about those stops)
+    - 'the last successful answer of GET /me/organization-roles for the session''s partition: the role codes only
+      (ORG-MY-ROLES-2026-10-12, so "No se pudo entregar" keeps its dispatch_role rule offline); it leaves the phone
+      with the partition''s snapshot on 401 or 403 and with every snapshot on logout'
     - pending events
     - pending proof metadata
     privacy:
     - masked phone or relay
     - no client account history
+    - contact name only - the full name at a pickup or a return, the short name at a delivery
+      (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11)
     completion: cannot complete without required POD unless supervisor override ID
+    # UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (project owner, 2026-10-11, "Sí, como el diseño (Recommended)": "Solo
+    # de sus paradas asignadas. Se borra del teléfono cuando la parada deja de estar asignada o al cerrar sesión. Con
+    # datos de prueba hasta cerrar GATE-007."): what the driver sees of each assigned stop and how long the phone
+    # keeps it.
+    details:
+      decision: UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11
+      source: GET /driver/me/stops (listMyStops, DriverStop)
+      list:
+      # Project owner, 2026-10-11, "Solo el número (Recommended)": "El servidor manda cuántas paradas terminó hoy
+      # (hora de Mazatlán), sin datos de esas paradas."
+      - 'a header "Hoy · N paradas · K hechas" and the cash still to collect with its total ("Hoy · 5 paradas · 2
+        hechas · 1 cobro pendiente $1,250.00"): K is DriverStopList.completed_today and N is the open stops the list
+        shows plus K; K is shown only while the answer that carried it is from the current day in America/Mazatlan,
+        otherwise the header reads "Hoy · N paradas" with N the open stops; with no open stop the empty state shows
+        the header only when K is above zero'
+      - a stop that breaks the contract is left out of the list and a stop whose details break it is kept without
+        them; only their counts are reported, never a value; an answer that is not a DriverStopList shows "La
+        respuesta no pudo validarse de forma segura" and leaves the saved snapshot as it is
+      - each stop by position and action ("3 · Entregar"), "Siguiente" on the first one and "Pendiente" on the rest,
+        zone and contact name, service window and "Cobrar $X" while its cash is pending
+      detail:
+      - '"Entregar a M. López" ("Recoger con Farmacia Las Quintas" at a pickup, "Devolver a Farmacia Las Quintas" at
+        a return), the tracking number and "Cómo llegar"'
+      - full address with references, zone, service window and the cash step
+      # Project owner, 2026-10-11, "Completo en recolección (Recommended)": "En recolección se ve el nombre completo
+      # del contacto, como en tu diseño; en entrega, el nombre corto ("M. López")." and "Completo, como recolección
+      # (Recommended)": "El remitente es el mismo contacto de la recolección, así que se ve igual: "Farmacia Las
+      # Quintas"."
+      contact_name: computed by the server - PICKUP and RETURN stops carry the full contact name
+        (contact_full_name, "Farmacia Las Quintas"; a return goes back to the sender, the pickup contact); DELIVERY
+        stops carry only the short name (contact_short_name, the initial of the first word, a period and the last
+        word, "María López Pérez" becomes "M. Pérez"); never the full name of a delivery contact, the phone or any
+        other contact datum
+      service_window: shown in America/Mazatlan time ("13:00–15:00"), never the browser's zone
+      money: every amount comes from the server in integer cents (int64) and is formatted without floating point
+      retention:
+      - only the requesting driver's ACCEPTED or ACTIVE assignments; another driver's or organization's stop is
+        never sent
+      - the phone keeps the details only inside the latest server snapshot of its session; a stop the server no
+        longer returns leaves the phone with the next snapshot
+      - logging out wipes every saved snapshot of the phone before leaving; 401 or 403 wipes the session's snapshot
+      - the saved roles answer (ORG-MY-ROLES-2026-10-12) is wiped with the snapshots, on logout and on 401 or 403
+      - the offline queue survives a logout and carries no address or contact datum
+      - every listMyStops answer carries Cache-Control no-store
+      - synthetic data only until GATE-007 closes
+      # UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 review (2026-10-11): the key service never blocks the stops or the
+      # sync.
+      details_unavailable: a stop whose protected details the server could not read arrives with details_available
+        false; when the phone holds no details for that same stop (same order and stop type) it shows "Datos de entrega
+        no disponibles por ahora" in place of the contact and of "Cómo llegar", the address summary as its address and
+        only the verb as lead ("Entregar"); zone, window and the cash step stay; details the phone already holds for
+        the same stop are kept, never wiped
+      sync_confirmation: the reads that confirm queued actions ask for listMyStops with details=false, so they never
+        depend on the key service and never wipe the saved details; a stop that comes without details gets one full
+        read; a confirmation that cannot answer (logout, aborted pass) never answers an empty list and the queued
+        action stays; a stop absent from an answer that left out a stop is never taken for gone
+    # UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (project owner, 2026-10-11, "Google Maps (Recommended)": "Funciona
+    # igual en Android y iPhone. Si no tiene la app, abre la página web de Google Maps."); GATE-003 scope: the system
+    # never calculates routes.
+    navigation:
+      decision: UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11
+      label: Cómo llegar
+      opens: https://www.google.com/maps/search/?api=1&query=<latitude>,<longitude> of the stop, in a new tab (the
+        Google Maps app when the phone has it, its web page otherwise)
+      server_request: none
+      routing: none; no Directions or Routes request and no route calculation
+    # UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (project owner, 2026-10-11, "Solo confirma el monto (Recommended)":
+    # "Toca "Recibí $1,250.00" y el sistema pone la referencia (guía y hora). Si no le pagan, reporta "No pagó el
+    # cobro"."): the cash collected at the door, recorded by the driver who holds the assignment.
+    cod_collection:
+      decision: UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11
+      shown_when: a DELIVERY stop in DELIVERING whose DriverStop.cod is not recorded
+      action: '"Recibí $1,250.00" and a confirmation that names the amount; the driver types nothing'
+      request: POST /orders/{orderId}/cod-records (recordCodCollection) with amount_cents equal to cod.expected and
+        the reference "<tracking number> <phone local ISO-8601 time with offset>" (at most 200 characters)
+      offline: queued like the other stop operations, one Idempotency-Key per collection reused on every retry, and
+        synchronized before the delivery of the same order - the queue runs each order's actions in dependency order
+        (check-in, pickup, transit, start of the delivery, cash, delivery), never plain FIFO, so a collection saved
+        after the delivery still goes first
+      waiting_for_cash: 'a delivery saved on the phone while the stop still has cash to collect and no collection is
+        saved (the driver discarded a held collection, or the delivery was saved before collections existed) waits
+        unsent; the stop stays "En entrega", "Recibí $1,250.00" is offered again with "La entrega ya está guardada en
+        el teléfono. Se enviará después de registrar el cobro." and the delivery photo is not asked again; once the
+        collection is saved it syncs first and the delivery right after it; a delivery the server refuses with
+        COD_NOT_RECORDED while the cash is still pending waits the same way'
+
+      delivery: '"Confirmar entrega" stays disabled until the cash is recorded or saved on the phone; the server still
+        refuses DELIVERED without the recorded cash (COD_NOT_RECORDED)'
+      rejections: each finance conflict code and COD_NOT_RECORDED has its own Spanish message; no code is shown
+      not_paid: '"No pagó el cobro" is a reason of "No se pudo entregar" (failed_delivery,
+        UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12), offered only on a stop with cash on delivery and only while no
+        collection is saved on the phone or recorded'
+      door_only: a collection is recorded only while REST shows the stop DELIVERING; a queued collection whose stop
+        left DELIVERING (for example after a failed attempt) is held for attention and never sent, and one whose stop
+        REST leaves out of its answer waits unsent (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12)
+    # UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 (project owner: phase 3 approved 2026-10-09 with "avanza con la fase
+    # 3" and the delivery screen "Cómo llegar", "Llamar", "Llegué al destino", "Foto de entrega", "Cobro $…", "Confirmar
+    # entrega", "Vista previa de la foto · Repetir", "Usar esta foto", "No se pudo entregar"; 2026-10-11 "Despacho decide
+    # (Recommended)", "Lista cerrada (Recommended)" and "Según el motivo (Recommended)" in
+    # INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11; 2026-10-12 "Solo si hay cobro (Recommended)", "No, llama a
+    # despacho (Recommended)", "Registrar desde Despacho (Recommended)" and "Después, con ADR (Recommended)"): the
+    # driver reports that the delivery could not be made with a reason from the closed list and one photo; dispatch
+    # decides what follows. The backend and RLS remain the barrier.
+    failed_delivery:
+      decision: UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12
+      server_rule: INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11
+      label: No se pudo entregar
+      shown_when: a DELIVERY stop whose confirmed or projected status is DELIVERING, while no other action of the stop
+        is held for attention and no delivery is saved on the phone, to a person whose roles in the organization are
+        known and are not also dispatch (dispatch_role, role_loading, role_unknown); never on a pickup or a return
+        (the phone has no failed pickup)
+      dispatch_role: 'owner answer "Registrar desde Despacho (Recommended)" (2026-10-12): a person who also holds
+        DISPATCHER or PLATFORM_ADMIN in the active organization is reported by the server as dispatch, which refuses
+        the short report (409 INVALID_REQUEST); the stop does not offer "No se pudo entregar" and says "También eres
+        despacho en esta organización, así que el intento fallido no se reporta desde el teléfono: regístralo desde la
+        orden en Despacho, donde eliges el motivo y el siguiente paso." The phone knows it from GET
+        /me/organization-roles (getMyOrganizationRoles: the person''s own roles in the session''s organization only),
+        added for it by ORG-MY-ROLES-2026-10-12 (owner answers "Agregar los roles al API (Recommended)" and "Endpoint
+        nuevo de roles (Recommended)"), because GET /me/organization-contexts answers one context and one role per
+        organization and stays unchanged. The phone asks once per session start (a new sign-in or organization),
+        uses the answer saved for the session''s partition at once and keeps the last successful one there
+        (offline_cache), so a driver also reports offline. No photo is uploaded and nothing is stored'
+      role_loading: 'ORG-MY-ROLES-2026-10-12: while the read is on its way and no answer is known (right after every
+        sign-in, since logging out wipes the saved answer, or during a retry), "No se pudo entregar" is not offered
+        yet and the stop says nothing about the role: loading is not an error'
+      role_unknown: 'ORG-MY-ROLES-2026-10-12: when the phone knows no answer for the session and none is on its way
+        (the read failed with nothing saved, the API is earlier and answers 404, the answer broke the contract, or 401
+        or 403), "No se pudo entregar" is not offered (it fails closed) and the stop says "No pudimos confirmar tu rol.
+        Vuelve a abrir la app con conexión para reportar." - never asking to sign out, which would wipe what the phone
+        keeps offline. A failed read keeps the answer already saved and is made again when the connection returns or
+        the app is shown again, at most 5 times per session start and never after 401 or 403, which remove the
+        answer. The sign-in, the stops and every other action of the driver app work as before, so no deploy order
+        is needed between the web and the API'
+      settled_report: a report REST already confirms (its transition accepted and the stop at a later version, for
+        example after dispatch chose "Reintentar hoy") only waits to leave the queue and never holds back a new report
+        of the same stop
+      question: '"¿Qué pasó?" with the subtitle "El despacho decidirá si se reprograma o regresa", a radio group whose
+        options are 44 px targets'
+      reasons:
+      - RECIPIENT_ABSENT "No había nadie"
+      - ADDRESS_NOT_FOUND "Dirección incorrecta"
+      - RECIPIENT_REFUSED "Rechazó el paquete"
+      - PAYMENT_UNAVAILABLE "No pagó el cobro", only on a stop with cash on delivery (DriverStop.cod not null; owner
+        answer "Solo si hay cobro (Recommended)")
+      - '"Otro…" reveals ACCESS_RESTRICTED "Acceso restringido", PACKAGE_DAMAGED "Paquete dañado" and SECURITY_RISK
+        "Riesgo de seguridad"'
+      free_text: none; the server builds the description from the reason and derives the severity from it
+      photo: '"Foto del lugar (obligatoria)": exactly one JPEG or PNG of at most 10 MiB, shown in "Vista previa de la
+        foto" with "Repetir" and "Usar esta foto" like the delivery photo; the object URL is revoked on "Repetir", on
+        "Usar esta foto" and when the step closes; nothing is stored before "Enviar reporte"'
+      submit: '"Enviar reporte" stays disabled until a reason and the photo are chosen; it asks no confirmation, like
+        "Confirmar entrega"'
+      requests:
+      - POST /orders/{orderId}/proof-upload-sessions (createProofUploadSession) with proof_type DELIVERY_PHOTO while
+        the order is DELIVERING
+      - PUT of the photo to upload_url with only the session's required_headers and no credentials
+      - POST /orders/{orderId}/proofs (finalizeProof), which returns the proof id
+      - POST /orders/{orderId}/incidents (openIncident) with type FAILED_DELIVERY_ATTEMPT, reason_code, occurred_at (the
+        instant of the report) and evidence_proof_ids with that proof; never severity, description or next_action
+        (409 INVALID_REQUEST otherwise)
+      - POST /orders/{orderId}/transitions (transitionOrder) with target_status FAILED_ATTEMPT, reason
+        DRIVER_DELIVERY_FAILED_REPORTED, the expected_version the report was built on, metadata.incident_id and
+        client_occurred_at
+      attempt_check: until its incident exists, a report is sent only while REST shows its stop DELIVERING at exactly
+        the version it was built on, checked before the upload session and again before openIncident; otherwise
+        nothing is sent (no photo, no incident) and the report is held. A stop REST leaves out of its answer sends
+        nothing either; the report is read again after the backoff. Once the incident exists the transition is
+        replayed with its key whatever REST shows, because its stored answer is what tells whether the server
+        applied it
+      idempotency: each of the four API requests has its own Idempotency-Key (the PUT to storage carries only the
+        required_headers), derived from the operation and reused only to retry the same content; openIncident is
+        marked as requested before it is first sent; a report is never rebuilt for another version, so its incident
+        key always names it and a second incident is never opened from the phone
+      confirmation: REST confirms a report only by this phone's own work - once its transition was accepted, any
+        later version of the stop, whatever dispatch decided next ("Reintentar hoy", "Regresar"); before that, a
+        FAILED_ATTEMPT at a later version only when its own incident exists. A failed attempt dispatch registered on
+        its own never confirms a report that was not sent; the report is held with "Despacho ya registró el intento
+        fallido de esta entrega, así que tu reporte no se envió. Descártalo."
+      offline: one closed operation of the offline queue (FAILED_DELIVERY, operation schema 3, IndexedDB version 4)
+        holds the photo, the four keys and its progress (session, upload, proof id, incident requested, incident id),
+        so a retry or a new tab resumes at the next step; it is the first action of its order at the door, so no other
+        action of the order is sent while it is pending, retrying or held; the 72-hour rule and the per-partition
+        limits (100 operations, 25 MiB of photos, 10 MiB per photo) are those of the other driver actions, and an
+        action the server accepted that REST never shows leaves the queue after the same 72 hours without a notice;
+        the attention actions are discard, retry the same (only where it still applies and the cash is not recorded)
+        and a new upload session, never a rebuild for the current version (a new attempt is reported again from the
+        stop with a new reason and photo); every queued action of a stop dispatch moved on stays discardable; when
+        another Paquetenvia tab keeps the database open during the upgrade the stop asks to close it and reload; no
+        text, name, address, token, signed URL or object key is stored
+      after: 'while it waits the stop says "Reporte guardado en el teléfono. Se enviará cuando haya conexión." and
+        shows FAILED_ATTEMPT only as the status to sync; once REST confirms it the stop reads "Intento fallido · El
+        despacho decide", offers no next action and no longer counts its cash as pending; a refused action uses the
+        es-MX rule messages, DISPATCH_DECISION_REQUIRED included ("El siguiente paso de este intento fallido lo
+        decide el despacho."), and 409 INVALID_REQUEST of openIncident points to registering the attempt in Despacho,
+        never to the phone''s clock; a held report whose incident is open (or may be, after a lost answer) says so -
+        dispatch decides - and never says "not sent" nor invites reporting it again, also when it expires'
+      cash: 'owner answer "No, llama a despacho (Recommended)": with a cash collection saved on the phone (queued or
+        held) the report is not offered and the stop asks to discard the collection first if it was a mistake, with
+        the existing discard confirmation; with the cash recorded on the server (DriverStop.cod.recorded, or a
+        collection the server already accepted) it is not offered and the stop asks the driver to call dispatch, who
+        decides and coordinates returning the cash (no phone number is shown; the app has none); the sync holds a
+        queued report for attention when a collection of the same order is saved or the cash is recorded, checking
+        before the upload session, before openIncident and before the transition. The incident is never requested
+        while the cash is saved or recorded; when the cash is recorded after the incident was opened, the
+        transition is not sent and the incident stays open for dispatch, so the report and the cash can then both
+        exist on the server'
+      enforcement: the PWA enforces the cash rule; the server still accepts DELIVERING -> FAILED_ATTEMPT with the cash
+        recorded (AI-04 has no such guard), so a report made by dispatch is not blocked, which is intended because
+        dispatch decides; DriverStop.cod.recorded is false for a DISPUTED or REVERSED cash record, and a collection
+        recorded between the last check and a request cannot be prevented from the phone (residual risks)
+      orphan_photo: 'owner answer "Después, con ADR (Recommended)" (2026-10-12): a "Foto del lugar" finalized as a
+        DELIVERY_PHOTO whose report stops before openIncident (held, refused, discarded or expired) is cited by no
+        incident, so the server''s DELIVERED guard could still count it for the current attempt; recorded as a
+        residual risk and a pending server follow-up (a proof type of its own for a failed attempt, or a delivery
+        that cites its photo). The PWA reduces it by checking the attempt and the cash before the upload session and
+        again before openIncident; in normal use a delivery always uploads its own photo'
+    recipient_call: VOICE-001-MASKED-CALLS-2026-10-11 ("Sí, con número enmascarado") and
+      VOICE-001-PROVIDER-TWILIO-2026-10-11 - the detail of a DELIVERY stop whose confirmed status is DELIVERING offers
+      "Llamar al destinatario" only when getRecipientCallAvailability answers available true; it sends
+      requestRecipientCall with a new Idempotency-Key (reused only to retry the same tap after a network failure) and
+      shows "Te estamos llamando a tu celular…" for PLACED or REQUESTED and a retry hint for UNCONFIRMED; it is an
+      online-only action - offline the button is shown disabled with "Necesitas conexión a internet para llamar" only
+      once getRecipientCallAvailability answered available true for the stop (before that nothing is shown), and the
+      action is never queued, cached or replayed by the offline queue; an answer that arrives after the stop changed
+      is ignored; after a 429 Retry-After or an availability RATE_LIMITED with retry_after_seconds the PWA checks the
+      availability again once when the wait is over; the PWA never receives, shows or stores a phone number of the
+      recipient (masked phone or relay); DRIVER_PHONE_REQUIRED points to "Cuenta"; the call itself asks the driver to
+      press 1 before the recipient is dialed (VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11)
+  driver_account:
+    route: /driver/stops (header "Cuenta")
+    decision: VOICE-001-MASKED-CALLS-2026-10-11
+    phone: shown only when getMyDriverPhone answers voice_calls_enabled true; the driver types their own mobile (ten
+      Mexican digits, optional +52, spaces and hyphens) and must tick the consent text "Acepto que este número se use
+      solo para conectar mis llamadas con los destinatarios de mis entregas. El destinatario nunca verá mi número y no
+      se usará para nada más. Puedo cambiarlo o borrarlo cuando quiera." (consent_version VOICE-001-CONSENT-V1) before
+      registerMyDriverPhone; the stored number is never displayed (only "Celular registrado" and the date); "Borrar mi
+      celular" calls removeMyDriverPhone, which works whatever the driver profile's status (ARCO; a driver whose
+      profile is not active is told it cannot register a new number but can erase the stored one); online only, the
+      field is cleared after saving and nothing is kept in browser storage
   external_driver_offers:
     release: MVP-1
     host_route: /driver/stops
@@ -396,7 +1121,7 @@ screen_contracts:
       rejected_status_or_endpoint: forbidden
   public_tracking:
     show:
-    - brand
+    - heading (no brand while GATE-001 is open, see branding)
     - public_id
     - simplified status
     - timeline
@@ -432,6 +1157,25 @@ screen_contracts:
     - CANCELLED
     fail_closed: invalid/expired/revoked token, cross-tenant reference or unmapped internal state all render the same not-found
       experience
+    branding:
+      decision: GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10
+      heading: Seguimiento de envío
+      until: GATE-001 closes (the commercial name is validated before IMPI); GATE-001 stays open
+      rules:
+      - every state (loading, not found, unavailable, rate limited, tracking) opens with the heading and names no brand; the
+        commercial name never appears in public tracking text, page title or metadata
+      - the page title is the heading and the page links no PWA manifest; the not-found page a malformed tracking link
+        reaches names no brand either. That page is the app's single shared not-found page, served for every unknown
+        URL without a session (internal paths included), so it is a public surface and stays neutral; internal screens
+        reached with a session keep the platform name
+      - NEXT_PUBLIC_TRACKING_BRAND_NAME stays unset (no brand) and the web build refuses the unvalidated commercial name
+      - messages to the recipient that carry the tracking link (TRK-002, GATE-004 templates) use the same neutral text and
+        never name the commercial name
+      - internal screens, login, onboarding and the driver PWA keep the platform name
+      - the link host follows PILOT-DOMAIN-PRODUCTION and is not changed by this decision
+      - 'support channel (GATE-001-TRACKING-SUPPORT-LINK-2026-10-11): no support link while GATE-001 is open;
+        NEXT_PUBLIC_TRACKING_SUPPORT_URL stays empty, the page tells the recipient to reply through the channel the link
+        came by, and the web build refuses a link that names the commercial name'
   csv_order_import:
     release: MVP-1
     route: /ops/orders/import
@@ -515,6 +1259,8 @@ screen_contracts:
       with further pages loaded through next_cursor; an Incident returned by openIncident or resolveIncident replaces
       the listed one with the same id
     - status, severity, reason_code, next_action, custody_acquired, occurred_at and sla_due_at
+    - reason_code uses the labels of the driver's closed list (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11, see
+      /ops/orders/:id failed_attempt); a null next_action reads "Lo decide despacho"
     - proofs show proof_type and captured_at only; no image, download or signed URL is requested or rendered
     - description and resolution reason are never echoed back after submission
     idempotency:
@@ -571,6 +1317,91 @@ screen_contracts:
     - the COD reference is never echoed back after submission nor logged
     not_supported:
     - listing COD records across orders other than through the listOrders pending filter
+  # UI-PHASE3-DRIVERS-2026-10-11 (project owner, 2026-10-11): "Lista de consulta (Recommended)" for the dispatcher and
+  # "Sí, con referencia DRV- (Recommended)" for Finance's payee picker.
+  driver_roster:
+    release: MVP-1
+    route: /ops/drivers
+    decision: UI-PHASE3-DRIVERS-2026-10-11
+    authority: REST API + PostgreSQL
+    sources:
+      list: GET /drivers (listOrganizationDrivers)
+    roles: [DISPATCHER, PLATFORM_ADMIN with MFA]
+    excluded_roles: FINANCE, VIEWER, DRIVER and every other role; the shell does not offer the screen to them and the
+      API answers 403
+    navigation: the shell item Repartidores, right after Importar CSV, closing the operations items of the approved
+      menu (UI-PHASE3-INBOX-2026-10-10)
+    population: the OWN drivers of the selected organization that are not INACTIVE, the drivers the assignment picker
+      lists; drivers of other organizations, EXTERNAL and ALLY profiles and retired drivers are not listed
+    table:
+      columns:
+      - Repartidor (DRV- reference; AI-06 stores no driver name)
+      - Vehículo (es-MX vehicle label)
+      - Estado (Pendiente de activar, Activo or Suspendido; dot and text, never color alone)
+      - Paradas activas (the stops the driver holds now, the same stops its app shows; no calendar-day filter)
+      - Última ubicación (capture time of the latest position in America/Mazatlan; Sin ubicación registrada when none)
+      order: by DRV- reference
+      states: loading, empty (Sin repartidores), error keeping the rows, no session, access unavailable and the MFA
+        step-up when only the second factor is missing
+    pagination: Cargar más follows next_cursor; a repeated cursor stops the paging with a message
+    recovery:
+    - load, Actualizar, the page becoming visible and window focus read the first page again (never while hidden and
+      never twice within 5 seconds); optimistic UI is never authoritative
+    - a 401 or 403 clears the rows
+    privacy:
+    - no browser persistence and no client logging; an organization switch clears the list
+    - no name, phone, email, document data, coordinate or internal identifier is shown; the latest position is reduced
+      to its capture time
+    forbidden:
+    - adding, editing, suspending or removing a driver (sin altas ni bajas)
+    - names and phones while GATE-007 is open
+    not_supported:
+    - EXTERNAL drivers and retired (INACTIVE) drivers - outside the approved list
+  settlement_desk:
+    release: MVP-1
+    route: /finance/settlements
+    decision: UI-PHASE3-DRIVERS-2026-10-11
+    authority: REST API + PostgreSQL
+    sources:
+      list: GET /settlements (listSettlements)
+      read: GET /settlements/{settlementId} (getSettlement)
+      calculate: POST /settlements (createSettlement)
+      payees: GET /settlement-payees (listSettlementPayees)
+      adjust: POST /settlements/{settlementId}/adjustments (addSettlementAdjustment)
+      approve: POST /settlements/{settlementId}/approve (approveSettlement)
+      pay: POST /settlements/{settlementId}/pay (markSettlementPaid)
+      void: POST /settlements/{settlementId}/void (voidSettlement)
+      export: GET /settlements/{settlementId}/export.csv (exportSettlementCsv)
+    roles:
+      operate: [FINANCE, PLATFORM_ADMIN with MFA]
+      approve_and_pay: FINANCE and PLATFORM_ADMIN, both with MFA (D7-SETTLEMENT-MFA)
+      note: DISPATCHER, DRIVER and VIEWER never reach the screen and the API answers 403
+    calculate:
+      payee: picked from listSettlementPayees, every driver of the organization createSettlement accepts (any type or
+        status, so a retired driver can still be paid for past work), each shown as its DRV- reference and vehicle;
+        the id is sent, never typed or shown
+      periods:
+      - Semana pasada - Monday to Sunday of the previous week in America/Mazatlan
+      - Quincena pasada - the half month before the current one, the 1st to the 15th or the 16th to the month's end,
+        in America/Mazatlan
+      - Fechas a mano - two typed dates
+      explanation: the form spells out the dates of each preset in readable es-MX ("1–7 sep 2026") before anything is
+        sent; presets always end before today, so they are closed periods
+      confirmation: the existing ConfirmDialog names the payee by DRV- reference and vehicle and the exact period sent
+    display:
+    - every settlement names its payee by the DRV- reference of the payee list, never the internal id; sin referencia
+      when that list failed or does not have the payee, and the screen says the list could not be read
+    - periods in readable dates ("1–7 sep 2026") in the list, the detail and the confirmations
+    - the payee filter offers the same list plus Todos
+    money:
+    - totals, lines and adjustments are integer MXN cents; typed adjustments are parsed to integer cents without
+      floating point; the confirmations keep stating the amounts
+    recovery:
+    - Actualizar reads the settlements and the payee list again; every write reads the settlements again
+    privacy:
+    - no browser persistence and no client logging; an organization switch clears settlements, payees and keys
+    not_supported:
+    - driver names (GATE-007); the CSV export keeps payee_id as AI-05 publishes it
 prototype_file: prototype/index.html
 meta:
   version: '0.6'

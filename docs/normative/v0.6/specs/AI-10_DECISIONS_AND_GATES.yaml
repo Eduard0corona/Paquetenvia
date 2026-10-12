@@ -305,6 +305,7 @@ release_gates:
   - penetration test
   - restore drill
   - legal go-live checklist
+  - email off Azure Communication Services, which retires on 2028-09-30 (NTF-EMAIL-ACS-PILOT-2026-10-11)
   V1_SCALE_READINESS:
   - GATE-012
   - GATE-013

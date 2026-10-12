@@ -61,18 +61,34 @@ export const screenOperationsMatrix = {
   // getOperationsQueueCounts (x-capability-matrix operations_queue_operations),
   // which admits exactly the operations dashboard roles.
   getOperationsQueueCounts: ["DISPATCHER", "PLATFORM_ADMIN"],
+  // UI-PHASE3-ORDER-WIZARD-2026-10-10: "Nueva orden" confirms the order it creates with
+  // transitionOrder, which admits DISPATCHER and PLATFORM_ADMIN with MFA (AI-05
+  // TransitionConflict); DRIVER only from /driver for its own assignment.
+  transitionOrder: ["DISPATCHER", "PLATFORM_ADMIN"],
+} as const satisfies Readonly<Record<string, readonly string[]>>;
+
+/**
+ * AI-05 `x-capability-matrix.driver_list_operations` (UI-PHASE3-DRIVERS-2026-10-11): the dispatcher's read-only
+ * driver list ("Repartidores") admits the roles of the assignment picker, and the settlement payee list admits the
+ * createSettlement roles; PLATFORM_ADMIN needs MFA for both and FINANCE never reads the dispatcher's list.
+ */
+export const driverListOperationsMatrix = {
+  listOrganizationDrivers: ["DISPATCHER", "PLATFORM_ADMIN"],
+  listSettlementPayees: ["FINANCE", "PLATFORM_ADMIN"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
 const allOperations: Readonly<Record<string, readonly string[]>> = {
   ...capabilityMatrix,
   ...financeOperationsMatrix,
   ...screenOperationsMatrix,
+  ...driverListOperationsMatrix,
 };
 
 export type CapabilityOperation =
   | keyof typeof capabilityMatrix
   | keyof typeof financeOperationsMatrix
-  | keyof typeof screenOperationsMatrix;
+  | keyof typeof screenOperationsMatrix
+  | keyof typeof driverListOperationsMatrix;
 
 /**
  * Operations that need a satisfied MFA challenge for a given role. D7-SETTLEMENT-MFA:
@@ -106,6 +122,9 @@ const mfaOperations: Readonly<Partial<Record<string, readonly CapabilityOperatio
     "assignDriver",
     "listAssignableDrivers",
     "getOperationsQueueCounts",
+    "transitionOrder",
+    "listOrganizationDrivers",
+    "listSettlementPayees",
   ],
 };
 
@@ -185,6 +204,18 @@ export const orderDetailRoles = ["DISPATCHER", "PLATFORM_ADMIN"] as const;
 
 export function canSearchOrders(role: string | null): boolean {
   return canPerform(role, "listOrders") && (orderDetailRoles as readonly (string | null)[]).includes(role);
+}
+
+/**
+ * UI-PHASE3-INBOX-2026-10-10: the work inbox reads the operations dashboard (OBS-001) and
+ * getOperationsQueueCounts, so it is offered exactly to the roles both admit (DISPATCHER, and
+ * PLATFORM_ADMIN with MFA, which the API enforces); VIEWER and every other role are excluded
+ * as from the dashboard and the counts.
+ */
+export function canOpenWorkInbox(role: string | null): boolean {
+  return (
+    canPerform(role, "getOperationsQueueCounts") && (orderDetailRoles as readonly (string | null)[]).includes(role)
+  );
 }
 
 /** VIEWER never receives exact coordinates (D5-VIEWER-LOCATION-PRECISION-2026-09-27). */

@@ -1,6 +1,8 @@
 using System.Collections.Concurrent;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Playwright;
+using Paqueteria.Domain.Tenancy;
 
 namespace Paqueteria.IntegrationTests.Driver;
 
@@ -20,15 +22,43 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
     private static readonly byte[] SyntheticPng =
         [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
+    /// <summary>Decodable 1x1 PNGs (two colours) for the photo preview.</summary>
+    private static readonly byte[] FirstPreviewPng =
+    [
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xde, 0x00, 0x00, 0x00,
+        0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xe0, 0x2f, 0xcb, 0x03,
+        0x00, 0x01, 0x8b, 0x00, 0xf4, 0x02, 0x38, 0xf3, 0x86, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    private static readonly byte[] SecondPreviewPng =
+    [
+        0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
+        0x49, 0x48, 0x44, 0x52, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01,
+        0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, 0xde, 0x00, 0x00, 0x00,
+        0x0c, 0x49, 0x44, 0x41, 0x54, 0x78, 0xda, 0x63, 0xb8, 0x59, 0xce, 0x06,
+        0x00, 0x03, 0x83, 0x01, 0x57, 0x51, 0xa6, 0x6c, 0xcb, 0x00, 0x00, 0x00,
+        0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
+    ];
+
+    /// <summary>
+    /// UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the upgrade from the DRV-002 layout keeps every queued DRV-002
+    /// operation and drops the schema 1 snapshot, which carries no stop details; the next REST response rebuilds
+    /// it. UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: the database now reaches version 4 and the operation is
+    /// rewritten as operation schema 3.
+    /// </summary>
     [Fact]
     [Trait("Category", "DriverOfflineOperationsPwa")]
-    public async Task IndexedDb_v1_snapshot_survives_the_atomic_v2_upgrade()
+    public async Task IndexedDb_v2_upgrade_keeps_queued_operations_and_drops_detail_less_snapshots()
     {
         using var playwright = await Playwright.CreateAsync();
         await using var browser = await playwright.Chromium.LaunchAsync(
             new BrowserTypeLaunchOptions { Headless = true });
         var page = await browser.NewPageAsync();
         const string cacheNamespace = "opaque-drv002-upgrade";
+        const string operationId = "33333333-3333-4333-8333-333333333333";
         await InstallSessionAsync(page, cacheNamespace);
         await page.GotoAsync(server.BaseAddress.AbsoluteUri);
         await page.EvaluateAsync(
@@ -45,21 +75,35 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
                 .replaceAll("/", "_")
                 .replaceAll("=", "");
               await new Promise((resolve, reject) => {
-                const open = indexedDB.open("paquetenvia-driver-stops-v1", 1);
-                open.onupgradeneeded = () =>
-                  open.result.createObjectStore(
-                    "snapshots",
-                    { keyPath: "partitionKey" });
+                // The DRV-002 (version 2) layout, exactly as that release created it.
+                const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
+                open.onupgradeneeded = () => {
+                  const database = open.result;
+                  database.createObjectStore("snapshots", { keyPath: "partitionKey" });
+                  const operations = database.createObjectStore(
+                    "operations",
+                    { keyPath: ["partitionKey", "id"] });
+                  operations.createIndex("by_partition", "partitionKey");
+                  operations.createIndex("by_partition_order", ["partitionKey", "orderId"]);
+                  operations.createIndex("by_partition_status", ["partitionKey", "status"]);
+                  operations.createIndex("by_partition_next_attempt", ["partitionKey", "nextAttemptAt"]);
+                  operations.createIndex("by_partition_created", ["partitionKey", "createdAt", "id"]);
+                  const blobs = database.createObjectStore(
+                    "proof_blobs",
+                    { keyPath: ["partitionKey", "operationId"] });
+                  blobs.createIndex("by_partition", "partitionKey");
+                  database.createObjectStore("sync_leases", { keyPath: "partitionKey" });
+                };
                 open.onerror = () => reject(open.error);
                 open.onsuccess = () => {
                   const database = open.result;
                   const transaction = database.transaction(
-                    "snapshots",
+                    ["snapshots", "operations"],
                     "readwrite");
                   transaction.objectStore("snapshots").put({
                     partitionKey,
                     schemaVersion: 1,
-                    synchronizedAt: "2026-07-26T12:00:00.000Z",
+                    synchronizedAt: "2026-10-11T12:00:00.000Z",
                     stops: [{
                       order_id: value.orderId,
                       aggregate_version: 3,
@@ -68,6 +112,37 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
                       status: "ASSIGNED",
                       address_summary: "Zona sintética upgrade",
                     }],
+                  });
+                  const capturedAt = new Date(Date.now() - 60_000).toISOString();
+                  transaction.objectStore("operations").put({
+                    schemaVersion: 1,
+                    partitionKey,
+                    id: value.operationId,
+                    orderId: value.orderId,
+                    kind: "CHECK_IN",
+                    sourceStatus: "ASSIGNED",
+                    targetStatus: "AT_PICKUP",
+                    expectedVersion: 3,
+                    reason: "DRIVER_CHECK_IN",
+                    clientOccurredAt: capturedAt,
+                    createdAt: capturedAt,
+                    transitionIdempotencyKey: `drv2-${value.operationId}-transition`,
+                    sessionIdempotencyKey: null,
+                    finalizeIdempotencyKey: null,
+                    proofType: null,
+                    contentType: null,
+                    sizeBytes: null,
+                    sha256: null,
+                    capturedAt: null,
+                    status: "PENDING",
+                    attemptCount: 0,
+                    nextAttemptAt: capturedAt,
+                    sessionAttempt: 1,
+                    uploadSessionId: null,
+                    uploadSessionExpiresAt: null,
+                    uploadAccepted: false,
+                    proofId: null,
+                    safeError: null,
                   });
                   transaction.oncomplete = () => {
                     database.close();
@@ -83,55 +158,839 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
                 cacheNamespace,
                 organizationId = OrganizationId,
                 orderId = OrderId,
+                operationId,
             });
         await page.RouteAsync(
-            "**/api/v1/driver/me/stops",
+            DriverStopsPwaPlaywrightTests.StopsRoute,
             route => route.AbortAsync());
 
         await page.GotoAsync(
             new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
 
-        await ExpectTextAsync(page, "ORD_DRV002_UPGRADE");
+        await ExpectTextAsync(page, "1 acción en el dispositivo");
+        Assert.DoesNotContain(
+            "ORD_DRV002_UPGRADE",
+            await page.Locator("body").InnerTextAsync(),
+            StringComparison.Ordinal);
         var evidence = await page.EvaluateAsync<string>(
             """
             () => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1");
               open.onerror = () => reject(open.error);
               open.onsuccess = () => {
                 const database = open.result;
                 const stores = [...database.objectStoreNames].sort();
-                const request = database.transaction("snapshots", "readonly")
-                  .objectStore("snapshots").getAll();
-                request.onerror = () => {
+                const transaction = database.transaction(
+                  ["snapshots", "operations"],
+                  "readonly");
+                const snapshots = transaction.objectStore("snapshots").getAll();
+                const operations = transaction.objectStore("operations").getAll();
+                transaction.onerror = () => {
                   database.close();
-                  reject(request.error);
+                  reject(transaction.error);
                 };
-                request.onsuccess = () => {
-                  const snapshots = request.result;
+                transaction.oncomplete = () => {
+                  const operation = operations.result[0];
                   database.close();
                   resolve(JSON.stringify({
+                    version: database.version,
                     stores,
-                    snapshotCount: snapshots.length,
-                    publicId: snapshots[0]?.stops?.[0]?.order_public_id,
-                    schemaVersion: snapshots[0]?.schemaVersion,
+                    snapshotCount: snapshots.result.length,
+                    operationCount: operations.result.length,
+                    operationId: operation?.id,
+                    operationSchema: operation?.schemaVersion,
+                    operationKind: operation?.kind,
+                    operationStatus: operation?.status,
+                    codIsNull: operation?.cod === null,
+                    rejectionCodeIsNull: operation?.rejectionCode === null,
+                    failedDeliveryIsNull: operation?.failedDelivery === null,
                   }));
                 };
               };
             })
             """);
         using var document = JsonDocument.Parse(evidence);
+        var root = document.RootElement;
+        Assert.Equal(4, root.GetProperty("version").GetInt32());
         Assert.Equal(
-            ["operations", "proof_blobs", "snapshots", "sync_leases"],
-            document.RootElement
-                .GetProperty("stores")
+            ["operations", "organization_roles", "proof_blobs", "snapshots", "sync_leases"],
+            root.GetProperty("stores")
                 .EnumerateArray()
                 .Select(value => value.GetString() ?? string.Empty)
                 .ToArray());
-        Assert.Equal(1, document.RootElement.GetProperty("snapshotCount").GetInt32());
+        Assert.Equal(0, root.GetProperty("snapshotCount").GetInt32());
+        Assert.Equal(1, root.GetProperty("operationCount").GetInt32());
+        Assert.Equal(operationId, root.GetProperty("operationId").GetString());
+        Assert.Equal(3, root.GetProperty("operationSchema").GetInt32());
+        Assert.Equal("CHECK_IN", root.GetProperty("operationKind").GetString());
+        // The scheduler may already have tried once (the stops request is aborted): never lost, never sent.
+        Assert.Contains(root.GetProperty("operationStatus").GetString(), new[] { "PENDING", "RETRY_WAIT" });
+        Assert.True(root.GetProperty("codIsNull").GetBoolean());
+        Assert.True(root.GetProperty("rejectionCodeIsNull").GetBoolean());
+        Assert.True(root.GetProperty("failedDeliveryIsNull").GetBoolean());
+    }
+
+    /// <summary>
+    /// UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: IndexedDB version 4 rewrites a queued schema 2 operation (the
+    /// version 3 layout of UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11) as operation schema 3 in place and keeps the
+    /// schema 2 stop snapshot, which the app still shows offline.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task IndexedDb_v3_upgrade_keeps_schema_2_operations_and_the_snapshot()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        var page = await browser.NewPageAsync();
+        const string cacheNamespace = "opaque-drv-failed-upgrade";
+        const string operationId = "44444444-4444-4444-8444-444444444444";
+        await InstallSessionAsync(page, cacheNamespace);
+        await page.GotoAsync(server.BaseAddress.AbsoluteUri);
+        await page.EvaluateAsync(
+            """
+            async value => {
+              const input = new TextEncoder().encode(
+                `${value.cacheNamespace}\0${value.organizationId}`);
+              const digest = new Uint8Array(
+                await crypto.subtle.digest("SHA-256", input));
+              let binary = "";
+              for (const byte of digest) binary += String.fromCharCode(byte);
+              const partitionKey = btoa(binary)
+                .replaceAll("+", "-")
+                .replaceAll("/", "_")
+                .replaceAll("=", "");
+              await new Promise((resolve, reject) => {
+                // The UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (version 3) layout.
+                const open = indexedDB.open("paquetenvia-driver-stops-v1", 3);
+                open.onupgradeneeded = () => {
+                  const database = open.result;
+                  database.createObjectStore("snapshots", { keyPath: "partitionKey" });
+                  const operations = database.createObjectStore(
+                    "operations",
+                    { keyPath: ["partitionKey", "id"] });
+                  operations.createIndex("by_partition", "partitionKey");
+                  operations.createIndex("by_partition_order", ["partitionKey", "orderId"]);
+                  operations.createIndex("by_partition_status", ["partitionKey", "status"]);
+                  operations.createIndex("by_partition_next_attempt", ["partitionKey", "nextAttemptAt"]);
+                  operations.createIndex("by_partition_created", ["partitionKey", "createdAt", "id"]);
+                  const blobs = database.createObjectStore(
+                    "proof_blobs",
+                    { keyPath: ["partitionKey", "operationId"] });
+                  blobs.createIndex("by_partition", "partitionKey");
+                  database.createObjectStore("sync_leases", { keyPath: "partitionKey" });
+                };
+                open.onerror = () => reject(open.error);
+                open.onsuccess = () => {
+                  const database = open.result;
+                  const transaction = database.transaction(
+                    ["snapshots", "operations"],
+                    "readwrite");
+                  const now = new Date(Date.now() - 60_000).toISOString();
+                  transaction.objectStore("snapshots").put({
+                    partitionKey,
+                    schemaVersion: 2,
+                    synchronizedAt: now,
+                    stops: [{
+                      order_id: value.orderId,
+                      aggregate_version: 7,
+                      order_public_id: "ORD_DRV_V3_UPGRADE",
+                      stop_type: "DELIVERY",
+                      status: "IN_TRANSIT",
+                      address_summary: "Zona sintética v3",
+                      details_available: false,
+                      contact_short_name: null,
+                      contact_full_name: null,
+                      zone_name: null,
+                      service_window: null,
+                      cod: null,
+                      navigation: null,
+                    }],
+                    completedToday: 0,
+                  });
+                  transaction.objectStore("operations").put({
+                    schemaVersion: 2,
+                    partitionKey,
+                    id: value.operationId,
+                    orderId: value.orderId,
+                    kind: "START_DELIVERY",
+                    sourceStatus: "IN_TRANSIT",
+                    targetStatus: "DELIVERING",
+                    expectedVersion: 7,
+                    reason: "DRIVER_DELIVERY_STARTED",
+                    clientOccurredAt: now,
+                    createdAt: now,
+                    transitionIdempotencyKey: `drv2-${value.operationId}-transition`,
+                    sessionIdempotencyKey: null,
+                    finalizeIdempotencyKey: null,
+                    proofType: null,
+                    contentType: null,
+                    sizeBytes: null,
+                    sha256: null,
+                    capturedAt: null,
+                    status: "PENDING",
+                    attemptCount: 0,
+                    nextAttemptAt: now,
+                    sessionAttempt: 1,
+                    uploadSessionId: null,
+                    uploadSessionExpiresAt: null,
+                    uploadAccepted: false,
+                    proofId: null,
+                    safeError: null,
+                    cod: null,
+                    rejectionCode: null,
+                  });
+                  transaction.oncomplete = () => {
+                    database.close();
+                    resolve(undefined);
+                  };
+                  transaction.onerror = () => reject(transaction.error);
+                };
+              });
+            }
+            """,
+            new
+            {
+                cacheNamespace,
+                organizationId = OrganizationId,
+                orderId = OrderId,
+                operationId,
+            });
+        await page.RouteAsync(
+            DriverStopsPwaPlaywrightTests.StopsRoute,
+            route => route.AbortAsync());
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+
+        await ExpectTextAsync(page, "1 acción en el dispositivo");
+        // The kept snapshot: the stop is still shown offline, with the start of the delivery pending.
+        await ExpectTextAsync(page, "ORD_DRV_V3_UPGRADE");
+        var evidence = await page.EvaluateAsync<string>(
+            """
+            () => new Promise((resolve, reject) => {
+              const open = indexedDB.open("paquetenvia-driver-stops-v1");
+              open.onerror = () => reject(open.error);
+              open.onsuccess = () => {
+                const database = open.result;
+                const transaction = database.transaction(
+                  ["snapshots", "operations"],
+                  "readonly");
+                const snapshots = transaction.objectStore("snapshots").getAll();
+                const operations = transaction.objectStore("operations").getAll();
+                transaction.onerror = () => {
+                  database.close();
+                  reject(transaction.error);
+                };
+                transaction.oncomplete = () => {
+                  const operation = operations.result[0];
+                  database.close();
+                  resolve(JSON.stringify({
+                    version: database.version,
+                    snapshotCount: snapshots.result.length,
+                    operationCount: operations.result.length,
+                    operationSchema: operation?.schemaVersion,
+                    operationKind: operation?.kind,
+                    failedDeliveryIsNull: operation?.failedDelivery === null,
+                  }));
+                };
+              };
+            })
+            """);
+        using var document = JsonDocument.Parse(evidence);
+        var root = document.RootElement;
+        Assert.Equal(4, root.GetProperty("version").GetInt32());
+        Assert.Equal(1, root.GetProperty("snapshotCount").GetInt32());
+        Assert.Equal(1, root.GetProperty("operationCount").GetInt32());
+        Assert.Equal(3, root.GetProperty("operationSchema").GetInt32());
+        Assert.Equal("START_DELIVERY", root.GetProperty("operationKind").GetString());
+        Assert.True(root.GetProperty("failedDeliveryIsNull").GetBoolean());
+    }
+
+    /// <summary>
+    /// UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 ("Solo confirma el monto"): at the door the driver confirms
+    /// "Recibí $1,250.00"; the cash is queued with its own key and a reference of tracking number and phone time,
+    /// the delivery photo stays disabled until then, and on sync the cash is recorded before the delivery.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Cash_is_confirmed_at_the_door_and_recorded_before_the_delivery()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-drv-cod-main");
+        var backend = new SyntheticOfflineBackend { CodExpectedCents = 125_000 };
+        backend.SetOrderState("IN_TRANSIT", 7);
+        await backend.RouteAsync(page);
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(page, "Entregar a M. Sintética");
+        await ExpectTextAsync(page, "por cobrar al entregar");
+
+        await context.SetOfflineAsync(true);
+        try
+        {
+            await EnqueueButtonAsync(page, "Llegué al destino");
+            await ExpectTextAsync(page, "Registra el cobro antes de confirmar la entrega.");
+            Assert.True(await page.Locator("input[type=file]").IsDisabledAsync());
+
+            await page.GetByRole(AriaRole.Button, new() { Name = "Recibí $1,250.00" }).ClickAsync();
+            var dialog = page.GetByRole(AriaRole.Dialog, new() { Name = "¿Recibiste $1,250.00?" });
+            await dialog.WaitForAsync();
+            Assert.Contains("$1,250.00", await dialog.InnerTextAsync());
+            await dialog.GetByRole(AriaRole.Button, new() { Name = "Sí, recibí $1,250.00" }).ClickAsync();
+            await ExpectTextAsync(page, "Cobro guardado en el teléfono; se registrará al sincronizar.");
+            await WaitForOperationCountAsync(page, 2);
+            Assert.False(await page.Locator("input[type=file]").IsDisabledAsync());
+
+            await EnqueueProofAsync(page, "Confirmar entrega", "delivery-cod.png");
+            await WaitForOperationCountAsync(page, 3);
+        }
+        finally
+        {
+            await context.SetOfflineAsync(false);
+        }
+
+        await page.GetByRole(AriaRole.Button, new() { Name = "Sincronizar ahora" }).ClickAsync();
+        await WaitForOperationCountAsync(page, 0);
+
         Assert.Equal(
-            "ORD_DRV002_UPGRADE",
-            document.RootElement.GetProperty("publicId").GetString());
-        Assert.Equal(1, document.RootElement.GetProperty("schemaVersion").GetInt32());
+            ["transition:DELIVERING", "cod", "transition:DELIVERED"],
+            backend.Calls);
+        var record = Assert.Single(backend.CodRecords);
+        Assert.Equal(125_000, record.AmountCents);
+        Assert.Matches(
+            "^ORD_DRV002_SYNTHETIC \\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}[+-]\\d{2}:\\d{2}$",
+            record.Reference);
+        Assert.Matches("^drv2-[0-9a-f-]{36}-cod$", record.Key);
+    }
+
+    /// <summary>
+    /// UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: a delivery the server refuses with an ORD-002 rule code shows that
+    /// rule in Spanish instead of the generic "la parada cambió", also after a reload.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Refused_delivery_shows_the_rule_in_spanish()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-drv-cod-rule");
+        var backend = new SyntheticOfflineBackend
+        {
+            CodExpectedCents = 125_000,
+            CodRecorded = true,
+            RejectDeliveryAsCodNotRecorded = true,
+        };
+        backend.SetOrderState("DELIVERING", 8);
+        await backend.RouteAsync(page);
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(page, "El cobro ya está registrado.");
+        await EnqueueProofAsync(page, "Confirmar entrega", "delivery-rule.png");
+
+        const string rule =
+            "Falta registrar el cobro contra entrega. Registra el cobro antes de confirmar la entrega.";
+        await ExpectTextAsync(page, rule);
+        await page.ReloadAsync();
+        await ExpectTextAsync(page, rule);
+        Assert.DoesNotContain(
+            "porque la parada cambió",
+            await page.Locator("body").InnerTextAsync(),
+            StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 review: discarding a held cash collection never dead-ends the
+    /// delivery. The saved delivery waits for the cash, "Recibí" is offered again and the new collection reaches
+    /// the server before the delivery, although the delivery was saved first.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Discarded_cash_keeps_the_delivery_waiting_until_the_cash_is_recorded_again()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-drv-cod-discard");
+        var backend = new SyntheticOfflineBackend { CodExpectedCents = 125_000, RejectFirstCod = true };
+        backend.SetOrderState("DELIVERING", 8);
+        await backend.RouteAsync(page);
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(page, "por cobrar al entregar");
+        await context.SetOfflineAsync(true);
+        try
+        {
+            await ConfirmCashAsync(page);
+            await WaitForOperationCountAsync(page, 1);
+            await EnqueueProofAsync(page, "Confirmar entrega", "delivery-discard.png");
+            await WaitForOperationCountAsync(page, 2);
+        }
+        finally
+        {
+            await context.SetOfflineAsync(false);
+        }
+
+        await page.GetByRole(AriaRole.Button, new() { Name = "Sincronizar ahora" }).ClickAsync();
+        await ExpectTextAsync(page, "Acción que requiere atención");
+        Assert.Equal(["cod"], backend.Calls);
+
+        await page.GetByRole(AriaRole.Button, new() { Name = "Descartar" }).ClickAsync();
+        await page.GetByRole(AriaRole.Button, new() { Name = "Confirmar", Exact = true }).ClickAsync();
+        await ExpectTextAsync(
+            page,
+            "La entrega ya está guardada en el teléfono. Se enviará después de registrar el cobro.");
+        await WaitForOperationCountAsync(page, 1);
+        await page.GetByRole(AriaRole.Button, new() { Name = "Sincronizar ahora" }).ClickAsync();
+        await ExpectTextAsync(
+            page,
+            "La entrega ya está guardada en el teléfono. Se enviará después de registrar el cobro.");
+        Assert.Equal(["cod"], backend.Calls);
+        Assert.Empty(backend.TransitionTargets);
+
+        await ConfirmCashAsync(page);
+        await WaitForOperationCountAsync(page, 0);
+
+        Assert.Equal(["cod", "cod", "transition:DELIVERED"], backend.Calls);
+        Assert.Single(backend.CodRecords);
+    }
+
+    /// <summary>
+    /// UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: "No se pudo entregar" online. "¿Qué pasó?" offers the closed list
+    /// without "No pagó el cobro" (this stop collects no cash), "Otro…" reveals three more reasons, there is no text
+    /// field, and "Enviar reporte" waits for a reason and the photo. The report runs the AI-05 sequence once:
+    /// DELIVERY_PHOTO session, upload, proof, the incident without severity, description or next_action, and
+    /// FAILED_ATTEMPT with that incident; the stop then reads "Intento fallido · El despacho decide".
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Failed_delivery_is_reported_with_reason_and_photo_and_dispatch_decides()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-drv-failed-online");
+        await RecordRevokedObjectUrlsAsync(page);
+        var backend = new SyntheticOfflineBackend();
+        backend.SetOrderState("DELIVERING", 8);
+        await backend.RouteAsync(page);
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(page, "Entregar a M. Sintética");
+        await OpenFailedDeliveryAsync(page);
+        await ExpectTextAsync(page, "El despacho decidirá si se reprograma o regresa");
+        foreach (var reason in new[] { "No había nadie", "Dirección incorrecta", "Rechazó el paquete", "Otro…" })
+        {
+            await page.GetByRole(AriaRole.Radio, new() { Name = reason, Exact = true }).WaitForAsync();
+            var option = await page.Locator("label", new() { HasText = reason }).BoundingBoxAsync();
+            Assert.NotNull(option);
+            Assert.True(option.Height >= 44, $"{reason} is {option.Height}px high");
+        }
+        Assert.Equal(0, await page.GetByRole(AriaRole.Radio, new() { Name = "No pagó el cobro" }).CountAsync());
+        Assert.Equal(0, await page.Locator("textarea, input[type=text], input:not([type])").CountAsync());
+        var send = page.GetByRole(AriaRole.Button, new() { Name = "Enviar reporte" });
+        Assert.True(await send.IsDisabledAsync());
+
+        await page.GetByRole(AriaRole.Radio, new() { Name = "Otro…" }).CheckAsync();
+        foreach (var reason in new[] { "Acceso restringido", "Paquete dañado", "Riesgo de seguridad" })
+        {
+            await page.GetByRole(AriaRole.Radio, new() { Name = reason, Exact = true }).WaitForAsync();
+        }
+        await page.GetByRole(AriaRole.Radio, new() { Name = "Paquete dañado" }).CheckAsync();
+        Assert.True(await send.IsDisabledAsync());
+
+        var previewUrl = await ChooseFailedDeliveryPhotoAsync(page);
+        Assert.True(await IsObjectUrlRevokedAsync(page, previewUrl));
+        // Previewing and choosing the photo store nothing; only "Enviar reporte" does.
+        Assert.Equal(0, await ReadStoreCountAsync(page, "operations"));
+        Assert.False(await send.IsDisabledAsync());
+        await send.ClickAsync();
+
+        await WaitForOperationCountAsync(page, 0);
+        await WaitForProofCountAsync(page, 0);
+        await ExpectTextAsync(page, "Intento fallido · El despacho decide");
+        Assert.Equal(
+            0,
+            await page.GetByRole(AriaRole.Button, new() { Name = "No se pudo entregar" }).CountAsync());
+
+        Assert.Equal(["incident", "transition:FAILED_ATTEMPT"], backend.Calls);
+        var session = Assert.Single(backend.SessionAttempts);
+        Assert.Equal("DELIVERY_PHOTO", session.ProofType);
+        Assert.Equal(1, backend.UploadCount);
+        var proof = Assert.Single(backend.FinalizedProofs);
+        Assert.Equal("DELIVERY_PHOTO", proof.ProofType);
+        var (incidentKey, incidentBody) = Assert.Single(backend.IncidentRequests);
+        Assert.Matches("^drv2-[0-9a-f-]{36}-incident$", incidentKey);
+        using (var incident = JsonDocument.Parse(incidentBody))
+        {
+            var report = incident.RootElement;
+            Assert.Equal(
+                ["evidence_proof_ids", "occurred_at", "reason_code", "type"],
+                report.EnumerateObject().Select(member => member.Name).Order(StringComparer.Ordinal).ToArray());
+            Assert.Equal("FAILED_DELIVERY_ATTEMPT", report.GetProperty("type").GetString());
+            Assert.Equal("PACKAGE_DAMAGED", report.GetProperty("reason_code").GetString());
+            Assert.Equal(proof.CapturedAt, report.GetProperty("occurred_at").GetString());
+            Assert.Equal(
+                "00000000-0000-4000-8000-000000000001",
+                Assert.Single(report.GetProperty("evidence_proof_ids").EnumerateArray()).GetString());
+        }
+        Assert.Equal(["FAILED_ATTEMPT"], backend.TransitionTargets);
+        Assert.Equal(Assert.Single(backend.IncidentIds), Assert.Single(backend.TransitionIncidentIds));
+        Assert.Equal("DRIVER_DELIVERY_FAILED_REPORTED", Assert.Single(backend.TransitionReasons));
+        Assert.Equal(8, Assert.Single(backend.TransitionExpectedVersions));
+        Assert.Equal(proof.CapturedAt, Assert.Single(backend.TransitionClientOccurredAt));
+        var keys = new[] { session.Key, Assert.Single(backend.FinalizeKeys.Distinct()), incidentKey, Assert.Single(backend.TransitionKeys) };
+        Assert.Equal(4, keys.Distinct(StringComparer.Ordinal).Count());
+        Assert.All(keys, key => Assert.StartsWith("drv2-", key, StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: offline, "No pagó el cobro" (the stop collects cash) is saved with
+    /// its photo and shown as pending, never as confirmed, also after a reload. When the connection returns it is sent
+    /// once, without the cash, and the stop reads "Intento fallido · El despacho decide".
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Failed_delivery_saved_offline_is_sent_once_when_the_connection_returns()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-drv-failed-offline");
+        var backend = new SyntheticOfflineBackend { CodExpectedCents = 125_000 };
+        backend.SetOrderState("DELIVERING", 8);
+        await backend.RouteAsync(page);
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(page, "por cobrar al entregar");
+        // The reload below is offline, so the Service Worker must control the page and hold the shell first.
+        await EnsureServiceWorkerControlAsync(page);
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(page, "por cobrar al entregar");
+        // ORG-MY-ROLES-2026-10-12: the answer of the roles read is saved for the partition, role codes only.
+        var saved = Assert.Single(await DriverOrganizationRoles.WaitForSavedAsync(page, 1));
+        Assert.Equal(
+            ["partitionKey", "roles", "schemaVersion"],
+            saved.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(["DRIVER"], saved.GetProperty("roles").EnumerateArray().Select(role => role.GetString() ?? string.Empty));
+        // A page that went away mid-pass (the navigations above) leaves its sync lease behind until it expires (15
+        // seconds), and a sync asked for meanwhile does nothing (DRV-002). Waiting until no lease is active keeps the
+        // sync after the connection returns independent of how fast the machine is. An expired lease is never
+        // removed on its own, so the store is not expected to be empty.
+        await WaitForNoActiveSyncLeaseAsync(page);
+        await context.SetOfflineAsync(true);
+        try
+        {
+            // An offline start reads the roles saved for the partition, so a DRIVER still reports.
+            await page.ReloadAsync();
+            await ExpectTextAsync(page, "por cobrar al entregar");
+            await OpenFailedDeliveryAsync(page);
+            await page.GetByRole(AriaRole.Radio, new() { Name = "No pagó el cobro" }).CheckAsync();
+            await ChooseFailedDeliveryPhotoAsync(page);
+            await page.GetByRole(AriaRole.Button, new() { Name = "Enviar reporte" }).ClickAsync();
+            await WaitForOperationCountAsync(page, 1);
+            await WaitForProofCountAsync(page, 1);
+            await ExpectTextAsync(page, "Reporte guardado en el teléfono. Se enviará cuando haya conexión.");
+            await AssertPendingFailedAttemptAsync(page);
+
+            await page.ReloadAsync();
+            await ExpectTextAsync(page, "1 acción en el dispositivo");
+            await ExpectTextAsync(page, "Reporte guardado en el teléfono. Se enviará cuando haya conexión.");
+            await AssertPendingFailedAttemptAsync(page);
+        }
+        finally
+        {
+            await context.SetOfflineAsync(false);
+        }
+
+        await page.GetByRole(AriaRole.Button, new() { Name = "Sincronizar ahora" }).ClickAsync();
+        await WaitForOperationCountAsync(page, 0);
+        await WaitForProofCountAsync(page, 0);
+        await ExpectTextAsync(page, "Intento fallido · El despacho decide");
+
+        Assert.Equal(["incident", "transition:FAILED_ATTEMPT"], backend.Calls);
+        Assert.Empty(backend.CodRecords);
+        var (_, incidentBody) = Assert.Single(backend.IncidentRequests);
+        using var incident = JsonDocument.Parse(incidentBody);
+        Assert.Equal("PAYMENT_UNAVAILABLE", incident.RootElement.GetProperty("reason_code").GetString());
+        var capturedAt = Assert.Single(backend.SessionClientOccurredAt);
+        Assert.Equal(capturedAt, incident.RootElement.GetProperty("occurred_at").GetString());
+        Assert.Equal(capturedAt, Assert.Single(backend.TransitionClientOccurredAt));
+        Assert.Equal(capturedAt, Assert.Single(backend.FinalizedProofs).CapturedAt);
+    }
+
+    /// <summary>
+    /// UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 (owner answer "No, llama a despacho (Recommended)"): with the cash
+    /// saved on the phone "No se pudo entregar" is not offered; discarding the saved collection, with the existing
+    /// confirmation, brings it back. With the cash recorded on the server the stop asks the driver to call dispatch.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Saved_cash_hides_the_report_until_discarded_and_recorded_cash_asks_to_call_dispatch()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-drv-failed-cash");
+        var backend = new SyntheticOfflineBackend { CodExpectedCents = 125_000 };
+        backend.SetOrderState("DELIVERING", 8);
+        await backend.RouteAsync(page);
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(page, "por cobrar al entregar");
+        await page.GetByRole(AriaRole.Button, new() { Name = "No se pudo entregar" }).WaitForAsync();
+        await context.SetOfflineAsync(true);
+        try
+        {
+            await ConfirmCashAsync(page);
+            await WaitForOperationCountAsync(page, 1);
+            await ExpectTextAsync(
+                page,
+                "Hay un cobro guardado en el teléfono. Si fue un error, descártalo para poder reportar que no se pudo entregar.");
+            Assert.Equal(
+                0,
+                await page.GetByRole(AriaRole.Button, new() { Name = "No se pudo entregar" }).CountAsync());
+
+            await page.GetByRole(AriaRole.Button, new() { Name = "Descartar cobro guardado" }).ClickAsync();
+            var dialog = page.GetByRole(AriaRole.Dialog, new() { Name = "Confirma la acción" });
+            await dialog.WaitForAsync();
+            await dialog.GetByRole(AriaRole.Button, new() { Name = "Confirmar", Exact = true }).ClickAsync();
+            await WaitForOperationCountAsync(page, 0);
+            await page.GetByRole(AriaRole.Button, new() { Name = "No se pudo entregar" }).WaitForAsync();
+            await page.GetByRole(AriaRole.Button, new() { Name = "Recibí $1,250.00" }).WaitForAsync();
+        }
+        finally
+        {
+            await context.SetOfflineAsync(false);
+        }
+        Assert.Empty(backend.Calls);
+
+        backend.RecordCodOnServer();
+        await page.ReloadAsync();
+        await ExpectTextAsync(
+            page,
+            "El cobro ya está registrado. Si no puedes entregar, llama a despacho: ellos deciden y coordinan la devolución del cobro.");
+        Assert.Equal(
+            0,
+            await page.GetByRole(AriaRole.Button, new() { Name = "No se pudo entregar" }).CountAsync());
+        Assert.DoesNotContain("tel:", await page.ContentAsync(), StringComparison.Ordinal);
+        Assert.Empty(backend.Calls);
+    }
+
+    /// <summary>
+    /// UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: a report saved offline is held, unsent, when the cash was recorded
+    /// on the server meanwhile (for example by dispatch): nothing is uploaded or opened, and the stop explains that
+    /// the driver calls dispatch; only discarding remains.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Report_saved_offline_is_held_when_the_cash_was_recorded_meanwhile()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-drv-failed-held");
+        var backend = new SyntheticOfflineBackend { CodExpectedCents = 125_000 };
+        backend.SetOrderState("DELIVERING", 8);
+        await backend.RouteAsync(page);
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(page, "por cobrar al entregar");
+        await context.SetOfflineAsync(true);
+        try
+        {
+            await OpenFailedDeliveryAsync(page);
+            await page.GetByRole(AriaRole.Radio, new() { Name = "Rechazó el paquete" }).CheckAsync();
+            await ChooseFailedDeliveryPhotoAsync(page);
+            await page.GetByRole(AriaRole.Button, new() { Name = "Enviar reporte" }).ClickAsync();
+            await WaitForOperationCountAsync(page, 1);
+        }
+        finally
+        {
+            backend.RecordCodOnServer();
+            await context.SetOfflineAsync(false);
+        }
+
+        await page.GetByRole(AriaRole.Button, new() { Name = "Sincronizar ahora" }).ClickAsync();
+        await WaitForOperationStatusAsync(page, "NEEDS_ATTENTION");
+        await ExpectTextAsync(
+            page,
+            "El cobro de esta entrega ya está registrado, así que el reporte no se envió. Llama a despacho: ellos deciden y coordinan la devolución del cobro.");
+        Assert.Empty(backend.Calls);
+        Assert.Empty(backend.SessionAttempts);
+        Assert.Equal(0, backend.UploadCount);
+        Assert.Equal(
+            0,
+            await page.GetByRole(AriaRole.Button, new() { Name = "Reintentar la misma acción" }).CountAsync());
+        await page.GetByRole(AriaRole.Button, new() { Name = "Descartar", Exact = true }).WaitForAsync();
+    }
+
+    /// <summary>
+    /// UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: a report saved offline is never taken as confirmed by a failed
+    /// attempt that dispatch registered on its own. It is held unsent (no photo upload, no incident, no transition),
+    /// says so, keeps its photo until the driver discards it, and offers no rebuild for the new version.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Report_saved_offline_is_held_unsent_when_dispatch_registered_the_failed_attempt()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-drv-failed-dispatch-first");
+        var backend = new SyntheticOfflineBackend();
+        backend.SetOrderState("DELIVERING", 8);
+        await backend.RouteAsync(page);
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await page.GetByRole(AriaRole.Button, new() { Name = "No se pudo entregar" }).WaitForAsync();
+        await context.SetOfflineAsync(true);
+        try
+        {
+            await OpenFailedDeliveryAsync(page);
+            await page.GetByRole(AriaRole.Radio, new() { Name = "No había nadie" }).CheckAsync();
+            await ChooseFailedDeliveryPhotoAsync(page);
+            await page.GetByRole(AriaRole.Button, new() { Name = "Enviar reporte" }).ClickAsync();
+            await WaitForOperationCountAsync(page, 1);
+            await WaitForProofCountAsync(page, 1);
+        }
+        finally
+        {
+            // Meanwhile dispatch registered the failed attempt with its own incident.
+            backend.SetOrderState("FAILED_ATTEMPT", 9);
+            await context.SetOfflineAsync(false);
+        }
+
+        await page.GetByRole(AriaRole.Button, new() { Name = "Sincronizar ahora" }).ClickAsync();
+        await WaitForOperationStatusAsync(page, "NEEDS_ATTENTION");
+        await ExpectTextAsync(
+            page,
+            "Despacho ya registró el intento fallido de esta entrega, así que tu reporte no se envió. Descártalo.");
+        Assert.Empty(backend.Calls);
+        Assert.Empty(backend.SessionAttempts);
+        Assert.Equal(0, backend.UploadCount);
+        Assert.Empty(backend.IncidentRequests);
+        await WaitForProofCountAsync(page, 1);
+        Assert.Equal(
+            0,
+            await page.GetByRole(AriaRole.Button, new() { Name = "Crear acción para versión actual" }).CountAsync());
+        Assert.Equal(
+            0,
+            await page.GetByRole(AriaRole.Button, new() { Name = "Reintentar la misma acción" }).CountAsync());
+
+        await page.GetByRole(AriaRole.Button, new() { Name = "Descartar", Exact = true }).ClickAsync();
+        var dialog = page.GetByRole(AriaRole.Dialog, new() { Name = "Confirma la acción" });
+        await dialog.WaitForAsync();
+        await dialog.GetByRole(AriaRole.Button, new() { Name = "Confirmar", Exact = true }).ClickAsync();
+        await WaitForOperationCountAsync(page, 0);
+        await WaitForProofCountAsync(page, 0);
+        await ExpectTextAsync(page, "Intento fallido · El despacho decide");
+        Assert.Empty(backend.Calls);
+    }
+
+    /// <summary>
+    /// UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 (owner answer "Registrar desde Despacho (Recommended)") with
+    /// ORG-MY-ROLES-2026-10-12: a person whose roles read (getMyOrganizationRoles, the API's own answer) lists DRIVER
+    /// and DISPATCHER is not offered "No se pudo entregar" and uploads nothing; the stop says to register the attempt
+    /// from the order in Despacho.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task A_driver_who_is_also_dispatch_is_told_to_register_the_attempt_in_Despacho()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(
+            page,
+            "opaque-drv-failed-also-dispatch",
+            OrganizationRole.Driver,
+            OrganizationRole.Dispatcher);
+        var backend = new SyntheticOfflineBackend();
+        backend.SetOrderState("DELIVERING", 8);
+        await backend.RouteAsync(page);
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(
+            page,
+            "También eres despacho en esta organización, así que el intento fallido no se reporta desde el teléfono: regístralo desde la orden en Despacho, donde eliges el motivo y el siguiente paso.");
+        Assert.Equal(
+            0,
+            await page.GetByRole(AriaRole.Button, new() { Name = "No se pudo entregar" }).CountAsync());
+        Assert.Empty(backend.Calls);
+        var saved = Assert.Single(await DriverOrganizationRoles.WaitForSavedAsync(page, 1));
+        Assert.Equal(
+            ["DISPATCHER", "DRIVER"],
+            saved.GetProperty("roles").EnumerateArray().Select(role => role.GetString() ?? string.Empty));
+    }
+
+    /// <summary>
+    /// ORG-MY-ROLES-2026-10-12: this app against an API older than the roles read (404) withholds only "No se pudo
+    /// entregar" - it says the role could not be confirmed and saves nothing - while the stop, the delivery and its
+    /// sync work as before; no deployment order is needed.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Against_an_older_API_without_the_roles_read_only_the_report_is_withheld()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-drv-failed-older-api");
+        // Registered last, so it answers the roles read instead of InstallSessionAsync's route.
+        await DriverOrganizationRoles.RouteOlderApiAsync(page);
+        var backend = new SyntheticOfflineBackend();
+        backend.SetOrderState("DELIVERING", 8);
+        await backend.RouteAsync(page);
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(
+            page,
+            "No pudimos confirmar tu rol. Vuelve a abrir la app con conexión para reportar.");
+        Assert.DoesNotContain("Cierra sesión", await page.InnerTextAsync("main"), StringComparison.Ordinal);
+        Assert.Equal(
+            0,
+            await page.GetByRole(AriaRole.Button, new() { Name = "No se pudo entregar" }).CountAsync());
+        Assert.Empty(await DriverOrganizationRoles.ReadSavedAsync(page));
+
+        await EnqueueProofAsync(page, "Confirmar entrega", "delivery-older-api.png");
+        await WaitUntilAsync(() => backend.Calls.Contains("transition:DELIVERED"));
+        await WaitForOperationCountAsync(page, 0);
+        Assert.Equal(["transition:DELIVERED"], backend.Calls);
     }
 
     [Fact]
@@ -230,6 +1089,83 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             backend.SessionAttempts,
             attempt => Assert.StartsWith("drv2-", attempt.Key, StringComparison.Ordinal));
         Assert.Equal(2, backend.UploadCount);
+    }
+
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Proof_photo_is_previewed_retaken_and_queued_only_from_Usar_esta_foto()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-ui001-photo-preview");
+        await RecordRevokedObjectUrlsAsync(page);
+        var backend = new SyntheticOfflineBackend();
+        backend.SetOrderState("AT_PICKUP", 4);
+        await backend.RouteAsync(page);
+        var secondSha256 = Convert.ToHexStringLower(SHA256.HashData(SecondPreviewPng));
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(page, "Confirmar recolección");
+        await context.SetOfflineAsync(true);
+        try
+        {
+            await page.Locator("input[type=file]").SetInputFilesAsync(
+                new FilePayload
+                {
+                    Name = "first-preview.png",
+                    MimeType = "image/png",
+                    Buffer = FirstPreviewPng,
+                });
+            var firstUrl = await WaitForDecodedPreviewAsync(page);
+            Assert.StartsWith("blob:", firstUrl, StringComparison.Ordinal);
+            Assert.False(await IsObjectUrlRevokedAsync(page, firstUrl));
+            await page.WaitForFunctionAsync(
+                "() => document.activeElement?.textContent === 'Vista previa de la foto'");
+            // Previewing stores nothing.
+            Assert.Equal(0, await ReadStoreCountAsync(page, "operations"));
+            Assert.Equal(0, await ReadStoreCountAsync(page, "proof_blobs"));
+
+            // "Repetir" reopens the camera picker and revokes the first preview.
+            var chooser = await page.RunAndWaitForFileChooserAsync(
+                () => page.GetByRole(AriaRole.Button, new() { Name = "Repetir" })
+                    .ClickAsync());
+            Assert.True(await IsObjectUrlRevokedAsync(page, firstUrl));
+            await chooser.SetFilesAsync(
+                new FilePayload
+                {
+                    Name = "second-preview.png",
+                    MimeType = "image/png",
+                    Buffer = SecondPreviewPng,
+                });
+            var secondUrl = await WaitForDecodedPreviewAsync(page, firstUrl);
+            Assert.Equal(0, await ReadStoreCountAsync(page, "operations"));
+
+            await page.GetByRole(AriaRole.Button, new() { Name = "Usar esta foto" })
+                .ClickAsync();
+            await WaitForOperationCountAsync(page, 1);
+            await WaitForProofCountAsync(page, 1);
+            await ExpectTextAsync(page, "Iniciar traslado");
+            Assert.True(await IsObjectUrlRevokedAsync(page, secondUrl));
+            Assert.Equal(
+                $"{SecondPreviewPng.Length}|{secondSha256}|{secondSha256}",
+                await ReadSingleProofAsync(page));
+        }
+        finally
+        {
+            await context.SetOfflineAsync(false);
+        }
+
+        await page.WaitForFunctionAsync("() => navigator.onLine === true");
+        await WaitForOperationCountAsync(page, 0);
+        await WaitForProofCountAsync(page, 0);
+        // Only the retaken photo travels: one upload, sessions for its hash only.
+        Assert.Equal(1, backend.UploadCount);
+        Assert.Equal([secondSha256], backend.SessionSha256.Distinct());
+        Assert.Equal(["PICKED_UP"], backend.TransitionTargets);
     }
 
     [Fact]
@@ -510,7 +1446,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         await using var context = await browser.NewContextAsync();
         var page = await context.NewPageAsync();
         await InstallSessionAsync(page, "opaque-drv002-shared-session");
-        await page.RouteAsync("**/api/v1/driver/me/stops", async route =>
+        await page.RouteAsync(DriverStopsPwaPlaywrightTests.StopsRoute, async route =>
         {
             var organization =
                 await route.Request.HeaderValueAsync("X-Organization-Id");
@@ -519,18 +1455,17 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             {
                 Status = 200,
                 ContentType = "application/json",
-                Body = JsonSerializer.Serialize(new[]
-                {
-                    new
-                    {
-                        order_id = OrderId,
-                        aggregate_version = 3,
-                        order_public_id = $"ORD_DRV002_ORG_{suffix}",
-                        stop_type = "PICKUP",
-                        status = "ASSIGNED",
-                        address_summary = $"Zona sintética {suffix}",
-                    },
-                }),
+                Body = DriverStopsPwaPlaywrightTests.StopsBody(
+                    route.Request,
+                    [
+                        DriverStopsPwaPlaywrightTests.Stop(
+                            OrderId,
+                            3,
+                            $"ORD_DRV002_ORG_{suffix}",
+                            "PICKUP",
+                            "ASSIGNED",
+                            $"Zona sintética {suffix}"),
+                    ]),
             });
         });
 
@@ -578,7 +1513,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             var shellContainsData = await page.EvaluateAsync<bool>(
                 """
                 async () => {
-                  const cache = await caches.open("paquetenvia-driver-shell-v5");
+                  const cache = await caches.open("paquetenvia-driver-shell-v7");
                   const response = await cache.match("/driver/stops");
                   const text = response ? await response.text() : "";
                   return text.includes("ORD_DRV002_ORG_A") ||
@@ -594,6 +1529,55 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         }
     }
 
+    /// <summary>"No se pudo entregar" opens "¿Qué pasó?".</summary>
+    private static async Task OpenFailedDeliveryAsync(IPage page)
+    {
+        await page.GetByRole(AriaRole.Button, new() { Name = "No se pudo entregar", Exact = true }).ClickAsync();
+        await page.GetByRole(AriaRole.Group, new() { Name = "¿Qué pasó?" }).WaitForAsync();
+    }
+
+    /// <summary>
+    /// "Foto del lugar (obligatoria)": the photo is previewed and used; returns the revoked preview URL.
+    /// </summary>
+    private static async Task<string> ChooseFailedDeliveryPhotoAsync(IPage page)
+    {
+        await page.GetByLabel("Foto del lugar (obligatoria)").SetInputFilesAsync(
+            new FilePayload
+            {
+                Name = "lugar-sintetico.png",
+                MimeType = "image/png",
+                Buffer = FirstPreviewPng,
+            });
+        await page.GetByRole(AriaRole.Heading, new() { Name = "Vista previa de la foto" }).WaitForAsync();
+        var url = await page.GetByRole(AriaRole.Img, new() { Name = "Foto del lugar tomada" })
+            .GetAttributeAsync("src") ?? string.Empty;
+        Assert.StartsWith("blob:", url, StringComparison.Ordinal);
+        await page.GetByRole(AriaRole.Button, new() { Name = "Usar esta foto" }).ClickAsync();
+        await ExpectTextAsync(page, "Foto lista para el reporte.");
+        return url;
+    }
+
+    /// <summary>A report waiting to sync is pending: the confirmed status is still the delivery.</summary>
+    private static async Task AssertPendingFailedAttemptAsync(IPage page)
+    {
+        var facts = await page.Locator("dl").First.InnerTextAsync();
+        Assert.Contains("Estado confirmado", facts, StringComparison.Ordinal);
+        Assert.Contains("En reparto", facts, StringComparison.Ordinal);
+        Assert.Contains("Estado por sincronizar", facts, StringComparison.Ordinal);
+        Assert.Contains("Intento fallido", facts, StringComparison.Ordinal);
+        Assert.DoesNotContain("El despacho decide", await page.Locator("body").InnerTextAsync(), StringComparison.Ordinal);
+        Assert.Equal(0, await page.GetByRole(AriaRole.Button, new() { Name = "Recibí $1,250.00" }).CountAsync());
+        Assert.Equal(0, await page.Locator("input[type=file]").CountAsync());
+    }
+
+    private static async Task ConfirmCashAsync(IPage page)
+    {
+        await page.GetByRole(AriaRole.Button, new() { Name = "Recibí $1,250.00" }).ClickAsync();
+        var dialog = page.GetByRole(AriaRole.Dialog, new() { Name = "¿Recibiste $1,250.00?" });
+        await dialog.WaitForAsync();
+        await dialog.GetByRole(AriaRole.Button, new() { Name = "Sí, recibí $1,250.00" }).ClickAsync();
+    }
+
     private static async Task EnqueueButtonAsync(IPage page, string name)
     {
         await page.GetByRole(AriaRole.Button, new() { Name = name }).ClickAsync();
@@ -602,11 +1586,16 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             NextLabel(name));
     }
 
+    /// <summary>
+    /// UI-001 phase 3: the step names the action, the photo is shown in
+    /// "Vista previa de la foto" and only "Usar esta foto" queues it.
+    /// </summary>
     private static async Task EnqueueProofAsync(
         IPage page,
-        string button,
+        string action,
         string fileName)
     {
+        await ExpectTextAsync(page, action);
         await page.Locator("input[type=file]").SetInputFilesAsync(
             new FilePayload
             {
@@ -614,9 +1603,98 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
                 MimeType = "image/png",
                 Buffer = SyntheticPng,
             });
-        await page.GetByRole(AriaRole.Button, new() { Name = button }).ClickAsync();
+        await page.GetByRole(
+                AriaRole.Heading,
+                new() { Name = "Vista previa de la foto" })
+            .WaitForAsync();
+        await page.GetByRole(AriaRole.Button, new() { Name = "Usar esta foto" })
+            .ClickAsync();
         await page.WaitForTimeoutAsync(100);
     }
+
+    /// <summary>
+    /// Waits until the preview shows a decoded image other than
+    /// <paramref name="previous"/> and returns its object URL.
+    /// </summary>
+    private static async Task<string> WaitForDecodedPreviewAsync(
+        IPage page,
+        string? previous = null)
+    {
+        await page.WaitForFunctionAsync(
+            """
+            previous => {
+              const image = document.querySelector('img[alt="Foto de evidencia tomada"]');
+              return image !== null && image.src !== previous &&
+                image.complete && image.naturalWidth > 0;
+            }
+            """,
+            previous);
+        return await page.GetByRole(
+                AriaRole.Img,
+                new() { Name = "Foto de evidencia tomada" })
+            .GetAttributeAsync("src") ?? string.Empty;
+    }
+
+    /// <summary>
+    /// Records every <c>URL.revokeObjectURL</c> call. The page CSP keeps
+    /// <c>blob:</c> out of <c>connect-src</c>, so a revoked URL cannot be
+    /// probed with <c>fetch</c>.
+    /// </summary>
+    private static Task RecordRevokedObjectUrlsAsync(IPage page) =>
+        page.AddInitScriptAsync(
+            """
+            (() => {
+              const revoked = [];
+              const revoke = URL.revokeObjectURL.bind(URL);
+              URL.revokeObjectURL = url => {
+                revoked.push(String(url));
+                revoke(url);
+              };
+              window.__paquetenviaRevokedObjectUrls = revoked;
+            })();
+            """);
+
+    private static Task<bool> IsObjectUrlRevokedAsync(IPage page, string url) =>
+        page.EvaluateAsync<bool>(
+            "url => window.__paquetenviaRevokedObjectUrls.includes(url)",
+            url);
+
+    /// <summary>
+    /// The stored proof's recorded size and SHA-256, plus the SHA-256 of the
+    /// stored Blob bytes themselves.
+    /// </summary>
+    private static Task<string> ReadSingleProofAsync(IPage page) =>
+        page.EvaluateAsync<string>(
+            """
+            () => new Promise((resolve, reject) => {
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
+              open.onerror = () => reject(open.error);
+              open.onsuccess = () => {
+                const database = open.result;
+                const request = database.transaction("proof_blobs", "readonly")
+                  .objectStore("proof_blobs").getAll();
+                request.onerror = () => {
+                  database.close();
+                  reject(request.error);
+                };
+                request.onsuccess = async () => {
+                  database.close();
+                  if (request.result.length !== 1) {
+                    reject(new Error("expected exactly one stored proof"));
+                    return;
+                  }
+                  const proof = request.result[0];
+                  const digest = new Uint8Array(await crypto.subtle.digest(
+                    "SHA-256",
+                    await proof.blob.arrayBuffer()));
+                  const blobSha256 = [...digest]
+                    .map(value => value.toString(16).padStart(2, "0"))
+                    .join("");
+                  resolve(`${proof.sizeBytes}|${proof.sha256}|${blobSha256}`);
+                };
+              };
+            })
+            """);
 
     private static string NextLabel(string current) => current switch
     {
@@ -637,7 +1715,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             page,
             """
             async () => {
-              const cache = await caches.open("paquetenvia-driver-shell-v5");
+              const cache = await caches.open("paquetenvia-driver-shell-v7");
               return (await cache.keys()).some(
                 key => new URL(key.url).pathname.startsWith("/_next/static/"));
             }
@@ -658,7 +1736,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             page,
             """
             status => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
               open.onerror = () => reject(open.error);
               open.onsuccess = () => {
                 const database = open.result;
@@ -736,7 +1814,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         page.EvaluateAsync<string>(
             """
             () => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
               open.onerror = () => reject(open.error);
               open.onsuccess = () => {
                 const database = open.result;
@@ -763,11 +1841,18 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             })
             """);
 
+    /// <summary>
+    /// Installs the driver session and answers its roles read (ORG-MY-ROLES-2026-10-12) with the API's own answer for
+    /// a person whose memberships hold <paramref name="roles"/> (DRIVER only by default); see
+    /// <see cref="DriverOrganizationRoles"/>.
+    /// </summary>
     private static async Task InstallSessionAsync(
         IPage page,
-        string cacheNamespace)
+        string cacheNamespace,
+        params OrganizationRole[] roles)
     {
         await page.RouteAsync("**/hubs/driver/negotiate**", route => route.AbortAsync());
+        await DriverOrganizationRoles.RouteAsync(page, roles);
         var configuration = JsonSerializer.Serialize(new
         {
             organizationId = OrganizationId,
@@ -808,7 +1893,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         page.EvaluateAsync<string>(
             """
             () => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
               open.onerror = () => reject(open.error);
               open.onsuccess = () => {
                 const database = open.result;
@@ -830,11 +1915,50 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             })
             """);
 
+    /// <summary>Waits until no page holds an unexpired sync lease (an expired one stays in the store).</summary>
+    private static async Task WaitForNoActiveSyncLeaseAsync(IPage page)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+        while (true)
+        {
+            var active = await page.EvaluateAsync<int>(
+                """
+                () => new Promise((resolve, reject) => {
+                  const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
+                  open.onerror = () => reject(open.error);
+                  open.onsuccess = () => {
+                    const database = open.result;
+                    const request = database.transaction("sync_leases", "readonly")
+                      .objectStore("sync_leases").getAll();
+                    request.onerror = () => {
+                      database.close();
+                      reject(request.error);
+                    };
+                    request.onsuccess = () => {
+                      database.close();
+                      const now = Date.now();
+                      resolve(request.result.filter(lease => Date.parse(lease.expiresAt) > now).length);
+                    };
+                  };
+                })
+                """);
+            if (active == 0)
+            {
+                return;
+            }
+            if (DateTimeOffset.UtcNow >= deadline)
+            {
+                throw new TimeoutException($"Expected no active sync lease but found {active}.");
+            }
+            await Task.Delay(250);
+        }
+    }
+
     private static Task<int> ReadStoreCountAsync(IPage page, string storeName) =>
         page.EvaluateAsync<int>(
             """
             storeName => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
               open.onerror = () => reject(open.error);
               open.onsuccess = () => {
                 const database = open.result;
@@ -857,7 +1981,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         page.EvaluateAsync<int>(
             """
             () => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
               open.onerror = () => reject(open.error);
               open.onsuccess = () => {
                 const database = open.result;
@@ -893,28 +2017,56 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         private readonly ConcurrentDictionary<string, int> finalizeAttempts = new();
         private readonly Dictionary<string, string> sessionsByKey = [];
         private readonly Dictionary<string, FinalizedProof> proofsByKey = [];
+        private readonly Dictionary<string, string> incidentsByKey = [];
+        private int incidentSequence;
         private string status = "ASSIGNED";
         private int version = 3;
+        private bool codRecorded;
         private int sessionSequence;
         private bool firstTransition = true;
         private bool firstUpload = true;
         private bool firstFinalize = true;
+        private bool firstCod = true;
 
         internal bool AbortFirstTransition { get; init; }
         internal bool AbortFirstUpload { get; init; }
         internal bool AbortFirstFinalize { get; init; }
         internal bool ConflictFirstTransition { get; init; }
         internal bool ExpireTransitions { get; init; }
+
+        /// <summary>UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: cash the DELIVERY stop expects; 0 means none.</summary>
+        internal long CodExpectedCents { get; init; }
+        internal bool CodRecorded
+        {
+            get { lock (gate) return codRecorded; }
+            init => codRecorded = value;
+        }
+
+        /// <summary>Refuses DELIVERED with the ORD-002 rule code COD_NOT_RECORDED, whatever the cash state.</summary>
+        internal bool RejectDeliveryAsCodNotRecorded { get; init; }
+
+        /// <summary>Refuses the first cash collection with COD_AMOUNT_MISMATCH, recording nothing.</summary>
+        internal bool RejectFirstCod { get; init; }
+        internal List<string> Calls { get; } = [];
+        internal List<(string Key, long AmountCents, string Reference)> CodRecords { get; } = [];
         internal int? StopsFailureStatus { get; set; }
         internal bool HideOrder { get; set; }
         internal List<string> TransitionTargets { get; } = [];
         internal List<string> TransitionKeys { get; } = [];
         internal List<string?> TransitionClientOccurredAt { get; } = [];
         internal List<string?> SessionClientOccurredAt { get; } = [];
+        internal List<string?> SessionSha256 { get; } = [];
         internal List<(string Key, string ProofType)> SessionAttempts { get; } = [];
         internal List<string> FinalizeKeys { get; } = [];
         internal List<(string ProofType, string CapturedAt)> FinalizedProofs { get; } = [];
         internal int UploadCount { get; private set; }
+
+        /// <summary>UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: every openIncident request, key and exact body.</summary>
+        internal List<(string Key, string Body)> IncidentRequests { get; } = [];
+        internal List<string> IncidentIds { get; } = [];
+        internal List<string?> TransitionIncidentIds { get; } = [];
+        internal List<string?> TransitionReasons { get; } = [];
+        internal List<int> TransitionExpectedVersions { get; } = [];
 
         internal void SetOrderState(string nextStatus, int nextVersion)
         {
@@ -925,14 +2077,25 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             }
         }
 
+        /// <summary>Dispatch records the cash on the server while the phone is offline.</summary>
+        internal void RecordCodOnServer()
+        {
+            lock (gate)
+            {
+                codRecorded = true;
+            }
+        }
+
         internal async Task RouteAsync(IPage page)
         {
-            await page.RouteAsync("**/api/v1/driver/me/stops", RouteStopsAsync);
+            await page.RouteAsync(DriverStopsPwaPlaywrightTests.StopsRoute, RouteStopsAsync);
             await page.RouteAsync("**/api/v1/orders/*/transitions", RouteTransitionAsync);
             await page.RouteAsync(
                 "**/api/v1/orders/*/proof-upload-sessions",
                 RouteSessionAsync);
             await page.RouteAsync("**/api/v1/orders/*/proofs", RouteFinalizeAsync);
+            await page.RouteAsync("**/api/v1/orders/*/cod-records", RouteCodAsync);
+            await page.RouteAsync("**/api/v1/orders/*/incidents", RouteIncidentAsync);
             await page.RouteAsync($"{SyntheticStorageOrigin}/**", async route =>
             {
                 bool abort;
@@ -972,24 +2135,32 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             object[] payload;
             lock (gate)
             {
+                var stopType = status is "ASSIGNED" or "AT_PICKUP" ? "PICKUP" : "DELIVERY";
                 payload = HideOrder || status == "DELIVERED"
                     ? []
                     :
                     [
-                        new
-                        {
-                            order_id = OrderId,
-                            aggregate_version = version,
-                            order_public_id = "ORD_DRV002_SYNTHETIC",
-                            stop_type = status is "ASSIGNED" or "AT_PICKUP"
-                                ? "PICKUP"
-                                : "DELIVERY",
+                        DriverStopsPwaPlaywrightTests.Stop(
+                            OrderId,
+                            version,
+                            "ORD_DRV002_SYNTHETIC",
+                            stopType,
                             status,
-                            address_summary = "Zona sintética DRV-002",
-                        },
+                            "Zona sintética DRV-002",
+                            contactShortName: stopType == "PICKUP" ? null : "M. Sintética",
+                            contactFullName: stopType == "PICKUP" ? "Farmacia Sintética" : null,
+                            codExpectedCents: stopType == "DELIVERY" && CodExpectedCents > 0
+                                ? CodExpectedCents
+                                : null,
+                            codRecorded: codRecorded),
                     ];
             }
-            return route.FulfillAsync(Json(payload, 200));
+            return route.FulfillAsync(new RouteFulfillOptions
+            {
+                Status = 200,
+                ContentType = "application/json; charset=utf-8",
+                Body = DriverStopsPwaPlaywrightTests.StopsBody(route.Request, payload),
+            });
         }
 
         private async Task RouteTransitionAsync(IRoute route)
@@ -998,18 +2169,56 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             var target = request.GetProperty("target_status").GetString()!;
             var key = await route.Request.HeaderValueAsync("Idempotency-Key") ?? string.Empty;
             var abort = false;
+            var codMissing = false;
+            var incidentMissing = false;
+            var incidentId = request.TryGetProperty("metadata", out var metadata) &&
+                metadata.ValueKind == JsonValueKind.Object &&
+                metadata.TryGetProperty("incident_id", out var incident)
+                    ? incident.GetString()
+                    : null;
             lock (gate)
             {
                 TransitionTargets.Add(target);
                 TransitionKeys.Add(key);
                 TransitionClientOccurredAt.Add(ReadClientOccurredAt(request));
+                TransitionIncidentIds.Add(incidentId);
+                TransitionReasons.Add(request.GetProperty("reason").GetString());
+                TransitionExpectedVersions.Add(request.GetProperty("expected_version").GetInt32());
+                Calls.Add($"transition:{target}");
                 abort = AbortFirstTransition && firstTransition;
-                if (!(ConflictFirstTransition && firstTransition) && !ExpireTransitions)
+                // The DELIVERED guard if_cod_expected_then_cod_status_recorded_or_reconciled.
+                codMissing = target == "DELIVERED" &&
+                    (RejectDeliveryAsCodNotRecorded || (CodExpectedCents > 0 && !codRecorded));
+                // AI-04 attempt_stage_recorded: a FAILED_ATTEMPT names an incident opened for this order.
+                incidentMissing = target == "FAILED_ATTEMPT" &&
+                    (incidentId is null || !IncidentIds.Contains(incidentId));
+                if (!(ConflictFirstTransition && firstTransition) && !ExpireTransitions && !codMissing &&
+                    !incidentMissing)
                 {
                     status = target;
                     version += 1;
                 }
                 firstTransition = false;
+            }
+            if (incidentMissing)
+            {
+                await route.FulfillAsync(new RouteFulfillOptions
+                {
+                    Status = 409,
+                    ContentType = "application/problem+json",
+                    Body = """{"type":"about:blank","title":"Conflict.","status":409,"code":"INCIDENT_REQUIRED"}""",
+                });
+                return;
+            }
+            if (codMissing)
+            {
+                await route.FulfillAsync(new RouteFulfillOptions
+                {
+                    Status = 409,
+                    ContentType = "application/problem+json",
+                    Body = """{"type":"about:blank","title":"Conflict.","status":409,"code":"COD_NOT_RECORDED"}""",
+                });
+                return;
             }
             if (ConflictFirstTransition && TransitionTargets.Count == 1)
             {
@@ -1075,6 +2284,10 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             {
                 SessionAttempts.Add((key, proofType));
                 SessionClientOccurredAt.Add(ReadClientOccurredAt(request));
+                SessionSha256.Add(
+                    request.TryGetProperty("sha256", out var sha256)
+                        ? sha256.GetString()
+                        : null);
                 if (!sessionsByKey.TryGetValue(key, out var existingSessionId))
                 {
                     sessionSequence += 1;
@@ -1154,6 +2367,113 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
                     proof_type = proof.ProofType,
                     sha256 = proof.Sha256,
                     captured_at = proof.CapturedAt,
+                },
+                201));
+        }
+
+        private async Task RouteCodAsync(IRoute route)
+        {
+            var request = JsonDocument.Parse(route.Request.PostData ?? "{}").RootElement;
+            var key = await route.Request.HeaderValueAsync("Idempotency-Key") ?? string.Empty;
+            var amount = request.GetProperty("amount_cents").GetInt64();
+            var reference = request.GetProperty("reference").GetString() ?? string.Empty;
+            bool reject;
+            lock (gate)
+            {
+                Calls.Add("cod");
+                reject = RejectFirstCod && firstCod;
+                firstCod = false;
+                if (!reject)
+                {
+                    CodRecords.Add((key, amount, reference));
+                    codRecorded = amount == CodExpectedCents;
+                }
+            }
+            if (reject)
+            {
+                await route.FulfillAsync(new RouteFulfillOptions
+                {
+                    Status = 409,
+                    ContentType = "application/problem+json",
+                    Body = """{"type":"about:blank","title":"Conflict.","status":409,"code":"COD_AMOUNT_MISMATCH"}""",
+                });
+                return;
+            }
+            await route.FulfillAsync(Json(
+                new
+                {
+                    id = Guid.Parse("abababab-abab-4bab-8bab-abababababab"),
+                    order_id = OrderId,
+                    amount_cents = amount,
+                    status = "RECORDED",
+                    recorded_at = "2026-10-11T20:05:43+00:00",
+                    reconciled_at = (string?)null,
+                },
+                201));
+        }
+
+        /// <summary>
+        /// AI-05 openIncident for a DRIVER report (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11): severity,
+        /// description or next_action in the body is 409 INVALID_REQUEST; the same key replays the same incident.
+        /// </summary>
+        private async Task RouteIncidentAsync(IRoute route)
+        {
+            var body = route.Request.PostData ?? "{}";
+            var request = JsonDocument.Parse(body).RootElement.Clone();
+            var key = await route.Request.HeaderValueAsync("Idempotency-Key") ?? string.Empty;
+            var driverShape =
+                !request.TryGetProperty("severity", out _) &&
+                !request.TryGetProperty("description", out _) &&
+                !request.TryGetProperty("next_action", out _);
+            string incidentId;
+            lock (gate)
+            {
+                Calls.Add("incident");
+                IncidentRequests.Add((key, body));
+                if (!incidentsByKey.TryGetValue(key, out var existing))
+                {
+                    incidentSequence += 1;
+                    existing = $"00000000-0000-4000-8000-{(900 + incidentSequence).ToString().PadLeft(12, '0')}";
+                    if (driverShape)
+                    {
+                        incidentsByKey.Add(key, existing);
+                        IncidentIds.Add(existing);
+                    }
+                }
+                incidentId = existing;
+            }
+            if (!driverShape)
+            {
+                await route.FulfillAsync(new RouteFulfillOptions
+                {
+                    Status = 409,
+                    ContentType = "application/problem+json",
+                    Body = """{"type":"about:blank","title":"Conflict.","status":409,"code":"INVALID_REQUEST"}""",
+                });
+                return;
+            }
+            var reason = request.GetProperty("reason_code").GetString()!;
+            var occurredAt = request.GetProperty("occurred_at").GetString()!;
+            var severity = reason is "PACKAGE_DAMAGED" or "SECURITY_RISK" ? "HIGH" : "MEDIUM";
+            await route.FulfillAsync(Json(
+                new
+                {
+                    id = incidentId,
+                    order_id = OrderId,
+                    status = "OPEN",
+                    severity,
+                    reason_code = reason,
+                    next_action = (string?)null,
+                    custody_acquired = true,
+                    occurred_at = occurredAt,
+                    sla_due_at = DateTimeOffset.Parse(occurredAt, System.Globalization.CultureInfo.InvariantCulture)
+                        .AddHours(severity == "HIGH" ? 8 : 24)
+                        .ToUniversalTime()
+                        .ToString("yyyy-MM-ddTHH:mm:ss.fffZ", System.Globalization.CultureInfo.InvariantCulture),
+                    evidence_proof_ids = request.GetProperty("evidence_proof_ids")
+                        .EnumerateArray()
+                        .Select(value => value.GetString())
+                        .ToArray(),
                 },
                 201));
         }

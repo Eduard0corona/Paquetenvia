@@ -142,7 +142,7 @@ export function OperationsDriverAssignment({
       {state.kind === "ready" && drivers.length === 0 && (
         <p className="emptyState">
           <strong>No hay repartidores propios registrados.</strong>
-          Puedes publicar una oferta externa desde el tablero (en Otras acciones).
+          Puedes publicar una oferta externa desde el tablero.
         </p>
       )}
       {state.kind === "ready" && drivers.length > 0 && (
@@ -174,7 +174,7 @@ export function OperationsDriverAssignment({
             {!anyEligible && (
               <p className="notice noticeWarn" role="status">
                 Ningún repartidor propio cumple hoy los requisitos para esta orden. Puedes publicar
-                una oferta externa desde el tablero (en Otras acciones).
+                una oferta externa desde el tablero.
               </p>
             )}
             <ul className="opsDriverChoices">

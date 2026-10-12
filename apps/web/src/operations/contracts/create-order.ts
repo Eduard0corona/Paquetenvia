@@ -199,6 +199,19 @@ export type DraftResult<T> =
   | { readonly ok: true; readonly body: T }
   | { readonly ok: false; readonly errors: readonly string[] };
 
+/**
+ * A Spanish validation message and the draft field it is about, so a screen can show it next
+ * to that field (UI-PHASE3-ORDER-WIZARD-2026-10-10). Fields: `clientAccountId`, `serviceType`,
+ * `lowPriceReason`, `packages`, `origin.<field>` / `destination.<field>` (addressText,
+ * contactName, phone, references, coordinates), `packages.<index>.<field>` (description,
+ * weightGrams, declaredValue, dimensions), `payerType`, `acceptanceVersions`, `accepted`,
+ * `restrictedGoodsAcknowledged`, `acceptedAt`, `codAmount` and `serviceWindow`.
+ */
+export interface FieldError {
+  readonly field: string;
+  readonly message: string;
+}
+
 const uuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const coordinatePattern = /^-?\d{1,3}(?:\.\d{1,10})?$/;
@@ -209,27 +222,40 @@ const positiveIntegerPattern = /^\d{1,9}$/;
  * messages without the typed values, so nothing personal ends up in a message.
  */
 export function buildCreateQuoteBody(draft: QuoteDraft): DraftResult<CreateQuoteBody> {
-  const errors: string[] = [];
+  const { errors, body } = readQuoteDraft(draft);
+  return body === null
+    ? { ok: false, errors: errors.map((error) => error.message) }
+    : { ok: true, body };
+}
+
+/** The same checks as {@link buildCreateQuoteBody}, each message with its field. */
+export function quoteDraftErrors(draft: QuoteDraft): readonly FieldError[] {
+  return readQuoteDraft(draft).errors;
+}
+
+function readQuoteDraft(draft: QuoteDraft): { errors: FieldError[]; body: CreateQuoteBody | null } {
+  const errors: FieldError[] = [];
   const clientAccountId = draft.clientAccountId.trim();
   if (clientAccountId !== "" && !uuidPattern.test(clientAccountId))
-    errors.push("El ID de la cuenta cliente no es válido.");
-  const origin = address(draft.origin, "origen", errors);
-  const destination = address(draft.destination, "destino", errors);
+    errors.push({ field: "clientAccountId", message: "El ID de la cuenta cliente no es válido." });
+  const origin = address(draft.origin, "origin", "origen", errors);
+  const destination = address(draft.destination, "destination", "destino", errors);
   if (!(serviceTypes as readonly string[]).includes(draft.serviceType))
-    errors.push("Selecciona el tipo de servicio.");
+    errors.push({ field: "serviceType", message: "Selecciona el tipo de servicio." });
   if (draft.packages.length < 1 || draft.packages.length > maximumPackages)
-    errors.push(`Captura entre 1 y ${maximumPackages} paquetes.`);
+    errors.push({ field: "packages", message: `Captura entre 1 y ${maximumPackages} paquetes.` });
   const packages = draft.packages.map((item, index) =>
-    packageBody(item, index + 1, errors),
+    packageBody(item, index, errors),
   );
   const lowPriceReason = draft.authorizeLowPrice === true ? (draft.lowPriceReason ?? "").trim() : null;
+  const reasonError = (message: string) => errors.push({ field: "lowPriceReason", message });
   if (lowPriceReason !== null && lowPriceReason === "")
-    errors.push("Captura el motivo de la autorización de bajo monto.");
+    reasonError("Captura el motivo de la autorización de bajo monto.");
   if (lowPriceReason !== null && lowPriceReason.length > lowPriceAuthorizationReasonMaximum)
-    errors.push(`El motivo de la autorización admite ${lowPriceAuthorizationReasonMaximum} caracteres.`);
+    reasonError(`El motivo de la autorización admite ${lowPriceAuthorizationReasonMaximum} caracteres.`);
   if (lowPriceReason !== null && /[\u0000-\u001f\u007f-\u009f]/.test(lowPriceReason))
-    errors.push("El motivo de la autorización debe ser una sola línea.");
-  if (errors.length > 0) return { ok: false, errors };
+    reasonError("El motivo de la autorización debe ser una sola línea.");
+  if (errors.length > 0) return { errors, body: null };
   const body: CreateQuoteBody = {
     origin: origin!,
     destination: destination!,
@@ -239,33 +265,36 @@ export function buildCreateQuoteBody(draft: QuoteDraft): DraftResult<CreateQuote
   };
   if (clientAccountId !== "") body.client_account_id = clientAccountId;
   if (lowPriceReason !== null) body.low_price_authorization = { reason: lowPriceReason };
-  return { ok: true, body };
+  return { errors, body };
 }
 
 function address(
   draft: AddressDraft,
+  side: "origin" | "destination",
   label: string,
-  errors: string[],
+  errors: FieldError[],
 ): AddressBody | null {
   const before = errors.length;
+  const error = (field: string, message: string) => errors.push({ field: `${side}.${field}`, message });
   const addressText = draft.addressText.trim();
   const contactName = draft.contactName.trim();
   const phone = normalizeMexicanPhone(draft.phone);
   const references = draft.references.trim();
   if (addressText.length < 8)
-    errors.push(`La dirección de ${label} requiere al menos 8 caracteres.`);
-  if (contactName === "") errors.push(`Captura el contacto de ${label}.`);
-  if (draft.phone.trim() === "") errors.push(`Captura el teléfono de ${label}.`);
+    error("addressText", `La dirección de ${label} requiere al menos 8 caracteres.`);
+  if (contactName === "") error("contactName", `Captura el contacto de ${label}.`);
+  if (draft.phone.trim() === "") error("phone", `Captura el teléfono de ${label}.`);
   else if (phone === null)
-    errors.push(
+    error(
+      "phone",
       `El teléfono de ${label} debe tener 10 dígitos de México; puedes anteponer +52 y separarlos con espacios o guiones.`,
     );
   if (references.length > 500)
-    errors.push(`Las referencias de ${label} admiten 500 caracteres.`);
+    error("references", `Las referencias de ${label} admiten 500 caracteres.`);
   const lat = coordinate(draft.lat, 90);
   const lng = coordinate(draft.lng, 180);
   if (lat === null || lng === null)
-    errors.push(`Captura latitud y longitud válidas de ${label}.`);
+    error("coordinates", `Captura latitud y longitud válidas de ${label}.`);
   if (errors.length > before) return null;
   const body: AddressBody = {
     address_text: addressText,
@@ -287,32 +316,37 @@ function coordinate(text: string, limit: number): number | null {
 
 function packageBody(
   draft: PackageDraft,
-  position: number,
-  errors: string[],
+  index: number,
+  errors: FieldError[],
 ): PackageBody | null {
   const before = errors.length;
+  const position = index + 1;
+  const error = (field: string, message: string) => errors.push({ field: `packages.${index}.${field}`, message });
   const description = draft.description.trim();
   if (description === "" || description.length > 250)
-    errors.push(`El paquete ${position} requiere una descripción de hasta 250 caracteres.`);
+    error("description", `El paquete ${position} requiere una descripción de hasta 250 caracteres.`);
   const weight = positiveInteger(draft.weightGrams);
-  if (weight === null) errors.push(`El peso del paquete ${position} debe ser un entero en gramos mayor que 0.`);
+  if (weight === null) error("weightGrams", `El peso del paquete ${position} debe ser un entero en gramos mayor que 0.`);
   const declared = parseMxnToCents(draft.declaredValue);
   if (declared === null)
-    errors.push(`El valor declarado del paquete ${position} debe ser un monto en MXN con hasta 2 decimales.`);
+    error("declaredValue", `El valor declarado del paquete ${position} debe ser un monto en MXN con hasta 2 decimales.`);
   const dimensions: Array<[keyof PackageDraft, "length_mm" | "width_mm" | "height_mm"]> = [
     ["lengthMm", "length_mm"],
     ["widthMm", "width_mm"],
     ["heightMm", "height_mm"],
   ];
   const optional: Partial<Record<"length_mm" | "width_mm" | "height_mm", number>> = {};
+  let dimensionsValid = true;
   for (const [field, key] of dimensions) {
     const text = draft[field].trim();
     if (text === "") continue;
     const value = positiveInteger(text);
-    if (value === null)
-      errors.push(`Las medidas del paquete ${position} deben ser enteros en milímetros mayores que 0.`);
+    if (value === null) dimensionsValid = false;
     else optional[key] = value;
   }
+  // One message per package, however many of its measures are wrong.
+  if (!dimensionsValid)
+    error("dimensions", `Las medidas del paquete ${position} deben ser enteros en milímetros mayores que 0.`);
   if (errors.length > before) return null;
   return {
     description,
@@ -342,26 +376,11 @@ export function buildCreateOrderBody(
   versions: AcceptanceVersions | null,
   acceptedAt: Date,
 ): DraftResult<CreateOrderBody> {
-  const errors: string[] = [];
-  if (!uuidPattern.test(quoteId)) errors.push("Cotiza de nuevo antes de confirmar.");
-  if (!(payerTypes as readonly string[]).includes(draft.payerType))
-    errors.push("Selecciona quién paga.");
-  if (
-    versions === null ||
-    !isAcceptanceVersion(versions.termsVersion) ||
-    !isAcceptanceVersion(versions.privacyVersion)
-  )
-    errors.push(acceptanceVersionsUnavailableMessage);
-  if (!draft.accepted)
-    errors.push("Confirma que el cliente aceptó términos y aviso de privacidad.");
-  if (draft.restrictedGoodsAcknowledged !== true) errors.push(restrictedGoodsRequiredMessage);
-  if (Number.isNaN(acceptedAt.getTime())) errors.push("La hora de aceptación no es válida.");
-  const codCents = codExpectedCents(draft.codAmount);
-  if (codCents === null) errors.push(invalidCodAmountMessage);
-  else if (codCents > maximumCodExpectedCents) errors.push(codAmountAboveCapMessage);
-  const serviceWindow = buildServiceWindow(draft.serviceWindowFrom, draft.serviceWindowTo, acceptedAt);
-  if (!serviceWindow.ok) errors.push(serviceWindow.error);
+  const errors = acceptanceDraftErrors(draft, versions, acceptedAt).map((error) => error.message);
+  if (!uuidPattern.test(quoteId)) errors.unshift("Cotiza de nuevo antes de confirmar.");
   if (errors.length > 0) return { ok: false, errors };
+  const codCents = codExpectedCents(draft.codAmount);
+  const serviceWindow = buildServiceWindow(draft.serviceWindowFrom, draft.serviceWindowTo, acceptedAt);
   const body: CreateOrderBody = {
     quote_id: quoteId,
     payer_type: draft.payerType as PayerType,
@@ -378,6 +397,39 @@ export function buildCreateOrderBody(
   // Both empty is "no window": the field is left out and the zone's schedule applies.
   if (serviceWindow.ok && serviceWindow.window !== null) body.service_window = serviceWindow.window;
   return { ok: true, body };
+}
+
+/**
+ * The checks of {@link buildCreateOrderBody} other than the quote, each message with its field:
+ * who pays, the configured versions, both acknowledgements, the COD and the delivery window
+ * (evaluated at `acceptedAt`).
+ */
+export function acceptanceDraftErrors(
+  draft: AcceptanceDraft,
+  versions: AcceptanceVersions | null,
+  acceptedAt: Date,
+): readonly FieldError[] {
+  const errors: FieldError[] = [];
+  if (!(payerTypes as readonly string[]).includes(draft.payerType))
+    errors.push({ field: "payerType", message: "Selecciona quién paga." });
+  if (
+    versions === null ||
+    !isAcceptanceVersion(versions.termsVersion) ||
+    !isAcceptanceVersion(versions.privacyVersion)
+  )
+    errors.push({ field: "acceptanceVersions", message: acceptanceVersionsUnavailableMessage });
+  if (!draft.accepted)
+    errors.push({ field: "accepted", message: "Confirma que el cliente aceptó términos y aviso de privacidad." });
+  if (draft.restrictedGoodsAcknowledged !== true)
+    errors.push({ field: "restrictedGoodsAcknowledged", message: restrictedGoodsRequiredMessage });
+  if (Number.isNaN(acceptedAt.getTime()))
+    errors.push({ field: "acceptedAt", message: "La hora de aceptación no es válida." });
+  const codCents = codExpectedCents(draft.codAmount);
+  if (codCents === null) errors.push({ field: "codAmount", message: invalidCodAmountMessage });
+  else if (codCents > maximumCodExpectedCents) errors.push({ field: "codAmount", message: codAmountAboveCapMessage });
+  const serviceWindow = buildServiceWindow(draft.serviceWindowFrom, draft.serviceWindowTo, acceptedAt);
+  if (!serviceWindow.ok) errors.push({ field: "serviceWindow", message: serviceWindow.error });
+  return errors;
 }
 
 export const restrictedGoodsRequiredMessage =
@@ -431,25 +483,29 @@ export function evaluateConfirmation(
   const blockers: ConfirmationBlocker[] = [];
   if (quote.status !== "ACTIVE") blockers.push("inactive");
   if (Date.parse(quote.expires_at) <= now.getTime()) blockers.push("expired");
-  if (
-    quote.total.amount_cents <= lowPriceGuardTotalCents &&
-    !quote.consolidated_route &&
-    quote.low_price_authorization === null
-  )
-    blockers.push("low_price");
+  if (isHeldByLowPriceGuard(quote)) blockers.push("low_price");
   return blockers;
 }
 
+/** The low price guard alone: 52 MXN or less, IVA included, not consolidated and not authorized. */
+export function isHeldByLowPriceGuard(quote: Quote): boolean {
+  return (
+    quote.total.amount_cents <= lowPriceGuardTotalCents &&
+    !quote.consolidated_route &&
+    quote.low_price_authorization === null
+  );
+}
+
 export const confirmationBlockerLabels: Readonly<Record<ConfirmationBlocker, string>> = {
-  inactive: "La cotización ya no está activa; cotiza de nuevo.",
-  expired: "La cotización expiró; cotiza de nuevo.",
+  inactive: "La cotización ya no está activa; calcula el precio de nuevo.",
+  expired: "La cotización expiró; calcula el precio de nuevo.",
   low_price:
     "Total de 52 MXN o menos (IVA incluido): solo se confirma con ruta consolidada o con autorización de envío de bajo monto.",
 };
 
 /** LOW-PRICE-MANUAL-AUTH-2026-10-02: Spanish copy for the uniform 409 of createQuote. */
 export const lowPriceAuthorizationNotNeededMessage =
-  "La autorización de bajo monto no aplica a esta cotización (ruta consolidada o total mayor a 52 MXN con IVA incluido). Cotiza sin autorizar.";
+  "La autorización de bajo monto no aplica a esta cotización (ruta consolidada o total mayor a 52 MXN con IVA incluido). Quita la autorización y calcula el precio de nuevo.";
 
 // ---------------------------------------------------------------------------
 // Response parsers

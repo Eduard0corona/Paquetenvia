@@ -9,32 +9,51 @@ import {
   DriverStopsApiError,
 } from "../api/driver-stops-api";
 import { createExternalOffersApi } from "../api/external-offers-api";
+import { createDriverOrganizationRolesApi } from "../api/organization-roles-api";
+import { createDriverVoiceApi, type DriverVoiceApi } from "../api/voice-api";
+import { IndexedDbDriverOrganizationRolesCache } from "../cache/driver-roles-cache";
 import { IndexedDbDriverStopsCache } from "../cache/driver-stops-cache";
+import type { DriverFailedDeliveryReason } from "../contracts/failed-delivery";
 import {
+  driverReportRoleOf,
+  type DriverOrganizationRolesState,
+  type DriverReportRole,
+} from "../contracts/organization-roles";
+import {
+  driverConfirmedStatusLabel,
   driverOperationLabel,
   driverStopStatusLabel,
   driverStopTypeLabel,
 } from "../contracts/labels";
+import { completedTodayAt } from "../contracts/stop-details";
 import {
   createDriverSyncApi,
   DriverSyncApiError,
 } from "../offline/driver-sync-api";
 import {
+  driverFailedReportAttentionMessage,
+  driverFailedReportHoldState,
+} from "../offline/failed-delivery-policy";
+import {
+  driverOperationApplies,
   nextDriverOperationKind,
   projectDriverOperations,
   type ProjectedDriverStop,
 } from "../offline/operation-projection";
-import type {
-  DriverOfflineOperation,
-  DriverOperationKind,
-  DriverOperationalStatus,
+import {
+  driverOperationDefinitions,
+  type DriverOfflineOperation,
+  type DriverOperationKind,
+  type DriverOperationalStatus,
 } from "../offline/operation-contract";
+import { driverRejectionMessage } from "../offline/rejection-codes";
 import { defaultDriverStopsRealtimeFactory } from "../realtime/driver-stops-realtime";
 import {
   parseDriverStopsPathname,
   type DriverStopsRoute,
 } from "../routing/driver-stops-route";
 import {
+  driverLogoutStartedEvent,
   driverSessionChangedEvent,
   readBrowserDriverSession,
   sessionIdentity,
@@ -42,8 +61,10 @@ import {
 } from "../session/driver-session";
 import {
   DriverOperationsController,
+  type DriverFailedDeliveryEnqueueResult,
   type DriverOperationsState,
 } from "../state/driver-operations-controller";
+import { DriverRolesController } from "../state/driver-roles-controller";
 import {
   DriverStopsController,
   type DriverStopsViewState,
@@ -54,7 +75,21 @@ import {
 } from "../state/external-offers-controller";
 import { disabledDriverStopsTelemetry } from "../telemetry/driver-stops-telemetry";
 import { formatMxnCents } from "../../operations/contracts/money";
+import { useConfirmDialog } from "../../components/confirm-dialog";
 import { DriverAccount } from "./driver-account";
+import { DriverCodCollection } from "./driver-cod-collection";
+import { DriverFailedDelivery } from "./driver-failed-delivery";
+import { DriverProofCapture } from "./driver-proof-capture";
+import {
+  NavigationLink,
+  StopDetailFacts,
+  StopHighlights,
+  StopLead,
+  StopsSummary,
+  stopAddressText,
+  stopRowLabel,
+} from "./driver-stop-details";
+import { RecipientCall } from "./recipient-call";
 import styles from "./driver-stops.module.css";
 
 const unavailableState: DriverStopsViewState = Object.freeze({
@@ -63,6 +98,7 @@ const unavailableState: DriverStopsViewState = Object.freeze({
   synchronizedAt: null,
   realtime: "offline",
   refreshing: false,
+  completedToday: null,
 });
 const unavailableOperationsState: DriverOperationsState = Object.freeze({
   operations: [],
@@ -76,6 +112,17 @@ const unavailableExternalOffersState: ExternalOffersState = Object.freeze({
   pendingOfferId: null,
   message: null,
 });
+// ORG-MY-ROLES-2026-10-12: until the roles controller answers, the roles are
+// loading: the report is not offered and nothing is said about the role.
+const loadingRolesState: DriverOrganizationRolesState = Object.freeze({
+  roles: null,
+  loading: true,
+});
+const stopUnavailableForReport: DriverFailedDeliveryEnqueueResult =
+  Object.freeze({
+    stored: false,
+    message: "La parada no está disponible. Vuelve a abrirla desde tus paradas.",
+  });
 
 export function DriverStopsExperience() {
   const [session, setSession] = useState<DriverSession | null>(null);
@@ -85,6 +132,12 @@ export function DriverStopsExperience() {
   );
   const [externalOffersState, setExternalOffersState] =
     useState<ExternalOffersState>(unavailableExternalOffersState);
+  // ORG-MY-ROLES-2026-10-12: the person's own roles in the session's
+  // organization (getMyOrganizationRoles, saved per partition) and whether a
+  // request for them is on its way.
+  const [rolesState, setRolesState] = useState<DriverOrganizationRolesState>(
+    loadingRolesState,
+  );
   const [route, setRoute] = useState<DriverStopsRoute | null>(null);
   const controllerRef = useRef<DriverStopsController | null>(null);
   const operationsControllerRef = useRef<DriverOperationsController | null>(
@@ -93,8 +146,24 @@ export function DriverStopsExperience() {
   const externalOffersControllerRef = useRef<ExternalOffersController | null>(
     null,
   );
+  const rolesControllerRef = useRef<DriverRolesController | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const identity = sessionIdentity(session);
+  // VOICE-001: online-only calls; never part of the offline queue.
+  const voiceApi = useMemo<DriverVoiceApi | null>(
+    () =>
+      session
+        ? createDriverVoiceApi(
+            resolveDriverApiBaseUrl(
+              window.location.origin,
+              process.env.NEXT_PUBLIC_API_BASE_URL,
+              process.env.NODE_ENV,
+            ),
+            session,
+          )
+        : null,
+    [session],
+  );
 
   useEffect(() => {
     const refreshSession = () => setSession(readBrowserDriverSession());
@@ -102,6 +171,20 @@ export function DriverStopsExperience() {
     window.addEventListener(driverSessionChangedEvent, refreshSession);
     return () =>
       window.removeEventListener(driverSessionChangedEvent, refreshSession);
+  }, []);
+
+  useEffect(() => {
+    // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: "Cerrar sesión" wipes the saved
+    // stop details; every controller stops first so no refresh writes them back.
+    const stopControllers = () => {
+      void controllerRef.current?.dispose();
+      void operationsControllerRef.current?.dispose();
+      externalOffersControllerRef.current?.dispose();
+      rolesControllerRef.current?.dispose();
+    };
+    window.addEventListener(driverLogoutStartedEvent, stopControllers);
+    return () =>
+      window.removeEventListener(driverLogoutStartedEvent, stopControllers);
   }, []);
 
   useEffect(() => {
@@ -125,6 +208,14 @@ export function DriverStopsExperience() {
     const externalOffersController = new ExternalOffersController(
       createExternalOffersApi(baseUrl, session),
     );
+    // ORG-MY-ROLES-2026-10-12: asked once per session start (a new sign-in or
+    // organization is a new session); the answer saved for the partition keeps
+    // "No se pudo entregar" working offline.
+    const rolesController = new DriverRolesController({
+      session,
+      api: createDriverOrganizationRolesApi({ baseUrl, session }),
+      cache: new IndexedDbDriverOrganizationRolesCache(),
+    });
     const controller = new DriverStopsController({
       baseUrl,
       session,
@@ -163,12 +254,17 @@ export function DriverStopsExperience() {
         }
       },
       onAccessRevoked: (category) => void controller.revokeAccess(category),
+      reportRole: () => driverReportRoleOf(rolesController.current),
     });
     controllerRef.current = controller;
     operationsControllerRef.current = operationsController;
     externalOffersControllerRef.current = externalOffersController;
+    rolesControllerRef.current = rolesController;
     const unsubscribe = controller.subscribe((next) => {
       if (active) setState(next);
+    });
+    const unsubscribeRoles = rolesController.subscribe((next) => {
+      if (active) setRolesState(next);
     });
     const unsubscribeOperations = operationsController.subscribe((next) => {
       if (active) setOperationsState(next);
@@ -181,16 +277,20 @@ export function DriverStopsExperience() {
     void controller.start();
     void operationsController.start();
     void externalOffersController.start();
+    void rolesController.start();
 
     return () => {
       active = false;
       unsubscribe();
       unsubscribeOperations();
       unsubscribeExternalOffers();
+      unsubscribeRoles();
       controllerRef.current = null;
       operationsControllerRef.current = null;
       externalOffersControllerRef.current = null;
+      rolesControllerRef.current = null;
       externalOffersController.dispose();
+      rolesController.dispose();
       void operationsController.dispose();
       void controller.dispose();
     };
@@ -303,13 +403,15 @@ export function DriverStopsExperience() {
           headingRef={headingRef}
           synchronizedAt={state.synchronizedAt}
           offline={dataIsOffline}
+          voiceApi={voiceApi}
           operations={projection.operations.filter(
             (operation) => operation.orderId === route.orderId,
           )}
+          reportRole={driverReportRoleOf(rolesState)}
           mutating={operationsState.mutating}
           onEnqueue={(kind, blob) =>
-            stop
-              ? void operationsControllerRef.current?.enqueue(
+            stop && operationsControllerRef.current
+              ? operationsControllerRef.current.enqueue(
                   {
                     orderId: stop.order_id,
                     kind,
@@ -318,7 +420,34 @@ export function DriverStopsExperience() {
                   },
                   blob,
                 )
-              : undefined
+              : Promise.resolve(false)
+          }
+          onCollectCod={() =>
+            stop && stop.cod && operationsControllerRef.current
+              ? operationsControllerRef.current.enqueueCodCollection({
+                  orderId: stop.order_id,
+                  orderPublicId: stop.order_public_id,
+                  amountCents: stop.cod.expected.amount_cents,
+                  projectedStatus: stop.projectedStatus,
+                  projectedVersion: stop.projectedVersion,
+                })
+              : Promise.resolve(false)
+          }
+          onReportFailedDelivery={(reason, photo) =>
+            stop && operationsControllerRef.current
+              ? operationsControllerRef.current.enqueueFailedDelivery(
+                  {
+                    orderId: stop.order_id,
+                    reasonCode: reason,
+                    projectedStatus: stop.projectedStatus,
+                    projectedVersion: stop.projectedVersion,
+                    confirmedStatus: stop.confirmedStatus,
+                    confirmedVersion: stop.confirmedVersion,
+                    cod: stop.cod,
+                  },
+                  photo,
+                )
+              : Promise.resolve(stopUnavailableForReport)
           }
           onDiscard={(id, status, version) =>
             void operationsControllerRef.current?.discard(id, status, version)
@@ -361,9 +490,13 @@ export function DriverStopsExperience() {
           headingRef={headingRef}
           synchronizedAt={state.synchronizedAt}
           offline={dataIsOffline}
+          voiceApi={null}
           operations={[]}
+          reportRole="unknown"
           mutating={operationsState.mutating}
-          onEnqueue={() => undefined}
+          onEnqueue={() => Promise.resolve(false)}
+          onCollectCod={() => Promise.resolve(false)}
+          onReportFailedDelivery={() => Promise.resolve(stopUnavailableForReport)}
           onDiscard={() => undefined}
           onNewSession={() => undefined}
           onRetrySame={() => undefined}
@@ -542,10 +675,15 @@ function StopList({
       </StatusPanel>
     );
   }
+  const completedToday = completedTodayAt(
+    state.synchronizedAt,
+    state.completedToday,
+  );
   if (state.phase === "empty") {
     return (
       <StatusPanel title="Sin paradas activas">
         No tienes paradas activas.
+        <StopsSummary stops={[]} completedToday={completedToday} />
       </StatusPanel>
     );
   }
@@ -555,26 +693,28 @@ function StopList({
       {state.phase === "offline" ? (
         <OfflineBanner synchronizedAt={state.synchronizedAt} />
       ) : null}
+      <StopsSummary stops={projectedStops} completedToday={completedToday} />
       <ul className={styles.stopList} aria-label="Paradas asignadas">
-        {projectedStops.map((stop) => (
+        {projectedStops.map((stop, index) => (
           <li className={styles.stopCard} key={stop.order_id}>
             <div className={styles.cardHeading}>
               <div>
-                <p className={styles.cardLabel}>Orden</p>
+                <p className={styles.rowLabel}>{stopRowLabel(stop, index)}</p>
                 <h2>{stop.order_public_id}</h2>
               </div>
-              <span className={styles.badge}>
-                {driverStopStatusLabel(stop.confirmedStatus)}
+              <span className={index === 0 ? styles.badge : styles.quietBadge}>
+                {index === 0 ? "Siguiente" : "Pendiente"}
               </span>
             </div>
+            <StopHighlights stop={stop} />
             <dl className={styles.stopFacts}>
               <div>
-                <dt>Tipo de parada</dt>
-                <dd>{driverStopTypeLabel(stop.stop_type)}</dd>
+                <dt>Estado</dt>
+                <dd>{driverConfirmedStatusLabel(stop.confirmedStatus)}</dd>
               </div>
               <div>
                 <dt>Dirección</dt>
-                <dd>{stop.address_summary}</dd>
+                <dd className={styles.addressText}>{stopAddressText(stop)}</dd>
               </div>
               <div>
                 <dt>Sincronización</dt>
@@ -608,9 +748,13 @@ function StopDetail({
   headingRef,
   synchronizedAt,
   offline,
+  voiceApi,
   operations,
+  reportRole,
   mutating,
   onEnqueue,
+  onCollectCod,
+  onReportFailedDelivery,
   onDiscard,
   onNewSession,
   onRetrySame,
@@ -621,9 +765,17 @@ function StopDetail({
   headingRef: React.RefObject<HTMLHeadingElement | null>;
   synchronizedAt: string | null;
   offline: boolean;
+  voiceApi: DriverVoiceApi | null;
   operations: readonly DriverOfflineOperation[];
+  /** driverReportRoleOf what the phone knows of the roles getMyOrganizationRoles answers (ORG-MY-ROLES-2026-10-12). */
+  reportRole: DriverReportRole;
   mutating: boolean;
-  onEnqueue: (kind: DriverOperationKind, blob?: Blob) => void;
+  onEnqueue: (kind: DriverOperationKind, blob?: Blob) => Promise<boolean>;
+  onCollectCod: () => Promise<boolean>;
+  onReportFailedDelivery: (
+    reason: DriverFailedDeliveryReason,
+    photo: Blob,
+  ) => Promise<DriverFailedDeliveryEnqueueResult>;
   onDiscard: (
     operationId: string,
     status: DriverOperationalStatus | null,
@@ -662,10 +814,13 @@ function StopDetail({
       {offline ? <OfflineBanner synchronizedAt={synchronizedAt} /> : null}
       <article className={styles.detail}>
         <p className={styles.cardLabel}>Detalle de parada</p>
+        <StopLead stop={stop} />
         <h2 ref={headingRef} tabIndex={-1}>
           {stop.order_public_id}
         </h2>
+        <NavigationLink stop={stop} />
         <dl className={styles.detailFacts}>
+          <StopDetailFacts stop={stop} />
           <div>
             <dt>Tipo de parada</dt>
             <dd>{driverStopTypeLabel(stop.stop_type)}</dd>
@@ -674,7 +829,7 @@ function StopDetail({
             <dt>Estado confirmado</dt>
             <dd>
               <span className={styles.badge}>
-                {driverStopStatusLabel(stop.confirmedStatus)}
+                {driverConfirmedStatusLabel(stop.confirmedStatus)}
               </span>
             </dd>
           </div>
@@ -689,10 +844,6 @@ function StopDetail({
             </div>
           ) : null}
           <div>
-            <dt>Dirección</dt>
-            <dd>{stop.address_summary}</dd>
-          </div>
-          <div>
             <dt>Última sincronización</dt>
             <dd>{formatTimestamp(synchronizedAt)}</dd>
           </div>
@@ -706,6 +857,30 @@ function StopDetail({
           stop={stop}
           disabled={mutating}
           onEnqueue={onEnqueue}
+          onCollectCod={onCollectCod}
+        />
+        <RecipientCall
+          api={voiceApi}
+          orderId={stop.order_id}
+          stopType={stop.stop_type}
+          confirmedStatus={stop.confirmedStatus}
+          offline={offline}
+        />
+        {/* UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: last of the delivery screen, as designed. */}
+        <DriverFailedDelivery
+          key={stop.order_id}
+          stop={stop}
+          operations={operations}
+          reportRole={reportRole}
+          disabled={mutating}
+          onReport={onReportFailedDelivery}
+          onDiscardCollection={(operationId) =>
+            onDiscard(
+              operationId,
+              toOperationalStatus(stop.confirmedStatus),
+              stop.confirmedVersion,
+            )
+          }
         />
         <ConflictResolution
           stop={stop}
@@ -728,65 +903,91 @@ function StopAction({
   stop,
   disabled,
   onEnqueue,
+  onCollectCod,
 }: Readonly<{
   stop: ProjectedDriverStop;
   disabled: boolean;
-  onEnqueue: (kind: DriverOperationKind, blob?: Blob) => void;
+  onEnqueue: (kind: DriverOperationKind, blob?: Blob) => Promise<boolean>;
+  onCollectCod: () => Promise<boolean>;
 }>) {
-  const [proof, setProof] = useState<Blob | undefined>();
-  const [fileError, setFileError] = useState<string | null>(null);
+  const { confirm, dialog } = useConfirmDialog();
   const kind = nextDriverOperationKind(stop.projectedStatus);
   if (!kind || stop.attentionCount > 0) return null;
-  const proofRequired = kind === "PICKUP_PROOF" || kind === "DELIVERY_PROOF";
-  return (
-    <fieldset className={styles.actions} disabled={disabled}>
-      <legend>Siguiente acción</legend>
-      {proofRequired ? (
-        <>
-          <label htmlFor={`proof-${stop.order_id}`}>
-            Foto de evidencia (JPEG o PNG, máximo 10 MiB)
-          </label>
-          <input
-            id={`proof-${stop.order_id}`}
-            type="file"
-            accept="image/jpeg,image/png"
-            capture="environment"
-            aria-describedby={
-              fileError ? `proof-error-${stop.order_id}` : undefined
-            }
-            aria-invalid={fileError ? true : undefined}
-            onChange={(event) => {
-              const files = event.currentTarget.files;
-              if (!files || files.length !== 1) {
-                setProof(undefined);
-                setFileError("Selecciona exactamente una foto.");
-                return;
-              }
-              setProof(files[0]);
-              setFileError(null);
-            }}
+  if (kind === "DELIVERY_PROOF" && stop.deliveryAwaitingCash) {
+    // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the delivery and its photo are
+    // already saved; they wait for the cash, so only "Recibí" is offered and
+    // the delivery is sent right after the collection.
+    return (
+      <>
+        <fieldset className={styles.actions} disabled={disabled}>
+          <legend>Siguiente acción</legend>
+          <DriverCodCollection
+            stop={stop}
+            disabled={disabled}
+            confirm={confirm}
+            onCollect={onCollectCod}
           />
-          {fileError ? (
-            <p id={`proof-error-${stop.order_id}`} role="alert">
-              {fileError}
-            </p>
-          ) : null}
-        </>
-      ) : null}
-      <button
-        type="button"
-        disabled={disabled || (proofRequired && !proof)}
-        onClick={() => {
-          if (proofRequired && !proof) {
-            setFileError("Selecciona una foto antes de continuar.");
-            return;
-          }
-          onEnqueue(kind, proof);
-        }}
-      >
-        {driverOperationLabel(kind)}
-      </button>
-    </fieldset>
+          <p className={styles.deliveryWaitingHint}>
+            La entrega ya está guardada en el teléfono. Se enviará después de
+            registrar el cobro.
+          </p>
+        </fieldset>
+        {dialog}
+      </>
+    );
+  }
+  const proofRequired = kind === "PICKUP_PROOF" || kind === "DELIVERY_PROOF";
+  // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the delivery is never queued
+  // before the cash is recorded, at least on the phone; the collection is
+  // queued first, so it also reaches the server first.
+  const cashFirst =
+    kind === "DELIVERY_PROOF" &&
+    stop.cod !== null &&
+    stop.codCollection !== "recorded" &&
+    stop.codCollection !== "queued";
+  const cashHintId = `cash-first-${stop.order_id}`;
+  return (
+    <>
+      <fieldset className={styles.actions} disabled={disabled}>
+        <legend>Siguiente acción</legend>
+        {kind === "DELIVERY_PROOF" && stop.cod !== null ? (
+          <DriverCodCollection
+            stop={stop}
+            disabled={disabled}
+            confirm={confirm}
+            onCollect={onCollectCod}
+          />
+        ) : null}
+        {proofRequired ? (
+          <fieldset
+            className={styles.proofStep}
+            disabled={cashFirst}
+            aria-describedby={cashFirst ? cashHintId : undefined}
+          >
+            {cashFirst ? (
+              <p id={cashHintId} className={styles.cashFirstHint}>
+                Registra el cobro antes de confirmar la entrega.
+              </p>
+            ) : null}
+            {/* The photo is queued only from its preview ("Usar esta foto"). */}
+            <DriverProofCapture
+              orderId={stop.order_id}
+              actionLabel={driverOperationLabel(kind)}
+              onUse={(photo) => onEnqueue(kind, photo)}
+            />
+          </fieldset>
+        ) : (
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={() => void onEnqueue(kind)}
+          >
+            {driverOperationLabel(kind)}
+          </button>
+        )}
+      </fieldset>
+      {dialog}
+    </>
   );
 }
 
@@ -840,6 +1041,28 @@ function ConflictResolution({
     (operation) => operation.status === "BLOCKED",
   ).length;
   const confirmedOperationalStatus = toOperationalStatus(stop.confirmedStatus);
+  // UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: a "No se pudo entregar"
+  // report explains itself (its incident, the cash as it is now, or the
+  // attempt that moved on), is never rebuilt for another version (a new
+  // attempt is reported again from the stop; an open incident stays with
+  // dispatch) and is retried only where it still applies and the cash is not
+  // recorded (then the driver calls dispatch).
+  const report = attention.kind === "FAILED_DELIVERY";
+  const cashHold =
+    report && attention.safeError === "COD_COLLECTED"
+      ? driverFailedReportHoldState(stop, operations)
+      : null;
+  const offerRetry =
+    !report ||
+    (cashHold !== "recorded" &&
+      confirmedOperationalStatus !== null &&
+      driverOperationApplies(
+        attention,
+        confirmedOperationalStatus,
+        stop.confirmedVersion,
+      ));
+  const offerRebuild =
+    driverOperationDefinitions[attention.kind].transition && !report;
   const closeConfirmation = () => {
     confirmationDialogRef.current?.close();
     setConfirmation(null);
@@ -877,8 +1100,9 @@ function ConflictResolution({
     <section className={styles.conflict} aria-labelledby="conflict-heading">
       <h3 id="conflict-heading">Acción que requiere atención</h3>
       <p>
-        Esta operación no pudo aplicarse porque la parada cambió. Revisa el
-        estado confirmado antes de continuar.
+        {report
+          ? driverFailedReportAttentionMessage(attention, stop, operations)
+          : driverRejectionMessage(attention.kind, attention.rejectionCode)}
       </p>
       <dl>
         <div>
@@ -891,7 +1115,11 @@ function ConflictResolution({
         </div>
         <div>
           <dt>Acción prevista</dt>
-          <dd>{driverStopStatusLabel(attention.targetStatus)}</dd>
+          <dd>
+            {driverOperationDefinitions[attention.kind].transition
+              ? driverStopStatusLabel(attention.targetStatus)
+              : driverOperationLabel(attention.kind)}
+          </dd>
         </div>
         <div>
           <dt>Acciones bloqueadas después</dt>
@@ -910,30 +1138,34 @@ function ConflictResolution({
             Crear nueva sesión
           </button>
         ) : null}
-        <button
-          type="button"
-          disabled={disabled || confirmedOperationalStatus === null}
-          onClick={() =>
-            confirmedOperationalStatus
-              ? onRetrySame(
-                  attention.id,
-                  confirmedOperationalStatus,
-                  stop.confirmedVersion,
-                )
-              : undefined
-          }
-        >
-          Reintentar la misma acción
-        </button>
-        <button
-          type="button"
-          disabled={disabled || confirmedOperationalStatus === null}
-          onClick={(event) =>
-            requestConfirmation("rebuild", event.currentTarget)
-          }
-        >
-          Crear acción para versión actual
-        </button>
+        {offerRetry ? (
+          <button
+            type="button"
+            disabled={disabled || confirmedOperationalStatus === null}
+            onClick={() =>
+              confirmedOperationalStatus
+                ? onRetrySame(
+                    attention.id,
+                    confirmedOperationalStatus,
+                    stop.confirmedVersion,
+                  )
+                : undefined
+            }
+          >
+            Reintentar la misma acción
+          </button>
+        ) : null}
+        {offerRebuild ? (
+          <button
+            type="button"
+            disabled={disabled || confirmedOperationalStatus === null}
+            onClick={(event) =>
+              requestConfirmation("rebuild", event.currentTarget)
+            }
+          >
+            Crear acción para versión actual
+          </button>
+        ) : null}
         <button
           type="button"
           disabled={disabled}

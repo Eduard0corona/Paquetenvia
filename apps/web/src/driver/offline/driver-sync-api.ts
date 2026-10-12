@@ -5,6 +5,11 @@ import {
 } from "../../auth/request-credentials";
 import type { DriverSession } from "../session/driver-session";
 import {
+  DriverFailedDeliveryIncidentType,
+  isDriverFailedDeliveryReason,
+  type DriverFailedDeliveryReason,
+} from "../contracts/failed-delivery";
+import {
   type DriverOfflineOperation,
   type DriverOperationalStatus,
   type DriverProofType,
@@ -51,6 +56,29 @@ export interface DriverProofReceipt {
   readonly capturedAt: string;
 }
 
+/** AI-05 `CodTransaction` as recordCodCollection returns it; only what the queue checks is kept. */
+export interface DriverCodReceipt {
+  readonly id: string;
+  readonly orderId: string;
+  readonly amountCents: number;
+  readonly status: "EXPECTED" | "RECORDED" | "RECONCILED" | "DISPUTED" | "REVERSED";
+}
+
+/**
+ * AI-05 `Incident` as openIncident returns a driver report; only what the
+ * queue checks is kept (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12). The
+ * severity, SLA and status are the server's and are only validated.
+ */
+export interface DriverIncidentReceipt {
+  readonly id: string;
+  readonly orderId: string;
+  readonly reasonCode: DriverFailedDeliveryReason;
+  /** null: dispatch decides (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11). */
+  readonly nextAction: "RESCHEDULED" | "RETURNING" | null;
+  readonly occurredAt: string;
+  readonly evidenceProofIds: readonly string[];
+}
+
 export interface DriverSyncApi {
   transitionOrder(
     operation: DriverOfflineOperation,
@@ -71,6 +99,26 @@ export interface DriverSyncApi {
     sha256: string,
     signal?: AbortSignal,
   ): Promise<DriverProofReceipt>;
+  /**
+   * UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: records the cash a
+   * COD_COLLECTION carries with its own Idempotency-Key, the same on every
+   * retry, so a lost 201 is replayed instead of recorded twice.
+   */
+  recordCodCollection(
+    operation: DriverOfflineOperation,
+    signal?: AbortSignal,
+  ): Promise<DriverCodReceipt>;
+  /**
+   * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: opens the incident of a
+   * FAILED_DELIVERY with its own Idempotency-Key (the same on every retry):
+   * type FAILED_DELIVERY_ATTEMPT, the reason, the capture instant and the
+   * finalized photo, never severity, description or next_action (the server
+   * derives them for a driver and answers 409 INVALID_REQUEST otherwise).
+   */
+  openFailedDeliveryIncident(
+    operation: DriverOfflineOperation,
+    signal?: AbortSignal,
+  ): Promise<DriverIncidentReceipt>;
 }
 
 export interface DriverSyncApiOptions {
@@ -91,8 +139,14 @@ export function createDriverSyncApi(
     transitionOrder: (
       operation: DriverOfflineOperation,
       signal?: AbortSignal,
-    ) =>
-      requestJson(
+    ) => {
+      let metadata: Readonly<Record<string, string>>;
+      try {
+        metadata = transitionMetadata(operation);
+      } catch (error) {
+        return Promise.reject(error);
+      }
+      return requestJson(
         options,
         fetchImplementation,
         timeoutMilliseconds,
@@ -103,7 +157,7 @@ export function createDriverSyncApi(
           target_status: operation.targetStatus,
           reason: operation.reason,
           expected_version: operation.expectedVersion,
-          metadata: {},
+          metadata,
           // AI-05 x-offline-operation-age: the capture instant travels on
           // every attempt, so a replay is age-checked against when the driver
           // acted, never against when the queue reached the server.
@@ -111,7 +165,8 @@ export function createDriverSyncApi(
         },
         parseTransitionReceipt,
         signal,
-      ),
+      );
+    },
     createProofUploadSession: (
       operation: DriverOfflineOperation,
       proof: {
@@ -161,7 +216,75 @@ export function createDriverSyncApi(
         parseProofReceipt,
         signal,
       ),
+    recordCodCollection: (
+      operation: DriverOfflineOperation,
+      signal?: AbortSignal,
+    ) => {
+      const cod = operation.cod;
+      if (operation.kind !== "COD_COLLECTION" || cod === null) {
+        return Promise.reject(new DriverSyncApiError("invalid-contract"));
+      }
+      return requestJson(
+        options,
+        fetchImplementation,
+        timeoutMilliseconds,
+        `/api/v1/orders/${operation.orderId}/cod-records`,
+        201,
+        cod.idempotencyKey,
+        {
+          amount_cents: cod.amountCents,
+          reference: cod.reference,
+        },
+        parseCodReceipt,
+        signal,
+      );
+    },
+    openFailedDeliveryIncident: (
+      operation: DriverOfflineOperation,
+      signal?: AbortSignal,
+    ) => {
+      const report = operation.failedDelivery;
+      if (
+        operation.kind !== "FAILED_DELIVERY" ||
+        report === null ||
+        operation.proofId === null
+      ) {
+        return Promise.reject(new DriverSyncApiError("invalid-contract"));
+      }
+      return requestJson(
+        options,
+        fetchImplementation,
+        timeoutMilliseconds,
+        `/api/v1/orders/${operation.orderId}/incidents`,
+        201,
+        report.incidentIdempotencyKey,
+        {
+          type: DriverFailedDeliveryIncidentType,
+          reason_code: report.reasonCode,
+          // The instant the driver reported, also the capture of the photo;
+          // the server applies the 72-hour rule to it (x-offline-operation-age).
+          occurred_at: operation.clientOccurredAt,
+          evidence_proof_ids: [asUuid(operation.proofId)],
+        },
+        parseIncidentReceipt,
+        signal,
+      );
+    },
   });
+}
+
+/**
+ * The transition metadata: a FAILED_ATTEMPT names the incident that justifies
+ * it (AI-04 attempt_stage_recorded; the only member that target accepts); every
+ * other driver transition sends none.
+ */
+function transitionMetadata(
+  operation: DriverOfflineOperation,
+): Readonly<Record<string, string>> {
+  if (operation.kind !== "FAILED_DELIVERY") return {};
+  const incidentId = operation.failedDelivery?.incidentId ?? null;
+  if (incidentId === null) throw new DriverSyncApiError("invalid-contract");
+  return { incident_id: asUuid(incidentId) };
 }
 
 export async function uploadDriverProof(
@@ -459,6 +582,88 @@ function parseProofReceipt(value: unknown): DriverProofReceipt {
   });
 }
 
+function parseCodReceipt(value: unknown): DriverCodReceipt {
+  const record = readExactRecord(
+    value,
+    new Set([
+      "id",
+      "order_id",
+      "amount_cents",
+      "status",
+      "recorded_at",
+      "reconciled_at",
+    ]),
+  );
+  const status = record.status;
+  if (
+    status !== "EXPECTED" &&
+    status !== "RECORDED" &&
+    status !== "RECONCILED" &&
+    status !== "DISPUTED" &&
+    status !== "REVERSED"
+  ) {
+    throw new DriverSyncApiError("invalid-contract");
+  }
+  readNullableUtcTimestamp(record.recorded_at);
+  readNullableUtcTimestamp(record.reconciled_at);
+  return Object.freeze({
+    id: readUuid(record.id),
+    orderId: readUuid(record.order_id),
+    amountCents: readPositiveInteger(record.amount_cents),
+    status,
+  });
+}
+
+const incidentStatuses = ["OPEN", "INVESTIGATING", "RESOLVED", "REJECTED"];
+const incidentSeverities = ["LOW", "MEDIUM", "HIGH", "CRITICAL"];
+
+function parseIncidentReceipt(value: unknown): DriverIncidentReceipt {
+  const record = readExactRecord(
+    value,
+    new Set([
+      "id",
+      "order_id",
+      "status",
+      "severity",
+      "reason_code",
+      "next_action",
+      "custody_acquired",
+      "occurred_at",
+      "sla_due_at",
+      "evidence_proof_ids",
+    ]),
+  );
+  if (
+    typeof record.status !== "string" ||
+    !incidentStatuses.includes(record.status) ||
+    typeof record.severity !== "string" ||
+    !incidentSeverities.includes(record.severity) ||
+    !isDriverFailedDeliveryReason(record.reason_code) ||
+    (record.next_action !== null &&
+      record.next_action !== "RESCHEDULED" &&
+      record.next_action !== "RETURNING") ||
+    typeof record.custody_acquired !== "boolean" ||
+    !Array.isArray(record.evidence_proof_ids) ||
+    record.evidence_proof_ids.length < 1 ||
+    record.evidence_proof_ids.length > 10
+  ) {
+    throw new DriverSyncApiError("invalid-contract");
+  }
+  readUtcTimestamp(record.sla_due_at);
+  const evidenceProofIds = record.evidence_proof_ids.map(readUuid);
+  if (new Set(evidenceProofIds).size !== evidenceProofIds.length) {
+    throw new DriverSyncApiError("invalid-contract");
+  }
+  return Object.freeze({
+    id: readUuid(record.id),
+    orderId: readUuid(record.order_id),
+    reasonCode: record.reason_code,
+    nextAction: record.next_action,
+    occurredAt: readUtcTimestamp(record.occurred_at),
+    evidenceProofIds: Object.freeze(evidenceProofIds),
+  });
+}
+
 function readSignedUrl(value: unknown, production: boolean): string {
   if (typeof value !== "string") {
     throw new DriverSyncApiError("invalid-contract");
@@ -515,7 +720,12 @@ function readRequiredHeaders(
 
 function proofTypeFor(operation: DriverOfflineOperation): DriverProofType {
   if (operation.kind === "PICKUP_PROOF") return "PICKUP_PHOTO";
-  if (operation.kind === "DELIVERY_PROOF") return "DELIVERY_PHOTO";
+  // UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: "Foto del lugar" is a
+  // DELIVERY_PHOTO taken in DELIVERING; once it is incident evidence it never
+  // counts for DELIVERED (AI-04).
+  if (operation.kind === "DELIVERY_PROOF" || operation.kind === "FAILED_DELIVERY") {
+    return "DELIVERY_PHOTO";
+  }
   throw new DriverSyncApiError("invalid-contract");
 }
 
@@ -619,6 +829,8 @@ function readOperationalStatus(value: unknown): DriverOperationalStatus {
       "IN_TRANSIT",
       "DELIVERING",
       "DELIVERED",
+      // UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: the order after a report.
+      "FAILED_ATTEMPT",
     ].includes(value)
   ) {
     throw new DriverSyncApiError("invalid-contract");

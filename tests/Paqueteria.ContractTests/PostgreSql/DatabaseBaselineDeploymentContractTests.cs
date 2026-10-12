@@ -75,7 +75,8 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
                           paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance,
                           paqueteria_lifecycle_executor, paqueteria_cleanup_executor,
                           paqueteria_registration_executor, paqueteria_session_executor,
-                          paqueteria_master_data_executor, paqueteria_operator_outbox_executor
+                          paqueteria_master_data_executor, paqueteria_operator_outbox_executor,
+                          paqueteria_auto_close_executor
                     TO {{_login}} WITH ADMIN TRUE, SET TRUE;
                     -- MDM-001 N2: the deployment principal administers the operator grantee (AI-18 revokes it from
                     -- the runtime roles) but can never use it, like a CREATEROLE creator's automatic grant.
@@ -319,17 +320,19 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
                 ("paqueteria_master_data_executor", true),
                 ("paqueteria_master_data_loader", false),
                 ("paqueteria_operator_outbox_executor", true),
+                ("paqueteria_auto_close_executor", true),
             ],
             E002Guards.CanonicalRoles);
         Assert.Equal(
             [
                 "paqueteria_bootstrap", "paqueteria_outbox_executor", "paqueteria_maintenance", "paqueteria_lifecycle_executor",
                 "paqueteria_cleanup_executor", "paqueteria_registration_executor", "paqueteria_session_executor",
-                "paqueteria_master_data_executor", "paqueteria_operator_outbox_executor",
+                "paqueteria_master_data_executor", "paqueteria_operator_outbox_executor", "paqueteria_auto_close_executor",
             ],
             E002Guards.SpecializedOwners);
         Assert.Equal(
-            ["paqueteria_master_data_executor", "paqueteria_master_data_loader", "paqueteria_operator_outbox_executor"],
+            ["paqueteria_master_data_executor", "paqueteria_master_data_loader", "paqueteria_operator_outbox_executor",
+             "paqueteria_auto_close_executor"],
             E002Guards.LaneIntroducedRoles);
         Assert.Equal(
             Identity.Infrastructure.Persistence.Migrations.AddBffSessionStore.MigrationId,
@@ -494,6 +497,28 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         Assert.Equal(
             "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_V1",
             E002RoutineMap.Name(E002RoutineMapState.Applied, true, true, true, true, true, true, true, true, true));
+
+        // ORD-AUTO-CLOSE-2026-10-10: one auto-close executor routine for the Worker only.
+        Assert.Equal(
+            Orders.Infrastructure.Persistence.Migrations.AddOrderAutoCloseDiscovery.MigrationId,
+            E002OrderAutoCloseStateReader.MigrationId);
+        var autoClose = Assert.Single(
+            E002RoutineMap.Select(
+                    E002RoutineMapState.Applied, true, true, true, true, true, true, true, true, true,
+                    orderAutoCloseApplied: true)
+                .Except(E002RoutineMap.Select(E002RoutineMapState.Applied, true, true, true, true, true, true, true, true, true)));
+        Assert.Equal(
+            new E002RoutineEntry(
+                Orders.Infrastructure.Persistence.Migrations.AddOrderAutoCloseDiscovery.FunctionSignature,
+                Orders.Infrastructure.Persistence.Migrations.AddOrderAutoCloseDiscovery.ExecutorRole,
+                autoClose.Grantees),
+            autoClose);
+        Assert.Equal(["paqueteria_worker"], autoClose.Grantees);
+        Assert.Equal(51, E002RoutineMap.Select(
+            E002RoutineMapState.Applied, true, true, true, true, true, true, true, true, true, true).Count);
+        Assert.Equal(
+            "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_V1",
+            E002RoutineMap.Name(E002RoutineMapState.Applied, true, true, true, true, true, true, true, true, true, true));
     }
 
     [PostgreSqlContractFact]
@@ -591,10 +616,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
             Assert.Equal(
-                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_V1",
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_V1",
                 semantic.RoutineMap);
-            Assert.Equal(50, semantic.ControlledIdentities);
-            Assert.Equal(98, semantic.NormalizedExecuteRows);
+            Assert.Equal(51, semantic.ControlledIdentities);
+            Assert.Equal(100, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> CustodyLaneAsync() =>
@@ -675,10 +700,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
             Assert.Equal(
-                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_V1",
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_V1",
                 semantic.RoutineMap);
-            Assert.Equal(50, semantic.ControlledIdentities);
-            Assert.Equal(98, semantic.NormalizedExecuteRows);
+            Assert.Equal(51, semantic.ControlledIdentities);
+            Assert.Equal(100, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> IdentityLaneAsync() =>
@@ -765,10 +790,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
             Assert.Equal(
-                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_V1",
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_V1",
                 semantic.RoutineMap);
-            Assert.Equal(50, semantic.ControlledIdentities);
-            Assert.Equal(98, semantic.NormalizedExecuteRows);
+            Assert.Equal(51, semantic.ControlledIdentities);
+            Assert.Equal(100, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> PricingLaneAsync() =>
@@ -858,10 +883,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
             Assert.Equal(
-                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_V1",
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_V1",
                 semantic.RoutineMap);
-            Assert.Equal(50, semantic.ControlledIdentities);
-            Assert.Equal(98, semantic.NormalizedExecuteRows);
+            Assert.Equal(51, semantic.ControlledIdentities);
+            Assert.Equal(100, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> OrganizationsLaneAsync() =>
@@ -932,10 +957,12 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             REVOKE USAGE ON SCHEMA orders FROM paqueteria_lifecycle_executor;
             REVOKE SELECT (id,status,claim_window_ends_at,finalized_at), UPDATE (finalized_at)
               ON orders.orders FROM paqueteria_lifecycle_executor;
+            DROP FUNCTION {Orders.Infrastructure.Persistence.Migrations.AddOrderAutoCloseDiscovery.FunctionSignature};
             DELETE FROM platform."__ef_migrations_history_orders"
               WHERE "MigrationId" IN ('{E002LifecycleStateReader.Lif001MigrationId}',
                 '{Orders.Infrastructure.Persistence.Migrations.AddTrackingLinkGenerations.MigrationId}',
-                '{Orders.Infrastructure.Persistence.Migrations.AddOrderServiceWindow.MigrationId}');
+                '{Orders.Infrastructure.Persistence.Migrations.AddOrderServiceWindow.MigrationId}',
+                '{E002OrderAutoCloseStateReader.MigrationId}');
             """);
         Assert.Equal("PENDING", await OrdersLaneAsync());
         const string SecurityAclSql = "SELECT nspacl::text FROM pg_namespace WHERE nspname='security'";
@@ -989,6 +1016,15 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
                 """));
         Assert.False(await environment.ScalarAsync(
             "SELECT has_schema_privilege('paqueteria_lifecycle_executor','security','CREATE')"));
+        // ORD-AUTO-CLOSE-2026-10-10: the same Orders lane handed the discovery function to its own executor.
+        Assert.Equal(
+            "paqueteria_auto_close_executor|{paqueteria_auto_close_executor=X/paqueteria_auto_close_executor,paqueteria_worker=X/paqueteria_auto_close_executor}",
+            await environment.TextAsync("""
+                SELECT pg_get_userbyid(proowner) || '|' || proacl::text
+                FROM pg_proc WHERE oid='security.list_auto_close_owner_organizations(uuid,integer)'::regprocedure
+                """));
+        Assert.False(await environment.ScalarAsync(
+            "SELECT has_schema_privilege('paqueteria_auto_close_executor','security','CREATE')"));
         Assert.Equal(securityAclBefore, await environment.TextAsync(SecurityAclSql));
         Assert.Equal(membershipsBefore, await environment.TextAsync(MembershipSql));
 
@@ -1009,10 +1045,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             // The Notifications lane also installed the D8 DISPATCH lane and the Custody OPS-003 lane is applied
             // too: two routines each, owner + Worker.
             Assert.Equal(
-                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_V1",
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_V1",
                 semantic.RoutineMap);
-            Assert.Equal(50, semantic.ControlledIdentities);
-            Assert.Equal(98, semantic.NormalizedExecuteRows);
+            Assert.Equal(51, semantic.ControlledIdentities);
+            Assert.Equal(100, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> OrdersLaneAsync() =>
@@ -1093,14 +1129,98 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         {
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
-            Assert.EndsWith("_PLUS_MDM001_PLUS_DSPOPOUTBOX_V1", semantic.RoutineMap, StringComparison.Ordinal);
-            Assert.Equal(50, semantic.ControlledIdentities);
-            Assert.Equal(98, semantic.NormalizedExecuteRows);
+            Assert.EndsWith("_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_V1", semantic.RoutineMap, StringComparison.Ordinal);
+            Assert.Equal(51, semantic.ControlledIdentities);
+            Assert.Equal(100, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> DispatchLaneAsync() =>
             (await coordinator.PlanAsync(environment.DeploymentConnectionString, CancellationToken.None))
                 .Single(state => state.Module == "Dispatch").Status;
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Azure_ownership_bridge_applies_the_orders_auto_close_step_as_non_superuser()
+    {
+        // ORD-AUTO-CLOSE-2026-10-10: the Orders lane hands security.list_auto_close_owner_organizations to the
+        // auto-close executor through the same E-002 transaction-scoped CREATE as its LIF-001 step.
+        await using var environment = await new AzureLikeEnvironment(fixture).InitializeAsync("bridgeautoclose");
+        var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+        await new DatabaseBaselineDeployer().ApplyAsync(baseline, environment.DeploymentConnectionString, ownershipBridge: Bridge);
+        var coordinator = new ModuleMigrationCoordinator();
+        await coordinator.ApplyAsync(environment.AdminConnectionString, CancellationToken.None, azureOwnershipBridge: true);
+        await environment.AdminExecuteAsync($"""
+            DROP FUNCTION {Orders.Infrastructure.Persistence.Migrations.AddOrderAutoCloseDiscovery.FunctionSignature};
+            DELETE FROM platform."__ef_migrations_history_orders"
+              WHERE "MigrationId"='{E002OrderAutoCloseStateReader.MigrationId}';
+            """);
+        Assert.Equal("PENDING", await OrdersLaneAsync());
+        const string MembershipSql = """
+            SELECT COALESCE(string_agg(pg_get_userbyid(member) || '>' || pg_get_userbyid(roleid) || ':' ||
+                admin_option || inherit_option || set_option, ',' ORDER BY member, roleid), '')
+            FROM pg_auth_members
+            WHERE roleid='paqueteria_auto_close_executor'::regrole OR member='paqueteria_auto_close_executor'::regrole
+            """;
+        var membershipsBefore = await environment.TextAsync(MembershipSql);
+
+        // Without the E-002 bridge the managed-service principal cannot hand the function to the executor.
+        var denied = FindPostgresException(await Assert.ThrowsAnyAsync<Exception>(() =>
+            coordinator.ApplyAsync(environment.DeploymentConnectionString, CancellationToken.None)));
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, denied.SqlState);
+        Assert.Equal("PENDING", await OrdersLaneAsync());
+
+        // Fail closed on a pre-existing temporary CREATE, and leave it for the operator.
+        await environment.AdminExecuteAsync("GRANT CREATE ON SCHEMA security TO paqueteria_auto_close_executor");
+        var prestate = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            coordinator.ApplyAsync(environment.DeploymentConnectionString, CancellationToken.None, azureOwnershipBridge: true));
+        Assert.StartsWith("E002_CREATE_PRESTATE_PRESENT role=paqueteria_auto_close_executor", prestate.Message,
+            StringComparison.Ordinal);
+        await environment.AdminExecuteAsync("REVOKE CREATE ON SCHEMA security FROM paqueteria_auto_close_executor");
+
+        // Fail closed without effective SET authority over the executor (an Azure installation that predates it).
+        await environment.AdminExecuteAsync($"REVOKE SET OPTION FOR paqueteria_auto_close_executor FROM {environment.Login}");
+        var capability = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            coordinator.ApplyAsync(environment.DeploymentConnectionString, CancellationToken.None, azureOwnershipBridge: true));
+        Assert.StartsWith("E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles=paqueteria_auto_close_executor", capability.Message,
+            StringComparison.Ordinal);
+        await environment.AdminExecuteAsync($"GRANT paqueteria_auto_close_executor TO {environment.Login} WITH SET TRUE");
+        Assert.Equal("PENDING", await OrdersLaneAsync());
+        Assert.Equal(membershipsBefore, await environment.TextAsync(MembershipSql));
+
+        await coordinator.ApplyAsync(environment.DeploymentConnectionString, CancellationToken.None, azureOwnershipBridge: true);
+
+        Assert.All(await coordinator.AssertAsync(environment.DeploymentConnectionString, CancellationToken.None),
+            state => Assert.Equal("APPLIED", state.Status));
+        Assert.Equal(
+            "paqueteria_auto_close_executor|{paqueteria_auto_close_executor=X/paqueteria_auto_close_executor,paqueteria_worker=X/paqueteria_auto_close_executor}",
+            await environment.TextAsync("""
+                SELECT pg_get_userbyid(proowner) || '|' || proacl::text
+                FROM pg_proc WHERE oid='security.list_auto_close_owner_organizations(uuid,integer)'::regprocedure
+                """));
+        Assert.False(await environment.ScalarAsync(
+            "SELECT has_schema_privilege('paqueteria_auto_close_executor','security','CREATE')"));
+        Assert.False(await environment.ScalarAsync(
+            "SELECT has_schema_privilege('paqueteria_lifecycle_executor','security','CREATE')"));
+        Assert.Equal(membershipsBefore, await environment.TextAsync(MembershipSql));
+
+        await using (var admin = new NpgsqlConnection(environment.AdminConnectionString))
+        {
+            await admin.OpenAsync();
+            await new DatabaseBaselineAssertions().AssertAsync(admin);
+        }
+
+        await using (var deployment = new NpgsqlConnection(environment.DeploymentConnectionString))
+        {
+            await deployment.OpenAsync();
+            var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
+            Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_V1", semantic.RoutineMap);
+            Assert.Equal(51, semantic.ControlledIdentities);
+            Assert.Equal(100, semantic.NormalizedExecuteRows);
+        }
+
+        async Task<string> OrdersLaneAsync() =>
+            (await coordinator.PlanAsync(environment.DeploymentConnectionString, CancellationToken.None))
+                .Single(state => state.Module == "Orders").Status;
     }
 
     private static PostgresException FindPostgresException(Exception exception)

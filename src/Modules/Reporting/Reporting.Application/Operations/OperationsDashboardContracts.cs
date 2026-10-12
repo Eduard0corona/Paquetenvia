@@ -1,4 +1,5 @@
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Globalization;
 using System.Text;
 using Paqueteria.Domain.Tenancy;
@@ -38,6 +39,11 @@ public static class OperationsDashboardVocabulary
         value is not null && ServiceTypes.Contains(value, StringComparer.Ordinal);
 }
 
+/// <param name="PriceReview">
+/// UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: <c>true</c> keeps only the orders of the price review queue, those
+/// with a cost warning that have not finished (<see cref="OperationsQueuePolicy.IsPriceReview"/>); <c>false</c> or
+/// absent applies no filter, exactly like <paramref name="Unassigned"/>.
+/// </param>
 public sealed record OperationsDashboardFilters(
     Guid? OrderId,
     string? Status,
@@ -49,6 +55,7 @@ public sealed record OperationsDashboardFilters(
     DateTimeOffset? CreatedFrom,
     DateTimeOffset? CreatedTo,
     bool? Unassigned,
+    bool? PriceReview,
     OperationsDashboardCursor? Cursor);
 
 public sealed record OperationsDashboardRequest(
@@ -62,7 +69,11 @@ public sealed record OperationsDashboardCursor(
     DateTimeOffset UpdatedAt,
     Guid OrderId);
 
-public sealed record OperationsOrganizationSummary(Guid OrganizationId, string DisplayName);
+/// <param name="DisplayName">
+/// OBS-001-OPERATED-OWNER-NAME-2026-10-12: the name RLS lets the selected organization read, which is only its own;
+/// <c>null</c> for the other party of an order (<see cref="OperationsDashboardProjectionPolicy.IsVisibleName"/>).
+/// </param>
+public sealed record OperationsOrganizationSummary(Guid OrganizationId, string? DisplayName);
 
 public sealed record OperationsClientSummary(Guid ClientAccountId, string DisplayName);
 
@@ -84,6 +95,13 @@ public sealed record OperationsDriverLocation(
 /// <summary>A time window as UTC instants (OBS-001 pickup_window/delivery_window).</summary>
 public sealed record OperationsTimeWindow(DateTimeOffset From, DateTimeOffset To);
 
+/// <summary>
+/// An amount in integer cents (AI-01 §4.15), never a floating-point value. The dashboard total is the order's
+/// <c>orders.total_cents</c> in MXN with IVA included (GATE-011-VAT-INCLUDED-2026-09-29), the value AI-05
+/// <c>Order.total</c> returns for the same order (UI-PHASE3-INBOX-TOTAL-2026-10-10).
+/// </summary>
+public sealed record OperationsMoney(string Currency, long AmountCents);
+
 public sealed record OperationsDashboardOrder(
     Guid OrderId,
     int AggregateVersion,
@@ -98,6 +116,7 @@ public sealed record OperationsDashboardOrder(
     OperationsZoneSummary? DeliveryZone,
     OperationsAssignmentSummary? Assignment,
     OperationsDriverLocation? LatestDriverLocation,
+    OperationsMoney Total,
     string? CostWarning,
     bool UnassignedAlert,
     OperationsTimeWindow? DeliveryWindow = null);
@@ -146,9 +165,33 @@ public static class OperationsDashboardProjectionPolicy
     public static bool IsUnassignedAlert(string status, bool hasActiveAssignment) =>
         status is "READY_FOR_PICKUP" or "RESCHEDULED" && !hasActiveAssignment;
 
+    /// <summary>
+    /// RLS (AI-06 <c>orders_tenant</c>) shows the selected organization only the orders it owns or operates; a row
+    /// outside both is an inconsistent projection and fails closed.
+    /// </summary>
+    public static bool IsReaderParty(Guid readerOrganizationId, Guid ownerOrganizationId, Guid? operatorOrganizationId) =>
+        ownerOrganizationId == readerOrganizationId || operatorOrganizationId == readerOrganizationId;
+
+    /// <summary>
+    /// OBS-001-OPERATED-OWNER-NAME-2026-10-12: <c>app.current_org_ids</c> holds only the selected organization, so
+    /// AI-06 <c>organizations_tenant</c> lets it read only its own organizations row. Its own name is therefore present
+    /// and the other party of an order - the owner of an order it only operates, or the operator of an order it owns -
+    /// has no name; <c>owner_org_id</c> and <c>operator_org_id</c> stay distinct (AI-01 §2.5). A missing own name, or
+    /// a name RLS should have hidden, is an inconsistent projection and fails closed instead of reaching the page.
+    /// </summary>
+    public static bool IsVisibleName(Guid readerOrganizationId, Guid organizationId, string? displayName) =>
+        organizationId == readerOrganizationId ? displayName is not null : displayName is null;
+
     /// <summary>The shared non-PII driver label; the assignable-driver list uses the same one.</summary>
     public static string DriverReference(Guid driverId) =>
         Paqueteria.Application.Privacy.DriverReference.From(driverId);
+
+    /// <summary>
+    /// The order total is MXN integer cents and never negative (AI-06 <c>orders</c> CHECKs); anything else is an
+    /// inconsistent projection and fails closed.
+    /// </summary>
+    public static bool IsValidTotal([NotNullWhen(true)] string? currency, long amountCents) =>
+        string.Equals(currency, "MXN", StringComparison.Ordinal) && amountCents >= 0;
 
     public static bool IsValidLocation(
         double latitude,

@@ -1,6 +1,27 @@
 import { asUuid } from "../../realtime/envelope";
+import {
+  isDriverFailedDeliveryReason,
+  type DriverFailedDeliveryReason,
+} from "../contracts/failed-delivery";
+import {
+  isDriverRejectionCode,
+  type DriverRejectionCode,
+} from "./rejection-codes";
 
-export const DriverOfflineOperationSchemaVersion = 1 as const;
+/**
+ * Operation records are schema 3 since UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12
+ * ("No se pudo entregar": the FAILED_DELIVERY kind and its `failedDelivery`
+ * member). Schema 2 (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11) added the cash
+ * collection and the kept rejection code. IndexedDB version 4 rewrites every
+ * queued schema 1 or 2 record in place; see migrateDriverOfflineOperationRecord.
+ * The parser reads schema 3 only: an older or newer record fails closed (the
+ * whole queue is reported unavailable and nothing is sent or deleted).
+ */
+export const DriverOfflineOperationSchemaVersion = 3 as const;
+/** Proof blob records keep their schema 1 shape. */
+export const DriverProofBlobSchemaVersion = 1 as const;
+/** Sync lease records keep their schema 1 shape. */
+export const DriverSyncLeaseSchemaVersion = 1 as const;
 
 export const driverOperationKinds = [
   "CHECK_IN",
@@ -8,6 +29,8 @@ export const driverOperationKinds = [
   "START_TRANSIT",
   "START_DELIVERY",
   "DELIVERY_PROOF",
+  "COD_COLLECTION",
+  "FAILED_DELIVERY",
 ] as const;
 
 export const driverOperationStatuses = [
@@ -29,7 +52,18 @@ export type DriverOperationalStatus =
   | "PICKED_UP"
   | "IN_TRANSIT"
   | "DELIVERING"
-  | "DELIVERED";
+  | "DELIVERED"
+  | "FAILED_ATTEMPT";
+
+const driverOperationalStatuses = [
+  "ASSIGNED",
+  "AT_PICKUP",
+  "PICKED_UP",
+  "IN_TRANSIT",
+  "DELIVERING",
+  "DELIVERED",
+  "FAILED_ATTEMPT",
+] as const satisfies readonly DriverOperationalStatus[];
 
 export type DriverProofType = "PICKUP_PHOTO" | "DELIVERY_PHOTO";
 
@@ -38,6 +72,8 @@ export interface DriverOperationDefinition {
   readonly targetStatus: DriverOperationalStatus;
   readonly reason: string;
   readonly proofType: DriverProofType | null;
+  /** False only for the cash collection, which records COD and changes no order status. */
+  readonly transition: boolean;
 }
 
 export const driverOperationDefinitions: Readonly<
@@ -48,30 +84,58 @@ export const driverOperationDefinitions: Readonly<
     targetStatus: "AT_PICKUP",
     reason: "DRIVER_CHECK_IN",
     proofType: null,
+    transition: true,
   }),
   PICKUP_PROOF: Object.freeze({
     sourceStatus: "AT_PICKUP",
     targetStatus: "PICKED_UP",
     reason: "DRIVER_PICKUP_CONFIRMED",
     proofType: "PICKUP_PHOTO",
+    transition: true,
   }),
   START_TRANSIT: Object.freeze({
     sourceStatus: "PICKED_UP",
     targetStatus: "IN_TRANSIT",
     reason: "DRIVER_TRANSIT_STARTED",
     proofType: null,
+    transition: true,
   }),
   START_DELIVERY: Object.freeze({
     sourceStatus: "IN_TRANSIT",
     targetStatus: "DELIVERING",
     reason: "DRIVER_DELIVERY_STARTED",
     proofType: null,
+    transition: true,
   }),
   DELIVERY_PROOF: Object.freeze({
     sourceStatus: "DELIVERING",
     targetStatus: "DELIVERED",
     reason: "DRIVER_DELIVERY_CONFIRMED",
     proofType: "DELIVERY_PHOTO",
+    transition: true,
+  }),
+  // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 ("Solo confirma el monto"): the
+  // cash received at the door, recorded with recordCodCollection while the
+  // stop is DELIVERING. It is queued before the delivery and must sync first.
+  COD_COLLECTION: Object.freeze({
+    sourceStatus: "DELIVERING",
+    targetStatus: "DELIVERING",
+    reason: "DRIVER_COD_COLLECTED",
+    proofType: null,
+    transition: false,
+  }),
+  // UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 ("No se pudo entregar"): the
+  // driver reports reason and photo; dispatch decides what follows
+  // (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11). One operation carries the
+  // whole AI-05 sequence: DELIVERY_PHOTO upload session, PUT, proof, the
+  // incident without severity, description or next_action, and the transition
+  // to FAILED_ATTEMPT with metadata.incident_id.
+  FAILED_DELIVERY: Object.freeze({
+    sourceStatus: "DELIVERING",
+    targetStatus: "FAILED_ATTEMPT",
+    reason: "DRIVER_DELIVERY_FAILED_REPORTED",
+    proofType: "DELIVERY_PHOTO",
+    transition: true,
   }),
 });
 
@@ -81,10 +145,59 @@ export type DriverOperationSafeError =
   | "VERSION_CONFLICT"
   | "EVIDENCE_REJECTED"
   | "RESOURCE_UNAVAILABLE"
+  /**
+   * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 (owner answer "No, llama a
+   * despacho"): a failed-delivery report held because its order has a cash
+   * collection saved on the phone or recorded on the server; it is never sent.
+   */
+  | "COD_COLLECTED"
   | null;
 
+const driverOperationSafeErrors = [
+  "NETWORK",
+  "SESSION_EXPIRED",
+  "VERSION_CONFLICT",
+  "EVIDENCE_REJECTED",
+  "RESOURCE_UNAVAILABLE",
+  "COD_COLLECTED",
+] as const;
+
+/**
+ * The cash a COD_COLLECTION records: the stop's expected amount in MXN integer
+ * cents, the reference the app built (tracking number and device time) and the
+ * one Idempotency-Key reused on every retry. None of it is personal data.
+ */
+export interface DriverCodCollection {
+  readonly amountCents: number;
+  readonly reference: string;
+  readonly idempotencyKey: string;
+}
+
+export const MaximumCodReferenceLength = 200;
+
+/**
+ * What a FAILED_DELIVERY reports and how far it got: the reason from the
+ * closed list, the Idempotency-Key of its openIncident (one per report, reused
+ * on every retry, so a lost 201 is replayed and a second incident is never
+ * opened; a report is never rebuilt with another key), whether that request
+ * may already have reached the server, and the incident id once the server
+ * returned it. No text, name or address.
+ */
+export interface DriverFailedDeliveryReport {
+  readonly reasonCode: DriverFailedDeliveryReason;
+  readonly incidentIdempotencyKey: string;
+  /**
+   * Set right before openIncident is first sent and never cleared. With
+   * `incidentId` still null the incident may exist (its answer was lost): the
+   * next pass replays the same key, and a report held meanwhile says that the
+   * incident may already be open instead of "not sent".
+   */
+  readonly incidentRequested: boolean;
+  readonly incidentId: string | null;
+}
+
 export interface DriverOfflineOperation {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof DriverOfflineOperationSchemaVersion;
   readonly partitionKey: string;
   readonly id: string;
   readonly orderId: string;
@@ -112,10 +225,16 @@ export interface DriverOfflineOperation {
   readonly uploadAccepted: boolean;
   readonly proofId: string | null;
   readonly safeError: DriverOperationSafeError;
+  /** Present only on COD_COLLECTION. */
+  readonly cod: DriverCodCollection | null;
+  /** The server's rule code when the operation is held for attention, if known. */
+  readonly rejectionCode: DriverRejectionCode | null;
+  /** Present only on FAILED_DELIVERY. */
+  readonly failedDelivery: DriverFailedDeliveryReport | null;
 }
 
 export interface DriverProofBlobRecord {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof DriverProofBlobSchemaVersion;
   readonly partitionKey: string;
   readonly operationId: string;
   readonly blob: Blob;
@@ -125,7 +244,7 @@ export interface DriverProofBlobRecord {
 }
 
 export interface DriverSyncLease {
-  readonly schemaVersion: 1;
+  readonly schemaVersion: typeof DriverSyncLeaseSchemaVersion;
   readonly partitionKey: string;
   readonly ownerId: string;
   readonly expiresAt: string;
@@ -168,6 +287,9 @@ const operationProperties = new Set([
   "uploadAccepted",
   "proofId",
   "safeError",
+  "cod",
+  "rejectionCode",
+  "failedDelivery",
 ]);
 
 export function createDriverOfflineOperation(input: {
@@ -180,6 +302,13 @@ export function createDriverOfflineOperation(input: {
     readonly sizeBytes: number;
     readonly sha256: string;
   };
+  readonly cod?: {
+    readonly amountCents: number;
+    readonly reference: string;
+  };
+  readonly failedDelivery?: {
+    readonly reasonCode: DriverFailedDeliveryReason;
+  };
   readonly now?: () => Date;
   readonly randomUuid?: () => string;
 }): DriverOfflineOperation {
@@ -188,6 +317,15 @@ export function createDriverOfflineOperation(input: {
   const id = asUuid((input.randomUuid ?? (() => crypto.randomUUID()))());
   const proof = input.proof;
   if ((definition.proofType === null) !== (proof === undefined)) {
+    throw new DriverOfflineContractError();
+  }
+  if ((input.kind === "COD_COLLECTION") !== (input.cod !== undefined)) {
+    throw new DriverOfflineContractError();
+  }
+  if (
+    (input.kind === "FAILED_DELIVERY") !==
+    (input.failedDelivery !== undefined)
+  ) {
     throw new DriverOfflineContractError();
   }
   return Object.freeze({
@@ -221,7 +359,56 @@ export function createDriverOfflineOperation(input: {
     uploadAccepted: false,
     proofId: null,
     safeError: null,
+    cod: input.cod
+      ? Object.freeze({
+          amountCents: readPositiveSafeInteger(input.cod.amountCents),
+          reference: readCodReference(input.cod.reference),
+          idempotencyKey: codIdempotencyKey(id),
+        })
+      : null,
+    rejectionCode: null,
+    failedDelivery: input.failedDelivery
+      ? Object.freeze({
+          reasonCode: readFailedDeliveryReason(input.failedDelivery.reasonCode),
+          incidentIdempotencyKey: incidentIdempotencyKey(id),
+          incidentRequested: false,
+          incidentId: null,
+        })
+      : null,
   });
+}
+
+/**
+ * IndexedDB version 4 upgrade (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12): a
+ * queued schema 2 operation becomes schema 3 unchanged except for the new
+ * `failedDelivery` member (null: no older record is a failed-delivery report),
+ * and a schema 1 operation (DRV-002, from a version 2 database) also gets the
+ * two schema 2 members (`cod` and `rejectionCode`, null), so no queued action
+ * is lost. Anything else is returned as it is and the strict parser keeps
+ * judging it on read.
+ */
+export function migrateDriverOfflineOperationRecord(value: unknown): unknown {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    return value;
+  }
+  const record = value as Record<string, unknown>;
+  if (record.schemaVersion === 1) {
+    return {
+      ...record,
+      schemaVersion: DriverOfflineOperationSchemaVersion,
+      cod: null,
+      rejectionCode: null,
+      failedDelivery: null,
+    };
+  }
+  if (record.schemaVersion === 2) {
+    return {
+      ...record,
+      schemaVersion: DriverOfflineOperationSchemaVersion,
+      failedDelivery: null,
+    };
+  }
+  return value;
 }
 
 export function parseDriverOfflineOperation(
@@ -289,9 +476,25 @@ export function parseDriverOfflineOperation(
   ) {
     throw new DriverOfflineContractError();
   }
+  const cod = readCod(record.cod, id);
+  if ((kind === "COD_COLLECTION") !== (cod !== null)) {
+    throw new DriverOfflineContractError();
+  }
+  const failedDelivery = readFailedDelivery(record.failedDelivery, id);
+  if (
+    (kind === "FAILED_DELIVERY") !== (failedDelivery !== null) ||
+    // The incident cites the finalized photo, so it is never requested
+    // without it, and an incident id comes only from a request.
+    (failedDelivery !== null &&
+      ((failedDelivery.incidentRequested && record.proofId === null) ||
+        (failedDelivery.incidentId !== null &&
+          !failedDelivery.incidentRequested)))
+  ) {
+    throw new DriverOfflineContractError();
+  }
 
   return Object.freeze({
-    schemaVersion: readSchemaVersion(record.schemaVersion),
+    schemaVersion: readOperationSchemaVersion(record.schemaVersion),
     partitionKey,
     id,
     orderId: readUuid(record.orderId),
@@ -321,6 +524,9 @@ export function parseDriverOfflineOperation(
     uploadAccepted: readBoolean(record.uploadAccepted),
     proofId: readNullableUuid(record.proofId),
     safeError: readSafeError(record.safeError),
+    cod,
+    rejectionCode: readRejectionCode(record.rejectionCode),
+    failedDelivery,
   });
 }
 
@@ -358,7 +564,7 @@ export function parseDriverProofBlob(
     throw new DriverOfflineContractError();
   }
   return Object.freeze({
-    schemaVersion: readSchemaVersion(record.schemaVersion),
+    schemaVersion: readLegacySchemaVersion(record.schemaVersion),
     partitionKey,
     operationId: readUuid(record.operationId),
     blob: record.blob,
@@ -387,7 +593,7 @@ export function parseDriverSyncLease(
     throw new DriverOfflineContractError();
   }
   return Object.freeze({
-    schemaVersion: readSchemaVersion(record.schemaVersion),
+    schemaVersion: readLegacySchemaVersion(record.schemaVersion),
     partitionKey,
     ownerId: readUuid(record.ownerId),
     expiresAt: readUtcTimestamp(record.expiresAt),
@@ -405,6 +611,56 @@ export function sessionIdempotencyKey(
 ): string {
   return validateIdempotencyKey(
     `drv2-${asUuid(operationId)}-session-${readPositiveSafeInteger(attempt)}`,
+  );
+}
+
+/** One key per cash collection, reused on every retry and after a reload. */
+export function codIdempotencyKey(operationId: string): string {
+  return validateIdempotencyKey(`drv2-${asUuid(operationId)}-cod`);
+}
+
+/**
+ * One openIncident key per failed-delivery report, reused on every retry and
+ * after a reload. A report is never rebuilt for another version, so the key
+ * always names its own operation.
+ */
+export function incidentIdempotencyKey(operationId: string): string {
+  return validateIdempotencyKey(`drv2-${asUuid(operationId)}-incident`);
+}
+
+/**
+ * The reference recordCodCollection stores (owner answer "el sistema pone la
+ * referencia (guía y hora)"): the tracking number and the device's local time
+ * of the confirmation, ISO 8601 with its offset, for example
+ * `ORD_… 2026-10-11T13:05:42-07:00`. At most 200 characters, no surrounding
+ * white space.
+ */
+export function buildCodReference(orderPublicId: string, at: Date): string {
+  return readCodReference(
+    `${orderPublicId.trim()} ${formatLocalTimestamp(at.getTime(), -at.getTimezoneOffset())}`,
+  );
+}
+
+/** Wall-clock time at `offsetMinutes` east of UTC, ISO 8601 with that offset, whole seconds. */
+export function formatLocalTimestamp(
+  epochMilliseconds: number,
+  offsetMinutes: number,
+): string {
+  if (
+    !Number.isFinite(epochMilliseconds) ||
+    !Number.isSafeInteger(offsetMinutes) ||
+    Math.abs(offsetMinutes) > 14 * 60
+  ) {
+    throw new DriverOfflineContractError();
+  }
+  const local = new Date(epochMilliseconds + offsetMinutes * 60_000);
+  const pad = (value: number) => String(value).padStart(2, "0");
+  const sign = offsetMinutes < 0 ? "-" : "+";
+  const absolute = Math.abs(offsetMinutes);
+  return (
+    `${String(local.getUTCFullYear()).padStart(4, "0")}-${pad(local.getUTCMonth() + 1)}-` +
+    `${pad(local.getUTCDate())}T${pad(local.getUTCHours())}:${pad(local.getUTCMinutes())}:` +
+    `${pad(local.getUTCSeconds())}${sign}${pad(Math.floor(absolute / 60))}:${pad(absolute % 60)}`
   );
 }
 
@@ -442,11 +698,83 @@ function readExactRecord(
   return record;
 }
 
-function readSchemaVersion(value: unknown): 1 {
+function readOperationSchemaVersion(
+  value: unknown,
+): typeof DriverOfflineOperationSchemaVersion {
   if (value !== DriverOfflineOperationSchemaVersion) {
     throw new DriverOfflineContractError();
   }
   return value;
+}
+
+function readLegacySchemaVersion(value: unknown): 1 {
+  if (value !== DriverProofBlobSchemaVersion) {
+    throw new DriverOfflineContractError();
+  }
+  return value;
+}
+
+function readCod(value: unknown, operationId: string): DriverCodCollection | null {
+  if (value === null) return null;
+  const record = readExactRecord(
+    value,
+    new Set(["amountCents", "reference", "idempotencyKey"]),
+  );
+  if (record.idempotencyKey !== codIdempotencyKey(operationId)) {
+    throw new DriverOfflineContractError();
+  }
+  return Object.freeze({
+    amountCents: readPositiveSafeInteger(record.amountCents),
+    reference: readCodReference(record.reference),
+    idempotencyKey: record.idempotencyKey,
+  });
+}
+
+function readCodReference(value: unknown): string {
+  return readText(value, MaximumCodReferenceLength);
+}
+
+function readRejectionCode(value: unknown): DriverRejectionCode | null {
+  if (value === null) return null;
+  if (!isDriverRejectionCode(value)) throw new DriverOfflineContractError();
+  return value;
+}
+
+function readFailedDeliveryReason(value: unknown): DriverFailedDeliveryReason {
+  if (!isDriverFailedDeliveryReason(value)) {
+    throw new DriverOfflineContractError();
+  }
+  return value;
+}
+
+/**
+ * The exact `failedDelivery` member: a closed-list reason, the openIncident
+ * key of this very operation (drv2-<operation id>-incident), whether that
+ * request may have been sent, and a canonical incident id or null.
+ */
+function readFailedDelivery(
+  value: unknown,
+  operationId: string,
+): DriverFailedDeliveryReport | null {
+  if (value === null) return null;
+  const record = readExactRecord(
+    value,
+    new Set([
+      "reasonCode",
+      "incidentIdempotencyKey",
+      "incidentRequested",
+      "incidentId",
+    ]),
+  );
+  if (record.incidentIdempotencyKey !== incidentIdempotencyKey(operationId)) {
+    throw new DriverOfflineContractError();
+  }
+  return Object.freeze({
+    reasonCode: readFailedDeliveryReason(record.reasonCode),
+    incidentIdempotencyKey: record.incidentIdempotencyKey,
+    incidentRequested: readBoolean(record.incidentRequested),
+    incidentId: readNullableUuid(record.incidentId),
+  });
 }
 
 function readUuid(value: unknown): string {
@@ -473,14 +801,7 @@ function readPartitionKey(value: unknown): string {
 }
 
 function readOperationalStatus(value: unknown): DriverOperationalStatus {
-  return readEnum(value, [
-    "ASSIGNED",
-    "AT_PICKUP",
-    "PICKED_UP",
-    "IN_TRANSIT",
-    "DELIVERING",
-    "DELIVERED",
-  ] as const);
+  return readEnum(value, driverOperationalStatuses);
 }
 
 function readEnum<T extends string>(
@@ -556,13 +877,7 @@ function readSha256(value: unknown): string {
 function readSafeError(value: unknown): DriverOperationSafeError {
   if (
     value !== null &&
-    ![
-      "NETWORK",
-      "SESSION_EXPIRED",
-      "VERSION_CONFLICT",
-      "EVIDENCE_REJECTED",
-      "RESOURCE_UNAVAILABLE",
-    ].includes(value as string)
+    !(driverOperationSafeErrors as readonly unknown[]).includes(value)
   ) {
     throw new DriverOfflineContractError();
   }

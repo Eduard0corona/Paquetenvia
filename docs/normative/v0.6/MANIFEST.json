@@ -24,8 +24,8 @@
     },
     {
       "path": "CANONICAL_SOURCE_OF_TRUTH.md",
-      "bytes": 4445,
-      "sha256": "11669c2d62a32e9ef3d2a8efef94abf4e33052d292f4796a840168db3f13378c"
+      "bytes": 4566,
+      "sha256": "597ebb197094432126d6a2ae527c328f8aaf30ecc24306c8f89a58ce848bee0e"
     },
     {
       "path": "CHANGED_FILES_SINCE_V0.5.md",
@@ -34,13 +34,13 @@
     },
     {
       "path": "CHANGELOG.md",
-      "bytes": 74376,
-      "sha256": "46c22854214ed713f0d02f02b370d5f35d12ac5a2923775fc691deade5ca567f"
+      "bytes": 123727,
+      "sha256": "6efdf3e40bd9bf955b65ad5c7ca880c8c9b56cc5a3a867cd7b095c412573acba"
     },
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "e4cadbc255605ff8c3c8e542c258665701729b41f7b3899500afa8b0204acceb"
+      "sha256": "ade68bb2cad009599064a114e566ae8d37d2ab72cb8ea6b1dd79c5932615c6b0"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
@@ -54,8 +54,8 @@
     },
     {
       "path": "contracts/AI-05_OPENAPI.yaml",
-      "bytes": 230954,
-      "sha256": "0d8c7119d8f161271bebd2e04ceaae08a2dfd1444dcb5f1605458aedceddfd41"
+      "bytes": 292782,
+      "sha256": "7376599f7cb78adf18bdacb172e4d8541c436cc7eac5d489126cb9b0d733f516"
     },
     {
       "path": "contracts/AI-12_SIGNALR_CONTRACT.yaml",
@@ -69,13 +69,13 @@
     },
     {
       "path": "database/AI-18_DATABASE_ROLE_MODEL.sql",
-      "bytes": 44656,
-      "sha256": "e13dc633db9a96565245f0f80917f006e5b7aaec01d549e1d01942a06ce4e759"
+      "bytes": 47556,
+      "sha256": "79733422531adcf4bdb39a420c30fa2639a9aa9e1d42dab911eccafd285ef804"
     },
     {
       "path": "decision-log.md",
-      "bytes": 134948,
-      "sha256": "7ac8da6b50af23caef472daddce4f8e0667636b5248d3ad08b792f6864d5581f"
+      "bytes": 230323,
+      "sha256": "84e46fe668334a398f08a4c9e113fa623f536d1b301d07f1a4307cc248ccb02d"
     },
     {
       "path": "docs/AI-14_TECH_REFERENCES.md",
@@ -324,28 +324,28 @@
     },
     {
       "path": "specs/AI-03_ARCHITECTURE.md",
-      "bytes": 35184,
-      "sha256": "509072c1c471306e231728a648880495b15d741159a49a5fe2c22095c30a5d23"
+      "bytes": 36036,
+      "sha256": "e457b085da032be168300d261a4e07fd854e940408999cbdd731127cc6fbcda2"
     },
     {
       "path": "specs/AI-04_DOMAIN_MODEL.yaml",
-      "bytes": 21250,
-      "sha256": "63cd4fd448aa311bdb09c26ab092e3c1322c98d2dc423b541bc478b14958fc94"
+      "bytes": 23955,
+      "sha256": "a489f5a3b927c5b37120b7a1a689e8aa9bbcca910bcf87d281468921a425f853"
     },
     {
       "path": "specs/AI-07_UI_CONTRACTS.yaml",
-      "bytes": 25693,
-      "sha256": "a9a926b27166432e227c2047cbac6bae79e682770886bd4c2c1e3828bdbe000f"
+      "bytes": 95843,
+      "sha256": "146b65a9705f11f74d9b6f0508dd74b154422380066aa691ec3a624dd27e44f7"
     },
     {
       "path": "specs/AI-08_BACKLOG.yaml",
-      "bytes": 53993,
-      "sha256": "4a04ce7b2ee007a3fe9764efd9a0e65b0279def468400ead97563b034bcf4f7d"
+      "bytes": 57327,
+      "sha256": "3dce7fd98d8517b79aab279c68b53182b379bc7dbf3d6e20f7b08d2b5643e652"
     },
     {
       "path": "specs/AI-10_DECISIONS_AND_GATES.yaml",
-      "bytes": 18420,
-      "sha256": "ab3f778528fa4335458cf9681727e7fa7a24d99b3598054ee99420dfd4314f3e"
+      "bytes": 18525,
+      "sha256": "9ad8b7779d8316322c95756a4dcfce6568485b19f128f3fa48a2799b1b37cd5d"
     },
     {
       "path": "specs/AI-13_DOTNET_SOLUTION_BLUEPRINT.md",
@@ -364,8 +364,8 @@
     },
     {
       "path": "specs/AI-24_RUNTIME_HARDENING_CONTRACT.yaml",
-      "bytes": 13973,
-      "sha256": "5adb4ef8e786d22c763ec4b5e79f5d550c888c0eb3f63334533952c12d9107dc"
+      "bytes": 23263,
+      "sha256": "225792a2de0676ddc447add19c9180309a135d6fac23599a72d8816b24c1e5df"
     },
     {
       "path": "tests/AI-09_ACCEPTANCE_TESTS.feature",
@@ -374,8 +374,8 @@
     },
     {
       "path": "tools/validate_contracts.py",
-      "bytes": 47298,
-      "sha256": "dad2afb83981e5a84d5e1e33d0cf01f1eac0b050aef48b76b58c795ba5fa7b8f"
+      "bytes": 49644,
+      "sha256": "849836c10b846884b8c2996d3c38f7ab5b23ff49969073029f85d94e2c984a76"
     }
   ]
 }

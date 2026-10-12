@@ -2,6 +2,7 @@ using System.Text.Json;
 using System.Text.Json.Serialization;
 using Dispatch.Application.Assignments;
 using Dispatch.Application.ExternalOffers;
+using Dispatch.Application.Fleet;
 using Dispatch.Application.Stops;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
@@ -48,14 +49,26 @@ public static class DispatchEndpoints
             .ProducesProblem(StatusCodes.Status409Conflict)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
+        endpoints.MapGet("/api/v1/drivers", ListOrganizationDriversAsync)
+            .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
+            .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .WithName("listOrganizationDrivers")
+            .WithTags("Dispatch")
+            .Produces<OrganizationDriverPageResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+
         endpoints.MapGet("/api/v1/driver/me/stops", ListMyStopsAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
             .RequireTenantContext(StatusCodes.Status403Forbidden)
             .WithName("listMyStops")
             .WithTags("Driver")
-            .Produces<IReadOnlyList<DriverStopResponse>>(StatusCodes.Status200OK)
+            .Produces<DriverStopListResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status409Conflict)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapPost("/api/v1/external-offers", CreateExternalOfferAsync)
@@ -409,6 +422,36 @@ public static class DispatchEndpoints
         }
     }
 
+    /// <summary>
+    /// UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the only query parameter is <c>details</c>, at most once, exactly
+    /// <c>true</c> or <c>false</c>; absent means <c>true</c>. Anything else is 409 INVALID_REQUEST.
+    /// </summary>
+    public static bool TryReadDriverStopsQuery(IQueryCollection query, out bool includeDetails)
+    {
+        includeDetails = true;
+        if (query.Keys.Any(key => !string.Equals(key, "details", StringComparison.Ordinal)) ||
+            query.Any(pair => pair.Value.Count != 1))
+        {
+            return false;
+        }
+
+        if (!query.TryGetValue("details", out var value))
+        {
+            return true;
+        }
+
+        switch (value[0])
+        {
+            case "true":
+                return true;
+            case "false":
+                includeDetails = false;
+                return true;
+            default:
+                return false;
+        }
+    }
+
     public static bool TryReadAssignableDriversQuery(IQueryCollection query, out AssignableDriverCursor? cursor)
     {
         cursor = null;
@@ -422,17 +465,110 @@ public static class DispatchEndpoints
             AssignableDriverCursorCodec.TryDecode(value[0], out cursor);
     }
 
+    /// <summary>
+    /// UI-PHASE3-DRIVERS-2026-10-11. The only query parameter is <c>cursor</c>, at most once and issued by this
+    /// operation; anything else is 409 INVALID_REQUEST before capability or any row is read. The capability is then
+    /// settled from the session and again inside the tenant transaction; the list has no resource of its own, so
+    /// there is no 404, and a store failure or a value outside the published vocabulary is 503.
+    /// </summary>
+    private static async Task<IResult> ListOrganizationDriversAsync(
+        HttpContext httpContext,
+        IOrganizationRequestSession session,
+        ITenantContext tenantContext,
+        IOrganizationDriversQuery query,
+        CancellationToken cancellationToken)
+    {
+        if (!TrySession(session, tenantContext, out var actorId))
+        {
+            return Forbidden();
+        }
+
+        if (!TryReadOrganizationDriversQuery(httpContext.Request.Query, out var afterDriverId))
+        {
+            return Conflict("INVALID_REQUEST");
+        }
+
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.ListOrganizationDrivers) is { } denied)
+        {
+            return denied;
+        }
+
+        try
+        {
+            var page = await query.ListAsync(
+                new ListOrganizationDriversQuery(
+                    actorId,
+                    tenantContext.OrganizationId,
+                    session.MfaSatisfied,
+                    afterDriverId),
+                cancellationToken);
+            return Results.Ok(new OrganizationDriverPageResponse(
+                page.Items.Select(item => new OrganizationDriverResponse(
+                    item.DriverId,
+                    item.DriverReference,
+                    item.VehicleType,
+                    item.Status,
+                    item.ActiveStopCount,
+                    item.LastPositionAt)).ToArray(),
+                page.NextCursor));
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (AssignmentForbiddenException)
+        {
+            return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.ListOrganizationDrivers);
+        }
+        catch (AssignmentInfrastructureException)
+        {
+            return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Service Unavailable.");
+        }
+    }
+
+    public static bool TryReadOrganizationDriversQuery(IQueryCollection query, out Guid? afterDriverId)
+    {
+        afterDriverId = null;
+        if (query.Keys.Any(key => !string.Equals(key, "cursor", StringComparison.Ordinal)) ||
+            query.Any(pair => pair.Value.Count != 1))
+        {
+            return false;
+        }
+
+        if (!query.TryGetValue("cursor", out var value))
+        {
+            return true;
+        }
+
+        if (!OrganizationDriverCursorCodec.TryDecode(value[0], out var after))
+        {
+            return false;
+        }
+
+        afterDriverId = after;
+        return true;
+    }
+
     private static async Task<IResult> ListMyStopsAsync(
+        HttpContext httpContext,
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IDriverStopsQuery query,
         CancellationToken cancellationToken)
     {
+        // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the body can carry decrypted addresses and contact names, so no
+        // answer of this operation may be stored by a browser, a proxy or a shared cache.
+        httpContext.Response.Headers.CacheControl = "no-store";
         if (!session.IsActive ||
             session.UserId is not { } actorId ||
             !tenantContext.IsSelected)
         {
             return Forbidden();
+        }
+
+        if (!TryReadDriverStopsQuery(httpContext.Request.Query, out var includeDetails))
+        {
+            return Conflict("INVALID_REQUEST");
         }
 
         if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.ListMyStops) is { } denied)
@@ -442,17 +578,14 @@ public static class DispatchEndpoints
 
         try
         {
-            var stops = await query.ListCurrentDriverStopsAsync(
+            var result = await query.ListCurrentDriverStopsAsync(
                 actorId,
                 tenantContext.OrganizationId,
+                includeDetails,
                 cancellationToken);
-            return Results.Ok(stops.Select(value => new DriverStopResponse(
-                value.OrderId,
-                value.AggregateVersion,
-                value.OrderPublicId,
-                value.StopType,
-                value.Status,
-                value.AddressSummary)).ToArray());
+            return Results.Ok(new DriverStopListResponse(
+                result.Stops.Select(ToResponse).ToArray(),
+                result.CompletedToday));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -467,6 +600,29 @@ public static class DispatchEndpoints
             return Forbidden();
         }
     }
+
+    private static DriverStopResponse ToResponse(DriverStopResult value) => new(
+        value.OrderId,
+        value.AggregateVersion,
+        value.OrderPublicId,
+        value.StopType,
+        value.Status,
+        value.AddressSummary,
+        value.DetailsAvailable,
+        value.ContactShortName,
+        value.ContactFullName,
+        value.ZoneName,
+        value.ServiceWindow is { } window ? new DriverStopServiceWindowResponse(window.From, window.To) : null,
+        value.Cod is { } cod
+            ? new DriverStopCodResponse(new MoneyResponse("MXN", cod.ExpectedCents), cod.Recorded)
+            : null,
+        value.Navigation is { } navigation
+            ? new DriverStopNavigationResponse(
+                navigation.Latitude,
+                navigation.Longitude,
+                navigation.AddressText,
+                navigation.References)
+            : null);
 
     private static bool TryReadIdempotencyKey(HttpRequest request, out string value)
     {
@@ -576,13 +732,70 @@ public sealed record AssignableDriverPageResponse(
     [property: JsonPropertyName("items")] IReadOnlyList<AssignableDriverResponse> Items,
     [property: JsonPropertyName("next_cursor")] string? NextCursor);
 
+/// <summary>
+/// UI-PHASE3-DRIVERS-2026-10-11: a driver of the dispatcher's read-only list. The id is the stable key and is never
+/// shown; last_position_at is only the capture time of the latest position, never the position.
+/// </summary>
+public sealed record OrganizationDriverResponse(
+    [property: JsonPropertyName("driver_id")] Guid DriverId,
+    [property: JsonPropertyName("driver_reference")] string DriverReference,
+    [property: JsonPropertyName("vehicle_type")] string VehicleType,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("active_stop_count")] int ActiveStopCount,
+    [property: JsonPropertyName("last_position_at")] DateTimeOffset? LastPositionAt);
+
+public sealed record OrganizationDriverPageResponse(
+    [property: JsonPropertyName("items")] IReadOnlyList<OrganizationDriverResponse> Items,
+    [property: JsonPropertyName("next_cursor")] string? NextCursor);
+
+/// <summary>
+/// AI-05 <c>DriverStopList</c> (listMyStops): the requesting driver's stops and how many of the driver's stops were
+/// completed today in America/Mazatlan time, as a count only (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11).
+/// </summary>
+public sealed record DriverStopListResponse(
+    [property: JsonPropertyName("stops")] IReadOnlyList<DriverStopResponse> Stops,
+    [property: JsonPropertyName("completed_today")] int CompletedToday);
+
+/// <summary>
+/// AI-05 <c>DriverStop</c>. UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 adds the contact name (full on PICKUP and RETURN
+/// stops, short on DELIVERY stops), zone, service window, COD of a DELIVERY stop, the navigation target and whether
+/// the protected details are present; every member is always present, absent values are JSON null.
+/// </summary>
 public sealed record DriverStopResponse(
     [property: JsonPropertyName("order_id")] Guid OrderId,
     [property: JsonPropertyName("aggregate_version")] long AggregateVersion,
     [property: JsonPropertyName("order_public_id")] string OrderPublicId,
     [property: JsonPropertyName("stop_type")] string StopType,
     [property: JsonPropertyName("status")] string Status,
-    [property: JsonPropertyName("address_summary")] string AddressSummary);
+    [property: JsonPropertyName("address_summary")] string AddressSummary,
+    [property: JsonPropertyName("details_available")] bool DetailsAvailable,
+    [property: JsonPropertyName("contact_short_name")] string? ContactShortName,
+    [property: JsonPropertyName("contact_full_name")] string? ContactFullName,
+    [property: JsonPropertyName("zone_name")] string? ZoneName,
+    [property: JsonPropertyName("service_window")] DriverStopServiceWindowResponse? ServiceWindow,
+    [property: JsonPropertyName("cod")] DriverStopCodResponse? Cod,
+    [property: JsonPropertyName("navigation")] DriverStopNavigationResponse? Navigation)
+{
+    public override string ToString() =>
+        $"DriverStopResponse {{ OrderId = {OrderId:D}, Status = {Status}, [details redacted] }}";
+}
+
+public sealed record DriverStopServiceWindowResponse(
+    [property: JsonPropertyName("from")] DateTimeOffset From,
+    [property: JsonPropertyName("to")] DateTimeOffset To);
+
+public sealed record DriverStopCodResponse(
+    [property: JsonPropertyName("expected")] MoneyResponse Expected,
+    [property: JsonPropertyName("recorded")] bool Recorded);
+
+public sealed record DriverStopNavigationResponse(
+    [property: JsonPropertyName("latitude")] double Latitude,
+    [property: JsonPropertyName("longitude")] double Longitude,
+    [property: JsonPropertyName("address_text")] string AddressText,
+    [property: JsonPropertyName("references")] string? References)
+{
+    public override string ToString() => "DriverStopNavigationResponse { [redacted] }";
+}
 
 public sealed record CreateExternalOfferRequest(
     [property: JsonPropertyName("order_id")] Guid? OrderId,

@@ -38,7 +38,11 @@ const ui001Sources = [
   "src/operations/contracts/capabilities.ts",
   "src/operations/contracts/create-order.ts",
   "src/operations/contracts/money.ts",
+  "src/operations/contracts/order-wizard.ts",
   "src/operations/components/create-order-shell.tsx",
+  "src/operations/components/create-order-summary.tsx",
+  "src/operations/components/create-order-wizard.tsx",
+  "src/operations/components/focus-later.ts",
   "src/operations/state/active-role.ts",
   "src/operations/state/create-order-controller.ts",
   "src/operations/state/external-store.ts",
@@ -89,6 +93,7 @@ describe("UI-001 page policy", () => {
       "/api/v1/orders/csv/commit",
       "/api/v1/orders/csv/preview",
       "/api/v1/quotes",
+      "/api/v1/settlement-payees",
       "/api/v1/settlements",
       "/api/v1/settlements/",
     ]);
@@ -105,6 +110,8 @@ describe("UI-001 page policy", () => {
       ["/cod-records/{codId}/reconcile:", "reconcileCod"],
       ["/orders/{orderId}/financials:", "getOrderFinancials"],
       ["/settlements:", "createSettlement"],
+      // UI-PHASE3-DRIVERS-2026-10-11: the payee picker of "Calcular liquidación".
+      ["/settlement-payees:", "listSettlementPayees"],
       ["/settlements/{settlementId}:", "getSettlement"],
       ["/settlements/{settlementId}/adjustments:", "addSettlementAdjustment"],
       ["/settlements/{settlementId}/approve:", "approveSettlement"],

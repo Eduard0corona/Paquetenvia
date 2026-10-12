@@ -446,6 +446,112 @@ public sealed class IncidentPolicyTests
         Assert.False(policy.IsValid);
     }
 
+    /// <summary>INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: the driver sends reason and evidence only.</summary>
+    private static OpenIncidentCommand DriverCommand(string reasonCode = IncidentContract.RecipientAbsent) =>
+        ValidCommand() with
+        {
+            Severity = null,
+            Description = null,
+            NextAction = null,
+            ReasonCode = reasonCode,
+        };
+
+    [Fact]
+    public void A_driver_report_omits_severity_description_and_next_action()
+    {
+        var driver = DriverCommand();
+        Assert.True(IncidentRequestPolicy.IsValidCommandShape(driver));
+        Assert.True(IncidentRequestPolicy.IsDriverReportShape(driver));
+        Assert.False(IncidentRequestPolicy.IsDispatchReportShape(driver));
+        Assert.True(IncidentRequestPolicy.IsValidReportShape(driver, IncidentReporter.Driver));
+        Assert.False(IncidentRequestPolicy.IsValidReportShape(driver, IncidentReporter.Dispatch));
+
+        // Dispatch keeps today's complete report, and a driver may never send it.
+        var dispatch = ValidCommand();
+        Assert.True(IncidentRequestPolicy.IsValidReportShape(dispatch, IncidentReporter.Dispatch));
+        Assert.False(IncidentRequestPolicy.IsValidReportShape(dispatch, IncidentReporter.Driver));
+        Assert.False(IncidentRequestPolicy.IsValidReportShape(dispatch, (IncidentReporter)99));
+    }
+
+    [Theory]
+    [InlineData(true, false, false)]
+    [InlineData(false, true, false)]
+    [InlineData(false, false, true)]
+    [InlineData(true, true, false)]
+    [InlineData(true, false, true)]
+    [InlineData(false, true, true)]
+    public void A_request_mixing_both_shapes_is_never_an_opening(bool severity, bool description, bool nextAction)
+    {
+        var command = DriverCommand() with
+        {
+            Severity = severity ? IncidentContract.Medium : null,
+            Description = description ? "Texto del despachador." : null,
+            NextAction = nextAction ? IncidentContract.Rescheduled : null,
+        };
+
+        Assert.False(IncidentRequestPolicy.IsValidCommandShape(command));
+        Assert.False(IncidentRequestPolicy.IsValidReportShape(command, IncidentReporter.Driver));
+        Assert.False(IncidentRequestPolicy.IsValidReportShape(command, IncidentReporter.Dispatch));
+    }
+
+    [Fact]
+    public void A_driver_value_equal_to_the_derived_one_is_still_refused()
+    {
+        // Severity must be absent, not merely equal: a queued offline report never depends on the grading rule.
+        var command = DriverCommand(IncidentContract.SecurityRisk) with { Severity = IncidentContract.High };
+        Assert.False(IncidentRequestPolicy.IsValidReportShape(command, IncidentReporter.Driver));
+    }
+
+    [Theory]
+    [InlineData(IncidentContract.RecipientAbsent, IncidentContract.Medium, 24, "No había nadie")]
+    [InlineData(IncidentContract.AddressNotFound, IncidentContract.Medium, 24, "Dirección incorrecta")]
+    [InlineData(IncidentContract.RecipientRefused, IncidentContract.Medium, 24, "Rechazó el paquete")]
+    [InlineData(IncidentContract.PaymentUnavailable, IncidentContract.Medium, 24, "No pagó el cobro")]
+    [InlineData(IncidentContract.AccessRestricted, IncidentContract.Medium, 24, "Acceso restringido")]
+    [InlineData(IncidentContract.PackageDamaged, IncidentContract.High, 8, "Paquete dañado")]
+    [InlineData(IncidentContract.SecurityRisk, IncidentContract.High, 8, "Riesgo de seguridad")]
+    public void A_driver_report_is_graded_and_described_by_its_reason(
+        string reason,
+        string severity,
+        int slaHours,
+        string label)
+    {
+        Assert.True(IncidentContract.TryParseReasonCode(reason, out var reasonCode));
+
+        var derived = IncidentDriverReportPolicy.Severity(reasonCode);
+        Assert.Equal(severity, derived.ToContractValue());
+        Assert.Equal(Now.AddHours(slaHours), IncidentSlaPolicy.DueAt(Now, derived));
+
+        Assert.Equal(label, IncidentDriverReportPolicy.ReasonLabel(reasonCode));
+        var description = IncidentDriverReportPolicy.Description(reasonCode);
+        Assert.Equal("Intento fallido reportado por el repartidor. Motivo: " + label + ".", description);
+        Assert.True(IncidentRequestPolicy.IsValidDescription(description));
+    }
+
+    [Fact]
+    public void The_closed_reason_list_covers_every_reason_with_a_distinct_label()
+    {
+        var labels = Enum.GetValues<IncidentReasonCode>().Select(IncidentDriverReportPolicy.ReasonLabel).ToArray();
+        Assert.Equal(7, labels.Length);
+        Assert.Equal(labels.Length, labels.Distinct(StringComparer.Ordinal).Count());
+        Assert.Throws<ArgumentOutOfRangeException>(() => IncidentDriverReportPolicy.Severity((IncidentReasonCode)99));
+        Assert.Throws<ArgumentOutOfRangeException>(() => IncidentDriverReportPolicy.ReasonLabel((IncidentReasonCode)99));
+    }
+
+    [Theory]
+    [InlineData("AT_PICKUP", false, true)]
+    [InlineData("IN_TRANSIT", true, true)]
+    [InlineData("DELIVERING", true, true)]
+    [InlineData("PICKED_UP", true, false)]
+    [InlineData("FAILED_ATTEMPT", true, false)]
+    public void A_driver_report_without_next_action_is_judged_by_its_opening_state_only(
+        string orderStatus,
+        bool custodyAcquired,
+        bool allowed)
+    {
+        Assert.Equal(allowed, IncidentOrderStatePolicy.IsAllowedNextAction(orderStatus, custodyAcquired, null));
+    }
+
     [Fact]
     public void An_absent_actor_tenant_or_order_is_rejected()
     {

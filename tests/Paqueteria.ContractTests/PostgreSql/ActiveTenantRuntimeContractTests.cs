@@ -8,6 +8,7 @@ using Organizations.Application.OrganizationContexts;
 using Organizations.Application.Provisioning;
 using Organizations.Domain;
 using Organizations.Infrastructure.OrganizationContexts;
+using Organizations.Infrastructure.OrganizationRoles;
 using Organizations.Infrastructure.Persistence;
 using Organizations.Infrastructure.Provisioning;
 using Paqueteria.Application.Tenancy;
@@ -202,6 +203,84 @@ public sealed class ActiveTenantRuntimeContractTests(PostgreSqlContractFixture f
                 "DELETE FROM organizations.organizations WHERE id IN (@org_a,@org_b)",
                 P("org_a", orgA), P("org_b", orgB));
         }
+    }
+
+    /// <summary>
+    /// ORG-MY-ROLES-2026-10-12 (getMyOrganizationRoles): inside one tenant transaction the reader answers only the
+    /// requesting person's own ACTIVE memberships of the ACTIVE organization, each role once in ordinal order -
+    /// DRIVER only, DRIVER and DISPATCHER, DRIVER and PLATFORM_ADMIN - and nothing without one. RLS lets the tenant read
+    /// the organization's other members, yet another person's roles, a suspended or revoked membership, a role in
+    /// another organization and a membership of an organization that is not ACTIVE never appear.
+    /// </summary>
+    [PostgreSqlContractFact]
+    public async Task My_organization_roles_reader_answers_only_the_callers_own_active_roles()
+    {
+        var orgA = Guid.NewGuid();
+        var orgB = Guid.NewGuid();
+        var suspended = Guid.NewGuid();
+        var driver = Guid.NewGuid();
+        var driverDispatcher = Guid.NewGuid();
+        var driverAdmin = Guid.NewGuid();
+        var outsider = Guid.NewGuid();
+        var suffix = Guid.NewGuid().ToString("N");
+        await ExecuteAdminAsync(
+            """
+            INSERT INTO organizations.organizations(id,legal_name,display_name,organization_type,status) VALUES
+              (@org_a,'Roles A','Alpha','BUSINESS','ACTIVE'),
+              (@org_b,'Roles B','Beta','ALLY','ACTIVE'),
+              (@suspended,'Roles S','Gamma','BUSINESS','SUSPENDED');
+            INSERT INTO identity.users(id,identity_subject,status) VALUES
+              (@driver,'roles-driver-' || @suffix,'ACTIVE'),
+              (@driver_dispatcher,'roles-driver-dispatcher-' || @suffix,'ACTIVE'),
+              (@driver_admin,'roles-driver-admin-' || @suffix,'ACTIVE'),
+              (@outsider,'roles-outsider-' || @suffix,'ACTIVE');
+            INSERT INTO organizations.organization_memberships(id,user_id,organization_id,role,status,is_default) VALUES
+              (gen_random_uuid(),@driver,@org_a,'DRIVER','ACTIVE',true),
+              (gen_random_uuid(),@driver,@org_a,'VIEWER','SUSPENDED',false),
+              (gen_random_uuid(),@driver,@org_a,'FINANCE','REVOKED',false),
+              (gen_random_uuid(),@driver,@suspended,'DISPATCHER','ACTIVE',false),
+              (gen_random_uuid(),@driver_dispatcher,@org_a,'DRIVER','ACTIVE',true),
+              (gen_random_uuid(),@driver_dispatcher,@org_a,'DISPATCHER','ACTIVE',false),
+              (gen_random_uuid(),@driver_admin,@org_a,'PLATFORM_ADMIN','ACTIVE',false),
+              (gen_random_uuid(),@driver_admin,@org_a,'DRIVER','ACTIVE',true),
+              (gen_random_uuid(),@driver_admin,@org_b,'DISPATCHER','ACTIVE',false),
+              (gen_random_uuid(),@outsider,@org_b,'BUSINESS_ADMIN','ACTIVE',true);
+            """,
+            P("org_a", orgA), P("org_b", orgB), P("suspended", suspended), P("driver", driver),
+            P("driver_dispatcher", driverDispatcher), P("driver_admin", driverAdmin), P("outsider", outsider),
+            P("suffix", suffix));
+
+        try
+        {
+            Assert.Equal(["DRIVER"], await ReadMyRolesAsync(driver, orgA));
+            Assert.Equal(["DISPATCHER", "DRIVER"], await ReadMyRolesAsync(driverDispatcher, orgA));
+            Assert.Equal(["DRIVER", "PLATFORM_ADMIN"], await ReadMyRolesAsync(driverAdmin, orgA));
+            Assert.Equal(["DISPATCHER"], await ReadMyRolesAsync(driverAdmin, orgB));
+            Assert.Equal(["BUSINESS_ADMIN"], await ReadMyRolesAsync(outsider, orgB));
+            Assert.Empty(await ReadMyRolesAsync(outsider, orgA));
+            Assert.Empty(await ReadMyRolesAsync(driver, orgB));
+            Assert.Empty(await ReadMyRolesAsync(driver, suspended));
+        }
+        finally
+        {
+            await ExecuteAdminAsync(
+                """
+                DELETE FROM organizations.organization_memberships WHERE user_id IN (@driver,@driver_dispatcher,@driver_admin,@outsider);
+                DELETE FROM organizations.organizations WHERE id IN (@org_a,@org_b,@suspended);
+                DELETE FROM identity.users WHERE id IN (@driver,@driver_dispatcher,@driver_admin,@outsider);
+                """,
+                P("org_a", orgA), P("org_b", orgB), P("suspended", suspended), P("driver", driver),
+                P("driver_dispatcher", driverDispatcher), P("driver_admin", driverAdmin), P("outsider", outsider));
+        }
+    }
+
+    private async Task<IReadOnlyList<string>> ReadMyRolesAsync(Guid userId, Guid organizationId)
+    {
+        await using var scope = CreateRuntimeScope();
+        var reader = new PostgreSqlMyOrganizationRolesReader(
+            scope.Transaction,
+            NullLogger<PostgreSqlMyOrganizationRolesReader>.Instance);
+        return await reader.ReadAsync(userId, organizationId, CancellationToken.None);
     }
 
     [PostgreSqlContractFact]

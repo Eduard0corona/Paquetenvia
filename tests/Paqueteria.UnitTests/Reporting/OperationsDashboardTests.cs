@@ -9,6 +9,9 @@ namespace Paqueteria.UnitTests.Reporting;
 
 public sealed class OperationsDashboardTests
 {
+    private static readonly Guid Reader = Guid.Parse("22222222-2222-2222-2222-222222222222");
+    private static readonly Guid OtherOrganization = Guid.Parse("11111111-1111-1111-1111-111111111111");
+
     public static TheoryData<string> Statuses
     {
         get
@@ -85,6 +88,28 @@ public sealed class OperationsDashboardTests
             OperationsDashboardProjectionPolicy.IsUnassignedAlert(status, activeAssignment));
 
     [Fact]
+    public void Reader_must_own_or_operate_every_projected_order()
+    {
+        Assert.True(OperationsDashboardProjectionPolicy.IsReaderParty(Reader, Reader, null));
+        Assert.True(OperationsDashboardProjectionPolicy.IsReaderParty(Reader, Reader, Reader));
+        Assert.True(OperationsDashboardProjectionPolicy.IsReaderParty(Reader, Reader, OtherOrganization));
+        Assert.True(OperationsDashboardProjectionPolicy.IsReaderParty(Reader, OtherOrganization, Reader));
+        Assert.False(OperationsDashboardProjectionPolicy.IsReaderParty(Reader, OtherOrganization, null));
+        Assert.False(OperationsDashboardProjectionPolicy.IsReaderParty(Reader, OtherOrganization, OtherOrganization));
+    }
+
+    [Fact]
+    public void Only_the_reader_organization_name_is_visible()
+    {
+        // OBS-001-OPERATED-OWNER-NAME-2026-10-12: RLS lets the reader see only its own organizations row, so its own
+        // name is required and the other party of an order (owner it operates for, operator it delegated to) has none.
+        Assert.True(OperationsDashboardProjectionPolicy.IsVisibleName(Reader, Reader, "Synthetic Operations"));
+        Assert.True(OperationsDashboardProjectionPolicy.IsVisibleName(Reader, OtherOrganization, null));
+        Assert.False(OperationsDashboardProjectionPolicy.IsVisibleName(Reader, Reader, null));
+        Assert.False(OperationsDashboardProjectionPolicy.IsVisibleName(Reader, OtherOrganization, "Synthetic Viewer"));
+    }
+
+    [Fact]
     public void Driver_reference_is_stable_bounded_and_not_uuid()
     {
         var driverId = Guid.Parse("22222222-2222-2222-2222-222222222222");
@@ -129,6 +154,47 @@ public sealed class OperationsDashboardTests
         Assert.Equal(expected, OperationsDashboardAuthorizationPolicy.IsAllowed(role, mfa));
 
     [Fact]
+    public void Order_total_reaches_only_roles_that_already_read_order_totals()
+    {
+        // UI-PHASE3-INBOX-TOTAL-2026-10-10: the dashboard total is the AI-05 Order.total, which DISPATCHER and
+        // PLATFORM_ADMIN already read (listOrders, getOrder, getOrderFinancials). FINANCE, VIEWER and every other
+        // role keep the uniform 403, with or without MFA, so the total never reaches them through this read.
+        foreach (var role in Enum.GetValues<OrganizationRole>())
+        {
+            foreach (var mfa in new[] { false, true })
+            {
+                var expected = role == OrganizationRole.Dispatcher ||
+                    (role == OrganizationRole.PlatformAdmin && mfa);
+                Assert.Equal(expected, OperationsDashboardAuthorizationPolicy.IsAllowed(role, mfa));
+            }
+        }
+    }
+
+    [Theory]
+    [InlineData("MXN", 0L, true)]
+    [InlineData("MXN", 9_000L, true)]
+    [InlineData("MXN", long.MaxValue, true)]
+    [InlineData("MXN", -1L, false)]
+    [InlineData("USD", 9_000L, false)]
+    [InlineData("mxn", 9_000L, false)]
+    [InlineData(null, 9_000L, false)]
+    public void Order_total_is_non_negative_mxn_cents_or_fails_closed(
+        string? currency,
+        long amountCents,
+        bool expected) =>
+        Assert.Equal(expected, OperationsDashboardProjectionPolicy.IsValidTotal(currency, amountCents));
+
+    [Fact]
+    public void Order_total_is_int64_cents_never_floating_point()
+    {
+        Assert.Equal(typeof(long), PropertyType<OperationsMoney>(nameof(OperationsMoney.AmountCents)));
+        Assert.Equal(typeof(long), PropertyType<OperationsMoneyResponse>(nameof(OperationsMoneyResponse.AmountCents)));
+        Assert.Equal(
+            typeof(OperationsMoneyResponse),
+            PropertyType<OperationsDashboardOrderResponse>(nameof(OperationsDashboardOrderResponse.Total)));
+    }
+
+    [Fact]
     public void Options_have_fixed_page_defaults()
     {
         var options = new OperationsDashboardOptions();
@@ -154,6 +220,24 @@ public sealed class OperationsDashboardTests
         Assert.True(OperationsDashboardEndpoints.TryBindFilters(query, out var filters));
         Assert.Equal("DELIVERING", filters!.Status);
         Assert.True(filters.Unassigned);
+        Assert.Null(filters.PriceReview);
+    }
+
+    [Theory]
+    [InlineData("true", true)]
+    [InlineData("false", false)]
+    public void Price_review_filter_binds_exact_booleans(string value, bool expected)
+    {
+        // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: the inbox "Precio por revisar" list.
+        var query = Query(new Dictionary<string, StringValues>
+        {
+            ["price_review"] = value,
+            ["service_type"] = "URGENT",
+        });
+
+        Assert.True(OperationsDashboardEndpoints.TryBindFilters(query, out var filters));
+        Assert.Equal(expected, filters!.PriceReview);
+        Assert.Null(filters.Unassigned);
     }
 
     [Theory]
@@ -162,6 +246,10 @@ public sealed class OperationsDashboardTests
     [InlineData("order_id", "AAAAAAAA-AAAA-AAAA-AAAA-AAAAAAAAAAAA")]
     [InlineData("created_from", "2026-07-01T00:00:00-07:00")]
     [InlineData("unassigned", "TRUE")]
+    [InlineData("price_review", "TRUE")]
+    [InlineData("price_review", "1")]
+    [InlineData("price_review", "yes")]
+    [InlineData("price_review", "")]
     public void Invalid_filters_fail_closed(string name, string value)
     {
         var query = Query(new Dictionary<string, StringValues> { [name] = value });
@@ -169,15 +257,43 @@ public sealed class OperationsDashboardTests
         Assert.False(OperationsDashboardEndpoints.TryBindFilters(query, out _));
     }
 
-    [Fact]
-    public void Repeated_query_is_rejected()
+    [Theory]
+    [InlineData("status", "DRAFT", "CONFIRMED")]
+    [InlineData("price_review", "true", "true")]
+    [InlineData("price_review", "true", "false")]
+    public void Repeated_query_is_rejected(string name, string first, string second)
     {
         var query = Query(new Dictionary<string, StringValues>
         {
-            ["status"] = new StringValues(["DRAFT", "CONFIRMED"]),
+            [name] = new StringValues([first, second]),
         });
 
         Assert.False(OperationsDashboardEndpoints.TryBindFilters(query, out _));
+    }
+
+    [Fact]
+    public void Finished_statuses_are_the_terminadas_group_and_partition_the_seventeen_statuses()
+    {
+        // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: "finished" is the UI-STATUS-GROUPS-2026-10-05 group
+        // "Terminadas"; every other status is active and stays in the price review queue while it has a warning.
+        Assert.Equal(
+            ["DELIVERED", "RETURNED", "CLAIM_RESOLVED", "CLOSED", "CANCELLED"],
+            OperationsQueuePolicy.FinishedStatuses.ToArray());
+        Assert.All(OperationsQueuePolicy.FinishedStatuses, status => Assert.True(OperationsDashboardVocabulary.IsStatus(status)));
+        Assert.Equal(
+            ["DRAFT", "CONFIRMED", "READY_FOR_PICKUP", "ASSIGNED", "AT_PICKUP", "PICKED_UP", "IN_TRANSIT", "DELIVERING",
+             "FAILED_ATTEMPT", "RESCHEDULED", "RETURNING", "CLAIM_OPEN"],
+            OperationsDashboardVocabulary.Statuses.Except(OperationsQueuePolicy.FinishedStatuses).ToArray());
+    }
+
+    [Theory]
+    [MemberData(nameof(Statuses))]
+    public void Price_review_is_a_cost_warning_on_an_order_that_has_not_finished(string status)
+    {
+        var finished = OperationsQueuePolicy.FinishedStatuses.Contains(status);
+        Assert.Equal(!finished, OperationsQueuePolicy.IsPriceReview(status, "BELOW_MINIMUM_SNAPSHOT"));
+        Assert.Equal(!finished, OperationsQueuePolicy.IsPriceReview(status, "AUTHORIZED_OVERRIDE"));
+        Assert.False(OperationsQueuePolicy.IsPriceReview(status, costWarning: null));
     }
 
     [Fact]
@@ -217,6 +333,7 @@ public sealed class OperationsDashboardTests
                 "DeliveryZone",
                 "Assignment",
                 "LatestDriverLocation",
+                "Total",
                 "CostWarning",
                 "UnassignedAlert",
             ],
@@ -224,4 +341,7 @@ public sealed class OperationsDashboardTests
     }
 
     private static QueryCollection Query(Dictionary<string, StringValues> values) => new(values);
+
+    private static Type PropertyType<T>(string name) =>
+        typeof(T).GetProperty(name)?.PropertyType ?? throw new InvalidOperationException($"{name} is missing.");
 }

@@ -3,6 +3,10 @@
 import { clientApiBaseUrl } from "../../lib/api-base-url";
 import { useState } from "react";
 import {
+  publicTrackingHeading,
+  resolvePublicTrackingBrand,
+} from "../contracts/public-tracking-branding";
+import {
   publicStatusLabels,
   publicTimelineLabels,
 } from "../contracts/public-tracking-labels";
@@ -24,7 +28,9 @@ export function PublicTrackingShell() {
     token ?? null,
     apiBaseUrl,
   );
-  const brand = safeBrand(process.env.NEXT_PUBLIC_TRACKING_BRAND_NAME);
+  const brand = resolvePublicTrackingBrand(
+    process.env.NEXT_PUBLIC_TRACKING_BRAND_NAME,
+  );
   const supportUrl = safeSupportUrl(
     process.env.NEXT_PUBLIC_TRACKING_SUPPORT_URL,
   );
@@ -33,7 +39,7 @@ export function PublicTrackingShell() {
     return (
       <main className="trackingShell" aria-busy="true">
         <section className="trackingCard">
-          <p className="trackingBrand">{brand}</p>
+          <TrackingHeading brand={brand} />
           <h1>Consultando tu envío…</h1>
         </section>
       </main>
@@ -47,7 +53,7 @@ export function PublicTrackingShell() {
     return (
       <main className="trackingShell">
         <section className="trackingCard" aria-live="polite">
-          <p className="trackingBrand">{brand}</p>
+          <TrackingHeading brand={brand} />
           <h1>
             {state.view === "rate-limited"
               ? "Espera un momento antes de volver a intentarlo."
@@ -66,7 +72,7 @@ export function PublicTrackingShell() {
     return (
       <main className="trackingShell">
         <section className="trackingCard">
-          <p className="trackingBrand">{brand}</p>
+          <TrackingHeading brand={brand} />
           <h1>No pudimos encontrar este seguimiento.</h1>
           <p>Revisa el enlace o solicita uno nuevo.</p>
           <Support url={supportUrl} />
@@ -83,8 +89,7 @@ export function PublicTrackingShell() {
   return (
     <main className="trackingShell">
       <article className="trackingCard">
-        <p className="trackingBrand">{brand}</p>
-        <p className="trackingEyebrow">Seguimiento de envío</p>
+        <TrackingHeading brand={brand} />
         <h1 className="trackingPublicId">{state.projection.public_id}</h1>
 
         <section aria-labelledby="tracking-status-title">
@@ -148,6 +153,23 @@ export function PublicTrackingShell() {
   );
 }
 
+/**
+ * GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10: every state opens with the neutral
+ * heading and never names the unvalidated commercial name; a configured brand
+ * only goes above it.
+ */
+function TrackingHeading({ brand }: Readonly<{ brand: string | null }>) {
+  if (brand === null) {
+    return <p className="trackingHeading">{publicTrackingHeading}</p>;
+  }
+  return (
+    <>
+      <p className="trackingHeading">{brand}</p>
+      <p className="trackingEyebrow">{publicTrackingHeading}</p>
+    </>
+  );
+}
+
 function Support({ url }: Readonly<{ url: string | null }>) {
   return (
     <section aria-labelledby="tracking-support-title">
@@ -161,11 +183,6 @@ function Support({ url }: Readonly<{ url: string | null }>) {
       )}
     </section>
   );
-}
-
-function safeBrand(value: string | undefined): string {
-  const brand = value?.trim();
-  return brand && brand.length <= 80 ? brand : "Paquetenvia";
 }
 
 function safeSupportUrl(value: string | undefined): string | null {

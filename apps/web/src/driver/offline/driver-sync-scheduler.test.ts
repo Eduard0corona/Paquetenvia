@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DriverCachePartition } from "../cache/driver-stops-cache";
-import type { DriverStop } from "../contracts/driver-stop";
+import type { DriverStop, DriverStopList } from "../contracts/driver-stop";
 import type { DriverOfflineQueue } from "./driver-offline-queue";
 import {
   DriverSyncApiError,
@@ -18,6 +18,11 @@ import {
   selectRunnableOperation,
 } from "./driver-sync-scheduler";
 import { OfflineOperationMaximumAgeMilliseconds } from "./offline-operation-age";
+import { orderDriverOperations } from "./operation-projection";
+import {
+  stopList,
+  syntheticNavigation,
+} from "../contracts/driver-stop.fixtures";
 
 const partition: DriverCachePartition = { key: "D".repeat(43) };
 const orderA = "11111111-1111-4111-8111-111111111111";
@@ -70,6 +75,13 @@ describe("driver sync scheduler", () => {
       stop_type: "PICKUP",
       status: "AT_PICKUP",
       address_summary: "Zona sintética",
+      details_available: true,
+      contact_short_name: null,
+      contact_full_name: null,
+      zone_name: null,
+      service_window: null,
+      cod: null,
+      navigation: syntheticNavigation,
     };
     const scheduler = new DriverSyncScheduler({
       partition,
@@ -78,8 +90,10 @@ describe("driver sync scheduler", () => {
         transitionOrder,
         createProofUploadSession: vi.fn(),
         finalizeProof: vi.fn(),
+        recordCodCollection: vi.fn(),
+        openFailedDeliveryIncident: vi.fn(),
       } as DriverSyncApi,
-      refreshStops: async () => [stop],
+      refreshStops: async () => stopList([stop]),
       onQueueChanged: vi.fn(),
       onAccessRevoked: vi.fn(),
       now: () => new Date("2026-07-26T12:00:00.000Z"),
@@ -140,7 +154,7 @@ describe("driver sync scheduler", () => {
       queue,
       { transitionOrder },
       vi.fn(),
-      async () => [],
+      async () => stopList([]),
     );
 
     await scheduler.requestSync(true);
@@ -191,7 +205,7 @@ describe("driver sync scheduler", () => {
       queue,
       { transitionOrder },
       vi.fn(),
-      async () => [
+      async () => stopList([
         {
           order_id: orderA,
           aggregate_version: 3,
@@ -199,6 +213,13 @@ describe("driver sync scheduler", () => {
           stop_type: "PICKUP",
           status: "ASSIGNED",
           address_summary: "Zona A",
+          details_available: true,
+          contact_short_name: null,
+          contact_full_name: null,
+          zone_name: null,
+          service_window: null,
+          cod: null,
+          navigation: syntheticNavigation,
         },
         {
           order_id: orderB,
@@ -207,8 +228,15 @@ describe("driver sync scheduler", () => {
           stop_type: "DELIVERY",
           status: orderBConfirmed ? "DELIVERING" : "IN_TRANSIT",
           address_summary: "Zona B",
+          details_available: true,
+          contact_short_name: null,
+          contact_full_name: null,
+          zone_name: null,
+          service_window: null,
+          cod: null,
+          navigation: syntheticNavigation,
         },
-      ],
+      ]),
     );
 
     await scheduler.requestSync(true);
@@ -255,15 +283,24 @@ describe("driver sync scheduler", () => {
           transitionOrder,
           createProofUploadSession: vi.fn(),
           finalizeProof: vi.fn(),
+          recordCodCollection: vi.fn(),
+          openFailedDeliveryIncident: vi.fn(),
         },
-        refreshStops: async () => [{
+        refreshStops: async () => stopList([{
           order_id: orderA,
           aggregate_version: 3,
           order_public_id: "ORD_A",
           stop_type: "PICKUP",
           status: "ASSIGNED",
           address_summary: "Zona A",
-        }],
+          details_available: true,
+          contact_short_name: null,
+          contact_full_name: null,
+          zone_name: null,
+          service_window: null,
+          cod: null,
+          navigation: syntheticNavigation,
+        }]),
         onQueueChanged: vi.fn(),
         onAccessRevoked: vi.fn(),
         now: () => new Date("2026-07-26T12:00:00.000Z"),
@@ -282,6 +319,115 @@ describe("driver sync scheduler", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+describe("confirmation reads that cannot be trusted (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11)", () => {
+  it("keeps the queued action and ends the pass when the confirmation read cannot answer", async () => {
+    const queued = operation("CHECK_IN", orderA, 3, 1);
+    const queue = new MemoryQueue([queued]);
+    const transitionOrder = vi.fn();
+    const refreshStops = vi.fn(async (): Promise<DriverStopList> => {
+      throw new DriverSyncApiError("cancelled");
+    });
+    const scheduler = schedulerFor(
+      queue,
+      { transitionOrder },
+      vi.fn(),
+      refreshStops,
+    );
+
+    await scheduler.requestSync(true);
+
+    expect(refreshStops).toHaveBeenCalledOnce();
+    expect(transitionOrder).not.toHaveBeenCalled();
+    expect(queue.operations).toEqual([queued]);
+    await scheduler.dispose();
+  });
+
+  it("keeps the queued action when the driver logs out during a pass", async () => {
+    const queued = operation("CHECK_IN", orderA, 3, 1);
+    const queue = new MemoryQueue([queued]);
+    const transitionOrder = vi.fn();
+    const holder: { scheduler?: DriverSyncScheduler; logout?: Promise<void> } =
+      {};
+    const refreshStops = vi.fn(
+      async (signal?: AbortSignal): Promise<DriverStopList> => {
+        // "Cerrar sesión" stops every controller while the read is in flight;
+        // the closed stops controller throws instead of answering an empty list.
+        holder.logout = holder.scheduler!.dispose();
+        expect(signal?.aborted).toBe(true);
+        throw new DriverSyncApiError("cancelled");
+      },
+    );
+    holder.scheduler = schedulerFor(
+      queue,
+      { transitionOrder },
+      vi.fn(),
+      refreshStops,
+    );
+
+    await holder.scheduler.requestSync(true);
+    await holder.logout;
+
+    expect(refreshStops).toHaveBeenCalledOnce();
+    expect(transitionOrder).not.toHaveBeenCalled();
+    expect(queue.operations).toEqual([queued]);
+    expect(queue.clearCount).toBe(0);
+  });
+
+  it("never takes a stop for gone when the answer left out a stop that broke the contract", async () => {
+    const queued = operation("CHECK_IN", orderA, 3, 1);
+    const queue = new MemoryQueue([queued]);
+    const transitionOrder = vi.fn(async () => ({
+      id: orderA,
+      status: "AT_PICKUP" as const,
+      version: 4,
+    }));
+    const scheduler = schedulerFor(
+      queue,
+      { transitionOrder },
+      vi.fn(),
+      async () => ({ ...stopList([]), droppedCount: 1 }),
+    );
+
+    await scheduler.requestSync(true);
+
+    expect(transitionOrder).toHaveBeenCalledOnce();
+    expect(queue.operations).toEqual([
+      expect.objectContaining({
+        id: queued.id,
+        status: "AWAITING_REST_CONFIRMATION",
+      }),
+    ]);
+    await scheduler.dispose();
+  });
+
+  it("orders each order's actions by dependency and the orders by their oldest action", () => {
+    const now = new Date("2026-07-26T12:00:00.000Z");
+    const otherOrder = operation("START_DELIVERY", orderB, 8, 1);
+    const delivery = operation("DELIVERY_PROOF", orderA, 9, 2);
+    const collection = codOperation(orderA, 9, 3);
+
+    expect(
+      orderDriverOperations([collection, delivery, otherOrder]).map(
+        (value) => value.id,
+      ),
+    ).toEqual([otherOrder.id, collection.id, delivery.id]);
+    expect(
+      selectRunnableOperation([delivery, collection], now, false)?.id,
+    ).toBe(collection.id);
+    expect(
+      selectRunnableOperation(
+        [delivery, collection],
+        now,
+        false,
+        new Set([orderA]),
+      )?.id,
+    ).toBe(collection.id);
+    expect(
+      selectRunnableOperation([delivery], now, false, new Set([orderA])),
+    ).toBeNull();
   });
 });
 
@@ -355,6 +501,86 @@ describe("OPS-003 offline operation expiry", () => {
     await scheduler.dispose();
   });
 
+  it.each<[string, Error]>([
+    ["a network failure", new DriverSyncApiError("recoverable")],
+    ["an answer that breaks the contract", new DriverSyncApiError("invalid-contract")],
+    ["an unexpected error", new Error("synthetic")],
+  ])(
+    "keeps an accepted action waiting for REST when the read right after the 2xx fails with %s, so it never expires as unsent",
+    async (_name, failure) => {
+      const queued = operation("CHECK_IN", orderA, 3, 1);
+      const queue = new MemoryQueue([queued]);
+      const transitionOrder = vi.fn(async () => ({
+        id: orderA,
+        status: "AT_PICKUP" as const,
+        version: 4,
+      }));
+      const onOperationExpired = vi.fn();
+      const answers: (() => DriverStopList)[] = [
+        // Before sending: REST does not show the action yet.
+        () => stopList([stopA("ASSIGNED", 3)]),
+        // The confirmation read right after the server accepted it.
+        () => {
+          throw failure;
+        },
+        // A later read that still lags behind.
+        () => stopList([stopA("ASSIGNED", 3)]),
+      ];
+      const refreshStops = vi.fn(async () => {
+        const answer = answers.shift();
+        if (!answer) throw new Error("unexpected read");
+        return answer();
+      });
+      let clock = new Date(captured);
+      const scheduler = new DriverSyncScheduler({
+        partition,
+        queue,
+        api: {
+          transitionOrder,
+          createProofUploadSession: vi.fn(),
+          finalizeProof: vi.fn(),
+          recordCodCollection: vi.fn(),
+          openFailedDeliveryIncident: vi.fn(),
+        },
+        refreshStops,
+        onQueueChanged: vi.fn(),
+        onAccessRevoked: vi.fn(),
+        onOperationExpired,
+        now: () => clock,
+        randomUuid: () => "99999999-9999-4999-8999-999999999999",
+        upload: vi.fn().mockResolvedValue(undefined),
+      });
+
+      await scheduler.requestSync(true);
+      expect(transitionOrder).toHaveBeenCalledOnce();
+      expect(queue.operations).toEqual([
+        expect.objectContaining({
+          id: queued.id,
+          status: "AWAITING_REST_CONFIRMATION",
+          attemptCount: 1,
+          nextAttemptAt: "2026-07-26T12:00:02.000Z",
+          safeError: null,
+        }),
+      ]);
+
+      // Still within the window, REST lags: it keeps waiting and is not sent again.
+      clock = new Date(Date.parse(captured) + 60_000);
+      await scheduler.requestSync(true);
+      expect(queue.operations).toEqual([
+        expect.objectContaining({ status: "AWAITING_REST_CONFIRMATION", attemptCount: 2 }),
+      ]);
+
+      // Past the OPS-003 window it leaves the queue without the "venció" notice: the server has it.
+      clock = justOutside;
+      await scheduler.requestSync(true);
+      expect(queue.operations).toEqual([]);
+      expect(transitionOrder).toHaveBeenCalledOnce();
+      expect(onOperationExpired).not.toHaveBeenCalled();
+      expect(refreshStops).toHaveBeenCalledTimes(3);
+      await scheduler.dispose();
+    },
+  );
+
   it("confirms by REST before expiring an action the server already applied", async () => {
     const queue = new MemoryQueue([operation("CHECK_IN", orderA, 3, 1)]);
     const onOperationExpired = vi.fn();
@@ -363,7 +589,7 @@ describe("OPS-003 offline operation expiry", () => {
       {},
       justOutside,
       onOperationExpired,
-      async () => [stopA("AT_PICKUP", 4)],
+      async () => stopList([stopA("AT_PICKUP", 4)]),
     );
 
     await scheduler.requestSync(true);
@@ -521,7 +747,7 @@ describe("OPS-003 offline operation expiry", () => {
         api,
         justInside,
         onOperationExpired,
-        async () => [stopA("AT_PICKUP", 4)],
+        async () => stopList([stopA("AT_PICKUP", 4)]),
       );
 
       await scheduler.requestSync(true);
@@ -579,7 +805,7 @@ describe("OPS-003 offline operation expiry", () => {
       },
       justInside,
       onOperationExpired,
-      async () => [stopA("AT_PICKUP", 4)],
+      async () => stopList([stopA("AT_PICKUP", 4)]),
     );
 
     await scheduler.requestSync(true);
@@ -600,7 +826,7 @@ function expiryScheduler(
   apiOverrides: Partial<DriverSyncApi>,
   now: Date,
   onOperationExpired: (value: DriverOfflineOperation) => void = vi.fn(),
-  refreshStops: () => Promise<readonly DriverStop[]> = async () => [
+  refreshStops: () => Promise<DriverStopList> = async () => stopList([
     stopA("ASSIGNED", 3),
     {
       order_id: orderB,
@@ -609,8 +835,15 @@ function expiryScheduler(
       stop_type: "DELIVERY",
       status: "IN_TRANSIT",
       address_summary: "Zona B",
+      details_available: true,
+      contact_short_name: null,
+      contact_full_name: null,
+      zone_name: null,
+      service_window: null,
+      cod: null,
+      navigation: syntheticNavigation,
     },
-  ],
+  ]),
 ): DriverSyncScheduler {
   return new DriverSyncScheduler({
     partition,
@@ -619,6 +852,8 @@ function expiryScheduler(
       transitionOrder: vi.fn(),
       createProofUploadSession: vi.fn(),
       finalizeProof: vi.fn(),
+      recordCodCollection: vi.fn(),
+      openFailedDeliveryIncident: vi.fn(),
       ...apiOverrides,
     },
     refreshStops,
@@ -642,6 +877,13 @@ function stopA(
     stop_type: "PICKUP",
     status,
     address_summary: "Zona A",
+    details_available: true,
+    contact_short_name: null,
+    contact_full_name: null,
+    zone_name: null,
+    service_window: null,
+    cod: null,
+    navigation: syntheticNavigation,
   };
 }
 
@@ -671,7 +913,7 @@ function schedulerFor(
   queue: MemoryQueue,
   apiOverrides: Partial<DriverSyncApi>,
   onAccessRevoked = vi.fn(),
-  refreshStops: () => Promise<readonly DriverStop[]> = async () => [
+  refreshStops: () => Promise<DriverStopList> = async () => stopList([
     {
       order_id: orderA,
       aggregate_version: 3,
@@ -679,6 +921,13 @@ function schedulerFor(
       stop_type: "PICKUP",
       status: "ASSIGNED",
       address_summary: "Zona A",
+      details_available: true,
+      contact_short_name: null,
+      contact_full_name: null,
+      zone_name: null,
+      service_window: null,
+      cod: null,
+      navigation: syntheticNavigation,
     },
     {
       order_id: orderB,
@@ -687,13 +936,22 @@ function schedulerFor(
       stop_type: "DELIVERY",
       status: "IN_TRANSIT",
       address_summary: "Zona B",
+      details_available: true,
+      contact_short_name: null,
+      contact_full_name: null,
+      zone_name: null,
+      service_window: null,
+      cod: null,
+      navigation: syntheticNavigation,
     },
-  ],
+  ]),
 ): DriverSyncScheduler {
   const api: DriverSyncApi = {
     transitionOrder: vi.fn(),
     createProofUploadSession: vi.fn(),
     finalizeProof: vi.fn(),
+    recordCodCollection: vi.fn(),
+    openFailedDeliveryIncident: vi.fn(),
     ...apiOverrides,
   };
   return new DriverSyncScheduler({
@@ -705,6 +963,23 @@ function schedulerFor(
     onAccessRevoked,
     now: () => new Date("2026-07-26T12:00:00.000Z"),
     randomUuid: () => "99999999-9999-4999-8999-999999999999",
+  });
+}
+
+function codOperation(
+  orderId: string,
+  expectedVersion: number,
+  idTail: number,
+): DriverOfflineOperation {
+  return createDriverOfflineOperation({
+    partitionKey: partition.key,
+    orderId,
+    kind: "COD_COLLECTION",
+    expectedVersion,
+    cod: { amountCents: 125_000, reference: "ORD_A 2026-07-26T05:00:00-07:00" },
+    now: () => new Date(`2026-07-26T12:00:0${idTail}.000Z`),
+    randomUuid: () =>
+      `00000000-0000-4000-8000-${idTail.toString().padStart(12, "0")}`,
   });
 }
 

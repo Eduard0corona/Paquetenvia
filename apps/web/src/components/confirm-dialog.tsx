@@ -8,6 +8,11 @@ export interface ConfirmRequest {
   readonly description: string;
   readonly confirmLabel: string;
   readonly cancelLabel?: string;
+  /**
+   * Control that gets focus back when the dialog closes; by default the one focused when it
+   * opens. Set it when the dialog opens after an asynchronous read that disabled that control.
+   */
+  readonly returnFocus?: HTMLElement | null;
   readonly onConfirm: () => void;
 }
 
@@ -29,19 +34,20 @@ export function ConfirmDialog({
   const titleId = useId();
   const descriptionId = useId();
   const open = request !== null;
+  const returnFocus = request?.returnFocus ?? null;
 
   useEffect(() => {
     const dialog = dialogRef.current;
     if (dialog === null) return;
     if (open && !dialog.open) {
       const active = document.activeElement;
-      returnFocusRef.current = active instanceof HTMLElement ? active : null;
+      returnFocusRef.current = returnFocus ?? (active instanceof HTMLElement ? active : null);
       dialog.showModal();
       cancelRef.current?.focus();
     } else if (!open && dialog.open) {
       dialog.close();
     }
-  }, [open]);
+  }, [open, returnFocus]);
 
   const restoreFocus = useCallback(() => {
     const target = returnFocusRef.current;

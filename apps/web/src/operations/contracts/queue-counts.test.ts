@@ -49,6 +49,12 @@ describe("operations queue counts contract (UI-PHASE2-QUEUE-COUNTS-2026-10-05)",
     expect(parseOperationsQueueCounts({ ...valid(), generated_at: "2026-10-05T18:00:00Z" }).total).toBe(19);
   });
 
+  it("accepts price review up to the orders that have not finished (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11)", () => {
+    const value = valid();
+    expect(parseOperationsQueueCounts({ ...value, queues: { ...value.queues, price_review: 12 } }).queues.price_review).toBe(12);
+    expect(parseOperationsQueueCounts({ ...value, queues: { ...value.queues, price_review: 0 } }).queues.price_review).toBe(0);
+  });
+
   it("sums the server counts into the five status groups", () => {
     expect(statusGroupTotals(parseOperationsQueueCounts(valid()))).toEqual({
       TO_PREPARE: 3,
@@ -80,6 +86,8 @@ describe("operations queue counts contract (UI-PHASE2-QUEUE-COUNTS-2026-10-05)",
     ["delivered_not_closed off DELIVERED", (value) => ({ ...value, queues: { ...value.queues, delivered_not_closed: 1 } })],
     ["more unassigned than ready or rescheduled", (value) => ({ ...value, queues: { ...value.queues, unassigned: 5 } })],
     ["more price reviews than orders", (value) => ({ ...value, queues: { ...value.queues, price_review: 20 } })],
+    // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: 19 orders, 7 of them finished (DELIVERED, CLOSED).
+    ["more price reviews than unfinished orders", (value) => ({ ...value, queues: { ...value.queues, price_review: 13 } })],
     ["a non-UTC timestamp", (value) => ({ ...value, generated_at: "2026-10-05T12:00:00-06:00" })],
     ["a timestamp without offset", (value) => ({ ...value, generated_at: "2026-10-05T18:00:00" })],
   ];

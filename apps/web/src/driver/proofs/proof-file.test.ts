@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  checkDriverProofFile,
   MaximumDriverProofBytes,
   validateDriverProof,
 } from "./proof-file";
@@ -42,5 +43,35 @@ describe("driver proof validation", () => {
     ],
   ] as const)("rejects invalid evidence without partial output", async (blob, category) => {
     await expect(validateDriverProof(blob)).rejects.toMatchObject({ category });
+  });
+
+  it.each([
+    [undefined, "missing"],
+    [new Blob([], { type: "image/png" }), "empty"],
+    [new Blob(["x"], { type: "image/gif" }), "unsupported-type"],
+    [new Blob(["x"], { type: "image/jpeg;charset=utf-8" }), "unsupported-type"],
+    [
+      new Blob([new Uint8Array(MaximumDriverProofBytes + 1)], {
+        type: "image/png",
+      }),
+      "too-large",
+    ],
+  ] as const)(
+    "the preview check names the same failure the queue validation throws",
+    async (blob, category) => {
+      expect(checkDriverProofFile(blob)).toBe(category);
+      await expect(validateDriverProof(blob)).rejects.toMatchObject({ category });
+    },
+  );
+
+  it("the preview check accepts what the queue validation accepts", async () => {
+    const blob = new Blob([new Uint8Array([0xff, 0xd8, 0xff])], {
+      type: "image/jpeg",
+    });
+    expect(checkDriverProofFile(blob)).toBeNull();
+    await expect(validateDriverProof(blob)).resolves.toMatchObject({
+      contentType: "image/jpeg",
+      sizeBytes: 3,
+    });
   });
 });

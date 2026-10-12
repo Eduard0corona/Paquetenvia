@@ -1,7 +1,10 @@
+import { vehicleLabel } from "../../operations/contracts/assignable-driver";
 import { formatMxnCentsWithCurrency, parseMxnToCents } from "../../operations/contracts/money";
 import { shortId } from "../../lib/short-id";
 import type { CodTransaction, PendingCodOrder } from "./cod";
-import type { Settlement } from "./settlement";
+import type { CreateSettlementBody, Settlement } from "./settlement";
+import { formatPeriodRange } from "./settlement-period";
+import type { SettlementPayee } from "./settlement-payee";
 
 /** Texts for the confirmation shown before a risky finance action; amounts stay integer cents. */
 export interface ConfirmationText {
@@ -10,26 +13,30 @@ export interface ConfirmationText {
   readonly confirmLabel: string;
 }
 
-function settlementTarget(settlement: Settlement): string {
-  return `del repartidor ${shortId(settlement.payee_id)} (${settlement.period_from} a ${settlement.period_to})`;
+/**
+ * UI-PHASE3-DRIVERS-2026-10-11: the payee by the screen's label (its DRV- reference, never the internal id) and the
+ * period in readable dates.
+ */
+function settlementTarget(settlement: Settlement, payee: string): string {
+  return `del repartidor ${payee} (${formatPeriodRange(settlement.period_from, settlement.period_to)})`;
 }
 
-export function settlementApprovalConfirmation(settlement: Settlement): ConfirmationText {
+export function settlementApprovalConfirmation(settlement: Settlement, payee: string): ConfirmationText {
   return {
     title: "¿Aprobar liquidación?",
     description:
-      `Se aprobará la liquidación ${settlementTarget(settlement)} por un total de ` +
+      `Se aprobará la liquidación ${settlementTarget(settlement, payee)} por un total de ` +
       `${formatMxnCentsWithCurrency(settlement.total_cents)}. Después ya no se podrán agregar ajustes.`,
     confirmLabel: "Aprobar",
   };
 }
 
-export function settlementPaymentConfirmation(settlement: Settlement): ConfirmationText {
+export function settlementPaymentConfirmation(settlement: Settlement, payee: string): ConfirmationText {
   return {
     title: "¿Marcar liquidación como pagada?",
     description:
       `Confirma que ya se pagaron ${formatMxnCentsWithCurrency(settlement.total_cents)} ` +
-      `en la liquidación ${settlementTarget(settlement)}.`,
+      `en la liquidación ${settlementTarget(settlement, payee)}.`,
     confirmLabel: "Marcar pagada",
   };
 }
@@ -41,6 +48,7 @@ export function settlementPaymentConfirmation(settlement: Settlement): Confirmat
 export function settlementAdjustmentConfirmation(
   settlement: Settlement,
   amountText: string,
+  payee: string,
 ): ConfirmationText | null {
   const cents = parseMxnToCents(amountText, { allowNegative: true, allowZero: false });
   if (cents === null) return null;
@@ -49,37 +57,102 @@ export function settlementAdjustmentConfirmation(
   return {
     title: "¿Agregar ajuste?",
     description:
-      `Se ${verb} ${formatMxnCentsWithCurrency(absolute)} a la liquidación ${settlementTarget(settlement)}.`,
+      `Se ${verb} ${formatMxnCentsWithCurrency(absolute)} a la liquidación ${settlementTarget(settlement, payee)}.`,
     confirmLabel: "Agregar ajuste",
   };
 }
 
-export function settlementVoidConfirmation(settlement: Settlement): ConfirmationText {
+const operatingDayFormatter = new Intl.DateTimeFormat("es-MX", {
+  dateStyle: "long",
+  timeZone: "UTC",
+});
+
+/**
+ * A settlement period day (`YYYY-MM-DD`, an operating day in Mazatlán time) in words, such as
+ * "1 de septiembre de 2026". The calendar date is formatted as written: no device or zone
+ * offset can move it to another day.
+ */
+function formatOperatingDay(value: string): string {
+  const [year, month, day] = value.split("-").map(Number);
+  return operatingDayFormatter.format(new Date(Date.UTC(year, month - 1, day)));
+}
+
+/**
+ * "Calcular liquidación", for a request validateCreateSettlement already accepted, naming the payee picked from the
+ * list by its DRV- reference and vehicle (UI-PHASE3-DRIVERS-2026-10-11).
+ */
+export function settlementCreationConfirmation(body: CreateSettlementBody, payee: SettlementPayee): ConfirmationText {
+  const period =
+    body.period_from === body.period_to
+      ? `del ${formatOperatingDay(body.period_from)} (día completo, hora de Mazatlán)`
+      : `del ${formatOperatingDay(body.period_from)} al ${formatOperatingDay(body.period_to)} ` +
+        "(días completos, hora de Mazatlán)";
+  return {
+    title: "¿Calcular liquidación?",
+    description:
+      `Se calculará la liquidación del repartidor ${payee.driver_reference} ` +
+      `(${vehicleLabel(payee.vehicle_type).toLowerCase()}) ${period}.`,
+    confirmLabel: "Calcular",
+  };
+}
+
+export function settlementVoidConfirmation(settlement: Settlement, payee: string): ConfirmationText {
   return {
     title: "¿Anular liquidación?",
     description:
-      `Se anulará la liquidación ${settlementTarget(settlement)} por ` +
+      `Se anulará la liquidación ${settlementTarget(settlement, payee)} por ` +
       `${formatMxnCentsWithCurrency(settlement.total_cents)}. Esta acción no se puede deshacer.`,
     confirmLabel: "Anular",
   };
 }
 
-export function pendingCodReconciliationConfirmation(order: PendingCodOrder): ConfirmationText {
+/** A COD confirmation names the order by its tracking number when the screen has it. */
+function codOrderName(orderId: string, publicId: string | null): string {
+  return publicId ?? shortId(orderId);
+}
+
+/**
+ * "Registrar cobro", for the exact integer cents that will be sent. The reference the person
+ * typed is never repeated here (AI-07 cod_control).
+ */
+export function codRecordConfirmation(
+  orderId: string,
+  amountCents: number,
+  publicId: string | null = null,
+): ConfirmationText {
+  return {
+    title: "¿Registrar cobro?",
+    description:
+      `Se registrará el cobro contra entrega de ${formatMxnCentsWithCurrency(amountCents)} ` +
+      `de la orden ${codOrderName(orderId, publicId)}. Después quedará pendiente de conciliar.`,
+    confirmLabel: "Registrar cobro",
+  };
+}
+
+/** "Conciliar" from the pending list, once getOrderFinancials returned the RECORDED collection. */
+export function pendingCodReconciliationConfirmation(
+  order: PendingCodOrder,
+  record: CodTransaction,
+): ConfirmationText {
   return {
     title: "¿Conciliar cobro?",
     description:
-      `Se conciliará el cobro registrado de la orden ${order.public_id}. ` +
-      "Confirma solo si el efectivo ya se recibió completo.",
+      `Se conciliará el cobro de ${formatMxnCentsWithCurrency(record.amount_cents)} ` +
+      `de la orden ${order.public_id}. Confirma solo si el efectivo ya se recibió completo.`,
     confirmLabel: "Conciliar",
   };
 }
 
-export function codReconciliationConfirmation(transaction: CodTransaction): ConfirmationText {
+export function codReconciliationConfirmation(
+  transaction: CodTransaction,
+  publicId: string | null = null,
+): ConfirmationText {
   return {
     title: "¿Conciliar este cobro?",
     description:
       `Se conciliará el cobro de ${formatMxnCentsWithCurrency(transaction.amount_cents)} ` +
-      `de la orden ${shortId(transaction.order_id)}. Confirma solo si el efectivo ya se recibió completo.`,
+      `de la orden ${codOrderName(transaction.order_id, publicId)}. ` +
+      "Confirma solo si el efectivo ya se recibió completo.",
     confirmLabel: "Conciliar",
   };
 }

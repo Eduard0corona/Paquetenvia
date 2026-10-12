@@ -103,6 +103,13 @@ Otherwise the deploy job stops before logging in to Azure.
   administrator has created `paqueteria_operator_outbox_executor NOLOGIN BYPASSRLS` with SET for the deployment
   role (like the lifecycle executor); nothing is written before that check. The role is never granted to the API,
   the Worker or an operator login.
+- ORD-AUTO-CLOSE-2026-10-10: on a pilot database whose baseline predates the auto-close executor, the Orders lane
+  `20261010000100_AddOrderAutoCloseDiscovery` stops in its E-002 bridge with
+  `E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles=paqueteria_auto_close_executor` until an Azure administrator has
+  created `paqueteria_auto_close_executor NOLOGIN BYPASSRLS` with SET for the deployment role; nothing is written
+  before that check. The role is never granted to the API, the Worker or an operator login. The Worker runs the job
+  with `Orders__AutoClose__Enabled=true` (`apps.bicep`); its `orders_auto_close` readiness check fails until the lane
+  has installed the discovery function.
 - `job-pv-pilot-logins` runs the new migrator command `runtime-logins`. It creates or re-keys
   `pv_pilot_api` → `paqueteria_app` and `pv_pilot_worker` → `paqueteria_worker` as
   `LOGIN NOINHERIT NOBYPASSRLS` with exactly one membership. It receives **SCRAM-SHA-256 verifiers
@@ -203,6 +210,10 @@ the app restarts or starts a new revision; the workflow restarts the API and Wor
 
 Azure Communication Services email uses the Worker's managed identity, so it needs no secret.
 It is **not** in the Bicep yet. The resources themselves are free (about 0.00025 USD per email).
+ACS retires on 2028-09-30 and Microsoft starts limiting onboarding on 2026-10-23, so the owner creates
+the Communication Services and Email Communication Services resources by hand before that date
+(NTF-EMAIL-ACS-PILOT-2026-10-11, `guia-owner-seccion-a.md` §8); a later change references them from
+the templates and wires the Worker. Production needs another email provider (AI-10 `release_gates`).
 Binding `paquetenvia.com` as a sender needs its own DNS records (domain TXT, SPF, DKIM x2) and
 Meta/ACS sender setup. The adapters exist (`docs/development/gate-004-messaging-adapters.md`) but
 are **not wired into the pilot templates**: every `Messaging` channel stays `Disabled` until the owner

@@ -22,9 +22,11 @@ public sealed class DispatchImplementationContractTests
         var source = File.ReadAllText(path);
 
         Assert.Equal(3, Count(source, "endpoints.MapPost("));
-        Assert.Equal(3, Count(source, "endpoints.MapGet("));
+        Assert.Equal(4, Count(source, "endpoints.MapGet("));
         Assert.Contains("MapGet(\"/api/v1/orders/{orderId}/assignable-drivers\"", source, StringComparison.Ordinal);
         Assert.Contains(".WithName(\"listAssignableDrivers\")", source, StringComparison.Ordinal);
+        Assert.Contains("MapGet(\"/api/v1/drivers\"", source, StringComparison.Ordinal);
+        Assert.Contains(".WithName(\"listOrganizationDrivers\")", source, StringComparison.Ordinal);
         Assert.Contains("MapPost(\"/api/v1/orders/{orderId}/assignments\"", source, StringComparison.Ordinal);
         Assert.Contains("MapGet(\"/api/v1/driver/me/stops\"", source, StringComparison.Ordinal);
         Assert.Contains("MapPost(\"/api/v1/external-offers\"", source, StringComparison.Ordinal);
@@ -47,13 +49,24 @@ public sealed class DispatchImplementationContractTests
             "assignment_type", "cost_cents", "driver_id", "route_id");
         AssertJsonProperties<AssignmentResponse>("cost", "driver_id", "id", "order_id", "route_id", "status");
         AssertJsonProperties<MoneyResponse>("amount_cents", "currency");
+        AssertJsonProperties<DriverStopListResponse>("completed_today", "stops");
         AssertJsonProperties<DriverStopResponse>(
             "address_summary",
             "aggregate_version",
+            "cod",
+            "contact_full_name",
+            "contact_short_name",
+            "details_available",
+            "navigation",
             "order_id",
             "order_public_id",
+            "service_window",
             "status",
-            "stop_type");
+            "stop_type",
+            "zone_name");
+        AssertJsonProperties<DriverStopServiceWindowResponse>("from", "to");
+        AssertJsonProperties<DriverStopCodResponse>("expected", "recorded");
+        AssertJsonProperties<DriverStopNavigationResponse>("address_text", "latitude", "longitude", "references");
         AssertJsonProperties<CreateExternalOfferRequest>(
             "commission_cents", "eligible_constraints", "expires_at", "order_id");
         AssertJsonProperties<ExternalOfferConstraintsRequest>(
@@ -74,15 +87,47 @@ public sealed class DispatchImplementationContractTests
                 name.Contains("Document", StringComparison.OrdinalIgnoreCase) ||
                 name.Contains("Location", StringComparison.OrdinalIgnoreCase));
 
-        var stopNames = typeof(DriverStopResponse).GetProperties()
+        // UI-PHASE3-DRIVERS-2026-10-11: the dispatcher's driver list carries the time of the latest position, never
+        // the position, and no personal data.
+        AssertJsonProperties<OrganizationDriverResponse>(
+            "active_stop_count", "driver_id", "driver_reference", "last_position_at", "status", "vehicle_type");
+        AssertJsonProperties<OrganizationDriverPageResponse>("items", "next_cursor");
+        Assert.DoesNotContain(
+            typeof(OrganizationDriverResponse).GetProperties().Select(property => property.Name),
+            name => name.Contains("Name", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Phone", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Email", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Document", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Location", StringComparison.OrdinalIgnoreCase) ||
+                name.Contains("Lat", StringComparison.Ordinal) ||
+                name.Contains("Lng", StringComparison.Ordinal) ||
+                name.Contains("Point", StringComparison.Ordinal) ||
+                name.Contains("Accuracy", StringComparison.Ordinal));
+
+        // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the only contact data are the contact name of a PICKUP stop and
+        // the short name ("M. López") of the other stops; never a phone, a cost, an internal driver or assignment id,
+        // a ciphertext or a key version.
+        var stopNames = new[]
+            {
+                typeof(DriverStopListResponse),
+                typeof(DriverStopResponse),
+                typeof(DriverStopServiceWindowResponse),
+                typeof(DriverStopCodResponse),
+                typeof(DriverStopNavigationResponse),
+            }
+            .SelectMany(type => type.GetProperties())
             .Select(property => property.Name)
             .ToArray();
         Assert.DoesNotContain(stopNames, name =>
             name.Contains("Phone", StringComparison.OrdinalIgnoreCase) ||
-            name.Contains("Contact", StringComparison.OrdinalIgnoreCase) ||
+            (name.Contains("Contact", StringComparison.OrdinalIgnoreCase) &&
+                !string.Equals(name, nameof(DriverStopResponse.ContactShortName), StringComparison.Ordinal) &&
+                !string.Equals(name, nameof(DriverStopResponse.ContactFullName), StringComparison.Ordinal)) ||
             name.Contains("Cost", StringComparison.OrdinalIgnoreCase) ||
             name.Contains("DriverId", StringComparison.OrdinalIgnoreCase) ||
-            name.Contains("AssignmentId", StringComparison.OrdinalIgnoreCase));
+            name.Contains("AssignmentId", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains("Ciphertext", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains("KeyVersion", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -147,12 +192,70 @@ public sealed class DispatchImplementationContractTests
             [
                 "address_summary",
                 "aggregate_version",
+                "cod",
+                "contact_full_name",
+                "contact_short_name",
+                "details_available",
+                "navigation",
                 "order_id",
                 "order_public_id",
+                "service_window",
                 "status",
                 "stop_type",
+                "zone_name",
             ],
             RequiredPropertyNames(stop));
+        var stopList = schemas.Mapping("DriverStopList");
+        Assert.Equal(["completed_today", "stops"], RequiredPropertyNames(stopList));
+        Assert.Equal("false", stopList.Scalar("additionalProperties"));
+        Assert.Equal(
+            "#/components/schemas/DriverStop",
+            stopList.Mapping("properties").Mapping("stops").Mapping("items").Scalar("$ref"));
+        Assert.Equal("0", stopList.Mapping("properties").Mapping("completed_today").Scalar("minimum"));
+        var listMyStops = root.Mapping("paths").Mapping("/driver/me/stops").Mapping("get");
+        Assert.Equal(
+            "#/components/schemas/DriverStopList",
+            listMyStops.Mapping("responses").Mapping("200").Mapping("content").Mapping("application/json")
+                .Mapping("schema").Scalar("$ref"));
+        Assert.Equal(
+            ["200", "401", "403", "409", "503"],
+            listMyStops.Mapping("responses").Children.Keys.Cast<YamlScalarNode>().Select(value => value.Value));
+        var detailsParameter = listMyStops.Sequence("parameters").Children.OfType<YamlMappingNode>()
+            .Single(parameter => parameter.Children.ContainsKey(new YamlScalarNode("name")));
+        Assert.Equal("details", detailsParameter.Scalar("name"));
+        Assert.Equal("query", detailsParameter.Scalar("in"));
+        Assert.Equal("boolean", detailsParameter.Mapping("schema").Scalar("type"));
+        Assert.Equal("true", detailsParameter.Mapping("schema").Scalar("default"));
+        var stopProperties = stop.Mapping("properties");
+        Assert.Equal(
+            ["address_text", "latitude", "longitude", "references"],
+            RequiredPropertyNames(stopProperties.Mapping("navigation")));
+        Assert.Equal("false", stopProperties.Mapping("navigation").Scalar("additionalProperties"));
+        Assert.Equal(
+            ["object", "null"],
+            stopProperties.Mapping("navigation").Sequence("type").Children.Cast<YamlScalarNode>()
+                .Select(value => value.Value));
+        Assert.Equal("boolean", stopProperties.Mapping("details_available").Scalar("type"));
+        Assert.Equal(
+            Dispatch.Domain.DriverStopZoneName.MaximumLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            stopProperties.Mapping("zone_name").Scalar("maxLength"));
+        Assert.Equal(["expected", "recorded"], RequiredPropertyNames(stopProperties.Mapping("cod")));
+        Assert.Equal(
+            "#/components/schemas/Money",
+            stopProperties.Mapping("cod").Mapping("properties").Mapping("expected").Scalar("$ref"));
+        Assert.Equal(["from", "to"], RequiredPropertyNames(stopProperties.Mapping("service_window")));
+        Assert.Equal(
+            Dispatch.Domain.DriverStopContactName.MaximumLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            stopProperties.Mapping("contact_short_name").Scalar("maxLength"));
+        Assert.Equal(
+            Dispatch.Domain.DriverStopContactName.MaximumFullLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            stopProperties.Mapping("contact_full_name").Scalar("maxLength"));
+        Assert.Equal(
+            Dispatch.Domain.DriverStopAddressText.MaximumAddressLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            stopProperties.Mapping("navigation").Mapping("properties").Mapping("address_text").Scalar("maxLength"));
+        Assert.Equal(
+            Dispatch.Domain.DriverStopAddressText.MaximumReferencesLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
+            stopProperties.Mapping("navigation").Mapping("properties").Mapping("references").Scalar("maxLength"));
 
         Assert.Equal(
             ["OWN", "EXTERNAL", "ALLY_CAPACITY"],
@@ -248,6 +351,127 @@ public sealed class DispatchImplementationContractTests
         Assert.Equal(
             policyCodes,
             Dispatch.Application.Assignments.AssignableDriverPolicy.ReasonCodes.Order(StringComparer.Ordinal).ToArray());
+    }
+
+    /// <summary>
+    /// UI-PHASE3-DRIVERS-2026-10-11: listOrganizationDrivers is published with the picker's precedence and conflict
+    /// response, no 404, the one cursor parameter and schemas carrying exactly the vocabulary the server enforces;
+    /// its stop is the DriverStopPolicy stop listMyStops shows the driver.
+    /// </summary>
+    [Fact]
+    public void AI05_organization_driver_list_matches_the_implemented_vocabulary()
+    {
+        var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var operation = root.Mapping("paths").Mapping("/drivers").Mapping("get");
+        Assert.Equal("listOrganizationDrivers", operation.Scalar("operationId"));
+        var description = operation.Scalar("description").ReplaceLineEndings(" ");
+        Assert.Contains("UI-PHASE3-DRIVERS-2026-10-11", description, StringComparison.Ordinal);
+        Assert.Contains(
+            string.Join(", ", DriverStopPolicy.OrderStatuses.Take(DriverStopPolicy.OrderStatuses.Count - 1)) +
+            " or " + DriverStopPolicy.OrderStatuses[^1],
+            description,
+            StringComparison.Ordinal);
+        Assert.Equal(
+            "shape-validation-then-capability-before-persisted-state",
+            operation.Scalar("x-authorization-precedence"));
+        Assert.Equal("invalid-request-without-productive-transaction", operation.Scalar("x-shape-validation"));
+        var responses = operation.Mapping("responses");
+        Assert.Equal(
+            ["200", "401", "403", "409", "503"],
+            responses.Children.Keys.Cast<YamlScalarNode>().Select(value => value.Value));
+        Assert.Equal("#/components/responses/Forbidden", responses.Mapping("403").Scalar("$ref"));
+        Assert.Equal("#/components/responses/DispatchAssignmentConflict", responses.Mapping("409").Scalar("$ref"));
+        var cursor = Assert.Single(
+            operation.Sequence("parameters").Children.Cast<YamlMappingNode>(),
+            parameter => parameter.Children.ContainsKey(new YamlScalarNode("name")));
+        Assert.Equal("cursor", cursor.Scalar("name"));
+        Assert.Equal("query", cursor.Scalar("in"));
+        Assert.Equal(["cursor"], OrganizationDriversQueryParameters());
+
+        var schemas = root.Mapping("components").Mapping("schemas");
+        var driver = schemas.Mapping("OrganizationDriver");
+        Assert.Equal("false", driver.Scalar("additionalProperties"));
+        Assert.Equal(
+            ["active_stop_count", "driver_id", "driver_reference", "last_position_at", "status", "vehicle_type"],
+            RequiredPropertyNames(driver));
+        var properties = driver.Mapping("properties");
+        Assert.Equal("^DRV-[0-9a-f]{8}$", properties.Mapping("driver_reference").Scalar("pattern"));
+        Assert.Equal(
+            Dispatch.Application.Assignments.AssignableDriverPolicy.VehicleTypes.ToArray(),
+            properties.Mapping("vehicle_type").Sequence("enum").Children.Cast<YamlScalarNode>()
+                .Select(value => value.Value!).ToArray());
+        Assert.Equal(
+            Dispatch.Application.Fleet.OrganizationDriverPolicy.Statuses.ToArray(),
+            properties.Mapping("status").Sequence("enum").Children.Cast<YamlScalarNode>()
+                .Select(value => value.Value!).ToArray());
+        Assert.Equal("0", properties.Mapping("active_stop_count").Scalar("minimum"));
+        var lastPosition = properties.Mapping("last_position_at");
+        Assert.Equal(
+            ["string", "null"],
+            lastPosition.Sequence("type").Children.Cast<YamlScalarNode>().Select(value => value.Value));
+        Assert.Equal("date-time", lastPosition.Scalar("format"));
+        Assert.Equal(["items", "next_cursor"], RequiredPropertyNames(schemas.Mapping("OrganizationDriverPage")));
+    }
+
+    /// <summary>
+    /// UI-PHASE3-DRIVERS-2026-10-11: one stop definition. The statuses the driver list counts are exactly those
+    /// DriverStopPolicy projects as a stop and those the listMyStops query reads, and the list reads no personal
+    /// column and no coordinate.
+    /// </summary>
+    [Fact]
+    public void Organization_driver_list_counts_the_listMyStops_stops_and_reads_no_personal_column()
+    {
+        var statuses = new[]
+        {
+            "DRAFT", "CONFIRMED", "READY_FOR_PICKUP", "ASSIGNED", "AT_PICKUP", "PICKED_UP", "IN_TRANSIT",
+            "DELIVERING", "FAILED_ATTEMPT", "RESCHEDULED", "RETURNING", "RETURNED", "DELIVERED", "CLOSED",
+            "CLAIM_OPEN", "CLAIM_RESOLVED", "CANCELLED",
+        };
+        foreach (var status in statuses)
+        {
+            foreach (var custody in new[] { false, true })
+            {
+                Assert.Equal(
+                    DriverStopPolicy.OrderStatuses.Contains(status),
+                    DriverStopPolicy.Project(status, custody).Included);
+            }
+        }
+
+        var stops = File.ReadAllText(Path.Combine(
+            RepositoryPaths.Root,
+            "src", "Modules", "Dispatch", "Dispatch.Infrastructure", "Stops", "PostgreSqlDriverStopsQuery.cs"));
+        var listed = System.Text.RegularExpressions.Regex.Match(
+            stops, @"AND o\.status IN \(([^)]*)\)", System.Text.RegularExpressions.RegexOptions.Singleline);
+        Assert.True(listed.Success);
+        Assert.Equal(
+            DriverStopPolicy.OrderStatuses.Order(StringComparer.Ordinal),
+            System.Text.RegularExpressions.Regex.Matches(listed.Groups[1].Value, "'([A-Z_]+)'")
+                .Select(match => match.Groups[1].Value)
+                .Order(StringComparer.Ordinal));
+
+        var source = File.ReadAllText(Path.Combine(
+            RepositoryPaths.Root,
+            "src", "Modules", "Dispatch", "Dispatch.Infrastructure", "Fleet", "PostgreSqlOrganizationDriversQuery.cs"));
+        Assert.Contains("DriverStopPolicy.OrderStatuses", source, StringComparison.Ordinal);
+        var start = source.IndexOf("const string sql =", StringComparison.Ordinal);
+        Assert.True(start >= 0);
+        var open = source.IndexOf("\"\"\"", start, StringComparison.Ordinal);
+        var close = source.IndexOf("\"\"\"", open + 3, StringComparison.Ordinal);
+        Assert.True(open > start && close > open);
+        var query = source[(open + 3)..close];
+        Assert.Contains("o.status=ANY(@stop_statuses)", query, StringComparison.Ordinal);
+        Assert.Contains("a.status IN ('ACCEPTED','ACTIVE')", query, StringComparison.Ordinal);
+        Assert.Contains("p.driver_type='OWN' AND p.status<>'INACTIVE'", query, StringComparison.Ordinal);
+        Assert.Contains("SELECT position.captured_at", query, StringComparison.Ordinal);
+        foreach (var forbidden in new[]
+                 {
+                     "identity.users", "organization_memberships", "driver_documents", "email", "phone",
+                     "ST_X", "ST_Y", "position.point", "accuracy_m", "FOR UPDATE", "INSERT INTO", "UPDATE ",
+                     "DELETE FROM",
+                 })
+        {
+            Assert.DoesNotContain(forbidden, query, StringComparison.OrdinalIgnoreCase);
+        }
     }
 
     [Fact]
@@ -370,6 +594,35 @@ public sealed class DispatchImplementationContractTests
             }
         }
 
+        return accepted.ToArray();
+    }
+
+    private static string[] OrganizationDriversQueryParameters()
+    {
+        var accepted = new List<string>();
+        foreach (var name in new[] { "cursor", "limit", "page_size", "status", "driver_id", "order_id" })
+        {
+            var query = new Microsoft.AspNetCore.Http.QueryCollection(
+                new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>
+                {
+                    [name] = name == "cursor"
+                        ? Dispatch.Application.Fleet.OrganizationDriverCursorCodec.Encode(Guid.NewGuid())
+                        : "1",
+                });
+            if (DispatchEndpoints.TryReadOrganizationDriversQuery(query, out _))
+            {
+                accepted.Add(name);
+            }
+        }
+
+        // A cursor the assignment picker issued is not a cursor of this operation.
+        var picker = new Microsoft.AspNetCore.Http.QueryCollection(
+            new Dictionary<string, Microsoft.Extensions.Primitives.StringValues>
+            {
+                ["cursor"] = Dispatch.Application.Assignments.AssignableDriverCursorCodec.Encode(
+                    new Dispatch.Application.Assignments.AssignableDriverCursor(Guid.NewGuid())),
+            });
+        Assert.False(DispatchEndpoints.TryReadOrganizationDriversQuery(picker, out _));
         return accepted.ToArray();
     }
 

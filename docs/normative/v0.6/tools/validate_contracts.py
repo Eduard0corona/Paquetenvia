@@ -146,6 +146,15 @@ OPERATOR_OUTBOX_EXECUTOR_GRANTS = [
     "GRANT INSERT (id,org_id,actor_id,action,entity_type,entity_id,request_id,payload_redacted,occurred_at) ON platform.audit_logs TO paqueteria_operator_outbox_executor;",
 ]
 
+# ORD-AUTO-CLOSE-2026-10-10: the auto-close executor only reads which owner organizations hold a DELIVERED order; its
+# discovery function is installed and granted by the Orders lane, never by AI-18.
+AUTO_CLOSE_EXECUTOR_GRANTS = [
+    "GRANT USAGE ON SCHEMA orders TO paqueteria_auto_close_executor;",
+    "GRANT SELECT (owner_org_id,status) ON orders.orders TO paqueteria_auto_close_executor;",
+]
+
+AUTO_CLOSE_FUNCTION = "security.list_auto_close_owner_organizations(uuid,integer)"
+
 OPERATOR_OUTBOX_FUNCTIONS = [
     "security.append_operator_order_outbox(uuid,uuid,jsonb,text,text,uuid,integer,jsonb,smallint,timestamptz,timestamptz)",
     "security.append_operator_order_audit(uuid,uuid,uuid,text,text,uuid,text,jsonb,timestamptz)",
@@ -164,8 +173,8 @@ BFF_SESSION_FUNCTIONS = [
 
 
 def executor_grant_errors(role_sql: str) -> list[str]:
-    """ADR-034, OPS-003-CLEANUP-ROLE, REG-001, BFF-SESSION-TABLE-SHAPE, MDM-001 and DSP-OPERATOR-OWNER-OUTBOX exact grant
-    sets for the dedicated executors."""
+    """ADR-034, OPS-003-CLEANUP-ROLE, REG-001, BFF-SESSION-TABLE-SHAPE, MDM-001, DSP-OPERATOR-OWNER-OUTBOX and
+    ORD-AUTO-CLOSE exact grant sets for the dedicated executors."""
     return (
         role_grant_errors(
             role_sql, "paqueteria_lifecycle_executor", LIFECYCLE_EXECUTOR_GRANTS, "Lifecycle executor (ADR-034)"
@@ -202,6 +211,12 @@ def executor_grant_errors(role_sql: str) -> list[str]:
             "paqueteria_operator_outbox_executor",
             OPERATOR_OUTBOX_EXECUTOR_GRANTS,
             "Operator outbox executor (DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03)",
+        )
+        + role_grant_errors(
+            role_sql,
+            "paqueteria_auto_close_executor",
+            AUTO_CLOSE_EXECUTOR_GRANTS,
+            "Auto-close executor (ORD-AUTO-CLOSE-2026-10-10)",
         )
     )
 
@@ -280,6 +295,30 @@ def operator_outbox_errors(schema_sql: str, role_sql: str) -> list[str]:
     ]:
         if fragment not in schema_sql:
             errors.append(f"Missing operator outbox contract in AI-06: {fragment}")
+    return errors
+
+
+def auto_close_errors(role_sql: str) -> list[str]:
+    """ORD-AUTO-CLOSE-2026-10-10: the only cross-tenant step of the automatic close lists owner organizations that hold
+    a DELIVERED order; the executor reads two columns, is never granted to anyone, and its function is granted by the
+    Orders lane, not by AI-18."""
+    errors = []
+    executable_roles = SQL_LINE_COMMENT.sub("", role_sql)
+    for fragment in [
+        "CREATE ROLE paqueteria_auto_close_executor NOLOGIN BYPASSRLS;",
+        "REVOKE paqueteria_auto_close_executor FROM paqueteria_app, paqueteria_worker;",
+        "ORD-AUTO-CLOSE-2026-10-10",
+        "search_path=pg_catalog, orders, pg_temp",
+        AUTO_CLOSE_FUNCTION,
+    ]:
+        if fragment not in role_sql:
+            errors.append(f"Missing auto-close executor contract in AI-18: {fragment}")
+    if re.search(r"GRANT\s+paqueteria_auto_close_executor\s+TO", executable_roles):
+        errors.append("Auto-close executor membership granted contrary to ORD-AUTO-CLOSE-2026-10-10")
+    if re.search(r"GRANT[^;]*list_auto_close_owner_organizations[^;]*;", executable_roles):
+        errors.append("The auto-close discovery function is granted by the Orders lane, not by AI-18")
+    if re.search(r"GRANT[^;]*\b(INSERT|UPDATE|DELETE|TRUNCATE)\b[^;]*TO\s+paqueteria_auto_close_executor", executable_roles):
+        errors.append("The auto-close executor may only read owner_org_id and status of orders.orders")
     return errors
 
 
@@ -755,6 +794,8 @@ def main() -> int:
     checks.append("Master data loader: executor-owned function, operator-only EXECUTE, exact column grants, GATE-007 marker")
     errors.extend(operator_outbox_errors(sql, role_sql))
     checks.append("Operator outbox executor: dedicated NOLOGIN role, exact column grants, lane-granted API-only functions")
+    errors.extend(auto_close_errors(role_sql))
+    checks.append("Auto-close executor: dedicated NOLOGIN role, two column grants, lane-granted Worker-only discovery function")
     checks.append("BFF session store: pre-tenant table, session executor grants only, function-only runtime access")
     # D8-OUTBOX-LANE-DISPATCH: the DISPATCH lane is installed after the baseline by a module lane, so
     # the role model records its contract; it must never grant the lane to anyone but the Worker.

@@ -47,18 +47,18 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20261002000100_VersionDispatchPoliciesPerOrganization.cs"),
         ("Locations", "__ef_migrations_history_locations", AdoptCanonicalLocationsBaseline.MigrationId,
             "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalLocationsBaseline.cs"),
-        ("Drivers", "__ef_migrations_history_drivers", AdoptCanonicalDriverPositions.MigrationId,
-            "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260725000156_AdoptCanonicalDriverPositions.cs"),
+        ("Drivers", "__ef_migrations_history_drivers", AddDriverVoiceBridge.MigrationId,
+            "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20261011000100_AddDriverVoiceBridge.cs"),
         ("Pricing", "__ef_migrations_history_pricing", RequireMazatlanTimeZoneInMasterDataLoader.MigrationId,
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20261002000100_RequireMazatlanTimeZoneInMasterDataLoader.cs"),
-        ("Orders", "__ef_migrations_history_orders", AddOrderServiceWindow.MigrationId,
-            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20261002000100_AddOrderServiceWindow.cs"),
+        ("Orders", "__ef_migrations_history_orders", AddOrderAutoCloseDiscovery.MigrationId,
+            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20261010000100_AddOrderAutoCloseDiscovery.cs"),
         ("Dispatch", "__ef_migrations_history_dispatch", AddOperatorOwnerOutboxExecutor.MigrationId,
             "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20261003000100_AddOperatorOwnerOutboxExecutor.cs"),
         ("Custody", "__ef_migrations_history_custody", AddBffSessionPurge.MigrationId,
             "src/Modules/Custody/Custody.Infrastructure/Persistence/Migrations/20260927000400_AddBffSessionPurge.cs"),
-        ("Incidents", "__ef_migrations_history_incidents", IndexIncidentEvidenceByOrderProof.MigrationId,
-            "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20260927000100_IndexIncidentEvidenceByOrderProof.cs"),
+        ("Incidents", "__ef_migrations_history_incidents", AllowDispatchDecidedNextAction.MigrationId,
+            "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20261011000100_AllowDispatchDecidedNextAction.cs"),
         ("Finance", "__ef_migrations_history_finance", EnforceSettlementLedgerIntegrity.MigrationId,
             "src/Modules/Finance/Finance.Infrastructure/Persistence/Migrations/20260925000100_EnforceSettlementLedgerIntegrity.cs"),
         ("Notifications", "__ef_migrations_history_notifications", FailStaleWhatsAppNotificationLeases.MigrationId,
@@ -116,22 +116,11 @@ internal sealed class ModuleMigrationCoordinator
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
-                // ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: the lane's latest step only adds the two nullable
-                // service window columns and their check (or adopts the AI-06 ones); dropping them would erase
-                // committed delivery windows, so its rollback fails closed. TRK-002-AUTO-LINK and LIF-001 are
-                // verified below with their own fail-closed rollbacks.
-                "Orders" =>
-                    source.Contains("ORD_SERVICE_WINDOW_DOWNGRADE_NOT_SUPPORTED", StringComparison.Ordinal) &&
-                    !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("DROP INDEX", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("UPDATE orders", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
-                    !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
-                    !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
-                    !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
+                // ORD-AUTO-CLOSE-2026-10-10: the lane's latest step only adds the auto-close executor, its two column
+                // grants and its read-only discovery function; its rollback drops exactly that function (role and
+                // grants are declared by AI-18 and stay inert). ORD-SERVICE-WINDOW-OPTIONAL, TRK-002-AUTO-LINK and
+                // LIF-001 are verified below with their own fail-closed rollbacks.
+                "Orders" => IsOrderAutoCloseSource(source),
                 // OPS-003-CLEANUP-ROLE: the lane only adds the cleanup executor, its two functions and the
                 // BFF session purge; every purged row is a lifecycle fact, so its rollback fails closed.
                 "Custody" =>
@@ -152,6 +141,15 @@ internal sealed class ModuleMigrationCoordinator
                 // functions (role and grants are declared by AI-18 and stay inert). No table, column, policy, role
                 // or row is dropped, deleted or rewritten.
                 "Dispatch" => IsOperatorOwnerOutboxSource(source),
+                // VOICE-001-MASKED-CALLS-2026-10-11: the lane's latest migration only adds the driver phone columns
+                // and the recipient call request table; its rollback refuses while any request or phone exists and
+                // otherwise drops exactly those objects. DRV-003 is verified below as an adoption.
+                "Drivers" => IsDriverVoiceBridgeSource(source),
+                // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: the lane's latest step only lets
+                // incidents.incidents.next_action be NULL (dispatch decides); its rollback restores NOT NULL and
+                // refuses while any incident leaves the decision to dispatch. The evidence index before it is
+                // verified below with its own rule.
+                "Incidents" => IsIncidentDispatchDecisionSource(source),
                 // SCL-001: dropping the shared key ring invalidates every payload protected by any
                 // replica, so the lane is additive and its rollback fails closed.
                 "DataProtection" =>
@@ -181,6 +179,11 @@ internal sealed class ModuleMigrationCoordinator
                 "VERIFIED"));
         }
 
+        VerifyOrdersSource(
+            root,
+            AddOrderServiceWindow.MigrationId,
+            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20261002000100_AddOrderServiceWindow.cs",
+            IsOrderServiceWindowSource);
         VerifyFailClosedSource(
             root,
             "Orders",
@@ -266,6 +269,11 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDriversBaseline.cs");
         VerifyAdoptionSource(
             root,
+            "Drivers",
+            AdoptCanonicalDriverPositions.MigrationId,
+            "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20260725000156_AdoptCanonicalDriverPositions.cs");
+        VerifyAdoptionSource(
+            root,
             "Orders",
             AdoptCanonicalOrdersBaseline.MigrationId,
             "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalOrdersBaseline.cs");
@@ -284,6 +292,11 @@ internal sealed class ModuleMigrationCoordinator
             "Incidents",
             AdoptCanonicalIncidentsBaseline.MigrationId,
             "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20260922_AdoptCanonicalIncidentsBaseline.cs");
+        VerifyIncidentsSource(
+            root,
+            IndexIncidentEvidenceByOrderProof.MigrationId,
+            "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20260927000100_IndexIncidentEvidenceByOrderProof.cs",
+            IsIncidentEvidenceIndexSource);
 
         return result;
     }
@@ -481,7 +494,11 @@ internal sealed class ModuleMigrationCoordinator
         string[] expectedIds = contract.Module switch
         {
             "Drivers" =>
-                [AdoptCanonicalDriversBaseline.MigrationId, AdoptCanonicalDriverPositions.MigrationId],
+                [
+                    AdoptCanonicalDriversBaseline.MigrationId,
+                    AdoptCanonicalDriverPositions.MigrationId,
+                    AddDriverVoiceBridge.MigrationId,
+                ],
             "Pricing" =>
                 [
                     AdoptCanonicalPricingBaseline.MigrationId,
@@ -499,6 +516,7 @@ internal sealed class ModuleMigrationCoordinator
                     AddOrderLifecycleFinalizationExecutor.MigrationId,
                     AddTrackingLinkGenerations.MigrationId,
                     AddOrderServiceWindow.MigrationId,
+                    AddOrderAutoCloseDiscovery.MigrationId,
                 ],
             "Notifications" =>
                 [
@@ -525,7 +543,11 @@ internal sealed class ModuleMigrationCoordinator
                     VersionDispatchPoliciesPerOrganization.MigrationId,
                 ],
             "Incidents" =>
-                [AdoptCanonicalIncidentsBaseline.MigrationId, IndexIncidentEvidenceByOrderProof.MigrationId],
+                [
+                    AdoptCanonicalIncidentsBaseline.MigrationId,
+                    IndexIncidentEvidenceByOrderProof.MigrationId,
+                    AllowDispatchDecidedNextAction.MigrationId,
+                ],
             "Dispatch" =>
                 [AdoptCanonicalDispatchAssignmentsBaseline.MigrationId, AddOperatorOwnerOutboxExecutor.MigrationId],
             "DataProtection" =>
@@ -541,6 +563,79 @@ internal sealed class ModuleMigrationCoordinator
                 ? "PENDING"
                 : "DRIFT";
         return new ModuleMigrationState(contract.Module, $"platform.{contract.HistoryTable}", contract.MigrationId, status);
+    }
+
+    /// <summary>VOICE-001-MASKED-CALLS-2026-10-11: the driver phone columns and the recipient call request table only;
+    /// the rollback is guarded by <c>VOICE001_DOWNGRADE_BLOCKED_DATA_PRESENT</c> and drops exactly that table.</summary>
+    private static bool IsDriverVoiceBridgeSource(string source) =>
+        source.Contains(AddDriverVoiceBridge.DecisionId, StringComparison.Ordinal) &&
+        source.Contains(AddDriverVoiceBridge.DowngradeBlockedMessage, StringComparison.Ordinal) &&
+        source.Split("DROP TABLE", StringSplitOptions.None).Length - 1 == 1 &&
+        source.Contains("DROP TABLE drivers.recipient_call_requests;", StringComparison.Ordinal) &&
+        source.Contains("FORCE ROW LEVEL SECURITY;", StringComparison.Ordinal) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE drivers", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE drivers", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("GRANT ", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>ORD-AUTO-CLOSE-2026-10-10: only the auto-close executor, its two column grants and its read-only
+    /// discovery function; the rollback drops exactly that function and nothing else.</summary>
+    private static bool IsOrderAutoCloseSource(string source) =>
+        source.Contains(AddOrderAutoCloseDiscovery.DecisionId, StringComparison.Ordinal) &&
+        source.Contains("DROP FUNCTION IF EXISTS {{FunctionSignature}};", StringComparison.Ordinal) &&
+        source.Split("DROP FUNCTION", StringSplitOptions.None).Length - 1 == 1 &&
+        source.Contains("ORD_AUTO_CLOSE_LIMIT_OUT_OF_RANGE", StringComparison.Ordinal) &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP INDEX", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("ROW LEVEL SECURITY;", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("INSERT INTO", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE orders", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: the step only adds the two nullable service window columns and
+    /// their check (or adopts the AI-06 ones); dropping them would erase committed delivery windows, so its rollback
+    /// fails closed.</summary>
+    private static bool IsOrderServiceWindowSource(string source) =>
+        source.Contains("ORD_SERVICE_WINDOW_DOWNGRADE_NOT_SUPPORTED", StringComparison.Ordinal) &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP INDEX", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE orders", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    private static void VerifyOrdersSource(string root, string migrationId, string sourcePath, Func<string, bool> isValid)
+    {
+        var path = Path.Combine(root, sourcePath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(path))
+        {
+            throw new BaselineVerificationException("Orders evolution migration is missing.");
+        }
+
+        var source = File.ReadAllText(path);
+        if (!source.Contains(migrationId, StringComparison.Ordinal) || !isValid(source))
+        {
+            throw new BaselineVerificationException(
+                "Orders evolution migration is destructive or has an unexpected identifier.");
+        }
     }
 
     /// <summary>DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: only the operator outbox executor, its exact column
@@ -756,6 +851,65 @@ internal sealed class ModuleMigrationCoordinator
         !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: one nullability change on incidents.incidents and a
+    /// rollback that restores NOT NULL or refuses while any incident leaves its next action to dispatch; no row,
+    /// grant, policy, trigger, check or other object is added, dropped or rewritten.</summary>
+    private static bool IsIncidentDispatchDecisionSource(string source) =>
+        source.Contains(AllowDispatchDecidedNextAction.DecisionId, StringComparison.Ordinal) &&
+        source.Contains(AllowDispatchDecidedNextAction.DowngradeBlocked, StringComparison.Ordinal) &&
+        source.Contains("ALTER TABLE incidents.incidents ALTER COLUMN next_action DROP NOT NULL;", StringComparison.Ordinal) &&
+        source.Contains("ALTER TABLE incidents.incidents ALTER COLUMN next_action SET NOT NULL;", StringComparison.Ordinal) &&
+        source.Split("ALTER TABLE", StringSplitOptions.None).Length - 1 == 2 &&
+        source.Split("DROP ", StringSplitOptions.None).Length - 1 == 1 &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP CONSTRAINT", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP INDEX", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP TRIGGER", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("ROW LEVEL SECURITY;", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("INSERT INTO", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE incidents", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("GRANT ", StringComparison.Ordinal) &&
+        !source.Contains("REVOKE ", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>The INC-001 evidence index step: it only adds incident_evidence_order_proof_idx, and its rollback
+    /// drops exactly that index.</summary>
+    private static bool IsIncidentEvidenceIndexSource(string source) =>
+        source.Contains("CREATE INDEX IF NOT EXISTS incident_evidence_order_proof_idx", StringComparison.Ordinal) &&
+        source.Contains("DROP INDEX IF EXISTS incidents.incident_evidence_order_proof_idx;", StringComparison.Ordinal) &&
+        source.Split("DROP ", StringSplitOptions.None).Length - 1 == 1 &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>An earlier Incidents lane migration that must keep its reviewed shape.</summary>
+    private static void VerifyIncidentsSource(string root, string migrationId, string sourcePath, Func<string, bool> isValid)
+    {
+        var path = Path.Combine(root, sourcePath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(path))
+        {
+            throw new BaselineVerificationException("Incidents evolution migration is missing.");
+        }
+
+        var source = File.ReadAllText(path);
+        if (!source.Contains(migrationId, StringComparison.Ordinal) || !isValid(source))
+        {
+            throw new BaselineVerificationException(
+                "Incidents evolution migration is destructive or has an unexpected identifier.");
+        }
+    }
 
     /// <summary>An earlier Organizations lane migration that must keep its reviewed shape.</summary>
     private static void VerifyOrganizationsSource(string root, string migrationId, string sourcePath, Func<string, bool> isValid)
@@ -1247,6 +1401,14 @@ internal sealed class ModuleMigrationCoordinator
         await context.Database.MigrateAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// The privileged roles the Orders lane hands a function to: ADR-034 (LIF-001) and ORD-AUTO-CLOSE-2026-10-10. On a
+    /// populated Azure installation that predates either one, an administrator creates it (NOLOGIN BYPASSRLS) with SET
+    /// for the deployment role first; until then the bridge stops before writing anything.
+    /// </summary>
+    private static readonly string[] OrdersLaneExecutors =
+        ["paqueteria_lifecycle_executor", "paqueteria_auto_close_executor"];
+
     private static async Task MigrateOrdersAsync(string connectionString, CancellationToken cancellationToken,
         bool azureOwnershipBridge)
     {
@@ -1268,6 +1430,8 @@ internal sealed class ModuleMigrationCoordinator
             await using var verification = await connection.BeginTransactionAsync(cancellationToken);
             await DatabaseBaselineAssertions.AssertLifecycleExecutorInstalledAsync(
                 connection, verification, cancellationToken);
+            await DatabaseBaselineAssertions.AssertAutoCloseExecutorInstalledAsync(
+                connection, verification, cancellationToken);
             await verification.RollbackAsync(cancellationToken);
             return;
         }
@@ -1275,6 +1439,8 @@ internal sealed class ModuleMigrationCoordinator
         // E-002/ADR-034: transferring security.finalize_expired_orders(integer) to the lifecycle executor
         // as a non-superuser needs SET on the executor and a transaction-scoped CREATE on schema security,
         // exactly like the Notifications bridge; nothing else is granted and nothing survives the commit.
+        // ORD-AUTO-CLOSE-2026-10-10: the same lane hands security.list_auto_close_owner_organizations(uuid,integer)
+        // to the auto-close executor, so both executors pass the same gate and receive the same temporary CREATE.
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         var stage = "lock";
         try
@@ -1286,39 +1452,45 @@ internal sealed class ModuleMigrationCoordinator
                 await advisory.ExecuteNonQueryAsync(cancellationToken);
             }
 
-            stage = "capability-gate";
-            await using (var capability = new NpgsqlCommand("""
-                SELECT pg_catalog.to_regrole('paqueteria_lifecycle_executor') IS NOT NULL
-                   AND pg_catalog.pg_has_role(session_user,'paqueteria_lifecycle_executor','SET')
-                """, connection, transaction))
+            foreach (var executor in OrdersLaneExecutors)
             {
-                if (await capability.ExecuteScalarAsync(cancellationToken) is not true)
+                stage = "capability-gate";
+                await using (var capability = new NpgsqlCommand("""
+                    SELECT pg_catalog.to_regrole(@role) IS NOT NULL
+                       AND pg_catalog.pg_has_role(session_user,@role,'SET')
+                    """, connection, transaction))
                 {
-                    throw new InvalidOperationException(
-                        "E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles=paqueteria_lifecycle_executor; STOP_FOR_CONTRACT_REVIEW");
+                    capability.Parameters.AddWithValue("role", executor);
+                    if (await capability.ExecuteScalarAsync(cancellationToken) is not true)
+                    {
+                        throw new InvalidOperationException(
+                            $"E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles={executor}; STOP_FOR_CONTRACT_REVIEW");
+                    }
                 }
-            }
 
-            stage = "create-prestate";
-            await using (var prestate = new NpgsqlCommand(
-                "SELECT pg_catalog.has_schema_privilege('paqueteria_lifecycle_executor','security','CREATE')",
-                connection, transaction))
-            {
-                if (await prestate.ExecuteScalarAsync(cancellationToken) is true)
+                stage = "create-prestate";
+                await using (var prestate = new NpgsqlCommand(
+                    "SELECT pg_catalog.has_schema_privilege(@role,'security','CREATE')",
+                    connection, transaction))
                 {
-                    throw new InvalidOperationException(
-                        "E002_CREATE_PRESTATE_PRESENT role=paqueteria_lifecycle_executor schema=security; STOP_FOR_CONTRACT_REVIEW");
+                    prestate.Parameters.AddWithValue("role", executor);
+                    if (await prestate.ExecuteScalarAsync(cancellationToken) is true)
+                    {
+                        throw new InvalidOperationException(
+                            $"E002_CREATE_PRESTATE_PRESENT role={executor} schema=security; STOP_FOR_CONTRACT_REVIEW");
+                    }
                 }
             }
 
             stage = "grant-temporary-create";
             await using (var grant = new NpgsqlCommand(
-                "GRANT CREATE ON SCHEMA security TO paqueteria_lifecycle_executor", connection, transaction))
+                "GRANT CREATE ON SCHEMA security TO paqueteria_lifecycle_executor, paqueteria_auto_close_executor",
+                connection, transaction))
             {
                 await grant.ExecuteNonQueryAsync(cancellationToken);
             }
 
-            stage = "lif001-ef-migration";
+            stage = "orders-lane-ef-migration";
             await using (var context = new OrdersDbContext(options, new TenantDatabaseExecutionState()))
             {
                 await using (var historyExists = new NpgsqlCommand(
@@ -1341,7 +1513,7 @@ internal sealed class ModuleMigrationCoordinator
             stage = "revoke-temporary-create";
             await using (var revoke = new NpgsqlCommand("""
                 SET LOCAL ROLE paqueteria_migrator;
-                REVOKE CREATE ON SCHEMA security FROM paqueteria_lifecycle_executor;
+                REVOKE CREATE ON SCHEMA security FROM paqueteria_lifecycle_executor, paqueteria_auto_close_executor;
                 RESET ROLE;
                 """, connection, transaction))
             {
@@ -1350,6 +1522,9 @@ internal sealed class ModuleMigrationCoordinator
 
             stage = "assert-lifecycle-boundary";
             await DatabaseBaselineAssertions.AssertLifecycleExecutorInstalledAsync(
+                connection, transaction, cancellationToken);
+            stage = "assert-auto-close-boundary";
+            await DatabaseBaselineAssertions.AssertAutoCloseExecutorInstalledAsync(
                 connection, transaction, cancellationToken);
             stage = "commit";
             await transaction.CommitAsync(cancellationToken);

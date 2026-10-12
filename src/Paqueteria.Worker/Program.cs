@@ -30,6 +30,8 @@ builder.Services.AddNotificationsInfrastructure(builder.Configuration);
 // GATE-004-CHANNELS: WhatsApp (Meta Cloud API) and email (ACS) adapters; every channel Disabled by default.
 builder.Services.AddPaqueteriaMessaging(builder.Configuration, builder.Environment);
 builder.Services.AddOrdersClaimWindowFinalization(builder.Configuration);
+// ORD-AUTO-CLOSE-2026-10-10: closes DELIVERED orders whose CLOSED guards hold; off unless Orders:AutoClose:Enabled.
+builder.Services.AddOrdersAutoClose(builder.Configuration);
 builder.Services.AddDispatchAssignmentLifecycleWorker(builder.Configuration);
 builder.Services.AddCustodyOperationalCleanup(builder.Configuration);
 builder.Services

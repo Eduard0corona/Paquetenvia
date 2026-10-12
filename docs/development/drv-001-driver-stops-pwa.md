@@ -17,6 +17,13 @@ eventos, reintento de mutaciones, GPS, mapas, navegación, incidentes, failed
 attempt ni contact relay token. DRV-002 deberá extender la persistencia sin
 romper su partición.
 
+Actualización `UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11`: `DriverStop` agrega
+`contact_short_name`, `zone_name`, `service_window`, `cod` y `navigation`; la
+dirección completa con referencias y el nombre corto se muestran y se guardan en
+el teléfono solo para las paradas asignadas vigentes (snapshot esquema 2, base
+versión 3). Ver `ui-001-phase3-driver-stop-details.md`; lo que sigue describe
+DRV-001 tal como se entregó.
+
 ## Dependencias y arquitectura
 
 No se agregan dependencias. La implementación reutiliza React, Next.js,
@@ -133,8 +140,10 @@ no consulta otros endpoints ni prueba otras particiones.
 partición activa, y nunca caen a datos offline. Sin conexión no es posible
 detectar una revocación nueva.
 
-`address_summary` es el único dato de ubicación visible o persistido. La
-retención temporal del snapshot no se presenta como una decisión legal.
+`address_summary` es el único dato de ubicación visible o persistido (hasta
+`UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11`, que agrega la dirección completa y el
+nombre corto con su propia retención). La retención temporal del snapshot no se
+presenta como una decisión legal.
 
 ## Service Worker
 
@@ -252,7 +261,9 @@ Next y sus recursos Docker con el job .NET general.
 ## Límites y riesgos
 
 - La sesión productiva depende todavía del adaptador de identidad aprobado.
-- La caché contiene `address_summary`; partición y limpieza son críticas.
+- La caché contiene `address_summary` (y, desde
+  `UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11`, la dirección completa y el nombre
+  corto); partición y limpieza son críticas.
 - Un Service Worker obsoleto puede conservar un shell anterior.
 - SignalR no sustituye REST.
 - Offline no puede comprobar revocaciones nuevas; 401/403 conocidas limpian.

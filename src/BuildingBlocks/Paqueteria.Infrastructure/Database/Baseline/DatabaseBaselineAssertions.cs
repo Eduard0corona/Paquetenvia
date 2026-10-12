@@ -28,7 +28,22 @@ public sealed class DatabaseBaselineAssertions
         "paqueteria_master_data_loader",
         // DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: the operator outbox executor is never assumable at runtime.
         "paqueteria_operator_outbox_executor",
+        // ORD-AUTO-CLOSE-2026-10-10: neither is the auto-close executor.
+        "paqueteria_auto_close_executor",
     ];
+
+    /// <summary>ORD-AUTO-CLOSE-2026-10-10: the auto-close owner discovery function.</summary>
+    public const string AutoCloseFunction = "security.list_auto_close_owner_organizations(uuid,integer)";
+
+    /// <summary>
+    /// ORD-AUTO-CLOSE-2026-10-10: the auto-close executor's exact column grants (schema.table.column:privilege), as AI-18
+    /// declares them and the Orders lane verifies them.
+    /// </summary>
+    public static IReadOnlyList<string> AutoCloseExecutorGrants { get; } = Array.AsReadOnly(new[]
+    {
+        "orders.orders.owner_org_id:SELECT",
+        "orders.orders.status:SELECT",
+    });
 
     /// <summary>DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: the two operator outbox functions.</summary>
     public static IReadOnlyList<string> OperatorOutboxFunctions { get; } = Array.AsReadOnly(new[]
@@ -296,6 +311,7 @@ public sealed class DatabaseBaselineAssertions
         "registration executor boundary (REG-001)",
         "BFF session executor boundary (BFF-SESSION-TABLE-SHAPE)",
         "master data executor and loader boundary (MDM-001-OPERATOR-LOADER)",
+        "auto-close executor boundary (ORD-AUTO-CLOSE-2026-10-10)",
         "real default-privilege inheritance probes",
     });
 
@@ -427,14 +443,20 @@ public sealed class DatabaseBaselineAssertions
                   SELECT 'paqueteria_operator_outbox_executor',true
                   WHERE pg_catalog.to_regrole('paqueteria_operator_outbox_executor') IS NOT NULL
                      OR pg_catalog.to_regprocedure('security.append_operator_order_outbox(uuid,uuid,jsonb,text,text,uuid,integer,jsonb,smallint,timestamp with time zone,timestamp with time zone)') IS NOT NULL
-                     OR pg_catalog.to_regprocedure('security.append_operator_order_audit(uuid,uuid,uuid,text,text,uuid,text,jsonb,timestamp with time zone)') IS NOT NULL)
+                     OR pg_catalog.to_regprocedure('security.append_operator_order_audit(uuid,uuid,uuid,text,text,uuid,text,jsonb,timestamp with time zone)') IS NOT NULL),
+                -- ORD-AUTO-CLOSE-2026-10-10: the same rule for installations that predate the auto-close executor.
+                auto_close(name,bypass_rls) AS (
+                  SELECT 'paqueteria_auto_close_executor',true
+                  WHERE pg_catalog.to_regrole('paqueteria_auto_close_executor') IS NOT NULL
+                     OR pg_catalog.to_regprocedure('security.list_auto_close_owner_organizations(uuid,integer)') IS NOT NULL)
                 SELECT 'role ' || expected.name || ' flags differ from least-privilege NOLOGIN contract'
                 FROM (SELECT name,bypass_rls FROM expected UNION ALL SELECT name,bypass_rls FROM lifecycle
                       UNION ALL SELECT name,bypass_rls FROM cleanup
                       UNION ALL SELECT name,bypass_rls FROM registration
                       UNION ALL SELECT name,bypass_rls FROM session_store
                       UNION ALL SELECT name,bypass_rls FROM master_data
-                      UNION ALL SELECT name,bypass_rls FROM operator_outbox) expected
+                      UNION ALL SELECT name,bypass_rls FROM operator_outbox
+                      UNION ALL SELECT name,bypass_rls FROM auto_close) expected
                 LEFT JOIN pg_catalog.pg_roles r ON r.rolname=expected.name
                 WHERE r.oid IS NULL OR r.rolcanlogin OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication
                   OR r.rolbypassrls IS DISTINCT FROM expected.bypass_rls
@@ -499,6 +521,9 @@ public sealed class DatabaseBaselineAssertions
             checks++;
 
             await AssertOperatorOutboxExecutorBoundaryAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
+            checks++;
+
+            await AssertAutoCloseExecutorBoundaryAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 
             await AssertDefaultAclCatalogAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
@@ -727,6 +752,10 @@ public sealed class DatabaseBaselineAssertions
                 ('security.append_operator_order_outbox(uuid,uuid,jsonb,text,text,uuid,integer,jsonb,smallint,timestamp with time zone,timestamp with time zone)'),
                 ('security.append_operator_order_audit(uuid,uuid,uuid,text,text,uuid,text,jsonb,timestamp with time zone)')) operator_outbox(signature)
               WHERE to_regprocedure(signature) IS NOT NULL
+              UNION ALL
+              -- ORD-AUTO-CLOSE-2026-10-10: installed by the Orders lane after the baseline.
+              SELECT 'security.list_auto_close_owner_organizations(uuid,integer)','paqueteria_auto_close_executor'
+              WHERE to_regprocedure('security.list_auto_close_owner_organizations(uuid,integer)') IS NOT NULL
             )
             SELECT 'function owner mismatch for ' || expected.signature || ', expected ' || expected.owner
             FROM expected
@@ -741,7 +770,7 @@ public sealed class DatabaseBaselineAssertions
             WHERE owner.rolname IN ('paqueteria_bootstrap','paqueteria_outbox_executor','paqueteria_maintenance',
                 'paqueteria_lifecycle_executor','paqueteria_cleanup_executor','paqueteria_registration_executor',
                 'paqueteria_session_executor','paqueteria_master_data_executor','paqueteria_master_data_loader',
-                'paqueteria_operator_outbox_executor')
+                'paqueteria_operator_outbox_executor','paqueteria_auto_close_executor')
               AND NOT EXISTS (SELECT 1 FROM expected WHERE pg_catalog.to_regprocedure(expected.signature)=p.oid AND expected.owner=owner.rolname)
             UNION ALL
             SELECT 'general function owner mismatch for ' || n.nspname || '.' || p.proname || ', actual ' || owner.rolname
@@ -1589,6 +1618,150 @@ public sealed class DatabaseBaselineAssertions
             cancellationToken,
             new NpgsqlParameter<string[]>("grants", OperatorOutboxExecutorGrants.ToArray()),
             new NpgsqlParameter<string[]>("functions", OperatorOutboxFunctions.ToArray()),
+            new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray())).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// ORD-AUTO-CLOSE-2026-10-10 lane contract: after the Orders lane (and after any E-002 temporary grant is revoked)
+    /// the role and its function must exist and satisfy the exact executor boundary.
+    /// </summary>
+    public static async Task AssertAutoCloseExecutorInstalledAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        var violations = new List<string>();
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            SELECT 'auto-close executor role is missing'
+            WHERE pg_catalog.to_regrole('paqueteria_auto_close_executor') IS NULL
+            UNION ALL
+            SELECT 'auto-close discovery function is missing: security.list_auto_close_owner_organizations(uuid,integer)'
+            WHERE pg_catalog.to_regprocedure('security.list_auto_close_owner_organizations(uuid,integer)') IS NULL
+            """,
+            cancellationToken).ConfigureAwait(false);
+        await AssertAutoCloseExecutorBoundaryAsync(connection, transaction, violations, cancellationToken)
+            .ConfigureAwait(false);
+        if (violations.Count != 0)
+        {
+            throw new DatabaseAssertionException(violations.AsReadOnly());
+        }
+    }
+
+    /// <summary>
+    /// ORD-AUTO-CLOSE-2026-10-10: once the auto-close executor exists it holds exactly USAGE on <c>orders</c> and
+    /// SELECT(owner_org_id,status) on <c>orders.orders</c>, none grantable, no table-wide grant and no CREATE anywhere;
+    /// it inherits nothing, no runtime or bootstrap role can reach it, and it owns no relation, schema or type and no
+    /// function but its own. That function is a STABLE SECURITY DEFINER with search_path=pg_catalog, orders, pg_temp,
+    /// contains no dynamic SQL and no RETURNING, and its ACL is exactly the owner and <c>paqueteria_worker</c>.
+    /// Privileges are read from the catalog ACLs. The role may exist without the function (fresh AI-18 before the
+    /// lane, or after the lane is rolled back).
+    /// </summary>
+    private static async Task AssertAutoCloseExecutorBoundaryAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        ICollection<string> violations,
+        CancellationToken cancellationToken)
+    {
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            WITH executor AS (
+              SELECT oid FROM pg_catalog.pg_roles WHERE rolname='paqueteria_auto_close_executor'
+            ),
+            expected AS (
+              SELECT split_part(grant_text, '.', 1) AS table_schema,
+                     split_part(grant_text, '.', 2) AS table_name,
+                     split_part(split_part(grant_text, '.', 3), ':', 1) AS column_name,
+                     split_part(grant_text, ':', 2) AS privilege_type
+              FROM unnest(@grants::text[]) grant_text),
+            actual AS (
+              SELECT n.nspname::text AS table_schema, c.relname::text AS table_name, att.attname::text AS column_name,
+                     acl.privilege_type, acl.is_grantable
+              FROM pg_catalog.pg_attribute att
+              JOIN pg_catalog.pg_class c ON c.oid=att.attrelid
+              JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+              CROSS JOIN LATERAL pg_catalog.aclexplode(att.attacl) acl
+              WHERE att.attacl IS NOT NULL AND acl.grantee IN (SELECT oid FROM executor)),
+            installed AS (
+              SELECT p.oid,p.proowner,p.prosecdef,p.provolatile,p.proconfig,p.prosrc,
+                     (SELECT string_agg(entry, ',' ORDER BY entry COLLATE "C")
+                      FROM (SELECT CASE WHEN acl.grantee=0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(acl.grantee) END
+                                     || ':' || acl.privilege_type || ':' || acl.is_grantable::text AS entry
+                            FROM pg_catalog.aclexplode(p.proacl) acl) entries) AS acl
+              FROM pg_catalog.pg_proc p
+              WHERE p.oid=pg_catalog.to_regprocedure(@function))
+            SELECT 'missing auto-close executor column grant: ' || e.table_schema || '.' || e.table_name || '.' || e.column_name || ':' || e.privilege_type
+            FROM expected e CROSS JOIN executor
+            LEFT JOIN actual a USING(table_schema,table_name,column_name,privilege_type)
+            WHERE a.column_name IS NULL
+            UNION ALL
+            SELECT 'unexpected auto-close executor column grant: ' || a.table_schema || '.' || a.table_name || '.' || a.column_name || ':' || a.privilege_type
+            FROM actual a LEFT JOIN expected e USING(table_schema,table_name,column_name,privilege_type)
+            WHERE e.column_name IS NULL
+            UNION ALL
+            SELECT 'auto-close executor column grant is grantable: ' || a.table_schema || '.' || a.table_name || '.' || a.column_name
+            FROM actual a WHERE a.is_grantable
+            UNION ALL
+            SELECT 'unexpected auto-close executor table grant: ' || n.nspname || '.' || c.relname || ':' || acl.privilege_type
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+            CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) acl
+            WHERE c.relacl IS NOT NULL AND acl.grantee IN (SELECT oid FROM executor)
+            UNION ALL
+            SELECT 'auto-close executor schema privilege differs: ' || n.nspname
+            FROM pg_catalog.pg_namespace n CROSS JOIN executor
+            WHERE n.nspname=ANY(@schemas::text[])
+              AND (has_schema_privilege(executor.oid,n.oid,'CREATE')
+                OR has_schema_privilege(executor.oid,n.oid,'USAGE') IS DISTINCT FROM (n.nspname='orders'))
+            UNION ALL
+            SELECT 'auto-close executor inherits role ' || pg_catalog.pg_get_userbyid(m.roleid)
+            FROM pg_catalog.pg_auth_members m WHERE m.member IN (SELECT oid FROM executor)
+            UNION ALL
+            SELECT 'auto-close executor is reachable from ' || member.rolname
+            FROM pg_catalog.pg_auth_members m
+            JOIN pg_catalog.pg_roles member ON member.oid=m.member
+            WHERE m.roleid IN (SELECT oid FROM executor)
+              AND member.rolname IN ('paqueteria_app','paqueteria_worker','paqueteria_bootstrap')
+            UNION ALL
+            SELECT 'auto-close executor owns a relation, schema or type'
+            FROM executor
+            WHERE EXISTS (SELECT 1 FROM pg_catalog.pg_class WHERE relowner=executor.oid)
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspowner=executor.oid)
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_type WHERE typowner=executor.oid)
+            UNION ALL
+            SELECT 'auto-close executor owns another function: ' || p.oid::regprocedure::text
+            FROM pg_catalog.pg_proc p
+            WHERE p.proowner IN (SELECT oid FROM executor)
+              AND NOT EXISTS (SELECT 1 FROM installed WHERE installed.oid=p.oid)
+            UNION ALL
+            SELECT 'auto-close discovery function is unsafe: security.list_auto_close_owner_organizations(uuid,integer)'
+            FROM installed
+            WHERE NOT installed.prosecdef
+               OR installed.provolatile <> 's'
+               OR installed.proconfig IS DISTINCT FROM ARRAY['search_path=pg_catalog, orders, pg_temp']
+               OR installed.prosrc ~* '(^|[^a-z_])EXECUTE([^a-z_]|$)'
+               OR installed.prosrc ~* 'RETURNING'
+               OR installed.proowner IS DISTINCT FROM (SELECT oid FROM executor)
+            UNION ALL
+            SELECT 'auto-close discovery function ACL differs: ' || COALESCE(installed.acl, 'default')
+            FROM installed
+            WHERE installed.acl IS DISTINCT FROM
+              'paqueteria_auto_close_executor:EXECUTE:false,paqueteria_worker:EXECUTE:false'
+            UNION ALL
+            SELECT 'auto-close discovery function exists without the auto-close executor role'
+            FROM installed WHERE NOT EXISTS (SELECT 1 FROM executor)
+            """,
+            cancellationToken,
+            new NpgsqlParameter<string[]>("grants", AutoCloseExecutorGrants.ToArray()),
+            new NpgsqlParameter<string>("function", AutoCloseFunction),
             new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray())).ConfigureAwait(false);
     }
 

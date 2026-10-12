@@ -1,5 +1,501 @@
 # Changelog
 
+## Roles propios en la organización activa: `GET /me/organization-roles` (ORG-MY-ROLES-2026-10-12) — 2026-10-12
+
+- Preguntas y respuestas literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR
+  del contrato de la API (AI-01 §7). Primera: ""Registrar desde Despacho" no se puede cumplir sin tocar el servidor: el
+  API solo dice un rol por empresa, así que la app del repartidor no sabe que esa persona también es despacho. ¿Qué
+  hacemos?" → "Agregar los roles al API (Recommended)" ("Cambio pequeño y aditivo: el contexto de cada empresa trae
+  también la lista de roles de la persona (con ADR). La app no le ofrece el reporte desde el inicio y no se sube ninguna
+  foto."); no elegida: "Aprender tras el primer rechazo". Segunda, tras revisar esa primera versión (un miembro `roles`
+  en `OrganizationContext`, nunca fusionado ni desplegado): "Agregar "roles" dentro del contexto de cada empresa rompe
+  el inicio de sesión de la web actual (la de hoy rechaza campos que no conoce) si el API se publica antes que la web, y
+  deja fallando las pestañas ya abiertas hasta recargar. ¿Cómo lo hacemos?" → "Endpoint nuevo de roles (Recommended)"
+  ("Los roles salen de una consulta nueva del API (solo los de la persona en su empresa activa). La web actual nunca la
+  llama, así que nada se rompe en ningún orden de despliegue; mismo resultado en la app del repartidor."); no elegida:
+  "Campo en el contexto y orden de despliegue".
+- AI-05: `OrganizationContext` y `listOrganizationContexts` quedan como estaban (cuatro miembros; el parser estricto de
+  la web no cambia). Nueva operación `getMyOrganizationRoles` (`GET /me/organization-roles`, etiqueta Identity, con
+  `X-Organization-Id`) y esquema `MyOrganizationRoles`: el objeto cerrado `{"roles":[...]}` con los roles propios de
+  quien pregunta en la organización elegida (membresía ACTIVE de una organización ACTIVE; el mismo enum de roles, sin
+  repetidos, en orden ordinal, minItems 1); 200, 401, 403 (encabezado ausente, mal formado o ajeno, o sin esa membresía)
+  y 503, como `getMyDriverPhone`; `Cache-Control: no-store`. `x-capability-matrix` agrega `own_membership_operations`
+  (todos los roles miembros, sin MFA: no dice nada más allá de las propias membresías) y `x-pilot-contract-deltas` la
+  entrada `ORG-MY-ROLES`.
+- Servidor: `OrganizationEndpoints` la mapea con `ActiveOrganizationMember` y el contexto tenant (403); la capacidad
+  `getMyOrganizationRoles` se revisa antes de leer; `PostgreSqlMyOrganizationRolesReader` lee solo las membresías
+  propias dentro de una transacción tenant explícita con RLS como `paqueteria_app` y nunca escribe. Nada de otras
+  personas, sin PII, sin migración, tabla, rol, permiso ni flujo atómico nuevo; AI-04, AI-06 y AI-18 sin cambios.
+- PWA del repartidor: pide la consulta al instalar la sesión y en cada sesión nueva (otro inicio de sesión u otra
+  organización); usa al instante la respuesta guardada para la partición y la reemplaza con cada respuesta correcta.
+  La respuesta se guarda en el IndexedDB particionado existente (store `organization_roles` de la versión 4, que
+  ningún teléfono ha abierto todavía, así que no sube de versión): la llave de partición, el esquema y los códigos de
+  rol, nada más. Sale del teléfono con la partición ante 401 o 403 y con todas las instantáneas al cerrar sesión;
+  cualquier otra falla (sin conexión, 5xx, 404 de una API anterior, respuesta fuera de contrato) conserva la guardada
+  y la consulta se repite al volver la conexión o al volver a verse la app (en línea, una a la vez, hasta 5 veces por
+  sesión, nunca después de 401 o 403). Las reglas no cambian: con DISPATCHER o PLATFORM_ADMIN la parada dice que se
+  registre desde Despacho; DRIVER sin ellos reporta, también sin conexión; mientras la primera consulta va en camino
+  el reporte todavía no se ofrece y no se dice nada del rol; sin respuesta conocida ni consulta en camino el reporte
+  no se ofrece (falla cerrado) con "No pudimos confirmar tu rol. Vuelve a abrir la app con conexión para reportar."
+  Ningún aviso de rol pide cerrar sesión, que borraría lo que el teléfono guarda sin conexión.
+- AI-07 `driver_stop`: `failed_delivery.dispatch_role`, `role_loading` y `role_unknown` citan esta consulta;
+  `offline_cache` y `details.retention` agregan la respuesta guardada.
+- Despliegue: no hace falta ningún orden. La web anterior nunca llama la consulta nueva, y esta web con una API anterior
+  (404) solo deja de ofrecer "No se pudo entregar"; el inicio de sesión, las paradas y todo lo demás siguen igual.
+  Rollback: revertir la web o la API, en cualquier orden, sin datos ni esquema que deshacer.
+
+## Repartidor: "No se pudo entregar" con motivo y foto, también sin conexión (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12) — 2026-10-12
+
+- Respuestas literales del project owner, registradas con sus preguntas en `decision-log.md` como cambio MAJOR
+  (AI-01 §7): fase 3 aprobada con "avanza con la fase 3" y la pantalla de entrega del diseño ("Cómo llegar",
+  "Llamar", "Llegué al destino", "Foto de entrega", "Cobro $…", "Confirmar entrega", "Vista previa de la foto ·
+  Repetir", "Usar esta foto", "No se pudo entregar"; "¿Qué pasó?" con "El despacho decidirá si se reprograma o
+  regresa", "No había nadie", "Dirección incorrecta", "Rechazó el paquete", "No pagó el cobro", "Otro…", "Foto del
+  lugar (obligatoria)" y "Enviar reporte"); el 2026-10-11 "Despacho decide (Recommended)", "Lista cerrada
+  (Recommended)" y "Según el motivo (Recommended)" (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11); el 2026-10-12
+  "Solo si hay cobro (Recommended)" (""No pagó el cobro" aparece solo cuando la parada tiene un cobro COD; en las demás
+  se ven los otros motivos y "Otro…".") y "No, llama a despacho (Recommended)" ("Con un cobro guardado en el teléfono o
+  ya registrado, "No se pudo entregar" no aparece. Si fue un error, descarta el cobro guardado; si ya se registró, la
+  app le pide llamar a despacho, que decide y coordina la devolución del dinero."); y, tras la revisión del PR,
+  "Registrar desde Despacho (Recommended)" ("La app no le ofrece "No se pudo entregar" y le explica que registre el
+  intento desde la orden en Despacho, donde elige motivo y siguiente paso. Sin cambiar el servidor.") y "Después, con
+  ADR (Recommended)" ("Lo registro como riesgo y pendiente (un tipo de foto propio para intento fallido, o que la
+  entrega cite su foto). En el uso normal de la app la entrega siempre sube su propia foto, así que no bloquea el
+  piloto.").
+- AI-07 `/driver/stops/:id` agrega la decisión y `screen_contracts.driver_stop.failed_delivery`: en una parada de
+  entrega en DELIVERING (confirmado o por sincronizar), "No se pudo entregar" abre "¿Qué pasó?" (renglones de 44 px;
+  "No pagó el cobro" solo si `DriverStop.cod` no es null; "Otro…" muestra "Acceso restringido", "Paquete dañado" y
+  "Riesgo de seguridad"), "Foto del lugar (obligatoria)" con la misma vista previa de la entrega y "Enviar reporte",
+  deshabilitado hasta tener motivo y foto, sin texto libre ni confirmación. `cod_collection.not_paid` apunta a este
+  flujo y `cod_collection.door_only` dice que un cobro solo se registra con la parada en DELIVERING.
+- PWA: una operación cerrada FAILED_DELIVERY corre la secuencia de AI-05 (sesión DELIVERY_PHOTO, PUT, prueba,
+  `openIncident` sin severity, description ni next_action, `transitionOrder` a FAILED_ATTEMPT con
+  `metadata.incident_id`), con una Idempotency-Key por petición al API; guarda la foto, las llaves y su avance, así
+  que un reintento o una pestaña nueva siguen en el paso correcto y nunca abren otra incidencia. Operaciones esquema 3,
+  IndexedDB versión 4 (las operaciones en cola se migran sin perderse; una app anterior no puede abrir la base) y caché
+  del Service Worker v7. Pendiente se ve como pendiente ("Reporte guardado en el teléfono. Se enviará cuando haya
+  conexión."); confirmado se ve "Intento fallido · El despacho decide".
+- Cobro: con un cobro guardado en el teléfono el reporte no aparece y la parada pide descartarlo primero (con la
+  confirmación de siempre); con el cobro registrado pide llamar a despacho, sin mostrar teléfono. La sincronización
+  retiene el reporte si aparece un cobro de la orden (antes de la sesión de carga, antes de la incidencia y antes de la
+  transición) y nunca registra un cobro fuera de la puerta: la incidencia nunca se pide con un cobro guardado o
+  registrado; si el cobro se registra después de abrirla, la transición no se manda y la incidencia queda para
+  despacho. Solo en la PWA: el servidor sigue aceptando el reporte del despacho con cobro, a propósito, porque despacho
+  decide.
+- Revisión del PR: antes de su incidencia, un reporte solo se manda si REST muestra la parada en DELIVERING en la
+  versión exacta en que se hizo (antes de la sesión y antes de la incidencia); un intento fallido que registró despacho
+  nunca lo confirma ("Despacho ya registró el intento fallido de esta entrega, así que tu reporte no se envió.
+  Descártalo."); REST confirma un reporte solo por su transición aceptada (cualquier versión posterior) o por su propia
+  incidencia; sin la parada en la respuesta de REST no se manda ni reporte ni cobro, y lo aceptado que REST nunca
+  muestra sale a las 72 horas; un reporte nunca se rehace para otra versión; lo que queda de una parada que despacho
+  movió siempre se puede descartar; un reporte con incidencia abierta (o posiblemente abierta) lo dice y nunca invita a
+  reportarlo de nuevo, también al vencer; "Enviar reporte" muestra el motivo real de un rechazo; quien también es
+  despacho ve el aviso de registrar desde Despacho y el 409 `INVALID_REQUEST` de la incidencia ya no habla del reloj;
+  una actualización de la base que bloquea otra pestaña pide cerrarla y cierra la conexión tardía.
+- Riesgos residuales: la "Foto del lugar" que queda sin incidencia podría contar para DELIVERED (pendiente de servidor
+  con ADR); `DriverStop.cod.recorded` es falso con un cobro DISPUTED o REVERSED; un cobro registrado entre la última
+  revisión y una petición no se puede impedir desde el teléfono.
+- Segunda y tercera revisión: el teléfono sabe que la persona también es despacho por su propia consulta de roles
+  (`GET /me/organization-roles`, ORG-MY-ROLES-2026-10-12, arriba), guardada por partición para que funcione sin
+  conexión; sin respuesta conocida el reporte no se ofrece (falla cerrado) y la parada lo explica; un reporte que REST
+  ya confirma ya no impide un reporte nuevo de la misma parada; y una acción que el servidor ya aceptó sigue esperando a
+  REST cuando falla la lectura de confirmación, así que nunca vence como no enviada.
+- Sin cambios en AI-04, AI-06, AI-18, roles, permisos ni migraciones, y sin un flujo atómico nuevo; el cambio de AI-05
+  y del servidor que necesita la respuesta 3 es ORG-MY-ROLES-2026-10-12, sin orden de despliegue.
+  Rollback: no es un revert simple (la app anterior abre IndexedDB 3 y el teléfono actualizado la rechaza); es una
+  versión que deja de ofrecer "No se pudo entregar" con IndexedDB 4, o una con IndexedDB 5 que reescribe la cola al
+  esquema 2 y descarta los reportes en cola (ver la nota de desarrollo).
+
+## Tablero y bandeja: la otra parte de la orden sin nombre en lugar de 503 (OBS-001-OPERATED-OWNER-NAME-2026-10-12) — 2026-10-12
+
+- Instrucción literal del project owner (2026-10-11), registrada en `decision-log.md` como cambio MAJOR (AI-01 §7):
+  "Pick the minimal option consistent with `owner_org_id` ≠ `operator_org_id` semantics (CLAUDE.md invariant 2), and
+  document the choice.", entre "Return no owner name, or a neutral label, for orders the reader only operates." y "Add
+  a narrow SECURITY DEFINER lookup that returns only the display name of owners that have an operator relationship
+  with the caller." Se eligió la primera, para las dos partes de la orden.
+- Defecto preexistente (riesgo residual del PR #221): AI-06 `organizations_tenant` oculta al operador la fila de la
+  organización dueña, el read model OBS-001 leía su nombre `NULL` y respondía 503 para toda la página (cada cola de la
+  bandeja y el Tablero), aunque `getOperationsQueueCounts` contaba esas órdenes. La dueña que lee una orden que opera
+  otra organización fallaba igual con el nombre del operador.
+- Read model `GET /api/v1/operations/dashboard` (ADR-OBS-001, fuera de AI-05): `owner` y `operator` conservan
+  `{organization_id, display_name}`; `display_name` es el nombre propio de la organización seleccionada y `null` para
+  la otra parte. Falla cerrado (503) una fila que no posee ni opera, su propio nombre ausente o un nombre que RLS debía
+  ocultar. Cliente, zona y demás filas de la dueña siguen ausentes para el operador; misma transacción RLS, mismos dos
+  comandos, mismos lectores y mismo 403.
+- PWA: el parser acepta `display_name: null` y exige una parte con nombre por orden; la tarjeta del Tablero y el
+  detalle muestran "Otra organización" (nunca el id); los filtros Dueño/Opera solo ofrecen organizaciones con nombre.
+- AI-07 `dispatch_dashboard`: `decision_amendments` y `organization_names`.
+- Sin cambios en AI-04, AI-05, AI-06, AI-18, migraciones, roles, grants, funciones SECURITY DEFINER, capacidades ni
+  flujos cross-module.
+
+## Rutas: errores por motivo con "Verificar identidad", fechas legibles, todas las páginas, "Agregar entrega" por guía y detalle sin IDs (UI-PHASE3-ROUTES-NO-IDS-2026-10-12) — 2026-10-12
+
+- Pregunta y respuesta literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR
+  (AI-01 §7): "En la pantalla Rutas quedaron detalles fuera de lo que pedí: si falla "Crear ruta" dice "La ruta cambió
+  mientras la editabas…" aunque el motivo sea otro, no ofrece verificar identidad (MFA), la lista muestra fechas como
+  2026-10-12 y solo la primera página, "Agregar entrega" pide pegar el ID de la orden y el detalle muestra IDs cortos.
+  ¿Los corrijo?" → "Sí, todo (Recommended)" ("Mensaje por motivo y verificar identidad, fechas legibles y todas las
+  páginas, "Agregar entrega" por número de guía (PQ-…), y el detalle muestra fecha, DRV- y guía en lugar de IDs.").
+  "PQ-…" venía del mockup: la guía real es el `public_id` de la orden (`ORD_` y 22 caracteres, el patrón de
+  `listOrders.public_id`), el mismo valor de "Buscar guía (ORD_…)" de la barra superior.
+- AI-07 `route_planner`:
+  - `errors`: cada cambio (`createRoute`, `addRouteStop`, `removeRouteStop`, `reorderRouteStops`) dice su motivo por el
+    código del problema; solo VERSION_CONFLICT dice que la ruta cambió y la vuelve a leer; sesión, rol y MFA con los
+    textos compartidos y "Verificar identidad" de regreso a `/ops/routes` con la ruta mostrada; sin respuesta válida
+    nunca dice que se guardó. La Idempotency-Key de cada cambio sigue siendo nueva.
+  - `list`: todas las páginas de `listRoutes` en el orden del servidor (máximo 10, con aviso; un cursor repetido hace
+    fallar la lectura) y cada ruta como "Ruta del 12 de octubre de 2026" o "Ruta sin fecha".
+  - `add_order`: "Guía (ORD_…)" con la validación y el cliente de `listOrders?public_id=` de la barra superior (ninguna:
+    "No encontramos esa guía"; más de una u otra guía fallan cerrado) y luego `addRouteStop`; `?orderId=` llena la guía
+    leída con `getOrder` o deja el campo vacío.
+  - `detail`: nombre por fecha, "Repartidor DRV-…" de `listOrganizationDrivers` ("Repartidor no disponible" si no
+    aparece), estado y paradas; cada parada con su guía de `getOrder` (máximo 100, cancelable, en memoria) o "Guía no
+    disponible"; las etiquetas accesibles usan la guía o la posición.
+  - Fuentes nuevas `order_lookup` (`listOrders`) y `order_guides` (`getOrder`); `not_supported`: terminar o descartar
+    rutas.
+- Sin cambios en AI-04, AI-05, AI-06, AI-18, backend, roles, capacidades, migraciones ni flujos cross-module.
+
+## Bandeja: "Crear ruta nueva" por día (UI-PHASE3-ROUTES-DAILY-2026-10-12) — 2026-10-12
+
+- Pregunta y respuesta literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR
+  (AI-01 §7): "Rutas: el API no tiene forma de terminar ni cancelar una ruta, así que toda ruta se queda en borrador para
+  siempre. Por eso "Crear ruta nueva" en la bandeja (solo aparece si el repartidor no tiene ninguna ruta en borrador)
+  dejaría de aparecer desde el segundo día. ¿Qué hacemos?" → "Ruta por día (Recommended)" ("Sin cambiar el API: el paso
+  ofrece "Crear ruta nueva" cuando el repartidor no tiene ruta en borrador con fecha de hoy (Mazatlán), y las rutas de
+  hoy salen primero. Terminar o descartar rutas viejas queda para después del piloto."). No se eligieron "Ruta por día +
+  cerrar rutas" ("Lo anterior, más un ADR con operaciones nuevas para "Terminar ruta" (sin paradas pendientes) y
+  "Descartar ruta" (borrador sin paradas), para que las viejas salgan de las listas.") ni "Dejar como está".
+- AI-07 `work_inbox.bulk_add_to_route` (`route_order`, `no_route`) y `create_route` (`offered_when`, `outcome`,
+  `found`): "Crear ruta nueva" se ofrece cuando el repartidor no tiene una ruta en borrador con `scheduled_for` de hoy en
+  America/Mazatlan (una ruta sin fecha no cuenta), también debajo de sus rutas anteriores, que se pueden seguir eligiendo;
+  las rutas de hoy van primero y llevan "(hoy)"; tras una falla ambigua solo cuenta como encontrada una ruta de hoy. Las
+  demás reglas de UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11 no cambian. Rutas conserva el orden del servidor.
+  `work_inbox.not_supported` y `route_planner.not_supported`: terminar o descartar rutas viejas, después del piloto.
+- Sin cambios en AI-04, AI-05, AI-06, AI-18, backend, roles, capacidades, migraciones ni flujos cross-module.
+
+## Repartidor: datos de la parada, "Cómo llegar" y cobro en la puerta (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11) — 2026-10-11
+
+- Respuestas literales del project owner: "avanza con la fase 3" (2026-10-09) y, el 2026-10-11, "Sí, como el diseño
+  (Recommended)" ("Solo de sus paradas asignadas. Se borra del teléfono cuando la parada deja de estar asignada o al
+  cerrar sesión. Con datos de prueba hasta cerrar GATE-007."), "Google Maps (Recommended)", "Solo confirma el monto
+  (Recommended)" ("Toca "Recibí $1,250.00" y el sistema pone la referencia (guía y hora). Si no le pagan, reporta "No
+  pagó el cobro"."), "Completo en recolección (Recommended)" ("En recolección se ve el nombre completo del contacto,
+  como en tu diseño; en entrega, el nombre corto ("M. López")."), "Completo, como recolección (Recommended)" ("El
+  remitente es el mismo contacto de la recolección, así que se ve igual: "Farmacia Las Quintas".") y "Solo el número
+  (Recommended)" ("El servidor manda cuántas paradas terminó hoy (hora de Mazatlán), sin datos de esas paradas.");
+  registradas, con sus preguntas, en `decision-log.md` como cambio MAJOR (AI-01 §7).
+- AI-05 listMyStops responde `DriverStopList` (`stops` y `completed_today`). Cada `DriverStop` agrega
+  `details_available`, `contact_short_name`, `contact_full_name`, `zone_name`, `service_window`, `cod` (`expected` y
+  `recorded`) y `navigation` (latitud, longitud, dirección y referencias), solo para las asignaciones ACCEPTED o ACTIVE
+  del repartidor que consulta. El servidor descifra la dirección y el contacto con el sobre ADP-001, en un lote, después
+  de cerrar la transacción del tenant y a través del puerto compartido `ILocationPiiReader` (Paqueteria.Application),
+  que Locations implementa con su mismo modo de `Locations:PiiProtector`; Dispatch no referencia el módulo Locations.
+  Si los datos de una parada no se pueden leer, la parada llega con `details_available` en false y sin nombre ni
+  navegación; la respuesta nunca falla ni es parcial por eso. `details=false` devuelve las mismas paradas sin leer
+  ningún dato protegido (otro valor, otro parámetro o uno repetido: 409 INVALID_REQUEST). Toda respuesta lleva
+  Cache-Control no-store.
+  Contacto: en recolección y devolución, el nombre completo (`contact_full_name`); en entrega, solo el nombre corto
+  (`contact_short_name`: inicial de la primera palabra, punto y última palabra, "M. Pérez"). Los caracteres de formato
+  cuentan como espacio, un texto vacío es null y `zone_name` se recorta a 200 caracteres. `cod.recorded` es la misma
+  condición de la guarda de DELIVERED. `completed_today` cuenta los cambios a PICKED_UP, DELIVERED o RETURNED que hizo
+  el repartidor que consulta en órdenes asignadas a él, durante el día de hoy en America/Mazatlan; solo el número.
+- AI-07 `/driver/stops/:id` agrega las acciones `navigate` y `cod_collection`; `screen_contracts.driver_stop` agrega
+  `details` (lista y detalle del diseño con el encabezado "Hoy · N paradas · K hechas", ventana en hora de Mazatlán,
+  "Datos de entrega no disponibles por ahora" cuando no hay datos, lecturas de confirmación sin datos protegidos que no
+  borran los guardados; retención: solo la instantánea vigente, cerrar sesión borra las instantáneas del teléfono y
+  401/403 la de la sesión), `navigation` (Google Maps por coordenadas en una pestaña nueva, sin solicitud al servidor ni
+  cálculo de rutas, GATE-003) y `cod_collection` ("Recibí $X" con confirmación; referencia con la guía y la hora local
+  del teléfono; una Idempotency-Key por cobro; la cola sigue el orden de dependencia, así que el cobro siempre va antes
+  de la entrega; una entrega sin cobro guardado espera el cobro y "Recibí" se ofrece de nuevo). `offline_cache` dice
+  que el teléfono guarda el nombre del contacto y la dirección de las paradas asignadas en este momento.
+- PWA: IndexedDB versión 3 (se descartan las instantáneas anteriores y las operaciones en cola se migran sin perderse) y
+  caché del Service Worker v6. Una parada que no cumple el contrato se deja fuera (o sin sus datos) en lugar de
+  rechazar la lista; cerrar sesión durante una sincronización nunca descarta una acción en cola. Un rollback debe
+  conservar la versión 3 o superior de IndexedDB.
+- Pendientes: "No pagó el cobro" (intento fallido). Datos de prueba hasta cerrar GATE-007. Sin cambios en AI-04, AI-06,
+  AI-18, roles, permisos ni migraciones, y sin un flujo atómico nuevo.
+
+## Bandeja y Rutas: "Crear ruta nueva" dentro del paso y selectores en "Crear ruta" (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11) — 2026-10-11
+
+- Pregunta y respuesta literales del project owner (2026-10-11), registradas en `decision-log.md` como cambio MAJOR
+  (AI-01 §7): "Bandeja, "Agregar estas órdenes a una ruta…": si el repartidor no tiene una ruta en borrador, hoy hay
+  que ir a Rutas a crearla. ¿Agregamos "Crear ruta nueva" dentro de ese mismo paso?" → "Sí, en el paso (Recommended)"
+  ("Crea la ruta en borrador para ese repartidor, con la ciudad de las órdenes y la fecha de hoy (hora de Mazatlán), y
+  sigue a la vista previa."). La otra opción, "Solo en Rutas" ("El paso sigue mandando a Rutas para crearla; ahí cambio
+  los IDs por selectores de repartidor y ciudad."), no se eligió. Después se le dijo al owner que el mismo cambio
+  sustituye también los campos de ID internos del formulario "Crear ruta" de Rutas por selectores, y no objetó; la
+  propuesta UX aprobada (UI-001) nombra "Las rutas piden el UUID del repartidor" como problema por corregir. La fase 3
+  se aprobó con "avanza con la fase 3".
+- AI-07 `work_inbox.bulk_add_to_route.create_route`: "Crear ruta nueva" aparece solo donde el paso dice que el
+  repartidor no tiene rutas en borrador. Cada orden del lote se lee con `getOrder`, una tras otra, para su `city_id`:
+  una sola ciudad ofrece el botón (nombrada con `listCities`, sin su id); órdenes de ciudades distintas no lo ofrecen y
+  el paso explica que una ruta cubre una sola ciudad y que se crean en Rutas; una orden que no se puede leer deja el
+  mensaje de no disponible. `createRoute` va con el repartidor del lote, la ciudad de las órdenes,
+  `service_area_id` nulo y la fecha de hoy en America/Mazatlan, con una Idempotency-Key que solo se reutiliza para
+  reenviar la misma solicitud tras una falla de red o del servidor; el botón espera mientras se envía. La ruta creada
+  queda elegida y el paso sigue a la misma vista previa, confirmación y `addRouteStop`. Las negativas (sesión, rol,
+  MFA con "Verificar identidad", 404 uniforme, DRIVER_INELIGIBLE, INVALID_REQUEST) dicen en español que no se creó la
+  ruta; ante una falla que no confirma si se creó, primero se vuelven a listar las rutas en borrador para encontrarla
+  en vez de duplicarla. `work_inbox.not_supported` deja solo los lotes con órdenes de ciudades distintas.
+- AI-07 `route_planner.create_form` (`/ops/routes`): "Crear ruta" ya no pide pegar IDs. Repartidor es un selector de
+  `listOrganizationDrivers` (todas las páginas, solo ACTIVE, `DRV-` con vehículo y estado), Ciudad uno de
+  `listCities` (nombre y estado) y Área de servicio uno de `listServiceAreas` (solo ACTIVE, con "Toda la ciudad");
+  cada lista tiene estados de carga, vacío y error, y el envío espera repartidor y ciudad. El resto de Rutas no cambia.
+- Sin cambios en AI-04, AI-05, AI-06, AI-18, backend, roles, capacidades, migraciones ni flujos cross-module.
+
+## Bandeja: "Agregar estas órdenes a una ruta…" al terminar una asignación en lote (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11) — 2026-10-11
+
+- Respuesta literal del project owner, registrada con su pregunta en `decision-log.md` como cambio MAJOR (AI-01 §7):
+  "Al terminar el lote (Recommended)" ("Después de "Asignar seleccionadas…" aparece "Agregar estas órdenes a una
+  ruta…" con las mismas órdenes y el mismo repartidor, con vista previa."). La fase 3 se aprobó con "avanza con la
+  fase 3".
+- AI-07 `work_inbox.bulk_add_to_route`: cuando un lote de "Asignar seleccionadas…" termina con al menos una orden
+  asignada, el panel ofrece "Agregar estas órdenes a una ruta…" solo con las órdenes que ese lote asignó y con su
+  repartidor. Solo se eligen rutas en borrador de ese repartidor (`listRoutes` con `status=DRAFT` y `driver_id`),
+  nombradas por fecha y paradas actuales, sin identificadores ni montos. La vista previa muestra la ruta, el
+  repartidor (`DRV-`) y las órdenes en el orden en que se agregan; la confirmación nombra la ruta, el repartidor y el
+  número de órdenes.
+- `addRouteStop` se envía una orden tras otra, cada una con su Idempotency-Key reutilizada al reenviar, con el
+  `expected_version` recién leído y después el de cada respuesta. Un VERSION_CONFLICT detiene el envío, vuelve a leer
+  la ruta y pide confirmar de nuevo. DRIVER_INELIGIBLE e INVALID_REQUEST responden solo por su orden. Un CONFLICT
+  genérico o el 404 también, pero el servidor los usa además para una ruta que dejó el borrador, así que antes de la
+  siguiente orden `getRoute` debe mostrar la misma ruta en borrador y la misma versión; si no, el envío se detiene como
+  con VERSION_CONFLICT. Un 403 MFA_REQUIRED ofrece "Verificar identidad". Resultado por fila con mensaje en español,
+  resumen sin ocultar fallas parciales y nueva lectura de la cola y los conteos. Es una secuencia de una operación
+  existente, no un flujo atómico nuevo de AI-13 §4.
+- La bandeja no crea rutas: si el repartidor no tiene una en borrador, la pantalla indica crearla en Rutas. Sin
+  cambios en AI-04, AI-05, AI-06, AI-18, backend, roles, capacidades ni migraciones.
+
+## Llamadas enmascaradas: confirmar con una tecla (VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11) — 2026-10-11
+
+- Pregunta y respuesta literales del project owner: "Llamadas enmascaradas: si contesta un buzón de voz, el saludo del
+  buzón puede decir el número del repartidor o del destinatario, y eso rompe el enmascarado. ¿Cómo lo evitamos?" →
+  "Confirmar con una tecla (Recommended)" ("Al repartidor le dice "Presiona 1 para llamar al destinatario". Al
+  destinatario: "Tiene una llamada sobre su envío; presione 1 para contestar" (texto neutro, sin marca). Si nadie
+  presiona, se cuelga sin enlazar. Gratis y no falla con buzones."); registrada como
+  `VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11` en `decision-log.md` y en `docs/adr/ADR-VOICE-001-MASKED-CALL-BRIDGE.md`.
+- AI-05: webhooks firmados `confirmTwilioDriverKeypress`, `screenTwilioRecipient` y `confirmTwilioRecipientKeypress`
+  (esquemas `TwilioKeypressForm` y `TwilioRecipientKeypressForm`); `RecipientCallAvailability.retry_after_seconds`;
+  descripciones de `requestRecipientCall` (tecla en ambos tramos, cualquier 5xx es ambiguo, reserva propia tras un
+  commit, solicitudes abandonadas), `receiveTwilioCallStatus` (nunca promueve una solicitud `FAILED`) y del celular del
+  repartidor (consultar y borrar con cualquier estado del perfil; registrar solo con perfil `ACTIVE`); entrada
+  `VOICE-001-VOICEMAIL-KEYPRESS` en `x-pilot-contract-deltas`.
+- AI-07: `driver_stop.recipient_call` (botón deshabilitado sin conexión solo tras confirmar la disponibilidad,
+  respuestas tardías descartadas, una nueva consulta al terminar la espera) y `driver_account` (borrar el celular con
+  cualquier estado del perfil).
+- AI-08: VOICE-001 agrega la decisión, criterios de aceptación (tecla, 5xx ambiguo, solicitudes abandonadas, ARCO) y
+  pruebas de las teclas.
+- AI-24 `voice_bridge`: `call`, `key_presses`, `resilience`, `request`, `webhooks`, `audit` y `erasure`.
+- Sin cambios en AI-06, AI-18 ni AI-12; la columna `bridge_stage` entra en la migración del lane Drivers
+  `20261011000100_AddDriverVoiceBridge`, que aún no se fusiona. No es un sexto flujo de AI-13 §4.
+
+## Llamadas enmascaradas repartidor–destinatario con Twilio (VOICE-001) — 2026-10-11
+
+- Preguntas y respuestas literales del project owner: "App del repartidor: hoy no ve el teléfono del destinatario.
+  ¿Debe poder llamarle desde la app?" → "Sí, con número enmascarado"; "Número enmascarado: … ¿Cómo seguimos?" →
+  "Investiga y propón (Recommended)"; "Número enmascarado: comparé proveedores. Azure Communication Services queda
+  descartado: no vende números mexicanos para llamar y Microsoft lo va a retirar. ¿Con cuál seguimos?" → "Twilio
+  (Recommended)". Registradas como `VOICE-001-MASKED-CALLS-2026-10-11` y `VOICE-001-PROVIDER-TWILIO-2026-10-11` (ADR:
+  Twilio como nuevo encargado de datos personales) en `decision-log.md` y en
+  `docs/adr/ADR-VOICE-001-MASKED-CALL-BRIDGE.md`.
+- AI-05: `getMyDriverPhone`, `registerMyDriverPhone`, `removeMyDriverPhone` (`/driver/me/phone`),
+  `getRecipientCallAvailability` y `requestRecipientCall` (`/driver/me/stops/{orderId}/recipient-call`, solo DRIVER,
+  `x-capability-matrix.voice_call_operations`, 404 uniforme, Idempotency-Key, 429, sin números en petición ni
+  respuesta) y los webhooks firmados `receiveTwilioCallStatus` y `answerTwilioInboundCall` (etiqueta Voice); entrada
+  `VOICE-001-MASKED-CALLS` en `x-pilot-contract-deltas`.
+- AI-07: `driver_stop.recipient_call` ("Llamar al destinatario" solo si el servidor lo permite; acción solo en línea,
+  nunca en la cola offline; "masked phone or relay") y `driver_account` (celular propio con consentimiento explícito).
+- AI-08: ítem VOICE-001 (MVP-1, P1, compuerta GATE-007; el piloto no usa números reales antes de resolver GATE-007).
+- AI-24 `voice_bridge`; AI-03 §15 añade `IVoiceBridgeProvider`; AI-04 `privacy_invariants` añade la regla de los
+  teléfonos de la llamada puente.
+- Sin cambios en AI-06, AI-18 ni AI-12: el lane Drivers `20261011000100_AddDriverVoiceBridge` agrega las columnas del
+  celular del repartidor y la tabla `drivers.recipient_call_requests`. No es un sexto flujo de AI-13 §4.
+
+## Repartidores del despacho y selector de repartidor en liquidaciones (UI-PHASE3-DRIVERS-2026-10-11) — 2026-10-11
+
+- Respuestas literales del project owner: "avanza con la fase 3" (2026-10-09) y, el 2026-10-11, "Lista de consulta
+  (Recommended)" y "Sí, con referencia DRV- (Recommended)"; registradas con sus preguntas y el texto de cada opción en
+  `decision-log.md` como cambio MAJOR (AI-01 §7), cuyo ADR es esa fila.
+- AI-05 `listOrganizationDrivers` (`GET /drivers`, esquemas `OrganizationDriver` y `OrganizationDriverPage`): lista por
+  cursor los repartidores OWN de la organización activa que no están INACTIVE, con la referencia `DRV-`, vehículo,
+  estado, paradas activas (las mismas que el repartidor ve en su app, sin filtro por día) y la hora de su última
+  ubicación, nunca la ubicación. Solo DISPATCHER y PLATFORM_ADMIN con MFA, los roles del selector de asignación.
+- AI-05 `listSettlementPayees` (`GET /settlement-payees`, esquemas `SettlementPayee` y `SettlementPayeePage`): lista por
+  cursor todos los repartidores de la organización que `createSettlement` acepta (cualquier tipo y estado, para pagar
+  también a uno suspendido o dado de baja), solo con `DRV-` y vehículo. Solo FINANCE y PLATFORM_ADMIN con MFA, los
+  roles de `createSettlement`; Finanzas no ve estado, paradas ni ubicaciones.
+- Ambas operaciones en `x-capability-matrix.driver_list_operations`; capacidad antes de leer, 403 uniforme, sin 404,
+  falla cerrada con 503 y no leen nombre, correo, teléfono ni documentos. Solo lectura, sin migraciones, tablas,
+  índices, roles, grants ni flujos nuevos; AI-06 y AI-18 sin cambios.
+- AI-07: ruta `/ops/drivers` con el contrato `driver_roster` ("Repartidores" después de "Importar CSV", sin acciones) y
+  contrato `settlement_desk` de `/finance/settlements`: el repartidor se elige de la lista, el periodo es "Semana
+  pasada", "Quincena pasada" (hora de Mazatlán) o "Fechas a mano" con las fechas explicadas ("1–7 sep 2026"), y cada
+  liquidación nombra a su repartidor por `DRV-`.
+- Libreta de direcciones de "Nueva orden" (UI-PHASE3-ADDRESS-BOOK-MVP2-2026-10-11): respuesta literal "Después del
+  piloto (Recommended)" ("Se queda en MVP-2, como dice el backlog."); sigue en BUS-001 (MVP-2) y el asistente del piloto
+  sigue capturando las direcciones. Sin cambios de contrato ni de código.
+
+## Bandeja: "Precio por revisar" solo con órdenes activas y "Asignar seleccionadas…" con costo por orden (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11) — 2026-10-11
+
+- Respuestas literales del project owner, registradas con sus preguntas en `decision-log.md` como cambio MAJOR
+  (AI-01 §7): "Solo órdenes activas (Recommended)" ("Lista y conteo solo de órdenes que no han terminado; al terminar,
+  salen solas. Nadie tiene que marcar nada.") y "Costo por orden (Recommended)" ("La vista previa muestra cada orden
+  con su costo para capturar; cuando exista el tabulador, se llena solo."). La fase 3 se aprobó con "avanza con la
+  fase 3".
+- AI-05 `getOperationsQueueCounts`: `queues.price_review` cuenta solo las órdenes con `cost_warning` que no han
+  terminado, es decir, en cualquier estado salvo DELIVERED, RETURNED, CLAIM_RESOLVED, CLOSED y CANCELLED (el grupo
+  "Terminadas" de UI-STATUS-GROUPS-2026-10-05). La terminalidad de AI-04, el plazo de reclamación y LIF-001 no cambian;
+  una orden en CLAIM_OPEN vuelve a estar activa.
+- El read model OBS-001 (`GET /api/v1/operations/dashboard`, ADR-OBS-001, fuera de AI-05) agrega el filtro booleano
+  `price_review` con la misma regla, dentro de la misma consulta con RLS y con el mismo cursor. La pestaña "Precio por
+  revisar" de la bandeja es una lista del servidor y ya no lleva la nota de "solo conteo".
+- AI-07 `work_inbox.bulk_assignment` ("Asignar seleccionadas…"): casillas solo en las filas con `unassigned_alert`,
+  "Seleccionar todas" y un máximo de 20 órdenes por lote; solo se ofrecen los repartidores elegibles para todas las
+  órdenes, y los demás aparecen con las órdenes que los bloquean. La vista previa pide el costo de cada orden en
+  pesos, vacío y obligatorio, y lo convierte a centavos enteros; nada se llena solo mientras no exista el tabulador.
+  La confirmación nombra al repartidor, el número de órdenes y la suma de los costos. `assignDriver` se envía una
+  orden tras otra, cada una con su Idempotency-Key, con resultado por fila y nueva lectura de la cola y los conteos.
+  Es una secuencia de operaciones existentes, no un flujo atómico nuevo de AI-13 §4.
+- Pendiente: "Agregar a ruta…" en lote (las rutas solo aceptan órdenes ya asignadas al repartidor de la ruta y ninguna
+  cola de la bandeja las lista). Sin cambios en AI-04, AI-06, AI-18, roles, capacidades ni migraciones.
+
+## El despacho decide el siguiente paso de un intento fallido reportado por el repartidor (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11) — 2026-10-11
+
+- Respuestas literales del project owner: "avanza con la fase 3" (2026-10-09) y, el 2026-10-11, "Despacho decide
+  (Recommended)", "Lista cerrada (Recommended)" y "Según el motivo (Recommended)"; registradas con sus preguntas y el
+  texto de cada opción en `decision-log.md` como cambio MAJOR (AI-01 §7), cuyo ADR es esa fila.
+- AI-05 `openIncident` y `OpenIncidentRequest` (`x-reporter-shape`): el despacho (DISPATCHER, o PLATFORM_ADMIN con MFA)
+  reporta como hoy, con severidad, descripción y siguiente acción. El repartidor manda solo tipo, motivo, hora del
+  intento y evidencias; si manda severidad, descripción o siguiente acción recibe 409 `INVALID_REQUEST`. El servidor
+  fija la severidad por motivo (alta para "Riesgo de seguridad" y "Paquete dañado", media para los demás), guarda
+  cifrada una descripción fija armada con el motivo y deja `next_action` en null: decide el despacho. `Incident`
+  publica `next_action` null en ese caso.
+- Migración del carril Incidents `20261011000100_AllowDispatchDecidedNextAction`: `incidents.incidents.next_action`
+  admite NULL. Su reversa restaura NOT NULL y se niega (`INC_DISPATCH_DECISION_DOWNGRADE_BLOCKED`) mientras exista una
+  incidencia que deja la decisión al despacho. AI-06 y AI-18 no cambian.
+- AI-04: guarda nueva `failed_attempt_dispatch_decides`. Mientras la incidencia del intento fallido no tenga siguiente
+  acción, solo DISPATCHER o PLATFORM_ADMIN con MFA sacan la orden de FAILED_ATTEMPT hacia RESCHEDULED ("Reprogramar"),
+  DELIVERING ("Reintentar hoy") o RETURNING ("Regresar"); el repartidor recibe 409 `DISPATCH_DECISION_REQUIRED`. Las
+  demás guardas (custodia, asignación válida) siguen igual y los reportes del despacho se comportan como antes.
+- getOrder `allowed_transitions` lista desde FAILED_ATTEMPT solo las salidas que esa decisión y la custodia permiten.
+- AI-07: el detalle de la orden muestra el motivo del intento fallido, si falta la decisión del despacho y el plazo de
+  atención; "Siguiente paso" ofrece "Reprogramar", "Reintentar hoy" y "Regresar" solo cuando el servidor los permite;
+  la bandeja de incidencias muestra "Lo decide despacho". AI-08 INC-001 precisa el criterio de siguiente acción.
+- Pendiente para otra entrega: la pantalla "No se pudo entregar" de la PWA del repartidor y su cola sin conexión. No se
+  agrega un sexto flujo atómico, ni roles, permisos, RLS u outbox.
+
+## Correo del piloto: se mantiene Azure Communication Services (NTF-EMAIL-ACS-PILOT-2026-10-11) — 2026-10-11
+
+- Respuesta literal del project owner a "Correo: Microsoft anunció el 23 de septiembre de 2026 que retira Azure
+  Communication Services el 30 de septiembre de 2028. [...] ¿Qué hacemos con el correo?": "Mantener ACS en el piloto
+  (Recommended)" ("El código ya está listo. Creas el recurso pronto, porque Microsoft puede cerrar las altas nuevas en
+  cualquier momento, y cambiamos de proveedor antes de pasar a producción."); registrada en `decision-log.md`.
+- El piloto sigue con el correo de GATE-004-CHANNELS por ACS; `AzureCommunicationEmailProvider` no cambia y el canal de
+  correo sigue `Disabled` hasta que cierre GATE-004.
+- Fuente (Microsoft Learn, guía de retiro de ACS, actualizada el 2026-10-08): desde el 2026-10-23 Microsoft empieza a
+  limitar las altas de clientes sin un recurso de ACS creado antes de esa fecha. La guía del owner (sección A §8)
+  explica cómo crear antes de esa fecha los recursos Communication Services y Email Communication Services en la
+  suscripción del piloto, sin cambiar plantillas, workflow ni código.
+- AI-10 `release_gates.PRODUCTION` agrega la condición de dejar ACS para el correo antes de producción. El proveedor
+  que lo reemplace es una decisión pendiente del owner.
+- Sin cambios en API, AI-04, AI-05, AI-06, AI-18, roles, permisos ni migraciones. GATE-004 sigue abierto.
+
+## Sin enlace de soporte en el seguimiento público (GATE-001-TRACKING-SUPPORT-LINK-2026-10-11) — 2026-10-11
+
+- Respuesta literal del project owner: "Quitarlo por ahora (Recommended)"; registrada, con su pregunta, en
+  `decision-log.md`. GATE-001 sigue abierto.
+- Mientras GATE-001 siga abierto, el seguimiento público no muestra enlace de soporte: el workflow del piloto ya no
+  usa el host del piloto como valor por omisión de `PILOT_TRACKING_SUPPORT_URL`, un
+  `NEXT_PUBLIC_TRACKING_SUPPORT_URL` vacío significa sin enlace (la página indica responder por el mismo canal del
+  enlace) y `next build` rechaza un enlace que nombre la marca en cualquier variante.
+- AI-07 `public_tracking.branding` agrega la regla del canal de soporte. Sin cambios en API, AI-04, AI-05, AI-06,
+  AI-18, roles ni migraciones.
+
+## Nombre neutro en el seguimiento público mientras GATE-001 sigue abierto (GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10) — 2026-10-10
+
+- Respuestas literales del project owner: "Interno sí, público neutro (Recommended)" y "Seguimiento de envío
+  (Recommended)"; registradas, con sus preguntas, en `decision-log.md`. GATE-001 sigue abierto: solo fija el texto
+  público provisional mientras el nombre comercial no esté validado ante el IMPI.
+- AI-07 `public_tracking.branding`: todos los estados del seguimiento abren con "Seguimiento de envío" y ninguno nombra
+  la marca; el título de la página es "Seguimiento de envío", `/track` no enlaza el manifest de la PWA del repartidor y
+  el 404 al que lleva un enlace mal formado se titula "Página no encontrada". En `show`, `brand` pasa a `heading`.
+- `NEXT_PUBLIC_TRACKING_BRAND_NAME` se conserva sin definir (sin marca): el workflow del piloto ya no pasa
+  "Paquetenvia" y `next build` rechaza ese nombre en cualquier variante.
+- Los mensajes al destinatario que llevan el enlace (TRK-002, plantillas GATE-004) usan el mismo texto neutro; hoy el
+  repositorio no contiene textos para destinatarios.
+- Pantallas internas, login, onboarding y PWA del repartidor conservan "Paquetenvia". Sin cambios en API, AI-04, AI-05,
+  AI-06, AI-18, roles ni migraciones; el dominio `paquetenvia.com` (PILOT-DOMAIN-PRODUCTION) no cambia.
+
+## Asistente de nueva orden en 4 pasos que crea y confirma (UI-PHASE3-ORDER-WIZARD-2026-10-10) — 2026-10-10
+
+- Respuestas literales del project owner: "avanza con la fase 3" (2026-10-09) y, a la pregunta "Asistente de nueva
+  orden: al terminar los 4 pasos, ¿cómo debe quedar la orden?", "Confirmada (Recommended)" ("El asistente la crea y la
+  confirma con las casillas del paso 4 (términos y artículos prohibidos). Queda lista para preparar."); registradas en
+  `decision-log.md` como cambio MAJOR de operación (AI-01 §7).
+- AI-07 `/ops/orders/new` y `create_order.wizard`: "1. Dónde", "2. Qué se envía", "3. Servicio y precio" y
+  "4. Confirmar" (solo quién paga y las dos casillas), con stepper, validación por paso junto a cada campo y un resumen
+  fijo (apilado en teléfonos) con el desglose: neto, IVA, total "IVA incluido" y la regla en palabras, antes de
+  confirmar. "Autorizar envío de bajo monto" sigue en el paso 3 con motivo obligatorio.
+- Al terminar: `createOrder` y después `transitionOrder` DRAFT → CONFIRMED con el motivo "Confirmada al crear la orden",
+  `restricted_goods_acknowledged` de la casilla del paso 4 y la versión de la orden creada. Si la confirmación se
+  rechaza, la orden queda en borrador, la pantalla lo dice con el mensaje de ORD-002-GUARD-CODES (o la verificación MFA)
+  y enlaza al detalle, donde "Siguiente paso" la confirma. Los reintentos usan la misma Idempotency-Key: nunca se crea
+  una segunda orden.
+- Pendientes: libreta de direcciones (BUS-001, MVP-2) y selector de cuenta cliente (no hay operación que las liste).
+  La importación CSV y la API siguen creando órdenes en borrador. Sin cambios en API, AI-04, AI-05, AI-06, AI-18, roles
+  ni migraciones.
+
+## Total de la orden en la bandeja de trabajo (UI-PHASE3-INBOX-TOTAL-2026-10-10) — 2026-10-10
+
+- Completa la columna Total de la tabla aprobada en la fase 3 (respuesta literal del project owner: "avanza con la
+  fase 3"); registrada en `decision-log.md`.
+- El read model OBS-001 `GET /operations/dashboard` (ADR-OBS-001, fuera de AI-05) agrega `total` a cada orden: el
+  `total_cents` guardado de la orden, con IVA incluido, en la forma `Money` de AI-05 `Order.total` (`currency` MXN,
+  `amount_cents` en centavos int64). Un valor negativo o en otra moneda falla cerrado (503).
+- Mismos lectores que hoy (DISPATCHER y PLATFORM_ADMIN con MFA), que ya leen ese total en `listOrders`/`getOrder` y
+  `getOrderFinancials`; FINANCE, VIEWER y los demás roles siguen con el 403 uniforme. Sin tarifa, desglose, costo de
+  asignación, margen ni cobro contra entrega.
+- AI-07 `work_inbox`: columna "Total (IVA incluido)" después de Repartidor, desde centavos enteros con el formato MXN
+  compartido; se retira de `not_supported` y la regla de privacidad permite solo ese monto.
+- Sin cambios en AI-04, AI-05, AI-06, AI-18, roles, capacidades, migraciones ni flujos.
+
+## Cierre automático de órdenes entregadas (ORD-AUTO-CLOSE-2026-10-10) — 2026-10-10
+
+- Pregunta y respuesta literales del project owner: "Cierre de órdenes: hoy una orden entregada se cierra a mano con "Cerrar orden". El servidor solo lo permite si no tiene incidencias abiertas y el cobro contra entrega ya está conciliado. Aun cerrada, se puede abrir una reclamación dentro del plazo. ¿Quieres que se cierre sola cuando cumpla esas reglas?" → "Sí, que se cierre sola" (descripción de la opción: "Agrego en la fase 3 un proceso en el servidor que la cierra en cuanto cumple las reglas. Requiere ADR, porque cambia el comportamiento.");
+  también dijo "avanza con la fase 3". Cambio MAJOR (AI-01 §7) registrado como ADR en `decision-log.md` y en
+  `docs/adr/ADR-ORD-AUTO-CLOSE.md`.
+- AI-04 `order_state_machine.automatic_close`: el sistema cierra (DELIVERED -> CLOSED) una orden entregada en cuanto
+  cumple todas las guardas de CLOSED, con la misma transición ORD-002 que el cierre manual y solo para la organización
+  dueña; escribe el mismo evento, outbox y auditoría, sin actor (`actor_id` nulo) y con el motivo "Cierre automático".
+  La reclamación dentro del plazo, la finalización LIF-001 y el cierre manual no cambian.
+- AI-24 `order_auto_close`: job `orders.auto-close` del Worker (apagado por defecto; intervalo 60 s, lotes de 100,
+  10 lotes por ciclo), descubrimiento de organizaciones dueñas, lectura de candidatas por tenant, bloqueo de fila y
+  versión optimista, manejo de fallos, telemetría sin identificadores y rollback.
+- AI-18: `paqueteria_auto_close_executor NOLOGIN BYPASSRLS` con `USAGE` en `orders` y `SELECT (owner_org_id,status)`
+  sobre `orders.orders`; aserciones 32-34. La función `security.list_auto_close_owner_organizations(uuid,integer)` la
+  instala el lane Orders (`20261010000100_AddOrderAutoCloseDiscovery`), con `EXECUTE` solo para `paqueteria_worker`.
+- AI-03 §25.2 y §25.8, AI-08 LIF-001 (salida y criterio de aceptación) y `tools/validate_contracts.py` (contrato
+  exacto del ejecutor).
+- Sin cambios en AI-05, AI-06 ni AI-12; no es un sexto flujo de AI-13 §4 (cada cierre es la transición ORD-002 de una
+  orden).
+
+## Bandeja de trabajo de despacho (UI-PHASE3-INBOX-2026-10-10) — 2026-10-10
+
+- Respuesta literal del project owner: "avanza con la fase 3"; registrada en `decision-log.md`.
+- AI-07 `/ops/inbox` (contrato `work_inbox`): "Bandeja de trabajo" para DISPATCHER y PLATFORM_ADMIN con MFA, su
+  página de inicio y primer elemento del menú (Bandeja · Tablero · + Nueva orden · Rutas · Incidencias · Importar CSV).
+  VIEWER y los demás roles quedan fuera, igual que en el tablero y los conteos.
+- Colas con los conteos reales de `getOperationsQueueCounts`: Sin asignar, Requiere atención, Precio por revisar (solo
+  conteo con nota), Entregadas sin cerrar y En ruta. Cada cola se lee con los filtros existentes de
+  `GET /operations/dashboard`; las de varios estados se combinan en el orden del servidor sin saltar ni reordenar filas.
+- Tabla (Guía, Estado, Destino por zona, Ventana en hora de Mazatlán, Repartidor) con chips que filtran en el servidor,
+  "Cargar más" y las acciones "Abrir" y "Asignar" (selector de repartidor del detalle). La cola y los chips viven en la
+  URL; el detalle abierto desde la bandeja ofrece "Volver a la bandeja".
+- `/ops/dashboard` sigue disponible como "Tablero", con su vista de posiciones ("Mapa de posiciones" desde la bandeja).
+- Pendientes: columna Total (el tablero no trae el total de la orden), lista de Precio por revisar (sin filtro del
+  servidor), acciones masivas con vista previa y las entradas Órdenes y Repartidores. Sin cambios en API, AI-04, AI-05,
+  AI-06, AI-18, roles ni migraciones.
+
 ## Reprogramar, devolver y reclamaciones en "Siguiente paso" (UI-NEXT-STEP-RETURNS-CLAIMS-2026-10-09) — 2026-10-09
 
 - Respuesta literal del project owner: "haz los opcionales mientras decido lo de la fase 3"; registrada en

@@ -3,6 +3,8 @@
 Owner decision **GATE-004-CHANNELS** (decision-log, 2026-09-27): customer notifications and tracking
 links use WhatsApp through the Meta Cloud API and email through Azure Communication Services (ACS).
 GATE-004 stays **open**: templates, Meta business verification and the sender domain are pending.
+ACS retires on 2028-09-30: the pilot keeps it and production moves email to another provider
+(NTF-EMAIL-ACS-PILOT-2026-10-11, AI-10 `release_gates.PRODUCTION`).
 This change adds the adapters behind the AI-03 §15 `IMessagingProvider` port. It does not send any
 message on its own: no producer, recipient source or pilot configuration uses it yet (see
 "Not in this change").
@@ -146,6 +148,13 @@ start with a message that names keys, never values.
 | `Messaging__Email__AzureCommunicationServices__ApiVersion` | `2023-03-31` (default) | app setting |
 | `Messaging__Email__AzureCommunicationServices__TimeoutSeconds` | `15` (1–60) | app setting |
 | `Messaging__Email__Templates__<key>__Subject` / `__PlainText` / `__ParameterCount` | owner-provided text with `{{1}}`…`{{n}}` exactly | app setting |
+
+Neutral recipient text while GATE-001 is open (GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10, AI-07
+`public_tracking.branding`): the commercial name is not validated before IMPI, so the WhatsApp templates
+approved in WhatsApp Manager and the email `Subject`/`PlainText` sent to recipients use the neutral
+"Seguimiento de envío" and never name "Paquetenvia". The repository holds no recipient text: these
+adapters have no default template, and the only stored template (`orders.created.operations`, `IN_APP`)
+goes to dispatchers.
 
 Key Vault mappings follow PILOT-KEYVAULT-PRIVATE-APP-READ, for example
 `KeyVaultSecrets__Mappings__2__SecretName=whatsapp-cloud-api-token`,

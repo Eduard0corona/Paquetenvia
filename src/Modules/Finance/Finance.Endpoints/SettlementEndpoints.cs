@@ -15,7 +15,8 @@ namespace Finance.Endpoints;
 /// <summary>
 /// The eight normative AI-05 settlement operations: createSettlement, listSettlements
 /// (AI05-LIST-SETTLEMENTS), getSettlement, addSettlementAdjustment, approveSettlement, markSettlementPaid,
-/// voidSettlement and exportSettlementCsv.
+/// voidSettlement and exportSettlementCsv; and listSettlementPayees (UI-PHASE3-DRIVERS-2026-10-11), the drivers
+/// createSettlement accepts as payee.
 /// </summary>
 public static class SettlementEndpoints
 {
@@ -43,6 +44,17 @@ public static class SettlementEndpoints
             .WithName("listSettlements")
             .WithTags("Finance")
             .Produces<SettlementPageResponse>(StatusCodes.Status200OK)
+            .ProducesProblem(StatusCodes.Status401Unauthorized)
+            .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
+
+        endpoints.MapGet("/api/v1/settlement-payees", ListPayeesAsync)
+            .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
+            .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .WithName("listSettlementPayees")
+            .WithTags("Finance")
+            .Produces<SettlementPayeePageResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status409Conflict)
@@ -203,6 +215,73 @@ public static class SettlementEndpoints
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
         catch (Exception exception) when (
             Failure(exception, () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.ListSettlements)) is { } failure) { return failure; }
+    }
+
+    /// <summary>
+    /// UI-PHASE3-DRIVERS-2026-10-11. The only query parameter is <c>cursor</c>, at most once and issued by this
+    /// operation; anything else is INVALID_REQUEST, decided before capability or any driver is read. The capability is
+    /// createSettlement's, settled from the session and again inside the tenant transaction.
+    /// </summary>
+    private static async Task<IResult> ListPayeesAsync(
+        HttpContext httpContext,
+        IOrganizationRequestSession session,
+        ITenantContext tenantContext,
+        ISettlementPayeeQuery query,
+        CancellationToken cancellationToken)
+    {
+        if (!FinanceEndpointBinding.TrySession(session, tenantContext, out var actorId))
+        {
+            return FinanceEndpointBinding.Forbidden();
+        }
+
+        if (!TryReadPayeeQuery(httpContext.Request.Query, out var afterDriverId))
+        {
+            return FinanceEndpointBinding.Conflict(InvalidRequest);
+        }
+
+        if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.ListSettlementPayees) is { } denied)
+        {
+            return denied;
+        }
+
+        try
+        {
+            var page = await query.ListPayeesAsync(
+                new(actorId, tenantContext.OrganizationId, session.MfaSatisfied, afterDriverId),
+                cancellationToken);
+            return Results.Json(
+                new SettlementPayeePageResponse(
+                    page.Items.Select(item => new SettlementPayeeResponse(
+                        item.DriverId, item.DriverReference, item.VehicleType)).ToArray(),
+                    page.NextCursor),
+                statusCode: StatusCodes.Status200OK);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
+        catch (Exception exception) when (
+            Failure(exception, () => TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.ListSettlementPayees)) is { } failure) { return failure; }
+    }
+
+    internal static bool TryReadPayeeQuery(IQueryCollection query, out Guid? afterDriverId)
+    {
+        afterDriverId = null;
+        if (query.Keys.Any(key => !string.Equals(key, "cursor", StringComparison.Ordinal)) ||
+            query.Any(pair => pair.Value.Count != 1))
+        {
+            return false;
+        }
+
+        if (!query.TryGetValue("cursor", out var value))
+        {
+            return true;
+        }
+
+        if (!SettlementPayeeCursorCodec.TryDecode(value[0], out var after))
+        {
+            return false;
+        }
+
+        afterDriverId = after;
+        return true;
     }
 
     internal static readonly string[] ListQueryParameters = ["payee_id", "status", "period_from", "period_to", "cursor"];
@@ -547,6 +626,19 @@ public sealed record SettlementLineResponse(
     [property: JsonPropertyName("amount_cents")] long AmountCents,
     [property: JsonPropertyName("source_reference")] string SourceReference,
     [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt);
+
+/// <summary>
+/// UI-PHASE3-DRIVERS-2026-10-11: a driver Finance may choose to settle. The id is what createSettlement takes and is
+/// never shown; nothing but the DRV- reference and the vehicle describes the driver.
+/// </summary>
+public sealed record SettlementPayeeResponse(
+    [property: JsonPropertyName("driver_id")] Guid DriverId,
+    [property: JsonPropertyName("driver_reference")] string DriverReference,
+    [property: JsonPropertyName("vehicle_type")] string VehicleType);
+
+public sealed record SettlementPayeePageResponse(
+    [property: JsonPropertyName("items")] IReadOnlyList<SettlementPayeeResponse> Items,
+    [property: JsonPropertyName("next_cursor")] string? NextCursor);
 
 public sealed record SettlementPageResponse(
     [property: JsonPropertyName("items")] IReadOnlyList<SettlementResponse> Items,

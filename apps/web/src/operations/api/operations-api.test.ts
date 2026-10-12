@@ -28,6 +28,11 @@ describe("operations api", () => {
       "status=DELIVERING&service_type=URGENT&unassigned=true&cursor=opaque",
     );
     expect(search.has("page_size")).toBe(false);
+    // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: the price review list is one more server filter.
+    expect(buildOperationsDashboardSearch({ priceReview: true, cursor: "opaque" }).toString()).toBe(
+      "price_review=true&cursor=opaque",
+    );
+    expect(buildOperationsDashboardSearch({}).has("price_review")).toBe(false);
   });
 
   it("sends current bearer and tenant without credentials", async () => {

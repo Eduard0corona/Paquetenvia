@@ -374,11 +374,14 @@ order_state_machine:
     - attempt_stage_recorded
     - custody_acquired_recorded
     RETURNING:
+    - failed_attempt_dispatch_decides
     - custody_acquired_true
     - failed_attempt_next_action_respected
     RESCHEDULED:
+    - failed_attempt_dispatch_decides
     - failed_attempt_next_action_respected
     DELIVERING:
+    - failed_attempt_dispatch_decides
     - if_from_failed_attempt_then_custody_acquired_true_and_valid_assignment
     - failed_attempt_next_action_respected
   prohibited:
@@ -389,6 +392,8 @@ order_state_machine:
   - PICKED_UP or DELIVERED justified by a proof created before the latest entry into AT_PICKUP or DELIVERING, or by a proof referenced as incident evidence
   - FAILED_ATTEMPT justified by an incident already referenced by an earlier FAILED_ATTEMPT
   - leaving FAILED_ATTEMPT to a successor other than the one the justifying incident next_action allows
+  - a DRIVER leaving FAILED_ATTEMPT while the justifying incident leaves the decision to dispatch (null next_action,
+    INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11)
   guard_semantics:
     decision: ORD-002-ATTEMPT-RULES-2026-09-27
     current_attempt: The current attempt starts at the latest ORDER_STATUS_CHANGED event into the capture state (AT_PICKUP for pickup, DELIVERING for delivery). No attempt_id column exists; the boundary is derived from the order history (ORD-002-ATTEMPT-BOUNDARY).
@@ -398,7 +403,23 @@ order_state_machine:
     attempt_stage_recorded: The FAILED_ATTEMPT is justified by exactly one incident opened in the current attempt and not referenced by an earlier FAILED_ATTEMPT.
     eligible_driver: Evaluated with the shared DriverEligibilityPolicy (documents, zone, membership) on ASSIGNED and on the immediate retry from FAILED_ATTEMPT to DELIVERING, which keeps the active assignment (D8-RESCHEDULED-NO-DIRECT-DELIVERY).
     capacity_available: Evaluated with the same DriverEligibilityPolicy capacity rules (vehicle capacity against the order packages) on the same transitions.
-    failed_attempt_next_action_respected: When leaving FAILED_ATTEMPT, the justifying incident next_action decides the successor. RETURNING allows only RETURNING. RESCHEDULED allows only RESCHEDULED or DELIVERING (the immediate FAILED_ATTEMPT -> DELIVERING retry; RESCHEDULED -> DELIVERING does not exist, D8-RESCHEDULED-NO-DIRECT-DELIVERY). Incidents adopted by the INC-001 backfill carry a default next_action and do not bind the successor; every other guard of the target still applies.
+    failed_attempt_next_action_respected: When leaving FAILED_ATTEMPT, the justifying incident next_action decides the successor. RETURNING allows only RETURNING. RESCHEDULED allows only RESCHEDULED or DELIVERING (the immediate FAILED_ATTEMPT -> DELIVERING retry; RESCHEDULED -> DELIVERING does not exist, D8-RESCHEDULED-NO-DIRECT-DELIVERY). A null next_action (a DRIVER report, INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11) leaves the choice to dispatch and allows RESCHEDULED ("Reprogramar"), DELIVERING ("Reintentar hoy") or RETURNING ("Regresar"); a justifying incident that cannot be read allows none. Incidents adopted by the INC-001 backfill carry a default next_action and do not bind the successor; every other guard of the target still applies.
+    failed_attempt_dispatch_decides: INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11 (project owner, "Despacho decide"). While the justifying incident has a null next_action, only a DISPATCHER or a PLATFORM_ADMIN with a satisfied MFA challenge (the transitionOrder role rules) leaves FAILED_ATTEMPT; a DRIVER is refused, whatever the target, before the target's other guards. A recorded next_action (an incident reported by dispatch) and an adopted incident keep today's rule, drivers included. Custody for RETURNING, custody and a valid assignment for the DELIVERING retry and every other guard still apply to dispatch's choice.
+  automatic_close:
+    decision: ORD-AUTO-CLOSE-2026-10-10
+    edge: DELIVERED -> CLOSED
+    rules:
+    - the system closes a DELIVERED order as soon as every CLOSED guard holds (no_unresolved_incident,
+      if_cod_expected_then_cod_status_reconciled, financial_reconciliation_complete, claim_window_ends_at_set); it is
+      the only transition the system may take
+    - the guards are evaluated only by the ORD-002 transition, the same code path as a manual close; an order whose
+      guards do not hold stays DELIVERED, and the system tries again later
+    - the system acts only for the owner organization (owner_org_id), in a tenant transaction of that organization
+      alone; an operator organization never changes the order state
+    - the order event, the outbox rows and the audit row are the ones a manual close writes, in the same transaction;
+      the system is no user, so the event and audit actor_id are null and the reason says "Cierre automático"
+    - a closed order still accepts CLAIM_OPEN until claim_window_ends_at and is finalized after it exactly as a
+      manually closed order; the manual close is unchanged and either close can happen first
 decided_pending_translation:
   status: DECIDED_2026-09-26_27_TRANSLATION_PENDING
   source: decision-log D8-REASSIGNMENT-NEW-ASSIGNMENT (working session with the project owner via Claude Code)
@@ -437,6 +458,9 @@ transaction_coordinator_allowlist:
 privacy_invariants:
 - request_snapshot_redacted contains no plaintext address/contact/phone/access notes
 - driver location is worker personal data and is included in GATE-007 retention/ARCO
+- VOICE-001-MASKED-CALLS-2026-10-11 - driver and recipient phone numbers reach the voice provider only in memory for one
+  bridged call; they are never returned by the call endpoints, logged, audited, published or stored in clear, and the
+  driver's own number is stored only with consent (ADP-001 envelope) and is included in GATE-007 retention/ARCO
 - proof and audit records are append-only; privacy actions use access restriction, pseudonymization or cryptographic erasure
   under approved policy
 outbox_invariants:

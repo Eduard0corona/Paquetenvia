@@ -25,6 +25,8 @@ public static class OperationsDashboardEndpoints
         "created_from",
         "created_to",
         "unassigned",
+        // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: the inbox "Precio por revisar" list.
+        "price_review",
         "cursor",
     ];
 
@@ -115,6 +117,7 @@ public static class OperationsDashboardEndpoints
             !TryUtc(query, "created_from", out var createdFrom) ||
             !TryUtc(query, "created_to", out var createdTo) ||
             !TryBoolean(query, "unassigned", out var unassigned) ||
+            !TryBoolean(query, "price_review", out var priceReview) ||
             !TryCursor(query, out var cursor))
         {
             return false;
@@ -138,6 +141,7 @@ public static class OperationsDashboardEndpoints
             createdFrom,
             createdTo,
             unassigned,
+            priceReview,
             cursor);
         return true;
     }
@@ -285,6 +289,7 @@ public static class OperationsDashboardEndpoints
                 item.LatestDriverLocation.Longitude,
                 item.LatestDriverLocation.AccuracyMeters,
                 item.LatestDriverLocation.CapturedAt),
+        new OperationsMoneyResponse(item.Total.Currency, item.Total.AmountCents),
         item.CostWarning,
         item.UnassignedAlert);
 
@@ -334,12 +339,25 @@ public sealed record OperationsDashboardOrderResponse(
     [property: JsonPropertyName("delivery_zone")] OperationsZoneResponse? DeliveryZone,
     [property: JsonPropertyName("assignment")] OperationsAssignmentResponse? Assignment,
     [property: JsonPropertyName("latest_driver_location")] OperationsDriverLocationResponse? LatestDriverLocation,
+    [property: JsonPropertyName("total")] OperationsMoneyResponse Total,
     [property: JsonPropertyName("cost_warning")] string? CostWarning,
     [property: JsonPropertyName("unassigned_alert")] bool UnassignedAlert);
 
+/// <summary>
+/// UI-PHASE3-INBOX-TOTAL-2026-10-10: the order total in the AI-05 <c>Money</c> shape of <c>Order.total</c>
+/// (currency MXN, integer cents, IVA included); never a floating-point value.
+/// </summary>
+public sealed record OperationsMoneyResponse(
+    [property: JsonPropertyName("currency")] string Currency,
+    [property: JsonPropertyName("amount_cents")] long AmountCents);
+
+/// <summary>
+/// OBS-001-OPERATED-OWNER-NAME-2026-10-12: <c>display_name</c> is the selected organization's own name, or
+/// <c>null</c> for the other party of the order, whose organizations row RLS hides; never a legal name or a label.
+/// </summary>
 public sealed record OperationsOrganizationResponse(
     [property: JsonPropertyName("organization_id")] Guid OrganizationId,
-    [property: JsonPropertyName("display_name")] string DisplayName);
+    [property: JsonPropertyName("display_name")] string? DisplayName);
 
 public sealed record OperationsClientResponse(
     [property: JsonPropertyName("client_account_id")] Guid ClientAccountId,

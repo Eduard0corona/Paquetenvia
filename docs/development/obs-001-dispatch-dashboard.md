@@ -46,11 +46,17 @@ Filtros permitidos:
 
 ```text
 order_id, status, delivery_zone_id, client_account_id, owner_org_id,
-operator_org_id, service_type, created_from, created_to, unassigned, cursor
+operator_org_id, service_type, created_from, created_to, unassigned,
+price_review, cursor
 ```
 
 Cada parámetro conocido aparece una vez; UUIDs son canónicos y no vacíos,
 status/service type son exactos, fechas son UTC y el rango máximo es 31 días.
+`unassigned` y `price_review` aceptan solo `true` o `false`; `false` no filtra.
+`price_review=true` (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11) deja solo las
+órdenes con `cost_warning` que no han terminado (estado fuera de DELIVERED,
+RETURNED, CLAIM_RESOLVED, CLOSED y CANCELLED), la misma regla con la que
+`getOperationsQueueCounts` cuenta `queues.price_review`.
 Valores inválidos devuelven Problem Details 400 sin reflejar input. Los
 desconocidos se ignoran. No existe `page_size`.
 
@@ -63,7 +69,11 @@ por ID y nunca sustituye una versión por otra menor.
 La respuesta contiene sólo `generated_at`, `items` y `next_cursor`. Cada item
 conserva el DTO exacto de OBS-001:
 
-- owner/operator con nombre canónico visible bajo RLS;
+- owner/operator con nombre canónico visible bajo RLS, que solo es el de la organización seleccionada
+  (OBS-001-OPERATED-OWNER-NAME-2026-10-12): la otra parte de la orden (la dueña de una orden que solo opera, o el
+  operador de una orden propia) conserva su id con `display_name: null`, y la PWA la muestra como "Otra organización"
+  y no la ofrece en los filtros Dueño/Opera; una fila que no posee ni opera, su propio nombre ausente o un nombre
+  que RLS debía ocultar fallan cerrado (503);
 - cliente visible o `null`;
 - zona operativa de destino o `null`;
 - `pickup_window` en `null`; `delivery_window` es la ventana de servicio de la orden (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02) o `null`, representada como `Horario de la zona`;
@@ -71,7 +81,10 @@ conserva el DTO exacto de OBS-001:
 - `driver_reference` no PII `DRV-xxxxxxxx`; el ID contractual no se renderiza;
 - posición persistida más reciente del conductor activo;
 - `AUTHORIZED_OVERRIDE` o `BELOW_MINIMUM_SNAPSHOT` cuando aplica;
-- alerta sin assignment sólo para `READY_FOR_PICKUP` y `RESCHEDULED`.
+- alerta sin assignment sólo para `READY_FOR_PICKUP` y `RESCHEDULED`;
+- `total`: el `orders.total_cents` de la orden con IVA incluido, en la forma `Money` de AI-05 `Order.total`
+  (`currency` MXN, `amount_cents` int64), el mismo valor que esos roles ya leen en `listOrders`/`getOrder`; negativo
+  o en otra moneda falla cerrado (UI-PHASE3-INBOX-TOTAL-2026-10-10).
 
 No se incluyen costo de assignment, email, teléfono, dirección, package, proof,
 notas, token ni payload SignalR. Telemetría usa categorías de baja cardinalidad.
@@ -126,7 +139,7 @@ Dashboard, órdenes, filtros, timeline, organización, referencias, posiciones,
 bearer y namespace viven sólo en memoria. No se crean cookies ni se usa
 localStorage, sessionStorage, IndexedDB o Cache API para operaciones.
 
-El Service Worker usa `paquetenvia-driver-shell-v5`. `/ops`, APIs de operations,
+El Service Worker usa `paquetenvia-driver-shell-v6`. `/ops`, APIs de operations,
 orders y contextos, OperationsHub, Authorization y `access_token` son
 network-only. El shell Driver offline se conserva.
 
@@ -141,7 +154,9 @@ lista semánticas, `time datetime`, aria-live/aria-busy, foco visible, targets d
 - Unit: contrato, filtros, cursor, 17 estados, assignments, alertas, referencia,
   ubicación, costo y UTC.
 - `OperationsDashboardPostgreSql`: PostgreSQL/PostGIS real, RLS, autorización,
-  aislamiento, filtros, respuesta/headers y privacidad.
+  aislamiento, filtros, respuesta/headers y privacidad; una orden de Synthetic Viewer operada por Synthetic
+  Operations carga para el operador (Tablero, cada cola de la bandeja y conteos iguales a las listas) sin nombre,
+  cliente, zona ni dirección de la dueña, y para la dueña sin el nombre del operador.
 - Vitest: parsers, API/filtros, labels/zona horaria, SW, CSP, almacenamiento y
   acciones; deferreds cubren single-flight, request previa, lectura obligatoria,
   snapshot exacto, cambio de sesión, fallo y el par de detalle.

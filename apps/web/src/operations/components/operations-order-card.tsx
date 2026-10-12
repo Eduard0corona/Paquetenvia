@@ -7,6 +7,8 @@ import { externalOfferConfirmation } from "../contracts/external-offer-confirmat
 import type { OperationsDashboardOrder } from "../contracts/operations-dashboard";
 import {
   assignmentTypeLabel,
+  operatorLabel,
+  ownerLabel,
   serviceTypeLabel,
 } from "../contracts/operations-formatters";
 import { DateTime } from "../../components/ui/date-time";
@@ -45,8 +47,8 @@ export function OperationsOrderCard({
       </div>
       <DescriptionList
         items={[
-          { label: "Dueño", value: order.owner.display_name },
-          { label: "Opera", value: order.operator?.display_name ?? "Sin operador" },
+          { label: "Dueño", value: ownerLabel(order.owner) },
+          { label: "Opera", value: operatorLabel(order.operator) },
           { label: "Cliente", value: order.client?.display_name ?? "No disponible" },
           { label: "Zona", value: order.delivery_zone?.name ?? "Sin zona asignada" },
           { label: "Servicio", value: serviceTypeLabel(order.service_type) },

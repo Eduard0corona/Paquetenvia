@@ -6,7 +6,7 @@ namespace Finance.Infrastructure.Settlements;
 /// Stand-in used while Finance:Provider is Disabled: settlements are capability the system does not offer,
 /// so every operation reports <see cref="Finance.Application.FinanceUnavailableException"/>.
 /// </summary>
-internal sealed class DisabledSettlementService : ISettlementService
+internal sealed class DisabledSettlementService : ISettlementService, ISettlementPayeeQuery
 {
     public Task<SettlementResult> CreateAsync(
         CreateSettlementCommand command,
@@ -38,5 +38,9 @@ internal sealed class DisabledSettlementService : ISettlementService
 
     public Task<SettlementCsvDocument> ExportCsvAsync(
         GetSettlementQuery query,
+        CancellationToken cancellationToken) => throw DisabledFinance.Unavailable();
+
+    public Task<SettlementPayeePage> ListPayeesAsync(
+        ListSettlementPayeesQuery query,
         CancellationToken cancellationToken) => throw DisabledFinance.Unavailable();
 }

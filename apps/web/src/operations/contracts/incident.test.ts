@@ -3,6 +3,8 @@ import {
   buildOpenIncidentBody,
   buildResolveIncidentBody,
   incidentListSearch,
+  incidentNextActionLabel,
+  incidentReasonLabels,
   mazatlanLocalToUtc,
   parseIncident,
   parseIncidentPage,
@@ -120,7 +122,35 @@ describe("Incident parser", () => {
     expect(parseIncident(incidentResponse()).status).toBe("OPEN");
   });
 
+  // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: a driver report leaves the next action to dispatch.
+  it("reads a null next action as the decision dispatch still has to take", () => {
+    const incident = parseIncident(incidentResponse({ next_action: null }));
+    expect(incident.next_action).toBeNull();
+    expect(incidentNextActionLabel(incident.next_action)).toBe("Lo decide despacho");
+    expect(incidentNextActionLabel("RESCHEDULED")).toBe("Reprogramar");
+    expect(incidentNextActionLabel("RETURNING")).toBe("Devolver al remitente");
+  });
+
+  it("labels every reason with the driver's closed list", () => {
+    expect(incidentReasonLabels).toEqual({
+      RECIPIENT_ABSENT: "No había nadie",
+      ADDRESS_NOT_FOUND: "Dirección incorrecta",
+      RECIPIENT_REFUSED: "Rechazó el paquete",
+      ACCESS_RESTRICTED: "Acceso restringido",
+      PAYMENT_UNAVAILABLE: "No pagó el cobro",
+      PACKAGE_DAMAGED: "Paquete dañado",
+      SECURITY_RISK: "Riesgo de seguridad",
+    });
+  });
+
   it.each([
+    ["an absent next action", (() => {
+      const body = { ...incidentResponse() } as Record<string, unknown>;
+      delete body.next_action;
+      return body;
+    })()],
+    ["a next action outside the contract", incidentResponse({ next_action: "DELIVERING" })],
+    ["an empty next action", incidentResponse({ next_action: "" })],
     ["an extra key such as the description", incidentResponse({ description: "texto" })],
     ["an unknown status", incidentResponse({ status: "CLOSED" })],
     ["no evidence", incidentResponse({ evidence_proof_ids: [] })],

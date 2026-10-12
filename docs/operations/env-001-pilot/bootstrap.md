@@ -158,7 +158,7 @@ In the GitHub UI: *Settings → Environments → New environment* `azure-pilot`.
 | `PILOT_RESOURCE_GROUP` | `rg-pv-pilot` |
 | `PILOT_BUDGET_START_DATE` | first day of the current or next month, e.g. `2026-10-01` (keep it unchanged afterwards) |
 | `PILOT_BUDGET_EMAILS` | optional, comma-separated extra recipients (resource-group Owners are always notified) |
-| `PILOT_TRACKING_SUPPORT_URL` | optional `https://` support link for public tracking (default `https://paquetenvia.com`) |
+| `PILOT_TRACKING_SUPPORT_URL` | optional `https://` support link for public tracking; leave it unset while GATE-001 is open (GATE-001-TRACKING-SUPPORT-LINK-2026-10-11: default is no link, and the build refuses a link that names the commercial name) |
 | `PILOT_GATE_007_DECISION` | ID of the decision-log row `GATE-007-...` whose Type is `Gate resolution` or `Gate scoping` (privacy). Not set until the owner records it; `GATE-007-PRIVACY-DRAFT` is rejected. |
 | `PILOT_GATE_012_DECISION` | `GATE-012-PILOT-SCOPE` (Type `Gate scoping`, cloud and data residency) |
 

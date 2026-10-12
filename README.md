@@ -313,7 +313,8 @@ productivo:
   ([guía](docs/development/scl-001-stateless-distributed-hosts.md)).
 - **SET-001** ledger de liquidaciones, flujo y exportación CSV.
 - **LIF-001** finalización de ventanas de reclamación (ADR-034)
-  ([guía](docs/development/lif-001-claim-window-finalization.md)).
+  ([guía](docs/development/lif-001-claim-window-finalization.md)) y cierre automático de órdenes entregadas
+  (ORD-AUTO-CLOSE-2026-10-10, [guía](docs/development/ord-auto-close-delivered-orders.md)).
 - **OPS-004** retención acotada del outbox
   ([runbook](docs/development/ops-004-outbox-retention.md)).
 

@@ -6,7 +6,9 @@ import {
 } from "./operations-parsers";
 import {
   formatMazatlanTime,
+  operatorLabel,
   orderStatusLabels,
+  ownerLabel,
   timelineLabel,
 } from "./operations-formatters";
 import { orderStatuses } from "./operations-dashboard";
@@ -15,6 +17,7 @@ const orderId = "11111111-1111-1111-1111-111111111111";
 const ownerId = "22222222-2222-2222-2222-222222222222";
 const assignmentId = "33333333-3333-3333-3333-333333333333";
 const driverId = "44444444-4444-4444-4444-444444444444";
+const operatorId = "55555555-5555-5555-5555-555555555555";
 
 function item() {
   return {
@@ -44,9 +47,17 @@ function item() {
       accuracy_m: 4.5,
       captured_at: "2026-07-27T01:59:00Z",
     },
+    total: { currency: "MXN", amount_cents: 12_345 },
     cost_warning: null,
     unassigned_alert: false,
   };
+}
+
+/** A page whose only item has `total` replaced (or removed when `undefined`). */
+function pageWithTotal(total: unknown) {
+  const changed: Record<string, unknown> = { ...item(), total };
+  if (total === undefined) delete changed.total;
+  return { ...page(), items: [changed] };
 }
 
 function page() {
@@ -61,6 +72,66 @@ describe("operations dashboard parser", () => {
   it("parses the exact contract", () => {
     expect(parseOperationsDashboard(page()).items[0]?.public_id).toBe(
       "ORD_synthetic",
+    );
+  });
+
+  it("keeps the order total as exact integer MXN cents (UI-PHASE3-INBOX-TOTAL-2026-10-10)", () => {
+    expect(parseOperationsDashboard(page()).items[0]?.total).toEqual({ currency: "MXN", amount_cents: 12_345 });
+    expect(parseOperationsDashboard(pageWithTotal({ currency: "MXN", amount_cents: 0 })).items[0]?.total).toEqual({
+      currency: "MXN",
+      amount_cents: 0,
+    });
+    const largest = { currency: "MXN", amount_cents: Number.MAX_SAFE_INTEGER };
+    expect(parseOperationsDashboard(pageWithTotal(largest)).items[0]?.total).toEqual(largest);
+  });
+
+  it.each([
+    ["absent", undefined],
+    ["null", null],
+    ["a bare number", 12_345],
+    ["fractional cents", { currency: "MXN", amount_cents: 123.45 }],
+    ["negative cents", { currency: "MXN", amount_cents: -1 }],
+    ["cents as text", { currency: "MXN", amount_cents: "12345" }],
+    ["unsafe integer", { currency: "MXN", amount_cents: Number.MAX_SAFE_INTEGER + 1 }],
+    ["another currency", { currency: "USD", amount_cents: 12_345 }],
+    ["missing currency", { amount_cents: 12_345 }],
+    ["an extra property", { currency: "MXN", amount_cents: 12_345, net_cents: 10_642 }],
+  ])("rejects a total that is %s", (_name, total) => {
+    expect(() => parseOperationsDashboard(pageWithTotal(total))).toThrow(OperationsContractError);
+  });
+
+  it("accepts no name for the other party of an order (OBS-001-OPERATED-OWNER-NAME-2026-10-12)", () => {
+    const operated = {
+      ...item(),
+      owner: { organization_id: ownerId, display_name: null },
+      operator: { organization_id: operatorId, display_name: "Operación sintética" },
+    };
+    expect(parseOperationsDashboard({ ...page(), items: [operated] }).items[0]).toMatchObject({
+      owner: { organization_id: ownerId, display_name: null },
+      operator: { organization_id: operatorId, display_name: "Operación sintética" },
+    });
+    const delegated = { ...item(), operator: { organization_id: operatorId, display_name: null } };
+    expect(parseOperationsDashboard({ ...page(), items: [delegated] }).items[0]).toMatchObject({
+      owner: { organization_id: ownerId, display_name: "Operación sintética" },
+      operator: { organization_id: operatorId, display_name: null },
+    });
+  });
+
+  it.each([
+    ["an owner without a name and no operator", { owner: { organization_id: ownerId, display_name: null } }],
+    [
+      "neither party named",
+      {
+        owner: { organization_id: ownerId, display_name: null },
+        operator: { organization_id: operatorId, display_name: null },
+      },
+    ],
+    ["an empty name", { owner: { organization_id: ownerId, display_name: "" } }],
+    ["a missing name", { owner: { organization_id: ownerId } }],
+    ["an extra organization property", { owner: { organization_id: ownerId, display_name: "A", legal_name: "A" } }],
+  ])("rejects %s", (_name, changes) => {
+    expect(() => parseOperationsDashboard({ ...page(), items: [{ ...item(), ...changes }] })).toThrow(
+      OperationsContractError,
     );
   });
 
@@ -148,6 +219,15 @@ describe("operations labels and timeline", () => {
     expect(orderStatuses).toHaveLength(17);
     expect(Object.keys(orderStatusLabels)).toHaveLength(17);
     expect(orderStatusLabels.DELIVERING).toBe("En reparto");
+  });
+
+  it("labels an organization without a visible name as another organization", () => {
+    // OBS-001-OPERATED-OWNER-NAME-2026-10-12
+    expect(ownerLabel({ organization_id: ownerId, display_name: "Dueña" })).toBe("Dueña");
+    expect(ownerLabel({ organization_id: ownerId, display_name: null })).toBe("Otra organización");
+    expect(operatorLabel({ organization_id: operatorId, display_name: "Opera" })).toBe("Opera");
+    expect(operatorLabel({ organization_id: operatorId, display_name: null })).toBe("Otra organización");
+    expect(operatorLabel(null)).toBe("Sin operador");
   });
 
   it("uses a safe label for unknown timeline events", () => {

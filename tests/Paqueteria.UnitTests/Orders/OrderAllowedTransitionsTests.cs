@@ -19,7 +19,8 @@ public sealed class OrderAllowedTransitionsTests
     {
         foreach (var source in Enum.GetValues<OrderStatus>())
         {
-            var allowed = Compute(Order(source), Snapshot("DISPATCHER"));
+            // A failed attempt whose decision dispatch still has to take, with custody: every exit is open.
+            var allowed = Compute(Order(source), Snapshot("DISPATCHER"), failedAttempt: PendingDecision(custody: true));
             var expected = OrderTransitionMatrix.AllowedTransitions.TryGetValue(source, out var targets)
                 ? targets.Order().ToArray()
                 : [];
@@ -179,6 +180,115 @@ public sealed class OrderAllowedTransitionsTests
             _ => throw new InvalidOperationException("Unexpected metadata keys."),
         };
 
+    /// <summary>
+    /// INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: a driver report leaves the decision to dispatch, so a DISPATCHER
+    /// or an MFA-satisfied PLATFORM_ADMIN gets "Reprogramar", "Reintentar hoy" and "Regresar" and a DRIVER gets none.
+    /// </summary>
+    [Fact]
+    public void A_pending_failed_attempt_offers_every_exit_to_dispatch_and_none_to_the_driver()
+    {
+        var failed = Order(OrderStatus.FailedAttempt);
+        OrderStatus[] all = [OrderStatus.Delivering, OrderStatus.Rescheduled, OrderStatus.Returning];
+
+        Assert.Equal(all, Targets(failed, Snapshot("DISPATCHER"), failedAttempt: PendingDecision(custody: true)));
+        Assert.Equal(
+            all,
+            Targets(failed, Snapshot("PLATFORM_ADMIN"), mfa: true, failedAttempt: PendingDecision(custody: true)));
+        Assert.Empty(Targets(failed, Snapshot("PLATFORM_ADMIN"), mfa: false, failedAttempt: PendingDecision(custody: true)));
+        Assert.Empty(Targets(
+            failed,
+            Snapshot("DRIVER", matchingAssignment: true),
+            failedAttempt: PendingDecision(custody: true)));
+        Assert.Empty(Targets(failed, Snapshot("VIEWER"), mfa: true, failedAttempt: PendingDecision(custody: true)));
+    }
+
+    [Fact]
+    public void Returning_and_the_retry_are_listed_only_once_custody_was_acquired()
+    {
+        // A failed pickup: nothing was collected, so only the reschedule can be taken.
+        Assert.Equal(
+            [OrderStatus.Rescheduled],
+            Targets(Order(OrderStatus.FailedAttempt), Snapshot("DISPATCHER"), failedAttempt: PendingDecision(custody: false)));
+    }
+
+    [Fact]
+    public void A_recorded_next_action_keeps_binding_the_exits_for_everyone()
+    {
+        var failed = Order(OrderStatus.FailedAttempt);
+        var driver = Snapshot("DRIVER", matchingAssignment: true);
+
+        Assert.Equal(
+            [OrderStatus.Delivering, OrderStatus.Rescheduled],
+            Targets(failed, Snapshot("DISPATCHER"), failedAttempt: Decided("RESCHEDULED")));
+        Assert.Equal(
+            [OrderStatus.Delivering, OrderStatus.Rescheduled],
+            Targets(failed, driver, failedAttempt: Decided("RESCHEDULED")));
+        Assert.Equal([OrderStatus.Returning], Targets(failed, Snapshot("DISPATCHER"), failedAttempt: Decided("RETURNING")));
+        Assert.Equal([OrderStatus.Returning], Targets(failed, driver, failedAttempt: Decided("RETURNING")));
+        // An adopted incident binds nothing; custody still applies.
+        Assert.Equal(
+            [OrderStatus.Delivering, OrderStatus.Rescheduled, OrderStatus.Returning],
+            Targets(failed, driver, failedAttempt: Decided("RETURNING", adopted: true)));
+    }
+
+    [Fact]
+    public void Without_the_failed_attempt_snapshot_or_its_incident_no_exit_is_listed()
+    {
+        var failed = Order(OrderStatus.FailedAttempt);
+        Assert.Empty(Targets(failed, Snapshot("DISPATCHER")));
+        Assert.Empty(Targets(
+            failed,
+            Snapshot("DISPATCHER"),
+            failedAttempt: new FailedAttemptExitSnapshot(
+                new IncidentGuardSnapshot(false, false, true, true),
+                new CustodyGuardSnapshot(true))));
+        // The snapshot only ever narrows the exits of FAILED_ATTEMPT.
+        Assert.Equal(
+            [OrderStatus.ReadyForPickup, OrderStatus.Cancelled],
+            Targets(Order(OrderStatus.Confirmed), Snapshot("DISPATCHER"), failedAttempt: PendingDecision(custody: false)));
+    }
+
+    /// <summary>The list and the guards are the same policy: whatever is listed passes the decision guards.</summary>
+    [Fact]
+    public void Every_listed_exit_passes_the_failed_attempt_decision_guards()
+    {
+        var registry = new OrderTransitionGuardRegistry();
+        foreach (var role in new[] { "DISPATCHER", "PLATFORM_ADMIN", "DRIVER" })
+        {
+            foreach (var snapshot in new[]
+                     {
+                         PendingDecision(custody: true), PendingDecision(custody: false), Decided("RESCHEDULED"),
+                         Decided("RETURNING"), Decided("RETURNING", adopted: true),
+                     })
+            {
+                foreach (var target in Targets(
+                             Order(OrderStatus.FailedAttempt),
+                             Snapshot(role, matchingAssignment: true),
+                             mfa: true,
+                             failedAttempt: snapshot))
+                {
+                    var result = registry.Evaluate(new OrderTransitionGuardContext
+                    {
+                        Source = OrderStatus.FailedAttempt,
+                        Target = target,
+                        Reason = "motivo",
+                        OccurredAt = Now,
+                        ClaimWindowEndsAt = null,
+                        FinalizedAt = null,
+                        CodExpectedCents = 0,
+                        MonetaryIntegrityValid = true,
+                        Metadata = NormalizedTransitionMetadata.Empty,
+                        Assignment = new AssignmentGuardSnapshot(true, true, true, true),
+                        Incidents = snapshot.Incidents,
+                        Custody = snapshot.Custody,
+                        ActorRole = role,
+                    });
+                    Assert.True(result.Satisfied, $"{role} -> {target}: {result.Code}");
+                }
+            }
+        }
+    }
+
     /// <summary>A context whose only failing guards can be the metadata-driven ones.</summary>
     private static OrderTransitionGuardContext GuardContext(
         OrderStatus source,
@@ -205,21 +315,36 @@ public sealed class OrderAllowedTransitionsTests
     private static OrderStatus[] Targets(
         OrderResult order,
         OrderTransitionAuthorizationSnapshot snapshot,
-        bool mfa = false) =>
-        Compute(order, snapshot, mfa: mfa).Select(item => item.Target).ToArray();
+        bool mfa = false,
+        FailedAttemptExitSnapshot? failedAttempt = null) =>
+        Compute(order, snapshot, mfa: mfa, failedAttempt: failedAttempt).Select(item => item.Target).ToArray();
 
     private static IReadOnlyList<OrderAllowedTransition> Compute(
         OrderResult order,
         OrderTransitionAuthorizationSnapshot snapshot,
         Guid? organizationId = null,
-        bool mfa = false) =>
+        bool mfa = false,
+        FailedAttemptExitSnapshot? failedAttempt = null) =>
         OrderAllowedTransitionsPolicy.Compute(
             Authorizer,
             organizationId ?? Owner,
             order,
             snapshot,
             mfa,
-            Now);
+            Now,
+            failedAttempt);
+
+    /// <summary>A failed attempt reported by the driver: its incident was read and records no next action.</summary>
+    private static FailedAttemptExitSnapshot PendingDecision(bool custody) => new(
+        new IncidentGuardSnapshot(false, false, custody, true, null, LatestFailedAttemptIncidentFound: true),
+        new CustodyGuardSnapshot(custody));
+
+    /// <summary>A failed attempt reported by dispatch with the next action it chose.</summary>
+    private static FailedAttemptExitSnapshot Decided(string nextAction, bool custody = true, bool adopted = false) => new(
+        new IncidentGuardSnapshot(
+            false, false, custody, true, nextAction, LatestFailedAttemptIncidentAdopted: adopted,
+            LatestFailedAttemptIncidentFound: true),
+        new CustodyGuardSnapshot(custody));
 
     private static OrderTransitionAuthorizationSnapshot Snapshot(string? role, bool matchingAssignment = false) =>
         new(role, matchingAssignment);

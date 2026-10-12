@@ -83,7 +83,11 @@ public sealed class SettlementHttpFixture : IAsyncLifetime
     public Task DisposeAsync() => Api.DisposeAsync();
 
     /// <summary>A fresh DRIVER of <paramref name="organizationId"/>, so every test settles its own payee.</summary>
-    internal async Task<Guid> SeedDriverAsync(Guid organizationId)
+    internal async Task<Guid> SeedDriverAsync(
+        Guid organizationId,
+        string driverType = "OWN",
+        string status = "ACTIVE",
+        string vehicleType = "MOTORCYCLE")
     {
         var user = Guid.NewGuid();
         var driver = Guid.NewGuid();
@@ -93,12 +97,15 @@ public sealed class SettlementHttpFixture : IAsyncLifetime
             INSERT INTO organizations.organization_memberships(id,user_id,organization_id,role,status,is_default)
             VALUES (gen_random_uuid(),@user,@org,'DRIVER','ACTIVE',true);
             INSERT INTO drivers.driver_profiles(id,user_id,org_id,home_city_id,driver_type,vehicle_type,status)
-            VALUES (@driver,@user,@org,@city,'OWN','MOTORCYCLE','ACTIVE');
+            VALUES (@driver,@user,@org,@city,@driver_type,@vehicle_type,@status);
             """,
             new NpgsqlParameter("user", user),
             new NpgsqlParameter("driver", driver),
             new NpgsqlParameter("org", organizationId),
-            new NpgsqlParameter("city", CityId));
+            new NpgsqlParameter("city", CityId),
+            new NpgsqlParameter("driver_type", driverType),
+            new NpgsqlParameter("vehicle_type", vehicleType),
+            new NpgsqlParameter("status", status));
         return driver;
     }
 

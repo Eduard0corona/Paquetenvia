@@ -68,6 +68,32 @@ class ExecutorGrantRuleTests(unittest.TestCase):
         )
         self.assertTrue(self.validator.executor_grant_errors(missing))
 
+    def test_auto_close_executor_contract_holds_and_any_widening_fails(self) -> None:
+        """ORD-AUTO-CLOSE-2026-10-10: two column reads, no write, no membership, lane-granted function."""
+        self.assertEqual([], self.validator.auto_close_errors(self.role_sql))
+        for widening in [
+            "GRANT SELECT (id) ON orders.orders TO paqueteria_auto_close_executor;",
+            "GRANT SELECT ON orders.orders TO paqueteria_auto_close_executor;",
+            "GRANT UPDATE (status) ON orders.orders TO paqueteria_auto_close_executor;",
+            "GRANT SELECT ON orders.order_events TO paqueteria_app, paqueteria_auto_close_executor;",
+            "GRANT USAGE ON SCHEMA security TO paqueteria_auto_close_executor;",
+            "GRANT paqueteria_auto_close_executor TO paqueteria_worker;",
+            "GRANT EXECUTE ON FUNCTION security.list_auto_close_owner_organizations(uuid,integer) TO paqueteria_app;",
+        ]:
+            with self.subTest(widening=widening):
+                widened = self.role_sql + "\n" + widening + "\n"
+                self.assertTrue(
+                    self.validator.executor_grant_errors(widened)
+                    or self.validator.auto_close_errors(widened)
+                )
+        missing = self.role_sql.replace(
+            "GRANT SELECT (owner_org_id,status) ON orders.orders TO paqueteria_auto_close_executor;", ""
+        )
+        self.assertNotEqual(missing, self.role_sql)
+        self.assertTrue(
+            any("differ from the contract" in error for error in self.validator.executor_grant_errors(missing))
+        )
+
     def test_multi_grantee_grants_fail_for_either_executor(self) -> None:
         for widening in [
             "GRANT SELECT ON orders.order_events TO paqueteria_app, paqueteria_cleanup_executor;",

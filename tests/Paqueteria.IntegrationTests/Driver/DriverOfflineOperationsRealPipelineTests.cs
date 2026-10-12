@@ -358,13 +358,18 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
             new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }
 
+    /// <summary>
+    /// UI-001 phase 3: the step names the action, the photo is shown in
+    /// "Vista previa de la foto" and only "Usar esta foto" queues it.
+    /// </summary>
     private static async Task EnqueueProofAsync(
         IPage page,
-        string button,
+        string action,
         string fileName,
         string mimeType = "image/png",
         byte[]? bytes = null)
     {
+        await page.GetByText(action, new() { Exact = true }).First.WaitForAsync();
         await page.Locator("input[type=file]").SetInputFilesAsync(
             new FilePayload
             {
@@ -372,7 +377,12 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
                 MimeType = mimeType,
                 Buffer = bytes ?? SyntheticPng,
             });
-        await page.GetByRole(AriaRole.Button, new() { Name = button }).ClickAsync();
+        await page.GetByRole(
+                AriaRole.Heading,
+                new() { Name = "Vista previa de la foto" })
+            .WaitForAsync();
+        await page.GetByRole(AriaRole.Button, new() { Name = "Usar esta foto" })
+            .ClickAsync();
         await page.WaitForTimeoutAsync(100);
     }
 
@@ -393,7 +403,7 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
             var actual = await page.EvaluateAsync<int>(
                 """
                 () => new Promise((resolve, reject) => {
-                  const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
+                  const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
                   open.onerror = () => reject(open.error);
                   open.onsuccess = () => {
                     const db = open.result;
@@ -421,7 +431,7 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
         var diagnostics = await page.EvaluateAsync<string>(
             """
             () => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
               open.onerror = () => reject(open.error);
               open.onsuccess = () => {
                 const db = open.result;
@@ -474,7 +484,7 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
             var reached = await page.EvaluateAsync<bool>(
                 """
                 expected => new Promise((resolve, reject) => {
-                  const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
+                  const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
                   open.onerror = () => reject(open.error);
                   open.onsuccess = () => {
                     const db = open.result;
@@ -508,7 +518,7 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
         page.EvaluateAsync<int>(
             """
             storeName => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
               open.onerror = () => reject(open.error);
               open.onsuccess = () => {
                 const db = open.result;
@@ -531,7 +541,7 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
         page.EvaluateAsync<string>(
             """
             () => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 2);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
               open.onerror = () => reject(open.error);
               open.onsuccess = () => {
                 const db = open.result;

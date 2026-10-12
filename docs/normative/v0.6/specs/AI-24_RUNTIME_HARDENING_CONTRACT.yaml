@@ -148,6 +148,39 @@ legal_acceptance:
     canonical_utf8: '{"schema_version":"order-acceptance-v1","order_id":"11111111-1111-1111-1111-111111111111","quote_id":"22222222-2222-2222-2222-222222222222","owner_org_id":"33333333-3333-3333-3333-333333333333","actor_id":"44444444-4444-4444-4444-444444444444","terms_version":"terms-2026-07","privacy_version":"privacy-2026-07","accepted_at_client":"2026-07-20T12:34:56.1234560Z","acceptance_channel":"PWA"}'
     sha256_hex: 2a09176e270ddcc52e0fee157f3d5bd869f36047f7f946daa7caed4816ae0b37
     sha256_base64: KgkXbicN3MUuD+4Vfz1b2GnzYEf3+Ubap8rtSBauCzc=
+order_auto_close:
+  decision: ORD-AUTO-CLOSE-2026-10-10
+  host: Paqueteria.Worker job orders.auto-close behind IJobScheduler (ADR-034 periodic BackgroundService)
+  settings:
+    enabled: Orders:AutoClose:Enabled, false by default; true requires ConnectionStrings:PaqueteriaWorker
+    interval: Orders:AutoClose:PollIntervalSeconds, default 60, 1..3600
+    batch: Orders:AutoClose:BatchSize, default 100, 1..1000 orders per batch
+    batches_per_cycle: Orders:AutoClose:MaxBatchesPerCycle, default 10, 1..100
+  discovery: security.list_auto_close_owner_organizations(uuid,integer), owned by paqueteria_auto_close_executor
+    NOLOGIN BYPASSRLS, executable only by paqueteria_worker; returns only owner organization identifiers with at
+    least one DELIVERED order, ascending and strictly after a cursor, limit 1..1000; no tenant context, no order
+    identifier and no guard input
+  candidates: per owner organization, an explicit Worker tenant transaction (BEGIN, set_config(..., true) with only
+    that organization in app.current_org_ids as uuid[], SET LOCAL ROLE paqueteria_worker) reads its DELIVERED orders
+    (owner_org_id = that organization) by ascending id with their version
+  close: per order, its own owner tenant transaction runs the ORD-002 transition DELIVERED -> CLOSED as the system
+    actor with the read version; guards, order update, event, outbox, audit and idempotency rows are the manual
+    close's
+  lock: no job-level lock; the order row lock (FOR UPDATE) and the optimistic version decide, so two Workers or a
+    concurrent manual close never close an order twice; the loser sees a version or state conflict and writes nothing
+  resume: the cycle stops at the end of the DELIVERED orders or after the batch cap and then resumes after the last
+    order tried (in-memory hint; a restart starts over)
+  failure_handling:
+    guard_not_satisfied: the order stays DELIVERED; counted per AI-05 rule code, not logged per order
+    superseded: version, state, visibility or concurrency conflict; nothing written; counted
+    unexpected_error: rolled back; the rest of the batch continues; the cycle then ends failed (ScheduledJobCycle
+      failure for the OBS-002 job-failure alert) and the order is retried on a later pass
+    discovery_or_read_error: the cycle ends failed and the next one runs after the interval
+  telemetry: meter Paquetenvia.Orders.AutoClose, orders.auto_close.cycles (outcome drained, capped or failed) and
+    orders.auto_close.attempts (outcome closed, superseded, failed or the lower-case rule code); counts only, never an
+    identifier or personal datum
+  rollback: Orders:AutoClose:Enabled=false; REVOKE EXECUTE on the discovery function from paqueteria_worker; orders
+    already closed stay closed
 tenant_context:
   current_org_ids: parameterized uuid[] cast to text for set_config; empty is {} and never NULL
   statement: SELECT set_config('app.current_org_ids', @organization_ids::uuid[]::text, true)
@@ -202,3 +235,68 @@ bff_session:
   mfa_step_up: /auth/login?mfa=required sends acr_values urn:authcenter:acr:mfa; the ID token must carry acr urn:authcenter:acr:mfa or urn:authcenter:acr:phr and mfa in amr; a 403 whose only unmet requirement is MFA carries problem code MFA_REQUIRED; nobody is forced to MFA (drivers included)
   callback_errors: access_denied (after state, correlation and iss validate) redirects to /login?error=access_denied; every other failure to /login?error=signin_failed; no protocol detail forwarded
   same_origin_routing: pilot ingress routes /api, /hubs, /auth and /signin-authcenter to the API
+voice_bridge:
+  decisions:
+  - VOICE-001-MASKED-CALLS-2026-10-11
+  - VOICE-001-PROVIDER-TWILIO-2026-10-11
+  - VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11
+  port: IVoiceBridgeProvider (Paqueteria.Application.Voice); adapters TwilioVoiceBridgeProvider and the synthetic fake;
+    closed VoiceBridgeResultCodes; phone numbers are VoicePhoneNumber values whose ToString is [redacted]
+  provider_selection: Voice:Provider Disabled (default), Synthetic (Development, Testing or DEV_SYNTHETIC only) or Twilio
+    (refused in Development, Testing, the DevSynthetic environment and any PAQUETERIA_DEPLOYMENT_CLASS=DEV_SYNTHETIC);
+    Twilio requires Voice:Twilio:Gate007DecisionId naming the decision-log row that resolves GATE-007, and the pilot
+    keeps Disabled (Voice__ is platform-managed in the pilot settings)
+  call: one Twilio REST create call (POST /2010-04-01/Accounts/{AccountSid}/Calls.json) To the driver's mobile From the
+    company number whose inline TwiML only gathers one digit - "Presiona 1 para llamar al destinatario." - for
+    Voice:Twilio:DriverConfirmSeconds (default 10) and posts it, a timeout included, to the signed driver-confirm
+    webhook; the recipient's number is not in that request. Only after the driver's 1 does the webhook answer <Dial
+    callerId=company number timeout=RecipientRingSeconds timeLimit=MaximumCallSeconds record=do-not-record><Number
+    url=recipient-screen>recipient</Number></Dial>; the screening says only the neutral "Tiene una llamada sobre su
+    envío; presione 1 para contestar." (no brand, GATE-001) for Voice:Twilio:RecipientConfirmSeconds (default 10) and
+    both legs are connected only after the recipient's 1 (VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11, "Confirmar con una
+    tecla") - without a key press the call hangs up without bridging, so a voicemail greeting that may say a number
+    never reaches the other party; the REST TimeLimit is MaximumCallSeconds plus both key presses, the recipient's
+    ringing and a minute of prompts. Mexican numbers are dialed as +52 and ten digits whose first digit is 2-9; no
+    recording, no answering-machine detection, no Twilio Proxy (Public Beta without SLA) and no in-browser calling
+    (mobile browsers do not keep WebRTC calls in background)
+  key_presses: drivers.recipient_call_requests.bridge_stage records DRIVER_CONFIRMED, DRIVER_NOT_CONFIRMED,
+    BRIDGE_FAILED (the recipient's number could not be used), RECIPIENT_CONFIRMED or RECIPIENT_NOT_CONFIRMED once per
+    call request, only for a request that may ring (REQUESTED, PLACED or UNCONFIRMED), within 15 minutes of the
+    request and bound to the platform's own call (CallSid of the driver leg, ParentCallSid of the recipient leg); a
+    replayed, late or foreign key press hangs up and changes nothing; nothing is retried; a store failure hangs up
+  resilience: per-attempt timeout Voice:Twilio:TimeoutSeconds (default 10), circuit breaker and bulkhead like the
+    messaging adapters; never retried (creating a call has no idempotency key); an ambiguous answer (a timeout, a broken
+    answer or any 5xx, after which Twilio may have created the call) ends UNCONFIRMED, keeps its key and counts toward
+    the limits; only a failure proving nothing was created (unreachable before sending, circuit open, concurrency
+    limit, a 4xx with a Twilio error code, 401, 403 or 429) ends FAILED and releases the key
+  credentials: Voice:Twilio:AccountSid, AuthToken, optional ApiKeySid and ApiKeySecret, CompanyNumber and optional
+    InboundForwardNumber only through KeyVaultSecrets:Mappings; the HTTP client has no default loggers
+  phones: the driver's own mobile is stored in drivers.driver_profiles.phone_ciphertext with the ADP-001 envelope
+    (purpose drivers.phone) with consent version VOICE-001-CONSENT-V1; the recipient phone is
+    locations.locations.phone_ciphertext (purpose locations.phone); both are decrypted only in memory inside
+    requestRecipientCall, after the REQUESTED row commits and with no transaction held; synthetic mode never decrypts
+    and uses non-dialable placeholders
+  request: Idempotency-Key (scope VOICE-001:REQUEST_RECIPIENT_CALL in platform.idempotency_keys); rate limits
+    Drivers:RecipientCalls MaximumPerOrder 3 per OrderWindowMinutes 15 and MaximumPerDriverPerHour 20, counting only
+    REQUESTED, PLACED and UNCONFIRMED; drivers.recipient_call_requests keeps who, order, assignment, provider, status,
+    result code, provider call id, final call status and duration and the bridge stage, never a number; the call
+    request id is chosen before the retrying transaction, so a retry after its commit resumes its own reservation;
+    a request left REQUESTED between its transactions is ended UNCONFIRMED (result code VOICE_OUTCOME_UNKNOWN) by the
+    next replay of its key once Drivers:RecipientCalls:StaleRequestSeconds (default 300) have passed; availability
+    RATE_LIMITED carries retry_after_seconds
+  webhooks: POST /api/v1/voice/twilio/call-status, /inbound, /driver-confirm, /recipient-screen and
+    /recipient-confirm are anonymous but require a valid X-Twilio-Signature (HMAC-SHA1 under the auth token over
+    Voice:Twilio:WebhookBaseUri plus the request path and query and the sorted form fields; never Host or
+    X-Forwarded-*) and the configured AccountSid; From, To, Caller and Called are used only for the signature; a status
+    callback promotes only a REQUESTED, PLACED or UNCONFIRMED request (never a FAILED one); the inbound answer is a
+    fixed message or a forward to the configured dispatch line with its own Voice:Twilio:InboundForwardRingSeconds
+    (default 30) and InboundForwardMaximumSeconds (default 3600), never the bridge's ring timeout or cost cap
+  audit: RECIPIENT_CALL_REQUESTED, RECIPIENT_CALL_PLACED, RECIPIENT_CALL_UNCONFIRMED, RECIPIENT_CALL_FAILED,
+    RECIPIENT_CALL_STATUS_REPORTED, RECIPIENT_CALL_DRIVER_CONFIRMED, RECIPIENT_CALL_NOT_CONFIRMED,
+    RECIPIENT_CALL_BRIDGED, RECIPIENT_CALL_BRIDGE_FAILED, DRIVER_PHONE_REGISTERED and DRIVER_PHONE_REMOVED, without any
+    phone number
+  erasure: a driver reads and erases its own number whatever its driver profile's status (ARCO); registering and calling
+    require an ACTIVE driver; erasing on behalf of a driver whose membership is no longer active (administrative
+    erasure, offboarding) is a follow-up outside VOICE-001
+  rollback: Voice:Provider=Disabled stops every call and every new phone; drivers can still remove their number; the
+    Drivers lane rollback refuses while call requests or phones exist

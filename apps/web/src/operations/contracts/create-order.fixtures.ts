@@ -35,13 +35,14 @@ export function quoteResponse(overrides: Record<string, unknown> = {}): Record<s
   };
 }
 
+/** createOrder answers with the new order in DRAFT (Orders.Domain Order.Create). */
 export function orderResponse(overrides: Record<string, unknown> = {}): Record<string, unknown> {
   return {
     id: orderId,
     public_id: "PQ-000123",
     owner_org_id: orgId,
     operator_org_id: null,
-    status: "CONFIRMED",
+    status: "DRAFT",
     price_net: { currency: "MXN", amount_cents: 8_000 },
     version: 1,
     origin_location_id: locationId,

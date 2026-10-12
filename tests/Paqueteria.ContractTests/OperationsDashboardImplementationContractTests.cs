@@ -40,6 +40,35 @@ public sealed class OperationsDashboardImplementationContractTests
     }
 
     [Fact]
+    public void Price_review_filter_is_bound_once_and_evaluated_inside_the_projection_query()
+    {
+        // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: one more filter of the same undeclared read model (ADR-OBS-001),
+        // a boolean like unassigned, applied in the CTE of the single RLS-scoped projection command.
+        var endpoint = Read(
+            "src", "Modules", "Reporting", "Reporting.Endpoints",
+            "OperationsDashboardEndpoints.cs");
+        // Listed once among the known parameters (each may appear once in the query) and bound once.
+        Assert.Equal(1, Count(endpoint, "        \"price_review\",\n"));
+        Assert.Contains("!TryBoolean(query, \"price_review\", out var priceReview)", endpoint, StringComparison.Ordinal);
+
+        var reader = Read(
+            "src", "Modules", "Reporting", "Reporting.Infrastructure",
+            "Operations", "PostgreSqlOperationsDashboardReader.cs");
+        Assert.Contains("@price_review::boolean IS NULL", reader, StringComparison.Ordinal);
+        Assert.Contains("OR @price_review = false", reader, StringComparison.Ordinal);
+        Assert.Contains(
+            "AddNullable(command, \"price_review\", NpgsqlDbType.Boolean, filters.PriceReview);",
+            reader,
+            StringComparison.Ordinal);
+        // The filter sits in the page CTE, before the ordering and the limit, so the cursor pages the filtered rows.
+        Assert.True(
+            reader.IndexOf("@price_review::boolean IS NULL", StringComparison.Ordinal) <
+            reader.IndexOf("ORDER BY order_row.updated_at DESC, order_row.id DESC", StringComparison.Ordinal));
+        // A row outside the queue rule fails closed instead of reaching the list.
+        Assert.Contains("OperationsQueuePolicy.IsPriceReview(item.Status, item.CostWarning)", reader, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Response_DTOs_are_exact_and_privacy_minimized()
     {
         AssertJsonProperties<OperationsDashboardResponse>(
@@ -48,11 +77,22 @@ public sealed class OperationsDashboardImplementationContractTests
             "aggregate_version", "assignment", "client", "cost_warning",
             "created_at", "delivery_window", "delivery_zone", "latest_driver_location",
             "operator", "order_id", "owner", "pickup_window", "public_id",
-            "service_type", "status", "unassigned_alert", "updated_at");
+            "service_type", "status", "total", "unassigned_alert", "updated_at");
         AssertJsonProperties<OperationsAssignmentResponse>(
             "assignment_id", "assignment_type", "driver_id", "driver_reference", "status");
         AssertJsonProperties<OperationsDriverLocationResponse>(
             "accuracy_m", "captured_at", "lat", "lng");
+        // OBS-001-OPERATED-OWNER-NAME-2026-10-12: an owner or operator is its id and the name RLS lets the selected
+        // organization read (null for the other party of the order); never a legal name or another column.
+        AssertJsonProperties<OperationsOrganizationResponse>("display_name", "organization_id");
+        Assert.Equal(
+            typeof(string),
+            typeof(OperationsOrganizationResponse).GetProperty(nameof(OperationsOrganizationResponse.DisplayName))!.PropertyType);
+        // UI-PHASE3-INBOX-TOTAL-2026-10-10: the order total in the AI-05 Money shape, int64 cents only.
+        AssertJsonProperties<OperationsMoneyResponse>("amount_cents", "currency");
+        Assert.Equal(
+            typeof(long),
+            typeof(OperationsMoneyResponse).GetProperty(nameof(OperationsMoneyResponse.AmountCents))!.PropertyType);
 
         var allNames = typeof(OperationsDashboardOrderResponse)
             .GetProperties()
@@ -62,7 +102,10 @@ public sealed class OperationsDashboardImplementationContractTests
             name.Contains("Phone", StringComparison.OrdinalIgnoreCase) ||
             name.Contains("Email", StringComparison.OrdinalIgnoreCase) ||
             name.Contains("Address", StringComparison.OrdinalIgnoreCase) ||
-            name.Contains("AssignmentCost", StringComparison.OrdinalIgnoreCase));
+            name.Contains("AssignmentCost", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains("Margin", StringComparison.OrdinalIgnoreCase) ||
+            name.Contains("Cod", StringComparison.Ordinal) ||
+            name.Contains("Tariff", StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -77,6 +120,9 @@ public sealed class OperationsDashboardImplementationContractTests
             source,
             StringComparison.Ordinal);
         Assert.Contains("SET LOCAL ROLE paqueteria_app", source, StringComparison.Ordinal);
+        // The in-transaction membership check admits only the dashboard roles, so the order total
+        // (UI-PHASE3-INBOX-TOTAL-2026-10-10) never reaches FINANCE, VIEWER or any other role.
+        Assert.Contains("AND m.role IN ('PLATFORM_ADMIN', 'DISPATCHER')", source, StringComparison.Ordinal);
         Assert.Contains("BeginTransactionAsync", source, StringComparison.Ordinal);
         Assert.Contains("CommitAsync", source, StringComparison.Ordinal);
         Assert.DoesNotContain("SECURITY DEFINER", source, StringComparison.OrdinalIgnoreCase);
@@ -85,6 +131,40 @@ public sealed class OperationsDashboardImplementationContractTests
         Assert.DoesNotContain("UPDATE ", source, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("DELETE FROM", source, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("CREATE TABLE", source, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Organization_names_come_only_from_the_RLS_scoped_projection()
+    {
+        // OBS-001-OPERATED-OWNER-NAME-2026-10-12: the owner of an order the selected organization only operates (and
+        // the operator of one it owns) keeps the name RLS hides as null. No SECURITY DEFINER lookup, role or grant
+        // reads it; the reader checks every row against the selected organization instead of failing the page.
+        var reader = Read(
+            "src", "Modules", "Reporting", "Reporting.Infrastructure",
+            "Operations", "PostgreSqlOperationsDashboardReader.cs");
+        Assert.Contains(
+            "LEFT JOIN organizations.organizations AS owner_organization",
+            reader,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "LEFT JOIN organizations.organizations AS operator_organization",
+            reader,
+            StringComparison.Ordinal);
+        Assert.Contains("items.Add(Map(reader, request.OrganizationId));", reader, StringComparison.Ordinal);
+        Assert.Contains(
+            "OperationsDashboardProjectionPolicy.IsReaderParty(readerOrganizationId, ownerId, operatorId)",
+            reader,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "OperationsDashboardProjectionPolicy.IsVisibleName(readerOrganizationId, ownerId, ownerName)",
+            reader,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "OperationsDashboardProjectionPolicy.IsVisibleName(readerOrganizationId, operatorId.Value, operatorName)",
+            reader,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("legal_name", reader, StringComparison.Ordinal);
+        Assert.DoesNotContain("security.", reader, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -13,7 +13,7 @@ import {
   transitionRequestBody,
   type AllowedTransition,
 } from "./order-transitions";
-import { orderStatuses } from "./operations-dashboard";
+import { orderStatuses, type OrderStatus } from "./operations-dashboard";
 
 const confirm: AllowedTransition = { target_status: "CONFIRMED", required_metadata: ["restricted_goods_acknowledged"] };
 const cancel: AllowedTransition = { target_status: "CANCELLED", required_metadata: [] };
@@ -88,6 +88,58 @@ describe("order transitions contract (UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05)",
       "FAILED_ATTEMPT",
       "DELIVERED",
     ]);
+  });
+
+  // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: "el despachador elige reprogramar, reintentar hoy o regresar".
+  describe("the decision of a failed attempt", () => {
+    const listed = (...targets: OrderStatus[]): AllowedTransition[] =>
+      targets.map((target_status) => ({ target_status, required_metadata: [] }));
+
+    it("offers Reprogramar, Reintentar hoy and Regresar in that order when the server lists them", () => {
+      const actions = nextStepActions(listed("RETURNING", "DELIVERING", "RESCHEDULED"), "FAILED_ATTEMPT");
+      expect(actions.map((action) => [action.target, action.label, action.reasonLabel, action.danger])).toEqual([
+        ["RESCHEDULED", "Reprogramar", "Motivo de la reprogramación", false],
+        ["DELIVERING", "Reintentar hoy", "Motivo del reintento", false],
+        ["RETURNING", "Regresar", "Motivo de la devolución", false],
+      ]);
+      expect(actions.every((action) => !action.needsRestrictedGoodsAcknowledgement)).toBe(true);
+    });
+
+    it("offers only what the server allows, never a placeholder", () => {
+      // A failed pickup: nothing was collected, so the server lists only the reschedule.
+      expect(nextStepActions(listed("RESCHEDULED"), "FAILED_ATTEMPT").map((action) => action.label)).toEqual([
+        "Reprogramar",
+      ]);
+      // A driver, or a decision already recorded as RETURNING, gets what the server listed and nothing more.
+      expect(nextStepActions([], "FAILED_ATTEMPT")).toEqual([]);
+      expect(nextStepActions(listed("RETURNING"), "FAILED_ATTEMPT").map((action) => action.label)).toEqual([
+        "Regresar",
+      ]);
+    });
+
+    it("keeps DELIVERING a driver step everywhere else", () => {
+      for (const source of orderStatuses.filter((status) => status !== "FAILED_ATTEMPT")) {
+        expect(nextStepActions(listed("DELIVERING"), source)).toEqual([]);
+      }
+      expect(nextStepActions(listed("DELIVERING"))).toEqual([]);
+      // Outside a failed attempt the existing wording stays.
+      expect(nextStepActions(listed("RESCHEDULED", "RETURNING"), "RESCHEDULED").map((action) => action.label)).toEqual([
+        "Reprogramar entrega",
+        "Iniciar devolución",
+      ]);
+    });
+
+    it("sends the decision with the reason and the version just read", () => {
+      const [, retry] = nextStepActions(listed("RESCHEDULED", "DELIVERING"), "FAILED_ATTEMPT");
+      expect(transitionRequestBody(retry, " Cliente pidió volver hoy ", 12, false)).toEqual({
+        target_status: "DELIVERING",
+        reason: "Cliente pidió volver hoy",
+        expected_version: 12,
+      });
+      const view = transitionConfirmation("ORD_AAAAAAAAAAAAAAAAAAAAAA", retry);
+      expect(view.title).toBe("¿Reintentar hoy?");
+      expect(view.description).toContain("El mismo repartidor volverá a intentar la entrega hoy");
+    });
   });
 
   it("builds claim and return bodies with only the reason, which the claim guards require", () => {
@@ -179,8 +231,15 @@ describe("transition rejection messages (ORD-002-GUARD-CODES-2026-10-05)", () =>
       problem.indexOf("          x-ord-002-guard-codes:"),
     );
     const published = [...enumBlock.matchAll(/^ {10}- ([A-Z_]+)$/gm)].map((match) => match[1]);
-    expect(published.length).toBe(24);
+    expect(published.length).toBe(25);
     expect([...transitionRejectionCodes]).toEqual(published);
+  });
+
+  // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: a driver report waits for dispatch.
+  it("tells who decides a failed attempt", () => {
+    expect(transitionRejectionMessage("DISPATCH_DECISION_REQUIRED")).toBe(
+      "El siguiente paso de este intento fallido lo decide el despacho.",
+    );
   });
 
   it("names what is missing for the codes the owner asked for", () => {

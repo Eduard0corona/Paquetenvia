@@ -2,7 +2,9 @@ using Dispatch.Application.Assignments;
 using Dispatch.Application.Stops;
 using Dispatch.Infrastructure.Assignments;
 using Dispatch.Application.ExternalOffers;
+using Dispatch.Application.Fleet;
 using Dispatch.Infrastructure.ExternalOffers;
+using Dispatch.Infrastructure.Fleet;
 using Dispatch.Infrastructure.Persistence;
 using Dispatch.Infrastructure.Stops;
 using Microsoft.EntityFrameworkCore;
@@ -81,7 +83,9 @@ public static class DependencyInjection
         services.TryAddSingleton<IAuditPayloadRedactor, AuditPayloadRedactor>();
         services.TryAddScoped<IAppendOnlyAuditWriter, PostgreSqlAppendOnlyAuditWriter>();
         services.TryAddSingleton<IDispatchAssignmentAuthorizer, DispatchAssignmentAuthorizer>();
-        services.TryAddSingleton<OrderTransitionGuardRegistry>();
+        // ORD-002-API-GUARD-REGISTRY: the AI-04 guards the assignment and external-offer flows evaluate before ASSIGNED,
+        // built by the same explicit factory as the Orders compositions (never a type registration).
+        services.TryAddSingleton(static _ => new OrderTransitionGuardRegistry());
         services.TryAddSingleton<IAssignmentFailureInjector, NoOpAssignmentFailureInjector>();
         services.TryAddScoped<IDispatchAuthorizationReader, PostgreSqlDispatchAuthorizationReader>();
         services.TryAddScoped<IAssignmentIdempotencyAccess, PostgreSqlAssignmentIdempotencyAccess>();
@@ -89,14 +93,20 @@ public static class DependencyInjection
         services.TryAddScoped<IAssignmentVisibilityDataReader, PostgreSqlAssignmentVisibilityDataReader>();
         services.TryAddScoped<IAssignmentVisibilityResolver, DispatchAssignmentVisibilityResolver>();
         services.TryAddScoped<IAssignmentReplayEvidenceReader, PostgreSqlAssignmentReplayEvidenceReader>();
+        // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the stop details are read through the shared port
+        // Paqueteria.Application.Locations.ILocationPiiReader, which the Locations module registers from its own bound
+        // Locations:PiiProtector option, so Dispatch never repeats the protection mode, purposes or storage format and
+        // takes no project reference to the Locations module.
         services.AddSingleton<DisabledAssignmentService>();
         services.AddSingleton<DisabledDriverStopsQuery>();
         services.AddSingleton<DisabledExternalOfferService>();
         services.AddSingleton<DisabledAssignableDriversQuery>();
+        services.AddSingleton<DisabledOrganizationDriversQuery>();
         services.AddScoped<PostgreSqlAssignmentToOrderCoordinator>();
         services.AddScoped<PostgreSqlDriverStopsQuery>();
         services.AddScoped<PostgreSqlExternalOfferService>();
         services.AddScoped<PostgreSqlAssignableDriversQuery>();
+        services.AddScoped<PostgreSqlOrganizationDriversQuery>();
         services.AddScoped<IAssignmentService>(serviceProvider =>
             serviceProvider.GetRequiredService<IOptions<DispatchOptions>>().Value.Provider switch
             {
@@ -124,6 +134,13 @@ public static class DependencyInjection
                 DispatchProviderKind.PostgreSql =>
                     serviceProvider.GetRequiredService<PostgreSqlAssignableDriversQuery>(),
                 _ => serviceProvider.GetRequiredService<DisabledAssignableDriversQuery>(),
+            });
+        services.AddScoped<IOrganizationDriversQuery>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<DispatchOptions>>().Value.Provider switch
+            {
+                DispatchProviderKind.PostgreSql =>
+                    serviceProvider.GetRequiredService<PostgreSqlOrganizationDriversQuery>(),
+                _ => serviceProvider.GetRequiredService<DisabledOrganizationDriversQuery>(),
             });
         return services;
     }

@@ -52,6 +52,7 @@ internal sealed class PostgreSqlOperationsDashboardReader(
             destination_zone.name AS zone_name,
             destination_zone.zone_type,
             order_row.total_cents,
+            order_row.currency,
             order_row.minimum_total_cents_snapshot,
             order_row.financial_override,
             order_row.service_window_from,
@@ -86,6 +87,17 @@ internal sealed class PostgreSqlOperationsDashboardReader(
                   FROM dispatch.assignments AS candidate
                   WHERE candidate.order_id = order_row.id
                     AND candidate.status IN ('ACCEPTED', 'ACTIVE')
+                )
+              )
+            )
+            AND (
+              @price_review::boolean IS NULL
+              OR @price_review = false
+              OR (
+                order_row.status NOT IN ('DELIVERED', 'RETURNED', 'CLAIM_RESOLVED', 'CLOSED', 'CANCELLED')
+                AND (
+                  COALESCE(order_row.total_cents < order_row.minimum_total_cents_snapshot, false)
+                  OR COALESCE(order_row.financial_override ?& ARRAY['actor_id', 'reason', 'valid_until'], false)
                 )
               )
             )
@@ -146,7 +158,9 @@ internal sealed class PostgreSqlOperationsDashboardReader(
             ELSE NULL
           END AS cost_warning,
           page.service_window_from,
-          page.service_window_to
+          page.service_window_to,
+          page.total_cents,
+          page.currency
         FROM page
         LEFT JOIN active_assignment AS assignment
           ON assignment.order_id = page.id AND assignment.row_number = 1
@@ -277,7 +291,15 @@ internal sealed class PostgreSqlOperationsDashboardReader(
         await using var reader = await command.ExecuteReaderAsync(cancellationToken);
         while (await reader.ReadAsync(cancellationToken))
         {
-            items.Add(Map(reader));
+            items.Add(Map(reader, request.OrganizationId));
+        }
+
+        // UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: the SQL filter and the queue policy state one rule; a row
+        // outside it is an inconsistent projection and fails closed instead of reaching the price review list.
+        if (request.Filters.PriceReview == true &&
+            items.Exists(item => !OperationsQueuePolicy.IsPriceReview(item.Status, item.CostWarning)))
+        {
+            throw new OperationsDashboardContractException("Price review projection is inconsistent.");
         }
 
         var pageSize = options.Value.DefaultPageSize;
@@ -305,6 +327,7 @@ internal sealed class PostgreSqlOperationsDashboardReader(
         AddNullable(command, "created_from", NpgsqlDbType.TimestampTz, filters.CreatedFrom);
         AddNullable(command, "created_to", NpgsqlDbType.TimestampTz, filters.CreatedTo);
         AddNullable(command, "unassigned", NpgsqlDbType.Boolean, filters.Unassigned);
+        AddNullable(command, "price_review", NpgsqlDbType.Boolean, filters.PriceReview);
         AddNullable(command, "cursor_updated_at", NpgsqlDbType.TimestampTz, filters.Cursor?.UpdatedAt);
         AddNullable(command, "cursor_order_id", NpgsqlDbType.Uuid, filters.Cursor?.OrderId);
         command.Parameters.Add(new NpgsqlParameter<int>("page_limit", NpgsqlDbType.Integer)
@@ -313,21 +336,31 @@ internal sealed class PostgreSqlOperationsDashboardReader(
         });
     }
 
-    private OperationsDashboardOrder Map(NpgsqlDataReader reader)
+    private OperationsDashboardOrder Map(NpgsqlDataReader reader, Guid readerOrganizationId)
     {
         var orderId = reader.GetGuid(0);
         var ownerId = reader.GetGuid(3);
         var ownerName = NullableString(reader, 4);
-        if (ownerName is null)
-        {
-            throw new OperationsDashboardContractException("Owner organization name is unavailable.");
-        }
-
         var operatorId = NullableGuid(reader, 5);
         var operatorName = NullableString(reader, 6);
-        if (operatorId.HasValue != (operatorName is not null))
+        if (!OperationsDashboardProjectionPolicy.IsReaderParty(readerOrganizationId, ownerId, operatorId))
         {
-            throw new OperationsDashboardContractException("Operator organization name is unavailable.");
+            throw new OperationsDashboardContractException("Order is outside the selected organization.");
+        }
+
+        // OBS-001-OPERATED-OWNER-NAME-2026-10-12: RLS hides every organizations row but the selected one, so the
+        // other party of the order (the owner of an order it operates, the operator of an order it owns) has no name.
+        if (!OperationsDashboardProjectionPolicy.IsVisibleName(readerOrganizationId, ownerId, ownerName))
+        {
+            throw new OperationsDashboardContractException("Owner organization name is inconsistent.");
+        }
+
+        var operatorNameIsConsistent = operatorId is null
+            ? operatorName is null
+            : OperationsDashboardProjectionPolicy.IsVisibleName(readerOrganizationId, operatorId.Value, operatorName);
+        if (!operatorNameIsConsistent)
+        {
+            throw new OperationsDashboardContractException("Operator organization name is inconsistent.");
         }
 
         var clientId = NullableGuid(reader, 7);
@@ -425,12 +458,21 @@ internal sealed class PostgreSqlOperationsDashboardReader(
             deliveryWindow = new OperationsTimeWindow(windowFrom, windowTo);
         }
 
+        // UI-PHASE3-INBOX-TOTAL-2026-10-10: the order total, integer MXN cents with IVA included, exactly as stored;
+        // the same value AI-05 Order.total returns to these roles. A negative or non-MXN total fails closed.
+        var totalCents = reader.GetInt64(28);
+        var currency = NullableString(reader, 29);
+        if (!OperationsDashboardProjectionPolicy.IsValidTotal(currency, totalCents))
+        {
+            throw new OperationsDashboardContractException("Order total is invalid.");
+        }
+
         return new OperationsDashboardOrder(
             orderId,
             reader.GetInt32(1),
             reader.GetString(2),
             new OperationsOrganizationSummary(ownerId, ownerName),
-            operatorId is null ? null : new OperationsOrganizationSummary(operatorId.Value, operatorName!),
+            operatorId is null ? null : new OperationsOrganizationSummary(operatorId.Value, operatorName),
             clientId is not null && clientName is not null
                 ? new OperationsClientSummary(clientId.Value, clientName)
                 : null,
@@ -441,6 +483,7 @@ internal sealed class PostgreSqlOperationsDashboardReader(
             zoneId is null ? null : new OperationsZoneSummary(zoneId.Value, zoneName!, zoneType!),
             assignment,
             location,
+            new OperationsMoney(currency, totalCents),
             costWarning,
             OperationsDashboardProjectionPolicy.IsUnassignedAlert(status, assignment is not null),
             deliveryWindow);

@@ -1,7 +1,7 @@
 import {
   DriverStopsContractError,
-  parseDriverStops,
-  type DriverStop,
+  parseDriverStopList,
+  type DriverStopList,
 } from "../contracts/driver-stop";
 import type { DriverSession } from "../session/driver-session";
 import {
@@ -9,8 +9,21 @@ import {
   type RequestAuthorization,
 } from "../../auth/request-credentials";
 
+export interface DriverStopsListOptions {
+  /**
+   * false asks for the stops without their protected details
+   * (`?details=false`, UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11): the server
+   * reads no personal value, so confirming queued actions never depends on
+   * the key service and never transfers addresses or names.
+   */
+  readonly details?: boolean;
+}
+
 export interface DriverStopsApi {
-  listStops(signal?: AbortSignal): Promise<readonly DriverStop[]>;
+  listStops(
+    signal?: AbortSignal,
+    options?: DriverStopsListOptions,
+  ): Promise<DriverStopList>;
 }
 
 export type DriverStopsApiFailure =
@@ -40,9 +53,14 @@ export function createDriverStopsApi(
   const fetchImplementation = options.fetch ?? fetch;
   const timeoutMilliseconds = options.timeoutMilliseconds ?? 10_000;
   const endpoint = new URL("/api/v1/driver/me/stops", options.baseUrl);
+  const withoutDetails = new URL(endpoint);
+  withoutDetails.searchParams.set("details", "false");
 
   return {
-    async listStops(signal?: AbortSignal): Promise<readonly DriverStop[]> {
+    async listStops(
+      signal?: AbortSignal,
+      listOptions?: DriverStopsListOptions,
+    ): Promise<DriverStopList> {
       const controller = new AbortController();
       const onAbort = () => controller.abort();
       signal?.addEventListener("abort", onAbort, { once: true });
@@ -62,17 +80,20 @@ export function createDriverStopsApi(
           throw new DriverStopsApiError("unauthorized");
         }
 
-        const response = await fetchImplementation(endpoint, {
-          method: "GET",
-          cache: "no-store",
-          credentials: authorization.credentials,
-          signal: controller.signal,
-          headers: {
-            Accept: "application/json",
-            ...authorization.headers,
-            "X-Organization-Id": options.session.organizationId,
+        const response = await fetchImplementation(
+          listOptions?.details === false ? withoutDetails : endpoint,
+          {
+            method: "GET",
+            cache: "no-store",
+            credentials: authorization.credentials,
+            signal: controller.signal,
+            headers: {
+              Accept: "application/json",
+              ...authorization.headers,
+              "X-Organization-Id": options.session.organizationId,
+            },
           },
-        });
+        );
 
         if (response.status === 401) {
           throw new DriverStopsApiError("unauthorized");
@@ -94,7 +115,7 @@ export function createDriverStopsApi(
         let payload: unknown;
         try {
           payload = await response.json();
-          return parseDriverStops(payload);
+          return parseDriverStopList(payload);
         } catch (error) {
           if (error instanceof DriverStopsContractError) {
             throw new DriverStopsApiError("invalid-contract");

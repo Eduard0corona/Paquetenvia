@@ -14,6 +14,7 @@ import {
   type CodTransaction,
   type OrderFinancials,
   type PendingCodOrder,
+  type RecordCodBody,
 } from "../contracts/cod";
 
 export const codPath = "/finance/cod";
@@ -178,25 +179,43 @@ export class CodController extends ExternalStore<CodState> {
   }
 
   /**
-   * Opens a pending order and reconciles the collection its financials name, so
-   * nobody types a COD record id. The record is taken only from the REST read.
+   * Pending-list "Conciliar", first step: opens the order with getOrderFinancials and
+   * returns the RECORDED collection it names, so the confirmation shows its amount
+   * before anything is reconciled and nobody types a COD record id. Returns null, with
+   * the reason on screen, when the read fails or nothing is pending any more.
    */
-  public async reconcileFromList(orderId: string): Promise<void> {
+  public async readReconcilableFromList(orderId: string): Promise<CodTransaction | null> {
     const state = this.getSnapshot();
-    if (!state.canReconcile || state.busy || !isCanonicalUuid(orderId)) return;
+    if (!state.canReconcile || state.busy || !isCanonicalUuid(orderId)) return null;
     const generation = this.generation;
-    await this.load(orderId);
-    if (generation !== this.generation) return;
-    const financials = this.getSnapshot().financials;
-    const record = financials?.order_id === orderId ? reconcilableRecord(financials) : null;
+    const outcome = await this.read(orderId);
+    if (generation !== this.generation || outcome === "superseded") return null;
+    if (outcome === "failed") {
+      this.update({ errors: ["No se pudo leer el cobro de esta orden; no se concilió nada. Vuelve a intentarlo."] });
+      return null;
+    }
+    const record = reconcilableRecord(this.getSnapshot().financials);
     if (record === null) {
-      if (financials?.order_id === orderId) {
-        this.update({ errors: ["El cobro de esta orden ya no está pendiente de conciliar; se actualizó la lista."] });
-        await this.loadPending();
-      }
+      this.update({ errors: ["El cobro de esta orden ya no está pendiente de conciliar; se actualizó la lista."] });
+      await this.loadPending();
+    }
+    return record;
+  }
+
+  /**
+   * Second step, from the confirmation: reconciles exactly the record the first step
+   * returned, only while the screen still shows that read.
+   */
+  public async reconcileFromList(orderId: string, codId: string): Promise<void> {
+    const state = this.getSnapshot();
+    const shown = state.loadingOrder === null && state.financials?.order_id === orderId
+      ? reconcilableRecord(state.financials)
+      : null;
+    if (shown === null || shown.id !== codId) {
+      this.update({ errors: ["El cobro cambió desde que lo revisaste; no se concilió nada. Vuelve a intentarlo."] });
       return;
     }
-    await this.reconcile(record.id);
+    await this.reconcile(codId);
   }
 
   public stop(): void {
@@ -206,11 +225,16 @@ export class CodController extends ExternalStore<CodState> {
   }
 
   public async load(orderId: string): Promise<void> {
+    await this.read(orderId);
+  }
+
+  /** getOrderFinancials for the order; "superseded" when a newer load or a tenant switch won. */
+  private async read(orderId: string): Promise<"loaded" | "failed" | "superseded"> {
     const api = this.api;
-    if (api === null || this.getSnapshot().phase !== "ready") return;
+    if (api === null || this.getSnapshot().phase !== "ready") return "superseded";
     if (!isCanonicalUuid(orderId)) {
       this.update({ errors: ["El ID de la orden no es válido."], message: null, stepUpHref: null });
-      return;
+      return "failed";
     }
     const generation = this.generation;
     const token = ++this.loadToken;
@@ -225,14 +249,16 @@ export class CodController extends ExternalStore<CodState> {
     });
     try {
       const financials = await api.financials(orderId, this.controller?.signal);
-      if (!isLatest()) return;
+      if (!isLatest()) return "superseded";
       if (financials.order_id !== orderId) throw new TenantApiError("invalid");
       // The COD record comes from REST (API-FIN-COD-VISIBILITY-2026-09-29), so it can be reconciled as shown.
       this.update({ financials, transaction: financials.cod_record ?? this.getSnapshot().transaction });
+      return "loaded";
     } catch (error) {
-      if (!isLatest()) return;
+      if (!isLatest()) return "superseded";
       this.update({ financials: null });
       this.fail(error, orderId);
+      return "failed";
     } finally {
       if (isLatest()) this.update({ loadingOrder: null });
     }
@@ -243,25 +269,36 @@ export class CodController extends ExternalStore<CodState> {
     if (orderId !== undefined) await this.load(orderId);
   }
 
-  public async record(amountText: string, reference: string): Promise<void> {
+  /**
+   * Validates a collection before its confirmation and returns the exact body (integer
+   * cents) recordCodCollection would receive, or null after showing why it cannot be sent.
+   */
+  public prepareRecord(amountText: string, reference: string): RecordCodBody | null {
     const state = this.getSnapshot();
     const financials = state.loadingOrder === null ? state.financials : null;
-    if (financials === null || !state.canRecord) return;
+    if (financials === null || !state.canRecord) return null;
     if (!canRecordCollection(financials)) {
       this.update({ errors: ["Esta orden no tiene un cobro contra entrega pendiente de registrar."], message: null });
-      return;
+      return null;
     }
     const result = buildRecordCodBody(financials, amountText, reference);
     if (!result.ok) {
       this.update({ errors: result.errors, message: null, stepUpHref: null });
-      return;
+      return null;
     }
-    const orderId = financials.order_id;
+    this.update({ errors: [] });
+    return result.body;
+  }
+
+  public async record(amountText: string, reference: string): Promise<void> {
+    const body = this.prepareRecord(amountText, reference);
+    const orderId = this.getSnapshot().financials?.order_id;
+    if (body === null || orderId === undefined) return;
     await this.write(
       `record:${orderId}`,
-      JSON.stringify(result.body),
-      result.body,
-      (api, key, body, signal) => api.record(orderId, body, key, signal),
+      JSON.stringify(body),
+      body,
+      (api, key, payload, signal) => api.record(orderId, payload, key, signal),
       (transaction) => transaction.order_id === orderId,
       "Cobro registrado.",
       orderId,

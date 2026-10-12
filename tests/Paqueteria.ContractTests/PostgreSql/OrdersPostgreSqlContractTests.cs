@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -364,8 +365,11 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
         Assert.Equal(1L, reader.GetInt64(1));
         Assert.Equal(declared, reader.GetInt64(2));
         Assert.Equal(1L, reader.GetInt64(3));
-        Assert.DoesNotContain("cod", reader.GetString(4), StringComparison.OrdinalIgnoreCase);
-        Assert.DoesNotContain("cod", reader.GetString(5), StringComparison.OrdinalIgnoreCase);
+        foreach (var jsonOrdinal in new[] { 4, 5 })
+        {
+            using var payload = JsonDocument.Parse(reader.GetString(jsonOrdinal));
+            AssertCarriesNoCod(payload.RootElement, declared);
+        }
     }
 
     /// <summary>
@@ -559,6 +563,7 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
                 Orders.Infrastructure.Persistence.Migrations.AddOrderLifecycleFinalizationExecutor.MigrationId,
                 Orders.Infrastructure.Persistence.Migrations.AddTrackingLinkGenerations.MigrationId,
                 Orders.Infrastructure.Persistence.Migrations.AddOrderServiceWindow.MigrationId,
+                Orders.Infrastructure.Persistence.Migrations.AddOrderAutoCloseDiscovery.MigrationId,
             ],
             await context.Database.GetAppliedMigrationsAsync());
 
@@ -641,6 +646,54 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
         catch (OrderConflictException)
         {
             return false;
+        }
+    }
+
+    /// <summary>
+    /// D6-COD-EXPECTED: the payload never carries COD: no property at any depth is a COD field and no property holds
+    /// the declared amount. It reads the parsed properties, never the raw text, where a public_id value can contain
+    /// the letters "cod".
+    /// </summary>
+    private static void AssertCarriesNoCod(JsonElement payload, long declared)
+    {
+        Assert.Equal(JsonValueKind.Object, payload.ValueKind);
+        var properties = EnumerateProperties(payload).ToArray();
+        Assert.DoesNotContain(properties, property => IsCodField(property.Name));
+        Assert.DoesNotContain(properties, property =>
+            property.Value.ValueKind == JsonValueKind.Number &&
+            property.Value.TryGetInt64(out var amount) &&
+            amount == declared);
+    }
+
+    /// <summary>
+    /// Every AI-05 COD field has the word cod in its snake_case name (for example cod_expected_cents, cod,
+    /// cod_record, cod_expected_cents_total and requires_cod); code and the *_code names are other words.
+    /// </summary>
+    private static bool IsCodField(string name) =>
+        name.Split('_').Contains("cod", StringComparer.OrdinalIgnoreCase);
+
+    private static IEnumerable<JsonProperty> EnumerateProperties(JsonElement value)
+    {
+        if (value.ValueKind == JsonValueKind.Object)
+        {
+            foreach (var property in value.EnumerateObject())
+            {
+                yield return property;
+                foreach (var nested in EnumerateProperties(property.Value))
+                {
+                    yield return nested;
+                }
+            }
+        }
+        else if (value.ValueKind == JsonValueKind.Array)
+        {
+            foreach (var item in value.EnumerateArray())
+            {
+                foreach (var nested in EnumerateProperties(item))
+                {
+                    yield return nested;
+                }
+            }
         }
     }
 

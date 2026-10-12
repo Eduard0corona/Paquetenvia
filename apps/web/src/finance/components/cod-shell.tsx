@@ -20,9 +20,18 @@ import {
   type OrderFinancials,
   type PendingCodOrder,
 } from "../contracts/cod";
-import { codReconciliationConfirmation, pendingCodReconciliationConfirmation } from "../contracts/confirmations";
+import {
+  codReconciliationConfirmation,
+  codRecordConfirmation,
+  pendingCodReconciliationConfirmation,
+} from "../contracts/confirmations";
 import type { CodController, CodState } from "../state/cod-controller";
 import { useCod } from "../state/use-cod";
+
+/** The order's tracking number when the pending list named it; confirmations fall back to the id. */
+function trackingNumber(state: CodState, orderId: string): string | null {
+  return state.pending?.find((order) => order.id === orderId)?.public_id ?? null;
+}
 
 export function CodShell() {
   const { state, controller } = useCod();
@@ -57,7 +66,7 @@ export function CodShell() {
             {state.loadingOrder !== null && <p className="live" aria-live="polite">Cargando la orden.</p>}
             {state.financials !== null && state.loadingOrder === null && (
               <Financials key={`${state.financials.order_id}-${state.formKey}`} financials={state.financials}
-                state={state} controller={controller} />
+                state={state} controller={controller} confirm={confirm} />
             )}
             {state.transaction !== null && (
               <Transaction transaction={state.transaction} state={state} controller={controller} confirm={confirm} />
@@ -146,10 +155,17 @@ function PendingRow({
       </button>
       {canReconcile && (
         <button className="btn btnPrimary" type="button" disabled={busy}
-          onClick={() => confirm({
-            ...pendingCodReconciliationConfirmation(order),
-            onConfirm: () => void controller.reconcileFromList(order.id),
-          })}>Conciliar</button>
+          onClick={async (event) => {
+            const trigger = event.currentTarget;
+            // The amount is read first; a failed read shows its error and opens no dialog.
+            const record = await controller.readReconcilableFromList(order.id);
+            if (record === null) return;
+            confirm({
+              ...pendingCodReconciliationConfirmation(order, record),
+              returnFocus: trigger,
+              onConfirm: () => void controller.reconcileFromList(order.id, record.id),
+            });
+          }}>Conciliar</button>
       )}
     </li>
   );
@@ -159,10 +175,12 @@ function Financials({
   financials,
   state,
   controller,
+  confirm,
 }: {
   readonly financials: OrderFinancials;
   readonly state: CodState;
   readonly controller: CodController;
+  readonly confirm: (request: ConfirmRequest) => void;
 }) {
   const cod = financials.cod;
   return (
@@ -212,7 +230,15 @@ function Financials({
         <form className="opsForm" autoComplete="off" onSubmit={(event) => {
           event.preventDefault();
           const data = new FormData(event.currentTarget);
-          void controller.record(String(data.get("amount") ?? ""), String(data.get("reference") ?? ""));
+          const amount = String(data.get("amount") ?? "");
+          const reference = String(data.get("reference") ?? "");
+          // Validated first; the dialog states the exact amount, never the reference.
+          const body = controller.prepareRecord(amount, reference);
+          if (body === null) return;
+          confirm({
+            ...codRecordConfirmation(financials.order_id, body.amount_cents, trackingNumber(state, financials.order_id)),
+            onConfirm: () => void controller.record(amount, reference),
+          });
         }}>
           <fieldset>
             <legend>Registrar cobro</legend>
@@ -254,7 +280,7 @@ function Transaction({
       />
       {transaction.status === "RECORDED" && state.canReconcile && (
         <button className="btn btnPrimary" type="button" disabled={state.busy} onClick={() => confirm({
-          ...codReconciliationConfirmation(transaction),
+          ...codReconciliationConfirmation(transaction, trackingNumber(state, transaction.order_id)),
           onConfirm: () => void controller.reconcile(),
         })}>
           Conciliar este cobro
