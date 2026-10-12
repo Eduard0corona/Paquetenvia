@@ -136,8 +136,18 @@ describe("\"No se pudo entregar\" on the stop", () => {
     );
     expect(html).not.toContain("<button");
     expect(html).not.toContain("<input");
-    // The flag comes from the session, kept in memory only.
-    expect(experience).toContain("alsoDispatch={session.alsoDispatch === true}");
+    // The role comes from the session's organization roles (the API's `roles`), kept in memory only.
+    expect(experience).toContain("reportRole={driverReportRole(session)}");
+  });
+
+  it("says the role could not be confirmed, with no form, when the session does not know the roles", () => {
+    const html = section({ kind: "role-unknown" });
+    expect(text(html)).toBe(
+      "No se pudo confirmar tu rol en esta organización, así que el intento fallido no se reporta desde el teléfono. " +
+        "Cierra sesión y vuelve a entrar con conexión; si sigue igual, llama a despacho para que lo registre.",
+    );
+    expect(html).not.toContain("<button");
+    expect(html).not.toContain("<input");
   });
 });
 
@@ -296,6 +306,13 @@ describe("AI-07 record", () => {
       "the report and the cash can then both exist on the server",
       '"Después, con ADR (Recommended)"',
       "a pending server follow-up",
+      // Second review: the roles come from the API (ORG-CONTEXT-ROLES-2026-10-12) and unknown roles fail closed.
+      "the roles array of the selected organization context at sign-in",
+      '"Agregar los roles al API (Recommended)"',
+      "No photo is uploaded and nothing is stored",
+      "role_unknown: 'ORG-CONTEXT-ROLES-2026-10-12",
+      "it fails closed",
+      "never holds back a new report of the same stop",
     ]) {
       expect(plain, expected).toContain(expected);
     }

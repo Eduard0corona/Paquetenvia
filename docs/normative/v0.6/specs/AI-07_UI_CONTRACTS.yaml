@@ -943,14 +943,25 @@ screen_contracts:
       server_rule: INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11
       label: No se pudo entregar
       shown_when: a DELIVERY stop whose confirmed or projected status is DELIVERING, while no other action of the stop
-        is held for attention and no delivery is saved on the phone, to a person who is not also dispatch in the
-        organization (dispatch_role); never on a pickup or a return (the phone has no failed pickup)
+        is held for attention and no delivery is saved on the phone, to a person whose roles in the organization are
+        known and are not also dispatch (dispatch_role, role_unknown); never on a pickup or a return (the phone has no
+        failed pickup)
       dispatch_role: 'owner answer "Registrar desde Despacho (Recommended)" (2026-10-12): a person who also holds
-        DISPATCHER or PLATFORM_ADMIN in the active organization (read from the organization contexts at sign-in and
-        kept in memory only) is reported by the server as dispatch, which refuses the short report (409
-        INVALID_REQUEST); the stop does not offer "No se pudo entregar" and says "También eres despacho en esta
-        organización, así que el intento fallido no se reporta desde el teléfono: regístralo desde la orden en
-        Despacho, donde eliges el motivo y el siguiente paso." No server change'
+        DISPATCHER or PLATFORM_ADMIN in the active organization is reported by the server as dispatch, which refuses
+        the short report (409 INVALID_REQUEST); the stop does not offer "No se pudo entregar" and says "También eres
+        despacho en esta organización, así que el intento fallido no se reporta desde el teléfono: regístralo desde la
+        orden en Despacho, donde eliges el motivo y el siguiente paso." The phone knows it from the roles array of the
+        selected organization context at sign-in (GET /me/organization-contexts, kept in memory only), which the API
+        added for it: ORG-CONTEXT-ROLES-2026-10-12 (owner answer "Agregar los roles al API (Recommended)"), because it
+        answers one context and one role per organization. No photo is uploaded and nothing is stored'
+      role_unknown: 'ORG-CONTEXT-ROLES-2026-10-12: when the session does not know the person''s roles in the
+        organization (an answer without roles), "No se pudo entregar" is not offered either (it fails closed) and the
+        stop says "No se pudo confirmar tu rol en esta organización, así que el intento fallido no se reporta desde el
+        teléfono. Cierra sesión y vuelve a entrar con conexión; si sigue igual, llama a despacho para que lo
+        registre." The sign-in and every other action of the driver app work as before'
+      settled_report: a report REST already confirms (its transition accepted and the stop at a later version, for
+        example after dispatch chose "Reintentar hoy") only waits to leave the queue and never holds back a new report
+        of the same stop
       question: '"¿Qué pasó?" with the subtitle "El despacho decidirá si se reprograma o regresa", a radio group whose
         options are 44 px targets'
       reasons:

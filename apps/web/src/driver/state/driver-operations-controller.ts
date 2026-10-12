@@ -2,7 +2,11 @@ import {
   createDriverCachePartition,
   DriverDatabaseBlockedError,
 } from "../cache/driver-stops-cache";
-import type { DriverStopCod, DriverStopList } from "../contracts/driver-stop";
+import type {
+  DriverStop,
+  DriverStopCod,
+  DriverStopList,
+} from "../contracts/driver-stop";
 import {
   driverFailedDeliveryReasonAllowed,
   isDriverFailedDeliveryReason,
@@ -27,6 +31,7 @@ import {
   applyDriverOperation,
   compareDriverOperationDependency,
   driverOperationApplies,
+  driverOperationConfirmedByStop,
 } from "../offline/operation-projection";
 import {
   disabledDriverSyncTelemetry,
@@ -39,6 +44,7 @@ import type { DriverSyncApi } from "../offline/driver-sync-api";
 import {
   driverDispatchRoleReportMessage,
   driverFailedReportIncident,
+  driverRoleUnknownReportMessage,
 } from "../offline/failed-delivery-policy";
 import { OfflineOperationMaximumAgeHours } from "../offline/offline-operation-age";
 import { driverOperationLabel } from "../contracts/labels";
@@ -46,7 +52,10 @@ import {
   validateDriverProof,
   type ValidatedDriverProof,
 } from "../proofs/proof-file";
-import type { DriverSession } from "../session/driver-session";
+import {
+  driverReportRole,
+  type DriverSession,
+} from "../session/driver-session";
 
 export interface DriverOperationsState {
   readonly operations: readonly DriverOfflineOperation[];
@@ -375,9 +384,11 @@ export class DriverOperationsController {
    * step. Refused, and nothing is stored, when the stop is not DELIVERING,
    * when "No pagó el cobro" is chosen on a stop without cash on delivery,
    * (owner answer "No, llama a despacho (Recommended)") when the order's cash
-   * is saved on the phone or recorded on the server, and (owner answer
-   * "Registrar desde Despacho (Recommended)") when the person is also dispatch
-   * in the organization. At most one report per order is ever queued.
+   * is saved on the phone or recorded on the server, (owner answer "Registrar
+   * desde Despacho (Recommended)") when the person is also dispatch in the
+   * organization, and (ORG-CONTEXT-ROLES-2026-10-12) when the session does not
+   * know the person's roles there. At most one unsettled report per order is
+   * ever queued: a report REST already confirms only waits to leave the queue.
    * Resolves `{ stored: true }` only when this call stored it; otherwise the
    * result carries the reason the form shows.
    */
@@ -387,6 +398,9 @@ export class DriverOperationsController {
       readonly reasonCode: DriverFailedDeliveryReason;
       readonly projectedStatus: DriverOperationalStatus;
       readonly projectedVersion: number;
+      /** The stop as REST confirms it (ProjectedDriverStop.confirmedStatus and confirmedVersion). */
+      readonly confirmedStatus: DriverStop["status"];
+      readonly confirmedVersion: number;
       /** DriverStop.cod of the stop: the only source of whether it collects cash. */
       readonly cod: DriverStopCod | null;
     },
@@ -400,10 +414,18 @@ export class DriverOperationsController {
     if (this.state.mutating) {
       return refuse("Espera a que termine la acción en curso y vuelve a enviar el reporte.");
     }
-    // Owner answer "Registrar desde Despacho (Recommended)": the server treats
-    // a person who is also dispatch as dispatch and refuses the short report.
-    if (this.options.session.alsoDispatch === true) {
-      return refuse(driverDispatchRoleReportMessage);
+    // Only a person whose roles here are known and include neither DISPATCHER
+    // nor PLATFORM_ADMIN files the report from the phone: the server treats a
+    // person who is also dispatch as dispatch and refuses the short report
+    // (owner answer "Registrar desde Despacho (Recommended)"), and unknown
+    // roles fail closed (ORG-CONTEXT-ROLES-2026-10-12).
+    switch (driverReportRole(this.options.session)) {
+      case "dispatch":
+        return refuse(driverDispatchRoleReportMessage);
+      case "unknown":
+        return refuse(driverRoleUnknownReportMessage);
+      case "driver":
+        break;
     }
     if (
       input.projectedStatus !==
@@ -437,7 +459,22 @@ export class DriverOperationsController {
         "Hay un cobro guardado en el teléfono. Si fue un error, descártalo antes de reportar.",
       );
     }
-    if (sameOrder.some((candidate) => candidate.kind === "FAILED_DELIVERY")) {
+    // A report REST already confirms (for example its transition was accepted
+    // and dispatch then chose "Reintentar hoy") is settled: the stop no longer
+    // shows it and it leaves the queue on the next pass, so it never holds a
+    // new report back (see driverOperationConfirmedByStop).
+    const confirmedStop = {
+      status: input.confirmedStatus,
+      aggregate_version: input.confirmedVersion,
+      cod: input.cod,
+    };
+    if (
+      sameOrder.some(
+        (candidate) =>
+          candidate.kind === "FAILED_DELIVERY" &&
+          !driverOperationConfirmedByStop(candidate, confirmedStop),
+      )
+    ) {
       return refuse("Ya hay un reporte guardado en el teléfono para esta entrega.");
     }
     if (sameOrder.some((candidate) => candidate.kind === "DELIVERY_PROOF")) {

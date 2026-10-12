@@ -1,5 +1,31 @@
 # Changelog
 
+## Contextos de organización con todos los roles de la persona (ORG-CONTEXT-ROLES-2026-10-12) — 2026-10-12
+
+- Pregunta y respuesta literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR
+  del contrato de la API (AI-01 §7): ""Registrar desde Despacho" no se puede cumplir sin tocar el servidor: el API solo
+  dice un rol por empresa, así que la app del repartidor no sabe que esa persona también es despacho. ¿Qué hacemos?" →
+  "Agregar los roles al API (Recommended)" ("Cambio pequeño y aditivo: el contexto de cada empresa trae también la
+  lista de roles de la persona (con ADR). La app no le ofrece el reporte desde el inicio y no se sube ninguna foto.");
+  no elegida: "Aprender tras el primer rechazo".
+- AI-05: `OrganizationContext` (`listOrganizationContexts`) agrega el arreglo obligatorio `roles`: cada rol que la
+  persona tiene en esa organización por una membresía ACTIVE (el mismo enum de roles, sin repetidos, en orden ordinal,
+  nunca vacío y siempre con `role`); `role` e `is_default` no cambian; entrada `ORG-CONTEXT-ROLES` en
+  `x-pilot-contract-deltas`.
+- Servidor: `OrganizationContextResponse.Roles` se calcula con `OrganizationContextRoles.ByOrganization` a partir de
+  las membresías de quien pregunta, dentro de la misma lectura con RLS; nada de otras personas, sin PII, sin
+  migración, tabla, rol, permiso ni flujo nuevo; AI-04, AI-06 y AI-18 sin cambios.
+- Web: el parser de contextos lee `roles` de forma estricta (un `roles` mal formado rechaza toda la respuesta) y
+  acepta una respuesta sin `roles` con `roles: null`, para que el inicio de sesión siga funcionando; la sesión del
+  repartidor guarda en memoria los roles de la organización elegida; con DISPATCHER o PLATFORM_ADMIN la parada dice
+  que se registre desde Despacho, y sin roles conocidos el reporte no se ofrece (falla cerrado) y la parada dice "No se
+  pudo confirmar tu rol en esta organización, así que el intento fallido no se reporta desde el teléfono. Cierra sesión
+  y vuelve a entrar con conexión; si sigue igual, llama a despacho para que lo registre." El portal local de desarrollo
+  lee los roles de la misma respuesta.
+- Orden de despliegue: la web anterior lee los contextos con miembros exactos y rechaza una respuesta con `roles`, así
+  que esta web se despliega antes o junto con esta API. Rollback: revertir la API primero o junto con la web; sin datos
+  ni esquema que deshacer.
+
 ## Repartidor: "No se pudo entregar" con motivo y foto, también sin conexión (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12) — 2026-10-12
 
 - Respuestas literales del project owner, registradas con sus preguntas en `decision-log.md` como cambio MAJOR
@@ -51,7 +77,12 @@
 - Riesgos residuales: la "Foto del lugar" que queda sin incidencia podría contar para DELIVERED (pendiente de servidor
   con ADR); `DriverStop.cod.recorded` es falso con un cobro DISPUTED o REVERSED; un cobro registrado entre la última
   revisión y una petición no se puede impedir desde el teléfono.
-- Sin cambios en AI-04, AI-05, AI-06, AI-18, servidor, roles, permisos ni migraciones, y sin un flujo atómico nuevo.
+- Segunda revisión: el teléfono sabe que la persona también es despacho por los `roles` de su contexto de organización
+  (ORG-CONTEXT-ROLES-2026-10-12, abajo); sin esos roles el reporte no se ofrece (falla cerrado) y la parada lo explica;
+  un reporte que REST ya confirma ya no impide un reporte nuevo de la misma parada; y una acción que el servidor ya
+  aceptó sigue esperando a REST cuando falla la lectura de confirmación, así que nunca vence como no enviada.
+- Sin cambios en AI-04, AI-06, AI-18, roles, permisos ni migraciones, y sin un flujo atómico nuevo; el cambio de AI-05
+  y del servidor que necesita la respuesta 3 es ORG-CONTEXT-ROLES-2026-10-12.
   Rollback: no es un revert simple (la app anterior abre IndexedDB 3 y el teléfono actualizado la rechaza); es una
   versión que deja de ofrecer "No se pudo entregar" con IndexedDB 4, o una con IndexedDB 5 que reescribe la cola al
   esquema 2 y descarta los reportes en cola (ver la nota de desarrollo).

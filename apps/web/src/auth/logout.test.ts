@@ -94,8 +94,8 @@ describe("organization switch through the BFF bootstrap", () => {
   it("re-installs the session for the chosen organization and fires the session-changed events", async () => {
     const target = host();
     const contexts = [
-      { organization_id: organizationA, display_name: "A", role: "DISPATCHER", is_default: true },
-      { organization_id: organizationB, display_name: "B", role: "FINANCE", is_default: false },
+      { organization_id: organizationA, display_name: "A", role: "DISPATCHER", is_default: true, roles: ["DISPATCHER"] },
+      { organization_id: organizationB, display_name: "B", role: "FINANCE", is_default: false, roles: ["FINANCE"] },
     ];
     const fetcher = vi.fn(async (input: RequestInfo | URL) =>
       String(input) === "/auth/session"

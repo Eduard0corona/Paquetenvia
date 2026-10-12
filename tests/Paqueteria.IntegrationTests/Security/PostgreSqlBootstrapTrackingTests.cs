@@ -137,10 +137,39 @@ public sealed class PostgreSqlBootstrapTrackingTests(
         Assert.Equal("Synthetic Operations", contexts[0].GetProperty("display_name").GetString());
         Assert.Equal("DISPATCHER", contexts[0].GetProperty("role").GetString());
         Assert.False(contexts[0].GetProperty("is_default").GetBoolean());
+        Assert.Equal(["DISPATCHER"], Roles(contexts[0]));
         Assert.Equal("Synthetic Viewer", contexts[1].GetProperty("display_name").GetString());
         Assert.Equal("VIEWER", contexts[1].GetProperty("role").GetString());
         Assert.True(contexts[1].GetProperty("is_default").GetBoolean());
+        Assert.Equal(["VIEWER"], Roles(contexts[1]));
+        // ORG-CONTEXT-ROLES-2026-10-12: exactly these members, nothing about any other person.
+        Assert.All(contexts, context => Assert.Equal(
+            ["display_name", "is_default", "organization_id", "role", "roles"],
+            context.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal)));
     }
+
+    /// <summary>
+    /// ORG-CONTEXT-ROLES-2026-10-12: one context for the organization where the person holds two ACTIVE memberships
+    /// (DRIVER and VIEWER), with both roles, read through the productive transactional RLS.
+    /// </summary>
+    [Fact]
+    public async Task Organization_context_lists_every_active_role_of_the_person_in_the_organization()
+    {
+        using var response = await SendBearerAsync(
+            "/api/v1/me/organization-contexts",
+            MockIdentityProfiles.ActiveDriver);
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var context = Assert.Single(document.RootElement.EnumerateArray());
+        Assert.Equal("Synthetic Viewer", context.GetProperty("display_name").GetString());
+        Assert.Equal(["DRIVER", "VIEWER"], Roles(context));
+        Assert.Contains(context.GetProperty("role").GetString() ?? string.Empty, Roles(context));
+        Assert.False(context.GetProperty("is_default").GetBoolean());
+    }
+
+    private static string[] Roles(JsonElement context) =>
+        context.GetProperty("roles").EnumerateArray().Select(role => role.GetString() ?? string.Empty).ToArray();
 
     [Fact]
     public async Task Active_identity_without_memberships_receives_an_empty_context_list()

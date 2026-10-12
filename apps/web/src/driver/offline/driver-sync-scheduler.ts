@@ -682,8 +682,14 @@ export class DriverSyncScheduler {
     phase: DriverSyncFailurePhase,
   ): Promise<void> {
     if (signal.aborted) return;
+    // The server already accepted this action; only REST has not shown it yet
+    // (for example the read right after the 2xx failed). It keeps waiting for
+    // REST with backoff: it is never sent again, held as a conflict or expired
+    // as unsent (OPS-003 would tell the driver to register it again).
+    const accepted = operation.status === "AWAITING_REST_CONFIRMATION";
     if (!(error instanceof DriverSyncApiError)) {
-      await this.defer(operation, "RETRY_WAIT");
+      if (accepted) await this.deferRestConfirmation(operation);
+      else await this.defer(operation, "RETRY_WAIT");
       return;
     }
     if (error.category === "cancelled") {
@@ -696,6 +702,10 @@ export class DriverSyncScheduler {
       await this.options.queue.clearPartition(this.options.partition);
       this.options.onAccessRevoked(error.category);
       this.abortController?.abort();
+      return;
+    }
+    if (accepted) {
+      await this.deferRestConfirmation(operation);
       return;
     }
     if (error.category === "not-found") {

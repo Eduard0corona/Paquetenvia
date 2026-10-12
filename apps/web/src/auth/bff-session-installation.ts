@@ -22,10 +22,11 @@ export type BffSessionInstallation =
       readonly displayName: string;
       readonly landingPath: string;
       /**
-       * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: the same person also holds
-       * DISPATCHER or PLATFORM_ADMIN in this organization (see DriverSession).
+       * ORG-CONTEXT-ROLES-2026-10-12: the selected context's `roles`, every role of
+       * the person in this organization; null when the answer did not carry them
+       * (see DriverSession.organizationRoles and driverReportRole).
        */
-      readonly alsoDispatch: boolean;
+      readonly organizationRoles: readonly string[] | null;
     }
   | { readonly kind: "none" };
 
@@ -71,15 +72,9 @@ export function selectSessionInstallation(
     landingPath: landingPathForRole(selected.role),
   };
   if (selected.role !== "DRIVER") return { kind: "operations", ...base };
-  return {
-    kind: "driver",
-    ...base,
-    alsoDispatch: contexts.some(
-      (context) =>
-        context.organization_id === selected.organization_id &&
-        (context.role === "DISPATCHER" || context.role === "PLATFORM_ADMIN"),
-    ),
-  };
+  // The API answers one context per organization; the person's other roles
+  // there come only in its `roles` (ORG-CONTEXT-ROLES-2026-10-12).
+  return { kind: "driver", ...base, organizationRoles: selected.roles };
 }
 
 export interface InstallOptions {
@@ -114,7 +109,7 @@ export function installBffSession(
       organizationId: installation.organizationId,
       cacheNamespace: sessionNamespace,
       ...credentials,
-      ...(installation.alsoDispatch ? { alsoDispatch: true } : {}),
+      organizationRoles: installation.organizationRoles,
     };
     host.dispatchEvent(new Event(driverSessionChangedEvent));
     return;

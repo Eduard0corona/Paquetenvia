@@ -187,6 +187,7 @@ public sealed class ActiveTenantRuntimeContractTests(PostgreSqlContractFixture f
                     Assert.Equal("Alpha", first.DisplayName);
                     Assert.Equal("BUSINESS_ADMIN", first.Role);
                     Assert.True(first.IsDefault);
+                    Assert.Equal(["BUSINESS_ADMIN"], first.Roles);
                 },
                 second =>
                 {
@@ -194,6 +195,70 @@ public sealed class ActiveTenantRuntimeContractTests(PostgreSqlContractFixture f
                     Assert.Equal("Beta", second.DisplayName);
                     Assert.Equal("VIEWER", second.Role);
                     Assert.False(second.IsDefault);
+                    Assert.Equal(["VIEWER"], second.Roles);
+                });
+        }
+        finally
+        {
+            await ExecuteAdminAsync(
+                "DELETE FROM organizations.organizations WHERE id IN (@org_a,@org_b)",
+                P("org_a", orgA), P("org_b", orgB));
+        }
+    }
+
+    /// <summary>
+    /// ORG-CONTEXT-ROLES-2026-10-12: one context per organization the tenant-safe read returns, whose roles are
+    /// every role of the caller's own ACTIVE memberships there (unique, sorted, containing role), so a DRIVER who is
+    /// also DISPATCHER in the same organization is visible to the driver app. role and is_default keep coming from
+    /// the default membership; an organization the read does not return is not answered.
+    /// </summary>
+    [PostgreSqlContractFact]
+    public async Task Product_context_reader_lists_every_active_role_of_the_caller_per_organization()
+    {
+        var userId = Guid.NewGuid();
+        var orgA = Guid.NewGuid();
+        var orgB = Guid.NewGuid();
+        var missing = Guid.NewGuid();
+        await ExecuteAdminAsync(
+            """
+            INSERT INTO organizations.organizations(id,legal_name,display_name,organization_type) VALUES
+              (@org_a,'Roles A','Alpha','BUSINESS'),(@org_b,'Roles B','Beta','ALLY');
+            """,
+            P("org_a", orgA), P("org_b", orgB));
+
+        try
+        {
+            await using var scope = CreateRuntimeScope();
+            var reader = new PostgreSqlOrganizationContextReader(
+                scope.Transaction,
+                NullLogger<PostgreSqlOrganizationContextReader>.Instance);
+
+            var result = await reader.ReadAsync(
+                userId,
+                [
+                    new AuthorizedOrganizationMembership(orgA, OrganizationRole.Driver, true),
+                    new AuthorizedOrganizationMembership(orgA, OrganizationRole.Dispatcher, false),
+                    new AuthorizedOrganizationMembership(orgB, OrganizationRole.Viewer, false),
+                    new AuthorizedOrganizationMembership(orgB, OrganizationRole.Driver, false),
+                    new AuthorizedOrganizationMembership(missing, OrganizationRole.PlatformAdmin, false),
+                ],
+                CancellationToken.None);
+
+            Assert.Collection(
+                result,
+                first =>
+                {
+                    Assert.Equal(orgA, first.OrganizationId);
+                    Assert.Equal("DRIVER", first.Role);
+                    Assert.True(first.IsDefault);
+                    Assert.Equal(["DISPATCHER", "DRIVER"], first.Roles);
+                },
+                second =>
+                {
+                    Assert.Equal(orgB, second.OrganizationId);
+                    Assert.Contains(second.Role, second.Roles);
+                    Assert.False(second.IsDefault);
+                    Assert.Equal(["DRIVER", "VIEWER"], second.Roles);
                 });
         }
         finally

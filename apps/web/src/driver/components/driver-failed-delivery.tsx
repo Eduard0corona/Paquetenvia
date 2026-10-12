@@ -20,10 +20,12 @@ import {
 import {
   driverDispatchRoleReportMessage,
   driverFailedDeliveryAvailability,
+  driverRoleUnknownReportMessage,
   type DriverFailedDeliveryAvailability,
 } from "../offline/failed-delivery-policy";
 import type { DriverOfflineOperation } from "../offline/operation-contract";
 import type { ProjectedDriverStop } from "../offline/operation-projection";
+import type { DriverReportRole } from "../session/driver-session";
 import type { DriverFailedDeliveryEnqueueResult } from "../state/driver-operations-controller";
 import {
   DriverProofPreview,
@@ -61,6 +63,7 @@ export const failedDeliveryCopy = Object.freeze({
     "El cobro ya está registrado. Si no puedes entregar, llama a despacho: ellos deciden y coordinan la devolución del cobro.",
   discardCollection: "Descartar cobro guardado",
   dispatchRole: driverDispatchRoleReportMessage,
+  roleUnknown: driverRoleUnknownReportMessage,
 });
 
 /**
@@ -93,7 +96,7 @@ export function chosenFailedDeliveryReason(
 export function DriverFailedDelivery({
   stop,
   operations,
-  alsoDispatch,
+  reportRole,
   disabled,
   onReport,
   onDiscardCollection,
@@ -101,8 +104,8 @@ export function DriverFailedDelivery({
   stop: ProjectedDriverStop;
   /** The projected operations of the stop's order. */
   operations: readonly DriverOfflineOperation[];
-  /** The person also holds DISPATCHER or PLATFORM_ADMIN here (DriverSession.alsoDispatch). */
-  alsoDispatch: boolean;
+  /** driverReportRole of the session (ORG-CONTEXT-ROLES-2026-10-12). */
+  reportRole: DriverReportRole;
   disabled: boolean;
   onReport: (
     reason: DriverFailedDeliveryReason,
@@ -113,7 +116,7 @@ export function DriverFailedDelivery({
   const availability = driverFailedDeliveryAvailability(
     stop,
     operations,
-    alsoDispatch,
+    reportRole,
   );
   return (
     <FailedDeliverySection
@@ -186,6 +189,13 @@ export function FailedDeliverySection({
       return (
         <section className={styles.failedDelivery} aria-label={failedDeliveryCopy.open}>
           <p className={styles.failedDeliveryNote}>{failedDeliveryCopy.dispatchRole}</p>
+        </section>
+      );
+    case "role-unknown":
+      // ORG-CONTEXT-ROLES-2026-10-12: the roles are unknown, so the report fails closed.
+      return (
+        <section className={styles.failedDelivery} aria-label={failedDeliveryCopy.open}>
+          <p className={styles.failedDeliveryNote}>{failedDeliveryCopy.roleUnknown}</p>
         </section>
       );
     case "offered":

@@ -128,25 +128,55 @@ function allowedTransitions(value: unknown): OperationsOrderDetail["allowed_tran
   }
 }
 
+const organizationContextKeys = [
+  "organization_id",
+  "display_name",
+  "role",
+  "is_default",
+] as const;
+
+/**
+ * GET /me/organization-contexts, read strictly. ORG-CONTEXT-ROLES-2026-10-12:
+ * each context carries `roles`, every role of the person in that organization
+ * (unique, non-empty, containing `role`; items are read like `role`, so a role
+ * this web does not know yet never breaks the sign-in). An answer without
+ * `roles` (an API older than this web; both deploy together) is still read,
+ * with `roles: null`, so sign-in keeps working; whoever needs the roles treats
+ * null as unknown and fails closed (the driver app then does not offer "No se
+ * pudo entregar"). A malformed `roles` breaks the contract like any other
+ * member and fails the whole answer.
+ */
 export function parseOrganizationContexts(
   value: unknown,
 ): readonly OperationsOrganizationContext[] {
   const contexts = array(value);
   if (contexts.length > 100) fail();
   return contexts.map((item) => {
-    const object = exactObject(item, [
-      "organization_id",
-      "display_name",
-      "role",
-      "is_default",
-    ]);
+    const withRoles =
+      typeof item === "object" &&
+      item !== null &&
+      Object.prototype.hasOwnProperty.call(item, "roles");
+    const object = exactObject(
+      item,
+      withRoles ? [...organizationContextKeys, "roles"] : organizationContextKeys,
+    );
+    const role = boundedString(object.role, 1, 64);
     return {
       organization_id: uuid(object.organization_id),
       display_name: boundedString(object.display_name, 1, 200),
-      role: boundedString(object.role, 1, 64),
+      role,
       is_default: boolean(object.is_default),
+      roles: withRoles ? organizationRoles(object.roles, role) : null,
     };
   });
+}
+
+function organizationRoles(value: unknown, role: string): readonly string[] {
+  const items = array(value);
+  if (items.length === 0 || items.length > 64) fail();
+  const roles = items.map((item) => boundedString(item, 1, 64));
+  if (new Set(roles).size !== roles.length || !roles.includes(role)) fail();
+  return Object.freeze(roles);
 }
 
 function parseDashboardOrder(value: unknown): OperationsDashboardOrder {

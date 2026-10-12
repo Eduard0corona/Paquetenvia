@@ -287,8 +287,8 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
 
   it("resolves the role of the selected organization only", () => {
     const contexts = [
-      { organization_id: "11111111-1111-4111-8111-111111111111", display_name: "A", role: "FINANCE", is_default: true },
-      { organization_id: "22222222-2222-4222-8222-222222222222", display_name: "B", role: "VIEWER", is_default: false },
+      { organization_id: "11111111-1111-4111-8111-111111111111", display_name: "A", role: "FINANCE", is_default: true, roles: ["FINANCE"] },
+      { organization_id: "22222222-2222-4222-8222-222222222222", display_name: "B", role: "VIEWER", is_default: false, roles: ["VIEWER"] },
     ];
     expect(resolveActiveRole(contexts, "22222222-2222-4222-8222-222222222222")).toBe("VIEWER");
     expect(resolveActiveRole(contexts, "33333333-3333-4333-8333-333333333333")).toBeNull();

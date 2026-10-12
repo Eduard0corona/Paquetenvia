@@ -44,6 +44,13 @@ sobre la cola sin conexión de DRV-002 con el cobro de `UI-PHASE3-DRIVER-STOP-DE
   (Recommended)": "Lo registro como riesgo y pendiente (un tipo de foto propio para intento fallido, o que la entrega
   cite su foto). En el uso normal de la app la entrega siempre sube su propia foto, así que no bloquea el piloto."
   (No se eligió "Ahora, antes de fusionar".)
+- 2026-10-12, después de la segunda revisión (`ORG-CONTEXT-ROLES-2026-10-12`), pregunta: ""Registrar desde Despacho"
+  no se puede cumplir sin tocar el servidor: el API solo dice un rol por empresa, así que la app del repartidor no sabe
+  que esa persona también es despacho. ¿Qué hacemos?" → "Agregar los roles al API (Recommended)": "Cambio pequeño y
+  aditivo: el contexto de cada empresa trae también la lista de roles de la persona (con ADR). La app no le ofrece el
+  reporte desde el inicio y no se sube ninguna foto." (No se eligió "Aprender tras el primer rechazo": "Sin tocar el
+  servidor: la primera vez se sube la foto, el servidor rechaza el reporte y la app le dice que use Despacho; desde ahí
+  ya no se lo ofrece en esa sesión. Queda una foto suelta por sesión.")
 
 ## Pantalla
 
@@ -51,6 +58,7 @@ sobre la cola sin conexión de DRV-002 con el cobro de `UI-PHASE3-DRIVER-STOP-DE
 | --- | --- |
 | DELIVERING (confirmado o por sincronizar), sin cobro guardado ni registrado | "No se pudo entregar" |
 | Igual, pero la persona también es DISPATCHER o PLATFORM_ADMIN en la organización | "También eres despacho en esta organización, así que el intento fallido no se reporta desde el teléfono: regístralo desde la orden en Despacho, donde eliges el motivo y el siguiente paso." Sin formulario |
+| Igual, pero la sesión no conoce los roles de la persona en la organización | "No se pudo confirmar tu rol en esta organización, así que el intento fallido no se reporta desde el teléfono. Cierra sesión y vuelve a entrar con conexión; si sigue igual, llama a despacho para que lo registre." Sin formulario |
 | Cobro guardado en el teléfono (en cola, reintentando o retenido) | "Hay un cobro guardado en el teléfono. Si fue un error, descártalo para poder reportar que no se pudo entregar." y "Descartar cobro guardado" (con la confirmación de siempre); si el cobro está retenido, se descarta desde su aviso |
 | Cobro registrado (`DriverStop.cod.recorded`, o el servidor ya aceptó el cobro y falta la confirmación REST) | "El cobro ya está registrado. Si no puedes entregar, llama a despacho: ellos deciden y coordinan la devolución del cobro." Sin número de teléfono: la app no tiene el de despacho |
 | Reporte guardado, esperando sincronizar | "Reporte guardado en el teléfono. Se enviará cuando haya conexión." El estado confirmado sigue "En reparto" y "Estado por sincronizar" dice "Intento fallido" |
@@ -75,10 +83,25 @@ sobre la cola sin conexión de DRV-002 con el cobro de `UI-PHASE3-DRIVER-STOP-DE
 - No hay ningún campo de texto.
 - El estado confirmado FAILED_ATTEMPT deja de contar el cobro de la parada como pendiente ("Cobrar $X" y el
   encabezado): lo siguiente lo decide despacho.
-- Quien también es despacho: al iniciar sesión, si la persona tiene en la organización activa, además de DRIVER, el
-  rol DISPATCHER o PLATFORM_ADMIN (de `/me/organization-contexts`), la sesión del repartidor lleva
-  `alsoDispatch: true`, solo en memoria. Se usa PLATFORM_ADMIN aunque el servidor solo lo trate como despacho con MFA:
+- Quien también es despacho (`ORG-CONTEXT-ROLES-2026-10-12`): `GET /me/organization-contexts` devuelve un contexto por
+  organización, con un solo `role` (el de la membresía por defecto), así que con eso el teléfono nunca veía a un
+  repartidor que también es despacho. Ahora cada contexto trae `roles`, todos los roles de la persona en esa
+  organización por membresías ACTIVE (sin repetidos, en orden ordinal, siempre con `role`). Al iniciar sesión, la
+  instalación BFF copia los `roles` del contexto elegido a la sesión del repartidor (`organizationRoles`, solo en
+  memoria) y `driverReportRole` decide: con DISPATCHER o PLATFORM_ADMIN, "dispatch" (el aviso de registrar desde
+  Despacho; el formulario no aparece y no se sube ninguna foto); con DRIVER y sin esos, "driver" (se ofrece); sin
+  roles o con roles mal formados, "unknown": no se ofrece (falla cerrado) y la parada lo explica. El controlador aplica
+  la misma regla antes de guardar nada. Se usa PLATFORM_ADMIN aunque el servidor solo lo trate como despacho con MFA:
   el teléfono no sabe si hay MFA y así falla cerrado.
+- Una respuesta sin `roles` (una API anterior a esta web) se sigue leyendo con `roles: null`: el inicio de sesión y el
+  resto de la app funcionan igual, y solo el reporte falla cerrado. Un `roles` mal formado (vacío, repetido, sin
+  `role`, de más de 64) rechaza toda la respuesta, como cualquier otro miembro. Un rol que la web todavía no conoce se
+  lee como `role`, así que no rompe el inicio de sesión. El portal local de desarrollo lee los roles del perfil de la
+  misma respuesta de la API.
+- Orden de despliegue: la web anterior lee los contextos con miembros exactos y rechaza una respuesta con `roles`
+  (su inicio de sesión no encontraría organización), así que esta web se despliega antes o junto con esta API. Una
+  página de la web anterior que siga abierta conserva su sesión instalada; si vuelve a iniciar sesión o cambia de
+  organización después del despliegue de la API, necesita recargar (la navegación va primero a la red).
 
 ## Secuencia y cola sin conexión
 
@@ -109,7 +132,14 @@ reutilizada solo para reintentar el mismo contenido:
   por su cuenta nunca confirma un reporte que no se mandó: queda retenido con "Despacho ya registró el intento fallido
   de esta entrega, así que tu reporte no se envió. Descártalo." y se puede descartar. La proyección muestra ya
   confirmado un reporte que REST confirma, nunca como conflicto, y la parada vuelve a ofrecer "Confirmar entrega" si
-  despacho pidió reintentar.
+  despacho pidió reintentar. Mientras ese reporte confirmado espera a salir de la cola, la parada puede volver a
+  ofrecer "No se pudo entregar" y el teléfono acepta el reporte nuevo: al revisar si ya hay uno guardado ignora los
+  que REST ya confirma (`driverOperationConfirmedByStop`), igual que la proyección.
+- **Aceptado, esperando a REST.** Una acción que el servidor ya aceptó (`AWAITING_REST_CONFIRMATION`) sigue esperando a
+  REST con backoff aunque falle la lectura de confirmación (la de justo después del 2xx o una posterior, por red,
+  contrato o error inesperado): nunca vuelve a `RETRY_WAIT`, nunca se manda de nuevo ni queda como conflicto, y a las
+  72 horas sale de la cola sin el aviso de "venció… Vuelve a registrarla" (el servidor la tiene). Solo una sesión
+  revocada (401/403) vacía la partición, como siempre.
 - **Parada que REST no muestra.** Si la respuesta de las paradas deja fuera la parada (por romper el contrato), un
   reporte o un cobro no se manda: queda en espera (`RETRY_WAIT`, `RESOURCE_UNAVAILABLE`) y se vuelve a leer después del
   backoff, también en las revisiones antes de la incidencia y de la transición. No espera para siempre: sin mandarse,
@@ -161,7 +191,8 @@ registrarla": dice que la incidencia quedó abierta y que despacho decide, y que
 - Los de DRV-002: 100 operaciones y 25 MiB de fotos por partición, 10 MiB por foto, solo JPEG y PNG, estimación de
   almacenamiento.
 - La operación solo guarda códigos, ids, llaves, el SHA-256 y el tamaño de la foto. Nada de texto, nombre, dirección,
-  token, URL firmada ni object key en IndexedDB, logs o consola. `alsoDispatch` vive solo en memoria.
+  token, URL firmada ni object key en IndexedDB, logs o consola. Los roles de la sesión (`organizationRoles`) viven
+  solo en memoria.
 - Descartar pausa la sincronización: el pase en curso se aborta y se espera, la operación se borra y se recalcula la
   cadena de la orden, y luego se reanuda y se pide una sincronización. Así un cobro que se descarta mientras estaba
   pendiente no se manda ni se vuelve a escribir.
@@ -177,6 +208,10 @@ registrarla": dice que la incidencia quedó abierta y que despacho decide, y que
   operación, incidencia pedida, id de la incidencia) e IndexedDB a la versión 4. La subida reescribe en el mismo lugar
   las operaciones en cola de esquema 2 (versión 3) y de esquema 1 (versión 2) agregando los miembros nuevos en null;
   las instantáneas de esquema 2 se conservan. El parser sigue estricto a un solo esquema.
+- El esquema 3 cambió de forma durante la revisión de este PR sin subir de número (se agregó
+  `failedDelivery.incidentRequested` y la llave de la incidencia quedó atada al id de su operación). No hace falta
+  migrar nada: ninguna compilación con la forma anterior llegó a un teléfono real (el PR no se fusionó ni se desplegó);
+  solo existieron en pruebas.
 - Se eligió subir la versión de IndexedDB (como lo hizo `UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11`) en lugar de mezclar
   esquemas: el navegador nunca abre una base con una versión menor a la actual, así que una app anterior (la de la
   versión 3) no puede abrirla y no puede leer mal, mandar ni borrar el tipo nuevo; muestra "La cola local no está
@@ -244,22 +279,40 @@ Vitest (`apps/web`):
 - `driver/offline/failed-delivery-sync-api.test.ts`: cuerpo exacto de la incidencia y de la transición, llaves,
   lectura estricta de la respuesta y clasificación de errores.
 - `driver/state/failed-delivery-controller.test.ts` y `driver/components/driver-failed-delivery.test.ts`: reglas de
-  "Enviar reporte" con su motivo real, quien también es despacho, nunca rehacer un reporte, descartar lo que queda de
-  una parada movida, reintentar libera lo bloqueado, avisos de vencimiento, pestaña que bloquea, estados de la
-  pantalla, motivos, "Otro…", foto obligatoria, botón deshabilitado, vista previa, textos en cola y confirmado, 44 px
-  y sin texto libre.
-- `auth/bff-session.test.ts`: `alsoDispatch` solo con DISPATCHER o PLATFORM_ADMIN en la misma organización.
+  "Enviar reporte" con su motivo real, quien también es despacho (DISPATCHER o PLATFORM_ADMIN en los `roles` de su
+  contexto), roles desconocidos (falla cerrado), un reporte confirmado por REST que ya no impide uno nuevo, nunca
+  rehacer un reporte, descartar lo que queda de una parada movida, reintentar libera lo bloqueado, avisos de
+  vencimiento, pestaña que bloquea, estados de la pantalla, motivos, "Otro…", foto obligatoria, botón deshabilitado,
+  vista previa, textos en cola y confirmado, 44 px y sin texto libre. Cada sesión sale de una respuesta de
+  `/me/organization-contexts` con la forma de la API, por el parser, la selección y la instalación reales
+  (`driver/session/driver-session.fixtures.ts`).
+- `driver/offline/driver-sync-scheduler.test.ts`: una acción aceptada cuya lectura de confirmación falla (red,
+  contrato o error inesperado) sigue esperando a REST, no se vuelve a mandar y a las 72 horas sale sin aviso de
+  vencida.
+- `auth/bff-session.test.ts`: los `roles` del único contexto que la API devuelve por organización llegan a la sesión
+  del repartidor (DISPATCHER o PLATFORM_ADMIN → despacho; DRIVER y VIEWER → repartidor; DISPATCHER de otra
+  organización no cuenta); una respuesta sin `roles` sigue iniciando sesión con roles desconocidos; un `roles` mal
+  formado rechaza la respuesta. `operations/contracts/organization-contexts.test.ts`: el parser estricto de `roles`.
 
 Playwright (`tests/Paqueteria.IntegrationTests/Driver`): `DriverOfflineOperationsPwaPlaywrightTests` agrega el flujo
 en línea (orden de llamadas, cuerpo exacto, llaves), sin conexión con recarga y sincronización, cobro guardado y
 registrado, reporte retenido por un cobro registrado mientras tanto, reporte retenido sin mandar nada porque despacho
 registró el intento fallido (y descartado), quien también es despacho, y la subida de IndexedDB 3 → 4;
 `DriverStopsPwaPlaywrightTests` agrega la pantalla de 320 px (44 px, sin desbordes) y el intento fallido confirmado.
+Sus sesiones se instalan desde la respuesta de contextos que arma el propio registro de la API
+(`OrganizationContextResponse` con `OrganizationContextRoles`, `DriverOrganizationContexts.cs`), nunca con una
+bandera inyectada; la prueba de despacho usa DRIVER y DISPATCHER en la misma organización.
+
+.NET: `OrganizationContextRolesContractTests` (AI-05 `roles`, forma JSON del registro, roles por organización y
+lectura dentro de la transacción), `ActiveTenantRuntimeContractTests` (lector en PostgreSQL real con DRIVER y
+DISPATCHER en la misma organización) y `PostgreSqlBootstrapTrackingTests` (endpoint real con RLS: DRIVER y VIEWER en
+un solo contexto).
 
 ```bash
 cd apps/web && pnpm run lint && pnpm run typecheck && pnpm exec vitest run && pnpm run build
 dotnet test tests/Paqueteria.IntegrationTests --filter "Category=DriverStopsPwa|Category=DriverOfflineOperationsPwa"
 dotnet test tests/Paqueteria.ArchitectureTests tests/Paqueteria.ContractTests --filter "FullyQualifiedName~SyntheticEnvironmentArchitectureTests|FullyQualifiedName~NormativeBaselineTests"
+dotnet test tests/Paqueteria.ContractTests --filter "FullyQualifiedName~OrganizationContextRolesContractTests|FullyQualifiedName~OpenApi|FullyQualifiedName~ActiveTenantRuntimeContractTests"
 python3 docs/normative/v0.6/tools/validate_contracts.py
 ```
 
@@ -278,6 +331,11 @@ python3 docs/normative/v0.6/tools/validate_contracts.py
   dice y no invita a reportarlo de nuevo, pero el teléfono no impide que el repartidor, después de descartar un reporte
   con incidencia abierta, reporte otra vez en el mismo intento.
 - No hay número de despacho en la app; "llama a despacho" depende de que el repartidor lo tenga.
+- Los roles se leen al iniciar sesión: si a la persona le dan o le quitan DISPATCHER o PLATFORM_ADMIN con la sesión
+  abierta, el teléfono lo sabe hasta el siguiente inicio de sesión o cambio de organización. El servidor sigue siendo la
+  barrera: si ya es despacho, rechaza el reporte corto (409 `INVALID_REQUEST`, que dice registrar desde Despacho).
+- Una persona con DRIVER y otro rol en la misma organización sin membresía por defecto recibe en `role` uno de los dos
+  (como antes de este cambio); solo con DRIVER ahí entra a la app del repartidor.
 - IndexedDB es almacenamiento del navegador; la foto puede contener información visual sensible (GATE-007).
 - Con una entrega guardada en el teléfono (por ejemplo esperando el cobro) no se ofrece el reporte.
 

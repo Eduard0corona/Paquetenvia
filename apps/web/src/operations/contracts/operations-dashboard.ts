@@ -158,4 +158,10 @@ export interface OperationsOrganizationContext {
   readonly display_name: string;
   readonly role: string;
   readonly is_default: boolean;
+  /**
+   * ORG-CONTEXT-ROLES-2026-10-12: every role the person holds in this organization (unique, never empty and
+   * always containing `role`). Null when the answer did not carry it (an API older than this web): whoever
+   * needs the roles treats null as unknown and fails closed.
+   */
+  readonly roles: readonly string[] | null;
 }

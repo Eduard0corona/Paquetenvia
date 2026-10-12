@@ -12,6 +12,7 @@ import {
   MemoryQueue,
   amountCents,
   collectionOperation,
+  deliveryStop,
   failedDeliveryOperation,
   orderId,
   reportId,
@@ -21,8 +22,16 @@ import type {
   DriverOfflineOperation,
   DriverOperationalStatus,
 } from "../offline/operation-contract";
-import { driverDispatchRoleReportMessage } from "../offline/failed-delivery-policy";
-import type { DriverSession } from "../session/driver-session";
+import {
+  driverDispatchRoleReportMessage,
+  driverFailedDeliveryAvailability,
+  driverRoleUnknownReportMessage,
+} from "../offline/failed-delivery-policy";
+import { projectDriverOperations } from "../offline/operation-projection";
+import {
+  driverSessionFromAnswer,
+  organizationContextsAnswer,
+} from "../session/driver-session.fixtures";
 import {
   DriverOperationsController,
   driverDatabaseBlockedMessage,
@@ -34,13 +43,14 @@ import {
  * report with its photo; the controller refuses it where the stop does not
  * offer it (owner answers "Solo si hay cobro" and "No, llama a despacho"),
  * rebuilds a held report without a second incident, and pauses the sync while
- * it discards.
+ * it discards. Every session comes from a GET /me/organization-contexts answer
+ * shaped like the API's (ORG-CONTEXT-ROLES-2026-10-12).
  */
-const session: DriverSession = {
-  organizationId: "44444444-4444-4444-8444-444444444444",
-  cacheNamespace: "opaque-failed-delivery-controller",
-  getAccessToken: () => "memory-only",
-};
+const organizationId = "44444444-4444-4444-8444-444444444444";
+const cacheNamespace = "opaque-failed-delivery-controller";
+const sessionFor = (roles: readonly string[] | null) =>
+  driverSessionFromAnswer(organizationContextsAnswer(organizationId, roles), cacheNamespace);
+const session = sessionFor(["DRIVER"]);
 const newId = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
 const cashPending: DriverStopCod = {
   expected: { currency: "MXN", amount_cents: amountCents },
@@ -53,7 +63,7 @@ function placePhoto(type = "image/png", size = 3): Blob {
 
 async function harness(
   initial: readonly DriverOfflineOperation[] = [],
-  options: { readonly alsoDispatch?: boolean } = {},
+  options: { readonly roles?: readonly string[] | null } = {},
 ) {
   const key = (await createDriverCachePartition(session)).key;
   const queue = new MemoryQueue(initial.map((operation) => ({ ...operation, partitionKey: key })));
@@ -65,7 +75,7 @@ async function harness(
     resume: vi.fn(),
   };
   const controller = new DriverOperationsController({
-    session: options.alsoDispatch ? { ...session, alsoDispatch: true } : session,
+    session: options.roles === undefined ? session : sessionFor(options.roles),
     queue,
     api: {} as DriverSyncApi,
     refreshStops: async () => stopList([]),
@@ -87,6 +97,8 @@ function report(
     reasonCode,
     projectedStatus: "DELIVERING" as DriverOperationalStatus,
     projectedVersion: 8,
+    confirmedStatus: "DELIVERING" as const,
+    confirmedVersion: 8,
     cod,
   };
 }
@@ -183,13 +195,80 @@ describe("Enviar reporte", () => {
     expect(saved.queue.operations).toHaveLength(1);
   });
 
-  it("refuses a report from a person who is also dispatch (owner answer \"Registrar desde Despacho\")", async () => {
-    const { controller, queue } = await harness([], { alsoDispatch: true });
+  it.each([[["DISPATCHER", "DRIVER"]], [["DRIVER", "PLATFORM_ADMIN"]]])(
+    "refuses a report from a person whose organization context also lists %j (owner answer \"Registrar desde Despacho\")",
+    async (roles) => {
+      const { controller, queue } = await harness([], { roles });
+      await expect(controller.enqueueFailedDelivery(report(), placePhoto())).resolves.toEqual(
+        refused(driverDispatchRoleReportMessage),
+      );
+      expect(queue.operations).toEqual([]);
+      expect(queue.proofs.size).toBe(0);
+    },
+  );
+
+  it("refuses a report when the organization context carries no roles (it fails closed)", async () => {
+    const { controller, queue } = await harness([], { roles: null });
     await expect(controller.enqueueFailedDelivery(report(), placePhoto())).resolves.toEqual(
-      refused(driverDispatchRoleReportMessage),
+      refused(driverRoleUnknownReportMessage),
     );
     expect(queue.operations).toEqual([]);
     expect(queue.proofs.size).toBe(0);
+  });
+
+  it("takes a driver whose other roles are not dispatch (DRIVER and VIEWER)", async () => {
+    const { controller, queue } = await harness([], { roles: ["DRIVER", "VIEWER"] });
+    await expect(controller.enqueueFailedDelivery(report(), placePhoto())).resolves.toEqual(stored);
+    expect(queue.only().kind).toBe("FAILED_DELIVERY");
+  });
+
+  it("takes a new report while an earlier one REST already confirms waits to leave the queue", async () => {
+    // The earlier report was accepted at version 8; dispatch chose "Reintentar
+    // hoy" and REST shows the stop at the door again at version 11 before the
+    // sync removed the earlier report.
+    const earlier = failedDeliveryOperation({ status: "AWAITING_REST_CONFIRMATION" });
+    const atTheDoorAgain = deliveryStop({ aggregate_version: 11 });
+    const projection = projectDriverOperations([atTheDoorAgain], [earlier]);
+    expect(
+      driverFailedDeliveryAvailability(projection.stops[0], projection.operations, "driver"),
+    ).toEqual({ kind: "offered", paymentReason: false });
+    const { controller, queue } = await harness([earlier]);
+
+    await expect(
+      controller.enqueueFailedDelivery(
+        {
+          ...report("ADDRESS_NOT_FOUND"),
+          projectedVersion: 11,
+          confirmedVersion: 11,
+        },
+        placePhoto(),
+      ),
+    ).resolves.toEqual(stored);
+
+    expect(queue.operations.map((operation) => [operation.id, operation.expectedVersion])).toEqual([
+      [earlier.id, 8],
+      [newId, 11],
+    ]);
+  });
+
+  it("still refuses a second report while the earlier one is not confirmed", async () => {
+    // Accepted, but REST still shows the version it was sent for.
+    const accepted = failedDeliveryOperation({ status: "AWAITING_REST_CONFIRMATION" });
+    const waiting = await harness([accepted]);
+    await expect(waiting.controller.enqueueFailedDelivery(report(), placePhoto())).resolves.toEqual(
+      refused("Ya hay un reporte guardado en el teléfono para esta entrega."),
+    );
+    expect(waiting.queue.operations).toHaveLength(1);
+
+    // Not accepted yet: a later version alone never settles it.
+    const pending = await harness([failedDeliveryOperation()]);
+    await expect(
+      pending.controller.enqueueFailedDelivery(
+        { ...report(), projectedVersion: 11, confirmedVersion: 11 },
+        placePhoto(),
+      ),
+    ).resolves.toEqual(refused("Ya hay un reporte guardado en el teléfono para esta entrega."));
+    expect(pending.queue.operations).toHaveLength(1);
   });
 
   it.each<[string, Blob | undefined]>([

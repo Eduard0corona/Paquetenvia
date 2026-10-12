@@ -17,6 +17,7 @@ import {
   driverFailedReportIncident,
   driverIncidentMaybeOpenReportMessage,
   driverIncidentOpenReportMessage,
+  driverRoleUnknownReportMessage,
   driverStaleReportMessage,
 } from "./failed-delivery-policy";
 import {
@@ -52,7 +53,7 @@ import type { DriverStop } from "../contracts/driver-stop";
  */
 function availability(stop: DriverStop, operations: readonly DriverOfflineOperation[] = []) {
   const projection = projectDriverOperations([stop], operations);
-  return driverFailedDeliveryAvailability(projection.stops[0], projection.operations);
+  return driverFailedDeliveryAvailability(projection.stops[0], projection.operations, "driver");
 }
 
 describe("projection of a failed-delivery report", () => {
@@ -205,7 +206,7 @@ describe("when the stop offers \"No se pudo entregar\"", () => {
     expect(availability(stop)).toEqual({ kind: "hidden" });
     const projection = projectDriverOperations([stop], [arrival]);
     expect(projection.stops[0]).toMatchObject({ projectedStatus: "DELIVERING", projectedVersion: 8 });
-    expect(driverFailedDeliveryAvailability(projection.stops[0], projection.operations)).toEqual({
+    expect(driverFailedDeliveryAvailability(projection.stops[0], projection.operations, "driver")).toEqual({
       kind: "offered",
       paymentReason: false,
     });
@@ -232,7 +233,7 @@ describe("when the stop offers \"No se pudo entregar\"", () => {
     ]);
     expect(projection.stops[0].projectedStatus).toBe("DELIVERED");
     expect(
-      driverFailedDeliveryAvailability(projection.stops[0], projection.operations),
+      driverFailedDeliveryAvailability(projection.stops[0], projection.operations, "driver"),
     ).toEqual({ kind: "hidden" });
   });
 
@@ -285,24 +286,37 @@ describe("when the stop offers \"No se pudo entregar\"", () => {
   it("hides it while another action of the stop needs attention", () => {
     const projection = projectDriverOperations([deliveryStop()], []);
     const stop = { ...projection.stops[0], attentionCount: 1 };
-    expect(driverFailedDeliveryAvailability(stop, [])).toEqual({ kind: "hidden" });
+    expect(driverFailedDeliveryAvailability(stop, [], "driver")).toEqual({ kind: "hidden" });
   });
 
-  it("tells a person who is also dispatch to register the attempt from Despacho (owner answer \"Registrar desde Despacho\")", () => {
-    const at = (stop: DriverStop, operations: readonly DriverOfflineOperation[] = []) => {
-      const projection = projectDriverOperations([stop], operations);
-      return driverFailedDeliveryAvailability(projection.stops[0], projection.operations, true);
-    };
-    expect(at(deliveryStop())).toEqual({ kind: "dispatch-role" });
-    expect(at(cashStop(false))).toEqual({ kind: "dispatch-role" });
+  it.each([
+    ["dispatch", "dispatch-role"],
+    ["unknown", "role-unknown"],
+  ] as const)(
+    "never offers the report to a %s report role: it says why instead",
+    (reportRole, kind) => {
+      const at = (stop: DriverStop, operations: readonly DriverOfflineOperation[] = []) => {
+        const projection = projectDriverOperations([stop], operations);
+        return driverFailedDeliveryAvailability(projection.stops[0], projection.operations, reportRole);
+      };
+      expect(at(deliveryStop())).toEqual({ kind });
+      expect(at(cashStop(false))).toEqual({ kind });
+      // Everything that is not the offer itself reads the same as for a driver.
+      expect(at(cashStop(true))).toEqual({ kind: "cod-recorded" });
+      expect(at(deliveryStop(), [failedDeliveryOperation()])).toEqual({ kind: "queued" });
+      expect(at(deliveryStop({ stop_type: "PICKUP", status: "AT_PICKUP" }))).toEqual({ kind: "hidden" });
+    },
+  );
+
+  it("says why: register the attempt from Despacho (owner answer \"Registrar desde Despacho\"), or sign in again", () => {
     expect(driverDispatchRoleReportMessage).toBe(
       "También eres despacho en esta organización, así que el intento fallido no se reporta desde el teléfono: " +
         "regístralo desde la orden en Despacho, donde eliges el motivo y el siguiente paso.",
     );
-    // Everything that is not the offer itself reads the same as for a driver.
-    expect(at(cashStop(true))).toEqual({ kind: "cod-recorded" });
-    expect(at(deliveryStop(), [failedDeliveryOperation()])).toEqual({ kind: "queued" });
-    expect(at(deliveryStop({ stop_type: "PICKUP", status: "AT_PICKUP" }))).toEqual({ kind: "hidden" });
+    expect(driverRoleUnknownReportMessage).toBe(
+      "No se pudo confirmar tu rol en esta organización, así que el intento fallido no se reporta desde el teléfono. " +
+        "Cierra sesión y vuelve a entrar con conexión; si sigue igual, llama a despacho para que lo registre.",
+    );
   });
 });
 

@@ -26,6 +26,8 @@ public sealed class PostgreSqlOrganizationContextReader(
         var membershipByOrganization = memberships
             .GroupBy(value => value.OrganizationId)
             .ToDictionary(group => group.Key, group => group.OrderByDescending(item => item.IsDefault).First());
+        // ORG-CONTEXT-ROLES-2026-10-12: every role of the caller's own active memberships per organization.
+        var rolesByOrganization = OrganizationContextRoles.ByOrganization(memberships);
         var executionContext = new TenantDatabaseExecutionContext(userId, membershipByOrganization.Keys);
 
         try
@@ -40,6 +42,8 @@ public sealed class PostgreSqlOrganizationContextReader(
                         .Select(organization => new { organization.Id, organization.DisplayName })
                         .ToListAsync(token);
 
+                    // Only organizations the tenant-safe read returns are answered, each with the
+                    // caller's own roles there and nothing about anyone else.
                     return names.Select(organization =>
                     {
                         var membership = membershipByOrganization[organization.Id];
@@ -47,7 +51,8 @@ public sealed class PostgreSqlOrganizationContextReader(
                             organization.Id,
                             organization.DisplayName,
                             membership.Role.ToContractValue(),
-                            membership.IsDefault);
+                            membership.IsDefault,
+                            rolesByOrganization[organization.Id]);
                     }).ToArray();
                 },
                 cancellationToken);

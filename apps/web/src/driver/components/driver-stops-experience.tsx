@@ -47,9 +47,11 @@ import {
 } from "../routing/driver-stops-route";
 import {
   driverLogoutStartedEvent,
+  driverReportRole,
   driverSessionChangedEvent,
   readBrowserDriverSession,
   sessionIdentity,
+  type DriverReportRole,
   type DriverSession,
 } from "../session/driver-session";
 import {
@@ -368,7 +370,7 @@ export function DriverStopsExperience() {
           operations={projection.operations.filter(
             (operation) => operation.orderId === route.orderId,
           )}
-          alsoDispatch={session.alsoDispatch === true}
+          reportRole={driverReportRole(session)}
           mutating={operationsState.mutating}
           onEnqueue={(kind, blob) =>
             stop && operationsControllerRef.current
@@ -402,6 +404,8 @@ export function DriverStopsExperience() {
                     reasonCode: reason,
                     projectedStatus: stop.projectedStatus,
                     projectedVersion: stop.projectedVersion,
+                    confirmedStatus: stop.confirmedStatus,
+                    confirmedVersion: stop.confirmedVersion,
                     cod: stop.cod,
                   },
                   photo,
@@ -451,7 +455,7 @@ export function DriverStopsExperience() {
           offline={dataIsOffline}
           voiceApi={null}
           operations={[]}
-          alsoDispatch={false}
+          reportRole="unknown"
           mutating={operationsState.mutating}
           onEnqueue={() => Promise.resolve(false)}
           onCollectCod={() => Promise.resolve(false)}
@@ -709,7 +713,7 @@ function StopDetail({
   offline,
   voiceApi,
   operations,
-  alsoDispatch,
+  reportRole,
   mutating,
   onEnqueue,
   onCollectCod,
@@ -726,8 +730,8 @@ function StopDetail({
   offline: boolean;
   voiceApi: DriverVoiceApi | null;
   operations: readonly DriverOfflineOperation[];
-  /** DriverSession.alsoDispatch (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12). */
-  alsoDispatch: boolean;
+  /** driverReportRole of the session (ORG-CONTEXT-ROLES-2026-10-12). */
+  reportRole: DriverReportRole;
   mutating: boolean;
   onEnqueue: (kind: DriverOperationKind, blob?: Blob) => Promise<boolean>;
   onCollectCod: () => Promise<boolean>;
@@ -830,7 +834,7 @@ function StopDetail({
           key={stop.order_id}
           stop={stop}
           operations={operations}
-          alsoDispatch={alsoDispatch}
+          reportRole={reportRole}
           disabled={mutating}
           onReport={onReportFailedDelivery}
           onDiscardCollection={(operationId) =>

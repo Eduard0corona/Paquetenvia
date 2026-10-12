@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Security.Cryptography;
 using System.Text.Json;
 using Microsoft.Playwright;
+using Paqueteria.Domain.Tenancy;
 
 namespace Paqueteria.IntegrationTests.Driver;
 
@@ -902,9 +903,10 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
     }
 
     /// <summary>
-    /// UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 (owner answer "Registrar desde Despacho (Recommended)"): a person
-    /// who is also DISPATCHER or PLATFORM_ADMIN in the organization is not offered "No se pudo entregar"; the stop
-    /// says to register the attempt from the order in Despacho.
+    /// UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 (owner answer "Registrar desde Despacho (Recommended)") with
+    /// ORG-CONTEXT-ROLES-2026-10-12: a person whose organization context also lists DISPATCHER (the one context the
+    /// API answers for that organization) is not offered "No se pudo entregar" and uploads nothing; the stop says
+    /// to register the attempt from the order in Despacho.
     /// </summary>
     [Fact]
     [Trait("Category", "DriverOfflineOperationsPwa")]
@@ -915,7 +917,11 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             new BrowserTypeLaunchOptions { Headless = true });
         await using var context = await browser.NewContextAsync();
         var page = await context.NewPageAsync();
-        await InstallSessionAsync(page, "opaque-drv-failed-also-dispatch", alsoDispatch: true);
+        await InstallSessionAsync(
+            page,
+            "opaque-drv-failed-also-dispatch",
+            OrganizationRole.Driver,
+            OrganizationRole.Dispatcher);
         var backend = new SyntheticOfflineBackend();
         backend.SetOrderState("DELIVERING", 8);
         await backend.RouteAsync(page);
@@ -1779,10 +1785,15 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             })
             """);
 
+    /// <summary>
+    /// Installs the driver session from the API's organization contexts answer for a person whose memberships in
+    /// the organization hold <paramref name="roles"/> (DRIVER only by default); see
+    /// <see cref="DriverOrganizationContexts"/>.
+    /// </summary>
     private static async Task InstallSessionAsync(
         IPage page,
         string cacheNamespace,
-        bool alsoDispatch = false)
+        params OrganizationRole[] roles)
     {
         await page.RouteAsync("**/hubs/driver/negotiate**", route => route.AbortAsync());
         var configuration = JsonSerializer.Serialize(new
@@ -1790,18 +1801,13 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             organizationId = OrganizationId,
             cacheNamespace,
             token = "synthetic-driver-token",
-            alsoDispatch,
+            contexts = DriverOrganizationContexts.Answer(OrganizationId, roles),
         });
         await page.AddInitScriptAsync(
             $$"""
             (() => {
               const value = {{configuration}};
-              window.__paquetenviaDriverSession = {
-                organizationId: value.organizationId,
-                cacheNamespace: value.cacheNamespace,
-                getAccessToken: () => value.token,
-                ...(value.alsoDispatch ? { alsoDispatch: true } : {}),
-              };
+              {{DriverOrganizationContexts.InstallFromAnswer}}
             })();
             """);
     }
@@ -1809,19 +1815,24 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
     private static Task ChangeOrganizationAsync(
         IPage page,
         string organizationId,
-        string cacheNamespace) =>
-        page.EvaluateAsync(
-            """
-            value => {
-              window.__paquetenviaDriverSession = {
-                organizationId: value.organizationId,
-                cacheNamespace: value.cacheNamespace,
-                getAccessToken: () => "synthetic-driver-token",
-              };
+        string cacheNamespace)
+    {
+        var configuration = JsonSerializer.Serialize(new
+        {
+            organizationId,
+            cacheNamespace,
+            token = "synthetic-driver-token",
+            contexts = DriverOrganizationContexts.Answer(organizationId, []),
+        });
+        return page.EvaluateAsync(
+            $$"""
+            () => {
+              const value = {{configuration}};
+              {{DriverOrganizationContexts.InstallFromAnswer}}
               window.dispatchEvent(new Event("paquetenvia:driver-session-changed"));
             }
-            """,
-            new { organizationId, cacheNamespace });
+            """);
+    }
 
     private static Task<string> ReadSingleClientOccurredAtAsync(IPage page) =>
         page.EvaluateAsync<string>(
