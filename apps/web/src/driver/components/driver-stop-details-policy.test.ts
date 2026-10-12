@@ -81,10 +81,41 @@ describe("design placement", () => {
     expect(details).toContain(">\n        Cómo llegar\n      </a>");
   });
 
-  it("never shows internal codes, ids or the legacy summary on the stop", () => {
+  it("never shows internal codes or ids, and the address summary only without details", () => {
     expect(experience).not.toContain("{stop.address_summary}");
+    expect(experience).toContain("{stopAddressText(stop)}");
+    expect(details).toContain("return stop.navigation?.address_text ?? stop.address_summary;");
     expect(details).not.toContain("order_id}<");
     expect(details).not.toMatch(/>\s*COD\s*</);
+  });
+
+  it("says the details are unavailable instead of Cómo llegar when the stop has none", () => {
+    expect(details).toContain("if (stop.navigation === null) return <DetailsUnavailable />;");
+    expect(details).toContain("{stop.details_available ? null : <DetailsUnavailable />}");
+    const helpers = read("src/driver/contracts/stop-details.ts");
+    expect(helpers).toContain('"Datos de entrega no disponibles por ahora"');
+  });
+
+  it("heads the list with today's stops and the completed ones", () => {
+    expect(experience).toContain(
+      "<StopsSummary stops={projectedStops} completedToday={completedToday} />",
+    );
+    expect(experience).toMatch(
+      /const completedToday = completedTodayAt\(\s*state\.synchronizedAt,\s*state\.completedToday,\s*\);/,
+    );
+    expect(details).toContain("{driverStopsDayLabel(stops.length, completedToday)}");
+  });
+});
+
+describe("a delivery waiting for its cash", () => {
+  it("offers Recibí again with a hint and never the photo capture a second time", () => {
+    const waiting = experience.slice(
+      experience.indexOf('if (kind === "DELIVERY_PROOF" && stop.deliveryAwaitingCash) {'),
+      experience.indexOf("const proofRequired ="),
+    );
+    expect(waiting).toContain("<DriverCodCollection");
+    expect(waiting).toContain("La entrega ya está guardada en el teléfono.");
+    expect(waiting).not.toContain("<DriverProofCapture");
   });
 });
 
@@ -107,5 +138,25 @@ describe("AI-07 record", () => {
     }
     expect(screen).toContain("https://www.google.com/maps/search/?api=1&query=<latitude>,<longitude>");
     expect(screen).toContain("logging out wipes every saved snapshot of the phone before leaving");
+  });
+
+  it("states plainly what the phone keeps and how the review answers behave", () => {
+    const aiSeven = read("../../docs/normative/v0.6/specs/AI-07_UI_CONTRACTS.yaml");
+    const screen = aiSeven.slice(
+      aiSeven.indexOf("\n  driver_stop:\n"),
+      aiSeven.indexOf("\n  external_driver_offers:\n"),
+    );
+    const cache = screen.slice(screen.indexOf("    offline_cache:\n"), screen.indexOf("    privacy:\n"));
+    expect(cache).toContain("the contact name and the full address");
+    expect(cache).toContain("of the stops currently assigned");
+    expect(cache).toContain("UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11");
+    expect(screen).toContain("the full name at a pickup or a return, the short name at a delivery");
+    expect(screen).toContain('"Completo, como recolección');
+    expect(screen).toContain('a header "Hoy · N paradas · K hechas"');
+    expect(screen).toContain('"Solo el número (Recommended)"');
+    expect(screen).toContain('"Datos de entrega');
+    expect(screen).toContain("details=false");
+    expect(screen).toContain("dependency order");
+    expect(screen).toContain("    waiting_for_cash:");
   });
 });

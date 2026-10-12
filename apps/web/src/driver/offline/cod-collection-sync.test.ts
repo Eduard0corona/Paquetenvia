@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DriverCachePartition } from "../cache/driver-stops-cache";
-import type { DriverStop } from "../contracts/driver-stop";
-import { withStopDetails } from "../contracts/driver-stop.fixtures";
+import type { DriverStop, DriverStopList } from "../contracts/driver-stop";
+import { stopList, withStopDetails } from "../contracts/driver-stop.fixtures";
 import type { DriverOfflineQueue } from "./driver-offline-queue";
 import {
   DriverSyncApiError,
@@ -11,6 +11,8 @@ import {
 import { DriverSyncScheduler } from "./driver-sync-scheduler";
 import {
   createDriverOfflineOperation,
+  migrateDriverOfflineOperationRecord,
+  parseDriverOfflineOperation,
   type DriverOfflineOperation,
   type DriverProofBlobRecord,
 } from "./operation-contract";
@@ -56,7 +58,7 @@ describe("cash collection sync", () => {
         sha256: "a".repeat(64),
         capturedAt: operation.clientOccurredAt,
       })),
-    }, async () => delivered ? [] : [deliveringStop(recorded)]);
+    }, async () => stopList(delivered ? [] : [deliveringStop(recorded)]));
 
     await scheduler.requestSync(true);
 
@@ -113,7 +115,7 @@ describe("cash collection sync", () => {
     const scheduler = schedulerFor(
       queue,
       { recordCodCollection },
-      async () => [deliveringStop(sent.length > 1 && recorded)],
+      async () => stopList([deliveringStop(sent.length > 1 && recorded)]),
     );
 
     await scheduler.requestSync(true);
@@ -132,7 +134,7 @@ describe("cash collection sync", () => {
     const scheduler = schedulerFor(
       queue,
       { recordCodCollection },
-      async () => [deliveringStop(true)],
+      async () => stopList([deliveringStop(true)]),
     );
 
     await scheduler.requestSync(true);
@@ -156,7 +158,7 @@ describe("cash collection sync", () => {
       },
       async () => {
         checks += 1;
-        return [deliveringStop(checks > 1)];
+        return stopList([deliveringStop(checks > 1)]);
       },
     );
 
@@ -204,18 +206,19 @@ describe("cash collection sync", () => {
   it("keeps the ORD-002 rule code of a refused delivery so the driver reads it", async () => {
     const queue = new MemoryQueue([deliveryOperation()]);
     queue.proofs.set(deliveryOperationId, proofFor(deliveryOperationId));
-    const scheduler = schedulerFor(queue, {
-      createProofUploadSession: vi.fn().mockResolvedValue(grant()),
-      finalizeProof: vi.fn(async (operation: DriverOfflineOperation) => ({
-        id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
-        proofType: "DELIVERY_PHOTO" as const,
-        sha256: "a".repeat(64),
-        capturedAt: operation.clientOccurredAt,
-      })),
-      transitionOrder: vi
-        .fn()
-        .mockRejectedValue(new DriverSyncApiError("conflict", "COD_NOT_RECORDED")),
-    });
+    // REST shows no cash to collect, so nothing waits for "Recibí": the
+    // server's refusal is a conflict the driver reads.
+    const scheduler = schedulerFor(
+      queue,
+      {
+        createProofUploadSession: vi.fn().mockResolvedValue(grant()),
+        finalizeProof: finalizeProof(),
+        transitionOrder: vi
+          .fn()
+          .mockRejectedValue(new DriverSyncApiError("conflict", "COD_NOT_RECORDED")),
+      },
+      async () => stopList([withStopDetails({ ...deliveringStop(false), cod: null })]),
+    );
 
     await scheduler.requestSync(true);
 
@@ -227,10 +230,127 @@ describe("cash collection sync", () => {
     await scheduler.dispose();
   });
 
+  it("keeps a delivery with no collection saved waiting for the cash, unsent", async () => {
+    const queue = new MemoryQueue([deliveryOperation()]);
+    queue.proofs.set(deliveryOperationId, proofFor(deliveryOperationId));
+    const transitionOrder = vi.fn();
+    const createProofUploadSession = vi.fn();
+    const refreshStops = vi.fn(async () => stopList([deliveringStop(false)]));
+    const scheduler = schedulerFor(
+      queue,
+      { transitionOrder, createProofUploadSession },
+      refreshStops,
+    );
+
+    await scheduler.requestSync(true);
+
+    // One read per pass: the waiting delivery is not tried again in a loop.
+    expect(refreshStops).toHaveBeenCalledOnce();
+    expect(createProofUploadSession).not.toHaveBeenCalled();
+    expect(transitionOrder).not.toHaveBeenCalled();
+    expect(queue.operations).toEqual([deliveryOperation()]);
+    expect(queue.proofs.has(deliveryOperationId)).toBe(true);
+    await scheduler.dispose();
+  });
+
+  it("sends a collection saved again after a discard first and the waiting delivery right after it", async () => {
+    // The held collection was discarded, so the delivery waited; "Recibí"
+    // saved a new collection, newer than the delivery.
+    const queue = new MemoryQueue([deliveryOperation()]);
+    queue.proofs.set(deliveryOperationId, proofFor(deliveryOperationId));
+    const harness = deliveryHarness(queue);
+
+    await harness.scheduler.requestSync(true);
+    expect(harness.calls).toEqual([]);
+
+    queue.operations.push(codOperation(new Date(now.getTime() + 120_000), secondCodOperationId));
+    await harness.scheduler.requestSync(true);
+
+    expect(harness.calls).toEqual([
+      `cod:drv2-${secondCodOperationId}-cod`,
+      "transition:DELIVERY_PROOF",
+    ]);
+    expect(queue.operations).toEqual([]);
+    await harness.scheduler.dispose();
+  });
+
+  it("keeps a delivery saved before collections existed (migrated in place) waiting for the cash", async () => {
+    // A schema 1 record: no cash member and no kept rejection code.
+    const legacy: Record<string, unknown> = { ...deliveryOperation(), schemaVersion: 1 };
+    delete legacy.cod;
+    delete legacy.rejectionCode;
+    const migrated = parseDriverOfflineOperation(
+      migrateDriverOfflineOperationRecord(legacy),
+      partition.key,
+    );
+    expect(migrated).toEqual(deliveryOperation());
+    const queue = new MemoryQueue([migrated]);
+    queue.proofs.set(deliveryOperationId, proofFor(deliveryOperationId));
+    const harness = deliveryHarness(queue);
+
+    await harness.scheduler.requestSync(true);
+    expect(harness.calls).toEqual([]);
+    expect(queue.operations).toEqual([migrated]);
+
+    queue.operations.push(codOperation(new Date(now.getTime() + 120_000), secondCodOperationId));
+    await harness.scheduler.requestSync(true);
+
+    expect(harness.calls).toEqual([
+      `cod:drv2-${secondCodOperationId}-cod`,
+      "transition:DELIVERY_PROOF",
+    ]);
+    expect(queue.operations).toEqual([]);
+    await harness.scheduler.dispose();
+  });
+
+  it("puts a delivery refused with COD_NOT_RECORDED back to wait for the cash", async () => {
+    const queue = new MemoryQueue([deliveryOperation()]);
+    queue.proofs.set(deliveryOperationId, proofFor(deliveryOperationId));
+    let reads = 0;
+    const transitionOrder = vi
+      .fn()
+      .mockRejectedValue(new DriverSyncApiError("conflict", "COD_NOT_RECORDED"));
+    // The first read predates the cash on the order; the server knows it.
+    const scheduler = schedulerFor(
+      queue,
+      {
+        createProofUploadSession: vi.fn().mockResolvedValue(grant()),
+        finalizeProof: finalizeProof(),
+        transitionOrder,
+      },
+      async () => {
+        reads += 1;
+        return stopList([
+          reads === 1
+            ? withStopDetails({ ...deliveringStop(false), cod: null })
+            : deliveringStop(false),
+        ]);
+      },
+    );
+
+    await scheduler.requestSync(true);
+
+    expect(transitionOrder).toHaveBeenCalledOnce();
+    expect(queue.operations).toEqual([
+      expect.objectContaining({
+        id: deliveryOperationId,
+        status: "PENDING",
+        safeError: null,
+        rejectionCode: null,
+        proofId: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+      }),
+    ]);
+    await scheduler.dispose();
+  });
+
   it("removes the collection without sending once the stop is no longer assigned", async () => {
     const queue = new MemoryQueue([codOperation()]);
     const recordCodCollection = vi.fn();
-    const scheduler = schedulerFor(queue, { recordCodCollection }, async () => []);
+    const scheduler = schedulerFor(
+      queue,
+      { recordCodCollection },
+      async () => stopList([]),
+    );
 
     await scheduler.requestSync(true);
 
@@ -254,16 +374,62 @@ describe("cash collection sync", () => {
   });
 });
 
-function codOperation(): DriverOfflineOperation {
+function codOperation(
+  at: Date = now,
+  id: string = codOperationId,
+): DriverOfflineOperation {
   return createDriverOfflineOperation({
     partitionKey: partition.key,
     orderId,
     kind: "COD_COLLECTION",
     expectedVersion: 9,
     cod: { amountCents, reference: "ORD_SYNTHETIC 2026-10-11T13:05:42-07:00" },
-    now: () => now,
-    randomUuid: () => codOperationId,
+    now: () => at,
+    randomUuid: () => id,
   });
+}
+
+const secondCodOperationId = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee";
+
+function finalizeProof() {
+  return vi.fn(async (operation: DriverOfflineOperation) => ({
+    id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+    proofType: "DELIVERY_PHOTO" as const,
+    sha256: "a".repeat(64),
+    capturedAt: operation.clientOccurredAt,
+  }));
+}
+
+/**
+ * A scheduler whose server records the cash, then accepts the delivery only
+ * once the cash is recorded, and lists the calls it received in order.
+ */
+function deliveryHarness(queue: MemoryQueue) {
+  let recorded = false;
+  let delivered = false;
+  const calls: string[] = [];
+  const scheduler = schedulerFor(
+    queue,
+    {
+      recordCodCollection: vi.fn(async (operation: DriverOfflineOperation) => {
+        calls.push(`cod:${operation.cod?.idempotencyKey}`);
+        recorded = true;
+        return receipt();
+      }),
+      createProofUploadSession: vi.fn().mockResolvedValue(grant()),
+      finalizeProof: finalizeProof(),
+      transitionOrder: vi.fn(async (operation: DriverOfflineOperation) => {
+        calls.push(`transition:${operation.kind}`);
+        if (!recorded) {
+          throw new DriverSyncApiError("conflict", "COD_NOT_RECORDED");
+        }
+        delivered = true;
+        return { id: orderId, status: "DELIVERED" as const, version: 10 };
+      }),
+    },
+    async () => stopList(delivered ? [] : [deliveringStop(recorded)]),
+  );
+  return { scheduler, calls };
 }
 
 function deliveryOperation(): DriverOfflineOperation {
@@ -324,9 +490,8 @@ function proofFor(operationId: string): DriverProofBlobRecord {
 function schedulerFor(
   queue: MemoryQueue,
   apiOverrides: Partial<DriverSyncApi>,
-  refreshStops: () => Promise<readonly DriverStop[]> = async () => [
-    deliveringStop(false),
-  ],
+  refreshStops: () => Promise<DriverStopList> = async () =>
+    stopList([deliveringStop(false)]),
 ): DriverSyncScheduler {
   return new DriverSyncScheduler({
     partition,

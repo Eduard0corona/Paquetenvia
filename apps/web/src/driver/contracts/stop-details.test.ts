@@ -2,9 +2,11 @@ import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  completedTodayAt,
   driverStopActionVerb,
   driverStopContactName,
   driverStopLead,
+  driverStopsDayLabel,
   formatCoordinate,
   formatDriverServiceWindow,
   googleMapsSearchUrl,
@@ -70,13 +72,15 @@ describe("stop details presentation", () => {
         contact_full_name: "Farmacia Las Quintas",
       }),
     ).toBe("Recoger con Farmacia Las Quintas");
+    // Owner answer "Completo, como recolección": a return reads the full name
+    // of the sender, the same contact as the pickup.
     expect(
       driverStopLead({
         stop_type: "RETURN",
-        contact_short_name: "M. López",
-        contact_full_name: null,
+        contact_short_name: null,
+        contact_full_name: "Farmacia Las Quintas",
       }),
-    ).toBe("Devolver a M. López");
+    ).toBe("Devolver a Farmacia Las Quintas");
     expect(
       driverStopLead({ stop_type: "RETURN", contact_short_name: null, contact_full_name: null }),
     ).toBe("Devolver");
@@ -87,6 +91,29 @@ describe("stop details presentation", () => {
       driverStopContactName({ contact_short_name: "M. López", contact_full_name: null }),
     ).toBe("M. López");
     expect(driverStopContactName({ contact_short_name: null, contact_full_name: null })).toBeNull();
+  });
+
+  it("writes the day header with today's completed stops (owner answer Solo el número)", () => {
+    expect(driverStopsDayLabel(3, 2)).toBe("Hoy · 5 paradas · 2 hechas");
+    expect(driverStopsDayLabel(0, 1)).toBe("Hoy · 1 parada · 1 hecha");
+    expect(driverStopsDayLabel(1, 0)).toBe("Hoy · 1 parada · 0 hechas");
+    expect(driverStopsDayLabel(3, null)).toBe("Hoy · 3 paradas");
+  });
+
+  it("shows the completed count only on the Mazatlán day it was counted", () => {
+    // 06:59Z is 23:59 of October 10 in Mazatlán (UTC-7); 07:00Z is 00:00 of October 11.
+    const lateEvening = "2026-10-11T06:59:00.000Z";
+    expect(completedTodayAt(lateEvening, 4, new Date("2026-10-11T06:59:59.000Z"))).toBe(4);
+    expect(completedTodayAt(lateEvening, 4, new Date("2026-10-11T07:00:00.000Z"))).toBeNull();
+    // Same UTC date, another Mazatlán day: the phone's own zone never decides.
+    expect(
+      completedTodayAt("2026-10-11T01:00:00.000Z", 3, new Date("2026-10-11T08:00:00.000Z")),
+    ).toBeNull();
+    expect(
+      completedTodayAt("2026-10-11T07:00:00.000Z", 3, new Date("2026-10-12T06:59:00.000Z")),
+    ).toBe(3);
+    expect(completedTodayAt(null, 3, new Date("2026-10-11T08:00:00.000Z"))).toBeNull();
+    expect(completedTodayAt(lateEvening, null, new Date("2026-10-11T06:59:59.000Z"))).toBeNull();
   });
 
   it("shows today's window in Mazatlán time as 13:00–15:00", () => {

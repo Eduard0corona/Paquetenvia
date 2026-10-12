@@ -6,28 +6,40 @@
   (Recommended)" ("Solo de sus paradas asignadas. Se borra del teléfono cuando la parada deja de estar asignada o al
   cerrar sesión. Con datos de prueba hasta cerrar GATE-007."), "Google Maps (Recommended)", "Solo confirma el monto
   (Recommended)" ("Toca "Recibí $1,250.00" y el sistema pone la referencia (guía y hora). Si no le pagan, reporta "No
-  pagó el cobro".") y "Completo en recolección (Recommended)" ("En recolección se ve el nombre completo del contacto,
-  como en tu diseño; en entrega, el nombre corto ("M. López")."); registradas, con sus preguntas, en
-  `decision-log.md` como cambio MAJOR (AI-01 §7).
-- AI-05 `DriverStop` (listMyStops) agrega `contact_short_name`, `contact_full_name`, `zone_name`, `service_window`,
-  `cod` (`expected` y `recorded`) y `navigation` (latitud, longitud, dirección y referencias), solo para las
-  asignaciones ACCEPTED o ACTIVE del repartidor que consulta. El servidor descifra la dirección y el contacto con el
-  sobre ADP-001, en un lote y después de cerrar la transacción del tenant; si algún valor no se puede leer responde 503
-  completo, nunca parcial.
-  Contacto: en recolección, el nombre completo (`contact_full_name`); en entrega y devolución, solo el nombre corto
-  (`contact_short_name`: inicial de la primera palabra, punto y última palabra, "M. Pérez"). `cod.recorded` es la
-  misma condición de la guarda de DELIVERED.
+  pagó el cobro"."), "Completo en recolección (Recommended)" ("En recolección se ve el nombre completo del contacto,
+  como en tu diseño; en entrega, el nombre corto ("M. López")."), "Completo, como recolección (Recommended)" ("El
+  remitente es el mismo contacto de la recolección, así que se ve igual: "Farmacia Las Quintas".") y "Solo el número
+  (Recommended)" ("El servidor manda cuántas paradas terminó hoy (hora de Mazatlán), sin datos de esas paradas.");
+  registradas, con sus preguntas, en `decision-log.md` como cambio MAJOR (AI-01 §7).
+- AI-05 listMyStops responde `DriverStopList` (`stops` y `completed_today`). Cada `DriverStop` agrega
+  `details_available`, `contact_short_name`, `contact_full_name`, `zone_name`, `service_window`, `cod` (`expected` y
+  `recorded`) y `navigation` (latitud, longitud, dirección y referencias), solo para las asignaciones ACCEPTED o ACTIVE
+  del repartidor que consulta. El servidor descifra la dirección y el contacto con el sobre ADP-001, en un lote, después
+  de cerrar la transacción del tenant y a través del puerto `ILocationPiiReader` de Locations, con el mismo modo de
+  `Locations:PiiProtector`. Si los datos de una parada no se pueden leer, la parada llega con `details_available` en
+  false y sin nombre ni navegación; la respuesta nunca falla ni es parcial por eso. `details=false` devuelve las mismas
+  paradas sin leer ningún dato protegido (otro valor, otro parámetro o uno repetido: 409 INVALID_REQUEST). Toda
+  respuesta lleva Cache-Control no-store.
+  Contacto: en recolección y devolución, el nombre completo (`contact_full_name`); en entrega, solo el nombre corto
+  (`contact_short_name`: inicial de la primera palabra, punto y última palabra, "M. Pérez"). Los caracteres de formato
+  cuentan como espacio, un texto vacío es null y `zone_name` se recorta a 200 caracteres. `cod.recorded` es la misma
+  condición de la guarda de DELIVERED. `completed_today` cuenta los cambios a PICKED_UP, DELIVERED o RETURNED que hizo
+  el repartidor que consulta en órdenes asignadas a él, durante el día de hoy en America/Mazatlan; solo el número.
 - AI-07 `/driver/stops/:id` agrega las acciones `navigate` y `cod_collection`; `screen_contracts.driver_stop` agrega
-  `details` (lista y detalle del diseño, ventana en hora de Mazatlán, retención: solo la instantánea vigente, cerrar
-  sesión borra las instantáneas del teléfono y 401/403 la de la sesión), `navigation` (Google Maps por coordenadas en
-  una pestaña nueva, sin solicitud al servidor ni cálculo de rutas, GATE-003) y `cod_collection` ("Recibí $X" con
-  confirmación; referencia con la guía y la hora local del teléfono; una Idempotency-Key por cobro; se sincroniza antes
-  de la entrega y "Confirmar entrega" queda deshabilitado hasta guardar el cobro).
+  `details` (lista y detalle del diseño con el encabezado "Hoy · N paradas · K hechas", ventana en hora de Mazatlán,
+  "Datos de entrega no disponibles por ahora" cuando no hay datos, lecturas de confirmación sin datos protegidos que no
+  borran los guardados; retención: solo la instantánea vigente, cerrar sesión borra las instantáneas del teléfono y
+  401/403 la de la sesión), `navigation` (Google Maps por coordenadas en una pestaña nueva, sin solicitud al servidor ni
+  cálculo de rutas, GATE-003) y `cod_collection` ("Recibí $X" con confirmación; referencia con la guía y la hora local
+  del teléfono; una Idempotency-Key por cobro; la cola sigue el orden de dependencia, así que el cobro siempre va antes
+  de la entrega; una entrega sin cobro guardado espera el cobro y "Recibí" se ofrece de nuevo). `offline_cache` dice
+  que el teléfono guarda el nombre del contacto y la dirección de las paradas asignadas en este momento.
 - PWA: IndexedDB versión 3 (se descartan las instantáneas anteriores y las operaciones en cola se migran sin perderse) y
-  caché del Service Worker v6. Un rollback debe conservar la versión 3 o superior de IndexedDB.
-- Pendientes: "Hoy" y "hechas" del encabezado (listMyStops solo devuelve paradas abiertas), "Llamar" y "No pagó el
-  cobro" (intento fallido). Datos de prueba hasta cerrar GATE-007. Sin cambios en AI-04, AI-06, AI-18, roles, permisos
-  ni migraciones, y sin un flujo atómico nuevo.
+  caché del Service Worker v6. Una parada que no cumple el contrato se deja fuera (o sin sus datos) en lugar de
+  rechazar la lista; cerrar sesión durante una sincronización nunca descarta una acción en cola. Un rollback debe
+  conservar la versión 3 o superior de IndexedDB.
+- Pendientes: "No pagó el cobro" (intento fallido). Datos de prueba hasta cerrar GATE-007. Sin cambios en AI-04, AI-06,
+  AI-18, roles, permisos ni migraciones, y sin un flujo atómico nuevo.
 
 ## Bandeja: "Agregar estas órdenes a una ruta…" al terminar una asignación en lote (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11) — 2026-10-11
 

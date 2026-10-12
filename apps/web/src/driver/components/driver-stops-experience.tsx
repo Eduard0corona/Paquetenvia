@@ -16,6 +16,7 @@ import {
   driverStopStatusLabel,
   driverStopTypeLabel,
 } from "../contracts/labels";
+import { completedTodayAt } from "../contracts/stop-details";
 import {
   createDriverSyncApi,
   DriverSyncApiError,
@@ -68,6 +69,7 @@ import {
   StopHighlights,
   StopLead,
   StopsSummary,
+  stopAddressText,
   stopRowLabel,
 } from "./driver-stop-details";
 import { RecipientCall } from "./recipient-call";
@@ -79,6 +81,7 @@ const unavailableState: DriverStopsViewState = Object.freeze({
   synchronizedAt: null,
   realtime: "offline",
   refreshing: false,
+  completedToday: null,
 });
 const unavailableOperationsState: DriverOperationsState = Object.freeze({
   operations: [],
@@ -600,10 +603,15 @@ function StopList({
       </StatusPanel>
     );
   }
+  const completedToday = completedTodayAt(
+    state.synchronizedAt,
+    state.completedToday,
+  );
   if (state.phase === "empty") {
     return (
       <StatusPanel title="Sin paradas activas">
         No tienes paradas activas.
+        <StopsSummary stops={[]} completedToday={completedToday} />
       </StatusPanel>
     );
   }
@@ -613,7 +621,7 @@ function StopList({
       {state.phase === "offline" ? (
         <OfflineBanner synchronizedAt={state.synchronizedAt} />
       ) : null}
-      <StopsSummary stops={projectedStops} />
+      <StopsSummary stops={projectedStops} completedToday={completedToday} />
       <ul className={styles.stopList} aria-label="Paradas asignadas">
         {projectedStops.map((stop, index) => (
           <li className={styles.stopCard} key={stop.order_id}>
@@ -634,7 +642,7 @@ function StopList({
               </div>
               <div>
                 <dt>Dirección</dt>
-                <dd className={styles.addressText}>{stop.navigation.address_text}</dd>
+                <dd className={styles.addressText}>{stopAddressText(stop)}</dd>
               </div>
               <div>
                 <dt>Sincronización</dt>
@@ -809,6 +817,29 @@ function StopAction({
   const { confirm, dialog } = useConfirmDialog();
   const kind = nextDriverOperationKind(stop.projectedStatus);
   if (!kind || stop.attentionCount > 0) return null;
+  if (kind === "DELIVERY_PROOF" && stop.deliveryAwaitingCash) {
+    // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the delivery and its photo are
+    // already saved; they wait for the cash, so only "Recibí" is offered and
+    // the delivery is sent right after the collection.
+    return (
+      <>
+        <fieldset className={styles.actions} disabled={disabled}>
+          <legend>Siguiente acción</legend>
+          <DriverCodCollection
+            stop={stop}
+            disabled={disabled}
+            confirm={confirm}
+            onCollect={onCollectCod}
+          />
+          <p className={styles.deliveryWaitingHint}>
+            La entrega ya está guardada en el teléfono. Se enviará después de
+            registrar el cobro.
+          </p>
+        </fieldset>
+        {dialog}
+      </>
+    );
+  }
   const proofRequired = kind === "PICKUP_PROOF" || kind === "DELIVERY_PROOF";
   // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the delivery is never queued
   // before the cash is recorded, at least on the phone; the collection is

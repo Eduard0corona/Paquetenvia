@@ -90,7 +90,7 @@ export class IndexedDbDriverStopsCache implements DriverStopsCache {
       if (!record) {
         return null;
       }
-      return validateSnapshot(record, partition.key);
+      return validateDriverStopsSnapshot(record, partition.key);
     } finally {
       database.close();
     }
@@ -100,7 +100,7 @@ export class IndexedDbDriverStopsCache implements DriverStopsCache {
     partition: DriverCachePartition,
     snapshot: DriverStopsSnapshot,
   ): Promise<void> {
-    const validated = validateSnapshot(
+    const validated = validateDriverStopsSnapshot(
       { ...snapshot, partitionKey: partition.key },
       partition.key,
     );
@@ -130,7 +130,12 @@ export class IndexedDbDriverStopsCache implements DriverStopsCache {
   }
 }
 
-function validateSnapshot(
+/**
+ * The strict check of a saved snapshot: exact members, this partition, schema 2,
+ * a UTC time, every stop valid and a non-negative integer or null count of
+ * today's completed stops. Anything else is never shown.
+ */
+export function validateDriverStopsSnapshot(
   value: unknown,
   expectedPartitionKey: string,
 ): DriverStopsSnapshot {

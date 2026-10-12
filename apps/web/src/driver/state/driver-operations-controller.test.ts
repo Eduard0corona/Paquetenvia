@@ -11,7 +11,9 @@ import {
   type DriverOfflineOperation,
   type DriverProofBlobRecord,
 } from "../offline/operation-contract";
+import { projectDriverOperations } from "../offline/operation-projection";
 import type { ValidatedDriverProof } from "../proofs/proof-file";
+import { stopList, withStopDetails } from "../contracts/driver-stop.fixtures";
 import type { DriverSession } from "../session/driver-session";
 import {
   DriverOperationsController,
@@ -273,7 +275,7 @@ describe("driver operations OPS-003 expiry notice", () => {
         finalizeProof: vi.fn(),
         recordCodCollection: vi.fn(),
       } as DriverSyncApi,
-      refreshStops: async () => [],
+      refreshStops: async () => stopList([]),
       onAccessRevoked: vi.fn(),
       schedulerFactory: (options) => {
         schedulerOptions = options;
@@ -425,6 +427,81 @@ describe("cash collection at the door (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11)
     );
     await harness.controller.dispose();
   });
+
+  it("after discarding a held collection the delivery waits for the cash and a new collection goes first", async () => {
+    const held = {
+      ...createDriverOfflineOperation({
+        partitionKey,
+        orderId,
+        kind: "COD_COLLECTION",
+        expectedVersion: 9,
+        cod: { amountCents: 125_000, reference: "ORD_X 2026-07-26T05:00:00-07:00" },
+        now: () => new Date("2026-07-26T12:00:00.000Z"),
+        randomUuid: () => operationId,
+      }),
+      status: "NEEDS_ATTENTION" as const,
+      safeError: "VERSION_CONFLICT" as const,
+      rejectionCode: "COD_AMOUNT_MISMATCH" as const,
+    };
+    const deliveryId = "66666666-6666-4666-8666-666666666666";
+    const delivery = {
+      ...createDriverOfflineOperation({
+        partitionKey,
+        orderId,
+        kind: "DELIVERY_PROOF",
+        expectedVersion: 9,
+        proof: { contentType: "image/png", sizeBytes: 1, sha256: "a".repeat(64) },
+        now: () => new Date("2026-07-26T12:00:30.000Z"),
+        randomUuid: () => deliveryId,
+      }),
+      status: "BLOCKED" as const,
+    };
+    const atTheDoor = withStopDetails({
+      order_id: orderId,
+      aggregate_version: 9,
+      order_public_id: collection.orderPublicId,
+      stop_type: "DELIVERY",
+      status: "DELIVERING",
+      address_summary: "Zona sintética",
+      cod: { expected: { currency: "MXN", amount_cents: 125_000 }, recorded: false },
+    });
+    const harness = await createHarness([held, delivery]);
+
+    await harness.controller.discard(operationId, "DELIVERING", 9);
+
+    expect(harness.queue.operations).toEqual([
+      expect.objectContaining({ id: deliveryId, status: "PENDING", safeError: null }),
+    ]);
+    const waiting = projectDriverOperations([atTheDoor], harness.queue.operations);
+    expect(waiting.stops[0]).toMatchObject({
+      projectedStatus: "DELIVERING",
+      projectedVersion: 9,
+      attentionCount: 0,
+      codCollection: "pending",
+      deliveryAwaitingCash: true,
+    });
+
+    // "Recibí" again: the collection is newer than the delivery but goes first.
+    await expect(
+      harness.controller.enqueueCodCollection({
+        ...collection,
+        projectedStatus: waiting.stops[0].projectedStatus,
+        projectedVersion: waiting.stops[0].projectedVersion,
+      }),
+    ).resolves.toBe(true);
+    const ready = projectDriverOperations([atTheDoor], harness.queue.operations);
+    expect(ready.stops[0]).toMatchObject({
+      projectedStatus: "DELIVERED",
+      projectedVersion: 10,
+      codCollection: "queued",
+      deliveryAwaitingCash: false,
+    });
+    expect(ready.operations.map((value) => value.kind)).toEqual([
+      "COD_COLLECTION",
+      "DELIVERY_PROOF",
+    ]);
+    await harness.controller.dispose();
+  });
 });
 
 async function createHarness(
@@ -459,7 +536,7 @@ async function createHarness(
       finalizeProof: vi.fn(),
       recordCodCollection: vi.fn(),
     } as DriverSyncApi,
-    refreshStops: async () => [],
+    refreshStops: async () => stopList([]),
     onAccessRevoked: vi.fn(),
     schedulerFactory: () => scheduler,
     now: () => new Date("2026-07-26T12:01:00.000Z"),

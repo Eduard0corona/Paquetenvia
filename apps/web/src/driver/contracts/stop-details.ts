@@ -12,6 +12,14 @@ import type {
 /** America/Mazatlan is the pilot zone; windows are always shown in it, never in the phone's zone. */
 export const DriverStopTimeZone = "America/Mazatlan";
 
+/**
+ * Shown in place of the contact and the address when the server could not
+ * read a stop's protected details and the phone holds none for it
+ * (`details_available` false).
+ */
+export const DriverStopDetailsUnavailableText =
+  "Datos de entrega no disponibles por ahora";
+
 const actionVerbs: Readonly<Record<DriverStop["stop_type"], string>> = {
   PICKUP: "Recoger",
   DELIVERY: "Entregar",
@@ -30,9 +38,10 @@ export function driverStopActionVerb(type: DriverStop["stop_type"]): string {
 }
 
 /**
- * The contact name the stop shows (owner answer "Completo en recolección"):
- * the full name on a pickup ("Farmacia Las Quintas"), the short one on a
- * delivery or return ("M. López"); null when the stop has none.
+ * The contact name the stop shows (owner answers "Completo en recolección" and
+ * "Completo, como recolección"): the full name on a pickup or a return
+ * ("Farmacia Las Quintas"), the short one on a delivery ("M. López"); null
+ * when the stop has none or its details are unavailable.
  */
 export function driverStopContactName(
   stop: Pick<DriverStop, "contact_short_name" | "contact_full_name">,
@@ -40,7 +49,10 @@ export function driverStopContactName(
   return stop.contact_full_name ?? stop.contact_short_name;
 }
 
-/** "Entregar a M. López"; only the verb when the stop has no contact name. */
+/**
+ * "Entregar a M. López"; only the verb when the stop has no contact name or
+ * its details are unavailable.
+ */
 export function driverStopLead(
   stop: Pick<DriverStop, "stop_type" | "contact_short_name" | "contact_full_name">,
 ): string {
@@ -94,6 +106,41 @@ const dayKeyFormatter = new Intl.DateTimeFormat("en-CA", {
   day: "2-digit",
   timeZone: DriverStopTimeZone,
 });
+
+/**
+ * UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (owner answer "Solo el número"):
+ * the server's count of the driver's stops completed today, but only while
+ * the answer that carried it is from today in Mazatlán; a count saved on an
+ * earlier day is never shown as today's.
+ */
+export function completedTodayAt(
+  synchronizedAt: string | null,
+  completedToday: number | null,
+  now: Date = new Date(),
+): number | null {
+  if (synchronizedAt === null || completedToday === null) return null;
+  const synchronized = new Date(synchronizedAt);
+  if (!Number.isFinite(synchronized.getTime())) return null;
+  return dayKeyFormatter.format(synchronized) === dayKeyFormatter.format(now)
+    ? completedToday
+    : null;
+}
+
+/**
+ * "Hoy · 5 paradas · 2 hechas": the stops of the day are the open stops the
+ * list shows plus the ones completed today; without today's count only the
+ * open stops are counted ("Hoy · 3 paradas").
+ */
+export function driverStopsDayLabel(
+  openStops: number,
+  completedToday: number | null,
+): string {
+  const total = openStops + (completedToday ?? 0);
+  const stops = `Hoy · ${total} ${total === 1 ? "parada" : "paradas"}`;
+  return completedToday === null
+    ? stops
+    : `${stops} · ${completedToday} ${completedToday === 1 ? "hecha" : "hechas"}`;
+}
 
 /**
  * "13:00–15:00" in Mazatlán time when the window is today; with the day

@@ -10,7 +10,7 @@ const session: DriverSession = {
   cacheNamespace: "opaque-session-0001",
   getAccessToken: () => "memory-only-token",
 };
-const validPayload = [
+const validStops = [
   {
     order_id: "22222222-2222-2222-2222-222222222222",
     aggregate_version: 1,
@@ -18,6 +18,7 @@ const validPayload = [
     stop_type: "DELIVERY",
     status: "IN_TRANSIT",
     address_summary: "Las Quintas, Culiacán",
+    details_available: true,
     contact_short_name: "M. Sintético",
     contact_full_name: null,
     zone_name: "Zona Sintética",
@@ -31,6 +32,7 @@ const validPayload = [
     },
   },
 ];
+const validPayload = { stops: validStops, completed_today: 2 };
 
 describe("createDriverStopsApi", () => {
   it("sends only current authorization, organization and accept headers", async () => {
@@ -50,8 +52,50 @@ describe("createDriverStopsApi", () => {
       session,
       fetch: fetchMock as typeof fetch,
     });
-    expect(await api.listStops()).toEqual(validPayload);
+    expect(await api.listStops()).toEqual({
+      stops: validStops,
+      completedToday: 2,
+      droppedCount: 0,
+      degradedCount: 0,
+    });
     expect(fetchMock).toHaveBeenCalledOnce();
+    expect(String(fetchMock.mock.calls[0][0])).toBe(
+      "https://api.synthetic.test/api/v1/driver/me/stops",
+    );
+  });
+
+  it("asks without the protected details only when told to (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11)", async () => {
+    const urls: string[] = [];
+    const api = createDriverStopsApi({
+      baseUrl: "https://api.synthetic.test",
+      session,
+      fetch: (async (input: URL | RequestInfo) => {
+        urls.push(String(input));
+        return jsonResponse({
+          stops: [
+            {
+              ...validStops[0],
+              details_available: false,
+              contact_short_name: null,
+              navigation: null,
+            },
+          ],
+          completed_today: 0,
+        });
+      }) as typeof fetch,
+    });
+
+    const list = await api.listStops(undefined, { details: false });
+    await api.listStops(undefined, { details: true });
+
+    expect(urls).toEqual([
+      "https://api.synthetic.test/api/v1/driver/me/stops?details=false",
+      "https://api.synthetic.test/api/v1/driver/me/stops",
+    ]);
+    expect(list.stops[0]).toMatchObject({
+      details_available: false,
+      navigation: null,
+    });
   });
 
   it.each([
@@ -82,13 +126,14 @@ describe("createDriverStopsApi", () => {
     await expectCategory(api.listStops(), "invalid-contract");
   });
 
-  it("fails closed for invalid JSON and extra DTO properties", async () => {
+  it("fails closed for invalid JSON, an extra answer member and the old bare list", async () => {
     const responses = [
       new Response("{", {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
-      jsonResponse([{ ...validPayload[0], telephone: "hidden" }]),
+      jsonResponse({ ...validPayload, telephone: "hidden" }),
+      jsonResponse(validStops),
     ];
     for (const response of responses) {
       const api = createDriverStopsApi({

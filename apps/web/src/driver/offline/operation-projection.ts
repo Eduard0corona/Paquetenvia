@@ -27,6 +27,13 @@ export interface ProjectedDriverStop
   readonly pendingCount: number;
   readonly attentionCount: number;
   readonly codCollection: DriverCodCollectionState;
+  /**
+   * A delivery is saved on the phone but waits, unsent, for the cash: the stop
+   * still has cash to collect and no collection is saved for it (see
+   * driverDeliveryAwaitsCash). The stop stays DELIVERING, so "Recibí" is
+   * offered again.
+   */
+  readonly deliveryAwaitingCash: boolean;
 }
 
 export interface DriverOperationProjection {
@@ -63,17 +70,102 @@ export function applyDriverOperation(
     : { status, version };
 }
 
+const driverOperationalStatusOrder: readonly DriverOperationalStatus[] = [
+  "ASSIGNED",
+  "AT_PICKUP",
+  "PICKED_UP",
+  "IN_TRANSIT",
+  "DELIVERING",
+  "DELIVERED",
+];
+
+/**
+ * UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the place of a queued action in
+ * its order's chain. Actions of one order run in this dependency order, not in
+ * the order they were saved: each step before the next one (check-in, pickup,
+ * transit, start of the delivery) and, at the door, the cash collection before
+ * the delivery, even when the collection was saved again after a discard.
+ */
+function dependencyRank(operation: DriverOfflineOperation): number {
+  const definition = driverOperationDefinitions[operation.kind];
+  return (
+    driverOperationalStatusOrder.indexOf(definition.sourceStatus) * 2 +
+    (definition.transition ? 1 : 0)
+  );
+}
+
+/**
+ * Orders two queued actions of the same order by dependency; actions at the
+ * same place of the chain keep the order they were saved in.
+ */
+export function compareDriverOperationDependency(
+  left: DriverOfflineOperation,
+  right: DriverOfflineOperation,
+): number {
+  return (
+    dependencyRank(left) - dependencyRank(right) ||
+    compareOperations(left, right)
+  );
+}
+
+/**
+ * The queue in sync order: orders by their oldest saved action, and the
+ * actions of each order by dependency (compareDriverOperationDependency).
+ */
+export function orderDriverOperations(
+  operations: readonly DriverOfflineOperation[],
+): readonly DriverOfflineOperation[] {
+  const byOrder = new Map<string, DriverOfflineOperation[]>();
+  for (const operation of [...operations].sort(compareOperations)) {
+    const existing = byOrder.get(operation.orderId) ?? [];
+    existing.push(operation);
+    byOrder.set(operation.orderId, existing);
+  }
+  return Object.freeze(
+    [...byOrder.values()].flatMap((orderOperations) =>
+      orderOperations.sort(compareDriverOperationDependency),
+    ),
+  );
+}
+
+/**
+ * UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: a delivery whose stop still has
+ * cash to collect waits, unsent, while no cash collection is saved for its
+ * order, because the server refuses DELIVERED without the recorded cash
+ * (COD_NOT_RECORDED). It happens after the driver discards a held collection
+ * or with a delivery saved before collections existed. "Recibí" is offered
+ * again; the new collection goes first and the delivery right after it.
+ */
+export function driverDeliveryAwaitsCash(
+  operation: DriverOfflineOperation,
+  stop: Pick<DriverStop, "cod"> | null,
+  operations: readonly DriverOfflineOperation[],
+): boolean {
+  return (
+    operation.kind === "DELIVERY_PROOF" &&
+    stop !== null &&
+    stop.cod !== null &&
+    !stop.cod.recorded &&
+    !operations.some(
+      (candidate) =>
+        candidate.orderId === operation.orderId &&
+        candidate.kind === "COD_COLLECTION",
+    )
+  );
+}
+
 /**
  * Produces the optimistic view without mutating persisted data. An invalid
  * source/version chain marks the first operation for attention and blocks only
- * later operations for that order; other orders keep projecting.
+ * later operations for that order; other orders keep projecting. A delivery
+ * waiting for its cash is not applied, so the stop stays DELIVERING.
  */
 export function projectDriverOperations(
   confirmedStops: readonly DriverStop[],
   operations: readonly DriverOfflineOperation[],
 ): DriverOperationProjection {
   const operationsByOrder = new Map<string, DriverOfflineOperation[]>();
-  for (const operation of [...operations].sort(compareOperations)) {
+  for (const operation of orderDriverOperations(operations)) {
     const existing = operationsByOrder.get(operation.orderId) ?? [];
     existing.push(operation);
     operationsByOrder.set(operation.orderId, existing);
@@ -86,6 +178,7 @@ export function projectDriverOperations(
     let chainBlocked = false;
     let pendingCount = 0;
     let attentionCount = 0;
+    let deliveryAwaitingCash = false;
     let codOperationStatus: DriverOperationStatus | null = null;
     for (const operation of operationsByOrder.get(stop.order_id) ?? []) {
       let derivedStatus: DriverOperationStatus = operation.status;
@@ -100,6 +193,8 @@ export function projectDriverOperations(
       } else if (!driverOperationApplies(operation, status, version)) {
         derivedStatus = "NEEDS_ATTENTION";
         chainBlocked = true;
+      } else if (driverDeliveryAwaitsCash(operation, stop, operations)) {
+        deliveryAwaitingCash = true;
       } else {
         ({ status, version } = applyDriverOperation(operation, status, version));
       }
@@ -134,6 +229,7 @@ export function projectDriverOperations(
       pendingCount,
       attentionCount,
       codCollection: codCollectionState(stop, codOperationStatus),
+      deliveryAwaitingCash,
     });
   });
 
@@ -156,9 +252,7 @@ export function projectDriverOperations(
 
   return Object.freeze({
     stops: Object.freeze(stops),
-    operations: Object.freeze(
-      [...projectedOperations.values()].sort(compareOperations),
-    ),
+    operations: orderDriverOperations([...projectedOperations.values()]),
   });
 }
 

@@ -248,6 +248,14 @@
   font-size: 0.85rem;
 }
 
+/* The server could not read the stop's details and the phone holds none. */
+.detailsUnavailable {
+  margin: 0.35rem 0 0;
+  color: var(--warn);
+  font-weight: 700;
+  line-height: 1.45;
+}
+
 .codStep {
   display: grid;
   gap: 0.5rem;
@@ -283,6 +291,14 @@
   margin: 0;
   color: var(--warn);
   font-weight: 800;
+}
+
+/* A delivery already saved on the phone that waits for the cash. */
+.deliveryWaitingHint {
+  margin: 0;
+  color: var(--ink);
+  font-weight: 700;
+  line-height: 1.45;
 }
 
 .pendingBadge {

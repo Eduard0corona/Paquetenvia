@@ -1,4 +1,4 @@
-import type { DriverStop } from "../contracts/driver-stop";
+import type { DriverStop, DriverStopList } from "../contracts/driver-stop";
 import type { DriverCachePartition } from "../cache/driver-stops-cache";
 import type { DriverOfflineQueue } from "./driver-offline-queue";
 import {
@@ -14,6 +14,11 @@ import {
   isOfflineOperationExpired,
   isOfflineOperationExpiredCode,
 } from "./offline-operation-age";
+import {
+  compareDriverOperationDependency,
+  driverDeliveryAwaitsCash,
+  orderDriverOperations,
+} from "./operation-projection";
 import {
   codRejectionCodeToKeep,
   transitionRejectionCodeToKeep,
@@ -46,9 +51,13 @@ export interface DriverSyncSchedulerOptions {
   readonly partition: DriverCachePartition;
   readonly queue: DriverOfflineQueue;
   readonly api: DriverSyncApi;
-  readonly refreshStops: (
-    signal?: AbortSignal,
-  ) => Promise<readonly DriverStop[]>;
+  /**
+   * The read that confirms queued actions (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11):
+   * the driver's stops without their protected details, so syncing never
+   * depends on the key service. When it cannot answer (logout, aborted pass)
+   * it throws; it never answers an empty list in place of the real one.
+   */
+  readonly refreshStops: (signal?: AbortSignal) => Promise<DriverStopList>;
   readonly onQueueChanged: (
     operations: readonly DriverOfflineOperation[],
   ) => void;
@@ -89,6 +98,12 @@ export class DriverSyncScheduler {
   private started = false;
   private leaseLost = false;
   private disposed = false;
+  /**
+   * Orders whose delivery waits for its cash in the current pass
+   * (driverDeliveryAwaitsCash): it is not tried again until a collection for
+   * the order runs or the next pass starts.
+   */
+  private readonly waitingForCash = new Set<string>();
 
   public constructor(private readonly options: DriverSyncSchedulerOptions) {
     this.telemetry = options.telemetry ?? disabledDriverSyncTelemetry;
@@ -163,19 +178,25 @@ export class DriverSyncScheduler {
     if (!acquired) return;
     this.options.onSyncPassStarted?.();
 
-    this.abortController = new AbortController();
+    // Logout, a lost lease or a confirmation read that could not answer
+    // aborts the pass; nothing destructive runs after that.
+    const pass = new AbortController();
+    this.abortController = pass;
     this.leaseLost = false;
+    this.waitingForCash.clear();
     this.scheduleLeaseHeartbeat();
     try {
       while (
         !this.disposed &&
         !this.leaseLost &&
+        !pass.signal.aborted &&
         this.isOnline() &&
         this.isVisible()
       ) {
         const operations = await this.options.queue.listOperations(
           this.options.partition,
         );
+        if (pass.signal.aborted) return;
         this.publishQueue(operations);
         // An action held for the driver's attention is never sent on its own,
         // but it still may not outlive the OPS-003 window: once it could no
@@ -187,13 +208,14 @@ export class DriverSyncScheduler {
             isOfflineOperationExpired(candidate.clientOccurredAt, this.now()),
         );
         if (stale) {
-          await this.expire(stale);
+          await this.expire(stale, pass.signal);
           continue;
         }
         const operation = selectRunnableOperation(
           operations,
           this.now(),
           manual,
+          this.waitingForCash,
         );
         if (!operation) {
           this.scheduleNext(operations);
@@ -206,7 +228,7 @@ export class DriverSyncScheduler {
           this.leaseMilliseconds,
         );
         if (!renewed) return;
-        await this.process(operation, this.abortController.signal);
+        await this.process(operation, operations, pass.signal);
         manual = false;
       }
     } finally {
@@ -220,20 +242,26 @@ export class DriverSyncScheduler {
 
   private async process(
     operation: DriverOfflineOperation,
+    operations: readonly DriverOfflineOperation[],
     signal: AbortSignal,
   ): Promise<void> {
     let current = operation;
     let failurePhase: "proof" | "transition" | "cod" =
       operation.kind === "COD_COLLECTION" ? "cod" : "transition";
+    // A collection of an order lets its waiting delivery be tried again.
+    if (current.kind === "COD_COLLECTION") {
+      this.waitingForCash.delete(current.orderId);
+    }
     this.telemetry.syncPhaseChanged(current.status);
     try {
-      const initialConfirmation = await this.confirmationByRest(current, signal);
-      if (initialConfirmation !== "pending") {
+      const initial = await this.confirmationByRest(current, signal);
+      if (initial.outcome !== "pending") {
+        if (signal.aborted) return;
         await this.options.queue.deleteOperation(
           this.options.partition,
           current.id,
         );
-        if (initialConfirmation === "confirmed") {
+        if (initial.outcome === "confirmed") {
           this.telemetry.syncCompleted(current.kind);
         } else {
           this.telemetry.conflictRaised("resource-unavailable");
@@ -248,7 +276,15 @@ export class DriverSyncScheduler {
       // window the server would only answer OFFLINE_OPERATION_EXPIRED, so the
       // queue discards it now instead of sending it.
       if (isOfflineOperationExpired(current.clientOccurredAt, this.now())) {
-        await this.expire(current);
+        await this.expire(current, signal);
+        return;
+      }
+      // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: a delivery whose cash is
+      // still to collect, with no collection saved for it, is not sent; it
+      // waits for "Recibí" and then goes right after the collection.
+      if (driverDeliveryAwaitsCash(current, initial.stop, operations)) {
+        this.waitingForCash.add(current.orderId);
+        this.telemetry.syncDeferred("cod-required");
         return;
       }
 
@@ -290,13 +326,14 @@ export class DriverSyncScheduler {
       current = await this.persist(current, {
         status: "AWAITING_REST_CONFIRMATION",
       });
-      const finalConfirmation = await this.confirmationByRest(current, signal);
-      if (finalConfirmation !== "pending") {
+      const final = await this.confirmationByRest(current, signal);
+      if (final.outcome !== "pending") {
+        if (signal.aborted) return;
         await this.options.queue.deleteOperation(
           this.options.partition,
           current.id,
         );
-        if (finalConfirmation === "confirmed") {
+        if (final.outcome === "confirmed") {
           this.telemetry.syncCompleted(current.kind);
         } else {
           this.telemetry.conflictRaised("resource-unavailable");
@@ -431,11 +468,17 @@ export class DriverSyncScheduler {
     signal: AbortSignal,
     phase: "proof" | "transition" | "cod",
   ): Promise<void> {
+    if (signal.aborted) return;
     if (!(error instanceof DriverSyncApiError)) {
       await this.defer(operation, "RETRY_WAIT");
       return;
     }
-    if (error.category === "cancelled" || signal.aborted) return;
+    if (error.category === "cancelled") {
+      // The confirmation read could not answer (for example the stops were
+      // closed by a logout): the action stays as it is and the pass ends.
+      this.abortController?.abort();
+      return;
+    }
     if (error.category === "unauthorized" || error.category === "forbidden") {
       await this.options.queue.clearPartition(this.options.partition);
       this.options.onAccessRevoked(error.category);
@@ -447,7 +490,7 @@ export class DriverSyncScheduler {
         this.options.partition,
         operation.id,
       );
-      await this.options.refreshStops(signal).catch(() => []);
+      await this.options.refreshStops(signal).catch(() => undefined);
       this.telemetry.conflictRaised("resource-unavailable");
       return;
     }
@@ -460,7 +503,7 @@ export class DriverSyncScheduler {
       error.category === "conflict" &&
       isOfflineOperationExpiredCode(error.publicCode)
     ) {
-      await this.expire(operation);
+      await this.expire(operation, signal);
       return;
     }
     if (error.category === "session-expired") {
@@ -475,18 +518,37 @@ export class DriverSyncScheduler {
       phase === "cod" &&
       error.category === "conflict" &&
       error.publicCode === "COD_ALREADY_RECORDED" &&
-      (await this.confirmationByRest(operation, signal).catch(
-        () => "pending" as const,
-      )) === "confirmed"
+      (await this.confirmationByRest(operation, signal).catch(() => null))
+        ?.outcome === "confirmed"
     ) {
       // Someone (for example dispatch) already recorded exactly this cash:
       // the collection is satisfied, so it leaves the queue and the delivery
       // behind it may proceed.
+      if (signal.aborted) return;
       await this.options.queue.deleteOperation(
         this.options.partition,
         operation.id,
       );
       this.telemetry.syncCompleted(operation.kind);
+      return;
+    }
+    if (
+      phase === "transition" &&
+      error.category === "conflict" &&
+      error.publicCode === "COD_NOT_RECORDED" &&
+      (await this.awaitsCash(operation, signal))
+    ) {
+      // The server refused the delivery because the cash is not recorded and
+      // no collection is saved for it: the delivery waits for "Recibí"
+      // instead of asking the driver to resolve a conflict.
+      if (signal.aborted) return;
+      await this.persist(operation, {
+        status: "PENDING",
+        safeError: null,
+        rejectionCode: null,
+      });
+      this.waitingForCash.add(operation.orderId);
+      this.telemetry.syncDeferred("cod-required");
       return;
     }
     await this.markAttentionAndBlock(
@@ -509,7 +571,11 @@ export class DriverSyncScheduler {
    * itself expired is removed the same way, and the first remaining one is
    * held for the driver's attention with the rest blocked behind it.
    */
-  private async expire(operation: DriverOfflineOperation): Promise<void> {
+  private async expire(
+    operation: DriverOfflineOperation,
+    signal: AbortSignal,
+  ): Promise<void> {
+    if (signal.aborted) return;
     await this.options.queue.deleteOperation(
       this.options.partition,
       operation.id,
@@ -523,11 +589,12 @@ export class DriverSyncScheduler {
       .filter(
         (candidate) =>
           candidate.orderId === operation.orderId &&
-          compareOperations(candidate, operation) > 0,
+          compareDriverOperationDependency(candidate, operation) > 0,
       )
-      .sort(compareOperations);
+      .sort(compareDriverOperationDependency);
     let held = false;
     for (const candidate of dependents) {
+      if (signal.aborted) return;
       if (
         candidate.status !== "AWAITING_REST_CONFIRMATION" &&
         isOfflineOperationExpired(candidate.clientOccurredAt, this.now())
@@ -555,8 +622,8 @@ export class DriverSyncScheduler {
     safeError: "VERSION_CONFLICT" | "EVIDENCE_REJECTED",
     rejectionCode: DriverRejectionCode | null = null,
   ): Promise<void> {
-    const operations = await this.options.queue.listOperations(
-      this.options.partition,
+    const operations = orderDriverOperations(
+      await this.options.queue.listOperations(this.options.partition),
     );
     let found = false;
     for (const candidate of operations) {
@@ -575,25 +642,62 @@ export class DriverSyncScheduler {
     this.telemetry.conflictRaised("conflict");
   }
 
+  /**
+   * What REST says about a queued action, with the stop it read. A stop the
+   * answer does not hold is "missing" only when the app accepted every stop
+   * of the answer; when it left one out for breaking the contract, the stop
+   * may be that one, so the action stays pending and is never discarded.
+   */
   private async confirmationByRest(
     operation: DriverOfflineOperation,
     signal: AbortSignal,
-  ): Promise<"confirmed" | "missing" | "pending"> {
-    const stops = await this.options.refreshStops(signal);
-    const stop = stops.find((candidate) => candidate.order_id === operation.orderId);
-    if (!stop) return "missing";
+  ): Promise<DriverSyncConfirmation> {
+    const list = await this.options.refreshStops(signal);
+    const stop =
+      list.stops.find((candidate) => candidate.order_id === operation.orderId) ??
+      null;
+    if (!stop) {
+      return {
+        outcome: list.droppedCount === 0 ? "missing" : "pending",
+        stop: null,
+      };
+    }
     if (operation.kind === "COD_COLLECTION") {
       // REST confirms a collection once the stop reports exactly its cash as
       // recorded (the DELIVERED guard condition); the status never changes.
-      return stop.cod?.recorded === true &&
-        stop.cod.expected.amount_cents === operation.cod?.amountCents
-        ? "confirmed"
-        : "pending";
+      return {
+        outcome:
+          stop.cod?.recorded === true &&
+          stop.cod.expected.amount_cents === operation.cod?.amountCents
+            ? "confirmed"
+            : "pending",
+        stop,
+      };
     }
-    return (
-      stop.status === operation.targetStatus &&
-      stop.aggregate_version >= operation.expectedVersion + 1
-    ) ? "confirmed" : "pending";
+    return {
+      outcome:
+        stop.status === operation.targetStatus &&
+        stop.aggregate_version >= operation.expectedVersion + 1
+          ? "confirmed"
+          : "pending",
+      stop,
+    };
+  }
+
+  /** After COD_NOT_RECORDED: whether the delivery now waits for its cash. */
+  private async awaitsCash(
+    operation: DriverOfflineOperation,
+    signal: AbortSignal,
+  ): Promise<boolean> {
+    try {
+      const { stop } = await this.confirmationByRest(operation, signal);
+      const operations = await this.options.queue.listOperations(
+        this.options.partition,
+      );
+      return driverDeliveryAwaitsCash(operation, stop, operations);
+    } catch {
+      return false;
+    }
   }
 
   private async defer(
@@ -719,13 +823,19 @@ export class DriverSyncScheduler {
   }
 }
 
+/**
+ * The next action to send: actions run in sync order (orderDriverOperations),
+ * and an order whose next action is held, backing off or a delivery waiting
+ * for its cash sends nothing else until it moves.
+ */
 export function selectRunnableOperation(
   operations: readonly DriverOfflineOperation[],
   now: Date,
   manual: boolean,
+  waitingForCash: ReadonlySet<string> = new Set(),
 ): DriverOfflineOperation | null {
   const blockedOrders = new Set<string>();
-  for (const operation of [...operations].sort(compareOperations)) {
+  for (const operation of orderDriverOperations(operations)) {
     if (blockedOrders.has(operation.orderId)) continue;
     if (
       operation.status === "NEEDS_ATTENTION" ||
@@ -744,6 +854,13 @@ export function selectRunnableOperation(
       blockedOrders.add(operation.orderId);
       continue;
     }
+    if (
+      waitingForCash.has(operation.orderId) &&
+      operation.kind !== "COD_COLLECTION"
+    ) {
+      blockedOrders.add(operation.orderId);
+      continue;
+    }
     return operation;
   }
   return null;
@@ -756,14 +873,9 @@ function isProofOperation(operation: DriverOfflineOperation): boolean {
   );
 }
 
-function compareOperations(
-  left: DriverOfflineOperation,
-  right: DriverOfflineOperation,
-): number {
-  return (
-    left.createdAt.localeCompare(right.createdAt) ||
-    left.id.localeCompare(right.id)
-  );
+interface DriverSyncConfirmation {
+  readonly outcome: "confirmed" | "missing" | "pending";
+  readonly stop: DriverStop | null;
 }
 
 function countBucket(count: number): string {

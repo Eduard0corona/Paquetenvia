@@ -401,12 +401,22 @@ function readBoundedText(value: unknown, maximumLength: number): string {
     typeof value !== "string" ||
     value.length < 1 ||
     value.length > maximumLength ||
-    value.trim().length < 1
+    !hasVisibleText(value)
   ) {
     throw new DriverStopsContractError();
   }
 
   return value;
+}
+
+/**
+ * The server sends no blank text: whitespace and invisible format characters
+ * (U+200B, U+FEFF and the rest of category Cf) count as blank there, and a
+ * value made only of them is sent as null (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11).
+ * The same definition applies here.
+ */
+export function hasVisibleText(value: string): boolean {
+  return /[^\s\p{Cf}]/u.test(value);
 }
 
 function readNullableBoundedText(

@@ -3,14 +3,20 @@ import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import type { DriverSession } from "../session/driver-session";
 import {
+  withStopDetails,
+  withoutStopDetails,
+} from "../contracts/driver-stop.fixtures";
+import {
   createDriverCachePartition,
   DriverDatabaseVersion,
   DriverOfflineOperationsStoreName,
   DriverProofBlobsStoreName,
+  DriverStopsCacheError,
   DriverStopsDatabaseName,
   DriverStopsSchemaVersion,
   DriverStopsStoreName,
   DriverSyncLeasesStoreName,
+  validateDriverStopsSnapshot,
 } from "./driver-stops-cache";
 
 const baseSession: DriverSession = {
@@ -69,3 +75,54 @@ describe("driver stop cache partition", () => {
     expect(source).not.toContain("sessionStorage");
   });
 });
+
+describe("saved stop snapshot (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11)", () => {
+  const partitionKey = "P".repeat(43);
+  const stop = withStopDetails({
+    order_id: "33333333-3333-4333-8333-333333333333",
+    aggregate_version: 2,
+    order_public_id: "ORD_SYNTHETIC",
+    stop_type: "DELIVERY",
+    status: "IN_TRANSIT",
+    address_summary: "Zona sintética",
+  });
+  const snapshot = {
+    partitionKey,
+    schemaVersion: DriverStopsSchemaVersion,
+    synchronizedAt: "2026-10-11T20:00:00.000Z",
+    stops: [stop, withoutStopDetails({ ...stop, order_id: "44444444-4444-4444-8444-444444444444" })],
+    completedToday: 2,
+  };
+
+  it("keeps today's completed count and stops with or without details", () => {
+    expect(validateDriverStopsSnapshot(snapshot, partitionKey)).toEqual({
+      schemaVersion: DriverStopsSchemaVersion,
+      synchronizedAt: snapshot.synchronizedAt,
+      stops: snapshot.stops,
+      completedToday: 2,
+    });
+    expect(
+      validateDriverStopsSnapshot({ ...snapshot, completedToday: null }, partitionKey)
+        .completedToday,
+    ).toBeNull();
+  });
+
+  it.each([
+    ["a negative count", { ...snapshot, completedToday: -1 }],
+    ["a fractional count", { ...snapshot, completedToday: 0.5 }],
+    ["a count as text", { ...snapshot, completedToday: "2" }],
+    ["no count", withoutCount(snapshot)],
+    ["another partition", { ...snapshot, partitionKey: "Q".repeat(43) }],
+    ["a stop of an older shape", { ...snapshot, stops: [{ ...stop, details_available: undefined }] }],
+  ])("never shows a snapshot with %s", (_name, value) => {
+    expect(() => validateDriverStopsSnapshot(value, partitionKey)).toThrow(
+      DriverStopsCacheError,
+    );
+  });
+});
+
+function withoutCount(value: object): Record<string, unknown> {
+  const copy: Record<string, unknown> = { ...value };
+  delete copy.completedToday;
+  return copy;
+}

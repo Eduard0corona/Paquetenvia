@@ -2,21 +2,30 @@ import { describe, expect, it, vi } from "vitest";
 import {
   DriverStopsApiError,
   type DriverStopsApi,
+  type DriverStopsListOptions,
 } from "../api/driver-stops-api";
 import {
+  createDriverCachePartition,
   type DriverCachePartition,
   type DriverStopsCache,
   type DriverStopsSnapshot,
 } from "../cache/driver-stops-cache";
-import type { DriverStop } from "../contracts/driver-stop";
+import type { DriverStop, DriverStopList } from "../contracts/driver-stop";
 import type {
   DriverStopsRealtimeCallbacks,
   DriverStopsRealtimeFactory,
 } from "../realtime/driver-stops-realtime";
 import type { DriverSession } from "../session/driver-session";
 import type { DriverStopsTelemetry } from "../telemetry/driver-stops-telemetry";
-import { DriverStopsController } from "./driver-stops-controller";
-import { syntheticNavigation } from "../contracts/driver-stop.fixtures";
+import {
+  DriverStopsController,
+  mergeConfirmedStops,
+} from "./driver-stops-controller";
+import {
+  stopList,
+  syntheticNavigation,
+  withoutStopDetails,
+} from "../contracts/driver-stop.fixtures";
 
 const session: DriverSession = {
   organizationId: "11111111-1111-1111-1111-111111111111",
@@ -30,6 +39,7 @@ const firstStop: DriverStop = {
   stop_type: "PICKUP",
   status: "ASSIGNED",
   address_summary: "Centro, Culiacán",
+  details_available: true,
   contact_short_name: null,
   contact_full_name: null,
   zone_name: null,
@@ -178,6 +188,159 @@ describe("DriverStopsController", () => {
     expect(harness.controller.current.realtime).toBe("offline");
   });
 
+  it("keeps today's completed count in the state and the saved snapshot", async () => {
+    const cache = new MemoryCache();
+    const harness = createHarness(cache, [stopList([firstStop], 2)]);
+    await harness.controller.start();
+    expect(harness.controller.current.completedToday).toBe(2);
+    expect(cache.onlySnapshot()?.completedToday).toBe(2);
+  });
+
+  it("confirms without details and never wipes the details the phone holds", async () => {
+    const cache = new MemoryCache();
+    const confirmed = { ...withoutStopDetails(firstStop), aggregate_version: 4, status: "AT_PICKUP" as const };
+    const harness = createHarness(cache, [
+      stopList([firstStop]),
+      stopList([confirmed], 1),
+    ]);
+    await harness.controller.start();
+
+    const list = await harness.controller.refreshForSync();
+
+    expect(harness.api.details).toEqual([true, false]);
+    expect(list.stops).toEqual([confirmed]);
+    const kept = { ...confirmed, details_available: true, navigation: firstStop.navigation };
+    expect(harness.controller.current.stops).toEqual([kept]);
+    expect(harness.controller.current.completedToday).toBe(1);
+    expect(cache.onlySnapshot()?.stops).toEqual([kept]);
+  });
+
+  it("asks for the details of a stop a confirmation brought without them", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness(new MemoryCache(), [
+        stopList([firstStop]),
+        stopList([withoutStopDetails(firstStop), withoutStopDetails(secondStop)]),
+        stopList([firstStop, secondStop]),
+      ]);
+      await harness.controller.start();
+      await harness.controller.refreshForSync();
+      expect(harness.controller.current.stops[1].details_available).toBe(false);
+
+      await vi.advanceTimersByTimeAsync(250);
+
+      expect(harness.api.details).toEqual([true, false, true]);
+      expect(harness.controller.current.stops).toEqual([firstStop, secondStop]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the saved details when a full read cannot read them and asks no more", async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = createHarness(new MemoryCache(), [
+        stopList([firstStop]),
+        stopList([withoutStopDetails(firstStop), withoutStopDetails(secondStop)]),
+      ]);
+      await harness.controller.start();
+      await harness.controller.retry();
+      await vi.advanceTimersByTimeAsync(1_000);
+
+      expect(harness.api.calls).toBe(2);
+      expect(harness.controller.current.stops).toEqual([
+        firstStop,
+        withoutStopDetails(secondStop),
+      ]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("keeps the details saved on the phone when the first read after opening cannot read them", async () => {
+    const cache = new MemoryCache();
+    const partition = await createDriverCachePartition(session);
+    await cache.replaceSnapshot(partition, {
+      schemaVersion: 2,
+      synchronizedAt: "2026-07-26T11:00:00.000Z",
+      stops: [firstStop],
+      completedToday: 0,
+    });
+    const harness = createHarness(cache, [
+      stopList([withoutStopDetails(firstStop), withoutStopDetails(secondStop)]),
+    ]);
+
+    await harness.controller.start();
+
+    expect(harness.controller.current.stops).toEqual([
+      firstStop,
+      withoutStopDetails(secondStop),
+    ]);
+    expect(cache.onlySnapshot()?.stops[0]).toEqual(firstStop);
+  });
+
+  it("never answers a confirmation with an empty list once closed or aborted", async () => {
+    const harness = createHarness(new MemoryCache(), [stopList([firstStop]), stopList([])]);
+    await expect(harness.controller.refreshForSync()).rejects.toMatchObject({
+      category: "recoverable",
+    });
+    await harness.controller.start();
+    const aborted = new AbortController();
+    aborted.abort();
+    await expect(harness.controller.refreshForSync(aborted.signal)).rejects.toMatchObject({
+      category: "cancelled",
+    });
+    await harness.controller.dispose();
+    await expect(harness.controller.refreshForSync()).rejects.toMatchObject({
+      category: "cancelled",
+    });
+    expect(harness.api.calls).toBe(1);
+  });
+
+  it("refuses the confirmation when the logout happens while it is in flight", async () => {
+    const cache = new MemoryCache();
+    const harness = createHarness(cache, [stopList([firstStop]), stopList([])]);
+    await harness.controller.start();
+    harness.api.beforeAnswer = () => void harness.controller.dispose();
+
+    await expect(harness.controller.refreshForSync()).rejects.toBeInstanceOf(
+      DriverStopsApiError,
+    );
+    expect(cache.onlySnapshot()?.stops).toEqual([firstStop]);
+  });
+
+  it("reports stops left out or kept without details as count buckets only", async () => {
+    const stopsRejected = vi.fn();
+    const harness = createHarness(
+      new MemoryCache(),
+      [{ ...stopList([firstStop]), droppedCount: 2, degradedCount: 1 }],
+      false,
+      { ...telemetry, stopsRejected },
+    );
+    await harness.controller.start();
+    expect(stopsRejected.mock.calls).toEqual([
+      ["dropped", "2-5"],
+      ["degraded", "1"],
+    ]);
+  });
+
+  it("merges details only for the same order and stop type", () => {
+    const pickup = firstStop;
+    const nowDelivery = { ...withoutStopDetails(firstStop), stop_type: "DELIVERY" as const };
+    expect(mergeConfirmedStops([pickup], [nowDelivery])).toEqual({
+      stops: [nowDelivery],
+      missingDetails: true,
+    });
+    expect(mergeConfirmedStops([pickup], [withoutStopDetails(pickup)])).toEqual({
+      stops: [pickup],
+      missingDetails: false,
+    });
+    expect(mergeConfirmedStops([pickup], [])).toEqual({
+      stops: [],
+      missingDetails: false,
+    });
+  });
+
   it("dispose cancels timers, requests and the previous connection", async () => {
     vi.useFakeTimers();
     try {
@@ -227,21 +390,29 @@ class MemoryCache implements DriverStopsCache {
   }
 }
 
+type SequenceResponse = readonly DriverStop[] | DriverStopList | DriverStopsApiError;
+
 class SequenceApi implements DriverStopsApi {
   public calls = 0;
+  /** Whether each call asked for the protected details. */
+  public readonly details: boolean[] = [];
+  public beforeAnswer: (() => void) | null = null;
 
-  public constructor(
-    private readonly responses: Array<
-      readonly DriverStop[] | DriverStopsApiError
-    >,
-  ) {}
+  public constructor(private readonly responses: SequenceResponse[]) {}
 
-  public async listStops(): Promise<readonly DriverStop[]> {
+  public async listStops(
+    _signal?: AbortSignal,
+    options?: DriverStopsListOptions,
+  ): Promise<DriverStopList> {
     const response =
       this.responses[Math.min(this.calls, this.responses.length - 1)];
     this.calls += 1;
+    this.details.push(options?.details !== false);
+    this.beforeAnswer?.();
     if (response instanceof DriverStopsApiError) throw response;
-    return response;
+    return Array.isArray(response)
+      ? stopList(response as readonly DriverStop[])
+      : (response as DriverStopList);
   }
 }
 
@@ -278,8 +449,9 @@ const telemetry: DriverStopsTelemetry = {
 
 function createHarness(
   cache: DriverStopsCache,
-  responses: Array<readonly DriverStop[] | DriverStopsApiError>,
+  responses: SequenceResponse[],
   failRealtime = false,
+  stopsTelemetry: DriverStopsTelemetry = telemetry,
 ) {
   const api = new SequenceApi(responses);
   const realtime = new RealtimeHarness(failRealtime);
@@ -289,7 +461,7 @@ function createHarness(
     api,
     cache,
     realtimeFactory: realtime,
-    telemetry,
+    telemetry: stopsTelemetry,
     now: () => new Date("2026-07-26T12:00:00.000Z"),
   });
   return { controller, api, realtime };

@@ -62,6 +62,49 @@ describe("cash collection projection", () => {
     });
   });
 
+  it("keeps a delivery with no collection saved waiting for the cash, so Recibí is offered again", () => {
+    const delivery = op("DELIVERY_PROOF", 9, 2, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+    const projection = projectDriverOperations([stop("DELIVERING")], [delivery]);
+    expect(projection.stops[0]).toMatchObject({
+      projectedStatus: "DELIVERING",
+      projectedVersion: 9,
+      pendingCount: 1,
+      attentionCount: 0,
+      codCollection: "pending",
+      deliveryAwaitingCash: true,
+    });
+    expect(projection.operations).toEqual([delivery]);
+  });
+
+  it("runs a collection saved after the delivery first and then applies the delivery", () => {
+    const delivery = op("DELIVERY_PROOF", 9, 1, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+    const cod = op("COD_COLLECTION", 9, 2, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    const projection = projectDriverOperations([stop("DELIVERING")], [delivery, cod]);
+    expect(projection.stops[0]).toMatchObject({
+      projectedStatus: "DELIVERED",
+      projectedVersion: 10,
+      codCollection: "queued",
+      deliveryAwaitingCash: false,
+    });
+    expect(projection.operations.map((value) => value.kind)).toEqual([
+      "COD_COLLECTION",
+      "DELIVERY_PROOF",
+    ]);
+  });
+
+  it("lets a delivery apply when the cash is already recorded or there is none", () => {
+    const delivery = op("DELIVERY_PROOF", 9, 1, "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+    for (const value of [
+      stop("DELIVERING", true),
+      withStopDetails({ ...stop("DELIVERING"), cod: null }),
+    ]) {
+      expect(projectDriverOperations([value], [delivery]).stops[0]).toMatchObject({
+        projectedStatus: "DELIVERED",
+        deliveryAwaitingCash: false,
+      });
+    }
+  });
+
   it("applies a queued collection on top of a pending arrival at the door", () => {
     const arrival = op("START_DELIVERY", 8, 1, "cccccccc-cccc-4ccc-8ccc-cccccccccccc");
     const cod = op("COD_COLLECTION", 9, 2, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");

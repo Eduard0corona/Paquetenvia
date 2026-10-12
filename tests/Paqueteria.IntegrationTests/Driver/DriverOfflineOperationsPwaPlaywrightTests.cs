@@ -159,7 +159,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
                 operationId,
             });
         await page.RouteAsync(
-            "**/api/v1/driver/me/stops",
+            DriverStopsPwaPlaywrightTests.StopsRoute,
             route => route.AbortAsync());
 
         await page.GotoAsync(
@@ -325,6 +325,65 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             "porque la parada cambió",
             await page.Locator("body").InnerTextAsync(),
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 review: discarding a held cash collection never dead-ends the
+    /// delivery. The saved delivery waits for the cash, "Recibí" is offered again and the new collection reaches
+    /// the server before the delivery, although the delivery was saved first.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Discarded_cash_keeps_the_delivery_waiting_until_the_cash_is_recorded_again()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-drv-cod-discard");
+        var backend = new SyntheticOfflineBackend { CodExpectedCents = 125_000, RejectFirstCod = true };
+        backend.SetOrderState("DELIVERING", 8);
+        await backend.RouteAsync(page);
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(page, "por cobrar al entregar");
+        await context.SetOfflineAsync(true);
+        try
+        {
+            await ConfirmCashAsync(page);
+            await WaitForOperationCountAsync(page, 1);
+            await EnqueueProofAsync(page, "Confirmar entrega", "delivery-discard.png");
+            await WaitForOperationCountAsync(page, 2);
+        }
+        finally
+        {
+            await context.SetOfflineAsync(false);
+        }
+
+        await page.GetByRole(AriaRole.Button, new() { Name = "Sincronizar ahora" }).ClickAsync();
+        await ExpectTextAsync(page, "Acción que requiere atención");
+        Assert.Equal(["cod"], backend.Calls);
+
+        await page.GetByRole(AriaRole.Button, new() { Name = "Descartar" }).ClickAsync();
+        await page.GetByRole(AriaRole.Button, new() { Name = "Confirmar", Exact = true }).ClickAsync();
+        await ExpectTextAsync(
+            page,
+            "La entrega ya está guardada en el teléfono. Se enviará después de registrar el cobro.");
+        await WaitForOperationCountAsync(page, 1);
+        await page.GetByRole(AriaRole.Button, new() { Name = "Sincronizar ahora" }).ClickAsync();
+        await ExpectTextAsync(
+            page,
+            "La entrega ya está guardada en el teléfono. Se enviará después de registrar el cobro.");
+        Assert.Equal(["cod"], backend.Calls);
+        Assert.Empty(backend.TransitionTargets);
+
+        await ConfirmCashAsync(page);
+        await WaitForOperationCountAsync(page, 0);
+
+        Assert.Equal(["cod", "cod", "transition:DELIVERED"], backend.Calls);
+        Assert.Single(backend.CodRecords);
     }
 
     [Fact]
@@ -780,7 +839,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         await using var context = await browser.NewContextAsync();
         var page = await context.NewPageAsync();
         await InstallSessionAsync(page, "opaque-drv002-shared-session");
-        await page.RouteAsync("**/api/v1/driver/me/stops", async route =>
+        await page.RouteAsync(DriverStopsPwaPlaywrightTests.StopsRoute, async route =>
         {
             var organization =
                 await route.Request.HeaderValueAsync("X-Organization-Id");
@@ -789,16 +848,17 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             {
                 Status = 200,
                 ContentType = "application/json",
-                Body = JsonSerializer.Serialize(new[]
-                {
-                    DriverStopsPwaPlaywrightTests.Stop(
-                        OrderId,
-                        3,
-                        $"ORD_DRV002_ORG_{suffix}",
-                        "PICKUP",
-                        "ASSIGNED",
-                        $"Zona sintética {suffix}"),
-                }),
+                Body = DriverStopsPwaPlaywrightTests.StopsBody(
+                    route.Request,
+                    [
+                        DriverStopsPwaPlaywrightTests.Stop(
+                            OrderId,
+                            3,
+                            $"ORD_DRV002_ORG_{suffix}",
+                            "PICKUP",
+                            "ASSIGNED",
+                            $"Zona sintética {suffix}"),
+                    ]),
             });
         });
 
@@ -860,6 +920,14 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         {
             await context.SetOfflineAsync(false);
         }
+    }
+
+    private static async Task ConfirmCashAsync(IPage page)
+    {
+        await page.GetByRole(AriaRole.Button, new() { Name = "Recibí $1,250.00" }).ClickAsync();
+        var dialog = page.GetByRole(AriaRole.Dialog, new() { Name = "¿Recibiste $1,250.00?" });
+        await dialog.WaitForAsync();
+        await dialog.GetByRole(AriaRole.Button, new() { Name = "Sí, recibí $1,250.00" }).ClickAsync();
     }
 
     private static async Task EnqueueButtonAsync(IPage page, string name)
@@ -1262,6 +1330,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         private bool firstTransition = true;
         private bool firstUpload = true;
         private bool firstFinalize = true;
+        private bool firstCod = true;
 
         internal bool AbortFirstTransition { get; init; }
         internal bool AbortFirstUpload { get; init; }
@@ -1279,6 +1348,9 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
 
         /// <summary>Refuses DELIVERED with the ORD-002 rule code COD_NOT_RECORDED, whatever the cash state.</summary>
         internal bool RejectDeliveryAsCodNotRecorded { get; init; }
+
+        /// <summary>Refuses the first cash collection with COD_AMOUNT_MISMATCH, recording nothing.</summary>
+        internal bool RejectFirstCod { get; init; }
         internal List<string> Calls { get; } = [];
         internal List<(string Key, long AmountCents, string Reference)> CodRecords { get; } = [];
         internal int? StopsFailureStatus { get; set; }
@@ -1304,7 +1376,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
 
         internal async Task RouteAsync(IPage page)
         {
-            await page.RouteAsync("**/api/v1/driver/me/stops", RouteStopsAsync);
+            await page.RouteAsync(DriverStopsPwaPlaywrightTests.StopsRoute, RouteStopsAsync);
             await page.RouteAsync("**/api/v1/orders/*/transitions", RouteTransitionAsync);
             await page.RouteAsync(
                 "**/api/v1/orders/*/proof-upload-sessions",
@@ -1370,7 +1442,12 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
                             codRecorded: codRecorded),
                     ];
             }
-            return route.FulfillAsync(Json(payload, 200));
+            return route.FulfillAsync(new RouteFulfillOptions
+            {
+                Status = 200,
+                ContentType = "application/json; charset=utf-8",
+                Body = DriverStopsPwaPlaywrightTests.StopsBody(route.Request, payload),
+            });
         }
 
         private async Task RouteTransitionAsync(IRoute route)
@@ -1564,11 +1641,27 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             var key = await route.Request.HeaderValueAsync("Idempotency-Key") ?? string.Empty;
             var amount = request.GetProperty("amount_cents").GetInt64();
             var reference = request.GetProperty("reference").GetString() ?? string.Empty;
+            bool reject;
             lock (gate)
             {
                 Calls.Add("cod");
-                CodRecords.Add((key, amount, reference));
-                codRecorded = amount == CodExpectedCents;
+                reject = RejectFirstCod && firstCod;
+                firstCod = false;
+                if (!reject)
+                {
+                    CodRecords.Add((key, amount, reference));
+                    codRecorded = amount == CodExpectedCents;
+                }
+            }
+            if (reject)
+            {
+                await route.FulfillAsync(new RouteFulfillOptions
+                {
+                    Status = 409,
+                    ContentType = "application/problem+json",
+                    Body = """{"type":"about:blank","title":"Conflict.","status":409,"code":"COD_AMOUNT_MISMATCH"}""",
+                });
+                return;
             }
             await route.FulfillAsync(Json(
                 new

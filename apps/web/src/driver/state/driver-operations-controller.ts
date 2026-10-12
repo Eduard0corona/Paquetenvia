@@ -1,5 +1,5 @@
 import { createDriverCachePartition } from "../cache/driver-stops-cache";
-import type { DriverStop } from "../contracts/driver-stop";
+import type { DriverStopList } from "../contracts/driver-stop";
 import {
   IndexedDbDriverOfflineQueue,
   type DriverOfflineQueue,
@@ -17,6 +17,7 @@ import {
 } from "../offline/operation-contract";
 import {
   applyDriverOperation,
+  compareDriverOperationDependency,
   driverOperationApplies,
 } from "../offline/operation-projection";
 import {
@@ -45,9 +46,8 @@ export interface DriverOperationsState {
 export interface DriverOperationsControllerOptions {
   readonly session: DriverSession;
   readonly api: DriverSyncApi;
-  readonly refreshStops: (
-    signal?: AbortSignal,
-  ) => Promise<readonly DriverStop[]>;
+  /** The confirmation read; see DriverSyncSchedulerOptions.refreshStops. */
+  readonly refreshStops: (signal?: AbortSignal) => Promise<DriverStopList>;
   readonly onAccessRevoked: (category: "unauthorized" | "forbidden") => void;
   readonly telemetry?: DriverSyncTelemetry;
   readonly queue?: DriverOfflineQueue;
@@ -239,8 +239,10 @@ export class DriverOperationsController {
    * UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 ("Recibí $1,250.00"): queues the
    * cash collection of a DELIVERING delivery stop for exactly the amount the
    * stop expects, with a reference made of the tracking number and the device
-   * time of this confirmation. It is queued before the delivery, so it syncs
-   * first. At most one collection per order is ever queued.
+   * time of this confirmation. It always syncs before the delivery of the same
+   * order (dependency order), also when it is saved again after a discard and
+   * the delivery was already waiting for it. At most one collection per order
+   * is ever queued.
    */
   public async enqueueCodCollection(input: {
     readonly orderId: string;
@@ -480,6 +482,12 @@ export class DriverOperationsController {
     });
   }
 
+  /**
+   * After a discard, the rest of the order's chain is checked again in
+   * dependency order. A delivery left without its cash collection becomes
+   * PENDING here and then waits for the cash (driverDeliveryAwaitsCash), so
+   * "Recibí" is offered again instead of a conflict.
+   */
   private async recalculateOrderChain(
     orderId: string,
     confirmedStatus: DriverOperationalStatus,
@@ -488,11 +496,7 @@ export class DriverOperationsController {
     if (!this.partition) return;
     const operations = (await this.queue.listOperations(this.partition))
       .filter((candidate) => candidate.orderId === orderId)
-      .sort(
-        (left, right) =>
-          left.createdAt.localeCompare(right.createdAt) ||
-          left.id.localeCompare(right.id),
-      );
+      .sort(compareDriverOperationDependency);
     let status = confirmedStatus;
     let version = confirmedVersion;
     let blocked = false;

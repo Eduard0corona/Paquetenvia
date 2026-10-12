@@ -12,11 +12,23 @@ const openApi = readFileSync(
 );
 
 describe("DRV-001 OpenAPI alignment", () => {
-  it("uses the existing listMyStops array operation", () => {
+  it("uses listMyStops with the DriverStopList answer and the details switch", () => {
     const operation = sliceBetween(openApi, "  /driver/me/stops:", "  /orders/");
     expect(operation).toContain("operationId: listMyStops");
-    expect(operation).toContain("type: array");
-    expect(operation).toContain("$ref: '#/components/schemas/DriverStop'");
+    expect(operation).toContain("$ref: '#/components/schemas/DriverStopList'");
+    expect(operation).toContain("- name: details");
+    expect(operation).toContain("type: boolean");
+    expect(operation).toContain("Cache-Control");
+    const list = sliceBetween(openApi, "    DriverStopList:", "    DriverStop:");
+    expect(list).toContain("additionalProperties: false");
+    for (const property of ["stops", "completed_today"]) {
+      expect(list).toContain(`- ${property}`);
+      expect(list).toContain(`${property}:`);
+    }
+    expect(list).toContain("type: array");
+    expect(list).toContain("maxItems: 500");
+    expect(list).toContain("$ref: '#/components/schemas/DriverStop'");
+    expect(list).toContain("America/Mazatlan");
   });
 
   it("models exactly the required frontend properties", () => {
@@ -29,6 +41,7 @@ describe("DRV-001 OpenAPI alignment", () => {
       "status",
       "address_summary",
       // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11
+      "details_available",
       "contact_short_name",
       "contact_full_name",
       "zone_name",

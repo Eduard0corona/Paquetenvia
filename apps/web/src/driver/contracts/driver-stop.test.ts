@@ -6,6 +6,9 @@ import {
   MaximumContactShortNameLength,
   MaximumReferencesLength,
   MaximumStopsPerResponse,
+  MaximumZoneNameLength,
+  hasVisibleText,
+  parseDriverStopList,
   parseDriverStops,
 } from "./driver-stop";
 
@@ -16,6 +19,7 @@ const validStop = {
   stop_type: "PICKUP",
   status: "ASSIGNED",
   address_summary: "Centro, Culiacán",
+  details_available: true,
   contact_short_name: null,
   contact_full_name: "Farmacia Sintética",
   zone_name: null,
@@ -52,6 +56,24 @@ const deliveryStop = {
   },
 } as const;
 
+/** The server could not read the details: no names and no navigation target. */
+const unavailableStop = {
+  ...deliveryStop,
+  order_id: "55555555-5555-5555-5555-555555555555",
+  order_public_id: "ORD_efghijklmnopqrstuvwxyz",
+  details_available: false,
+  contact_short_name: null,
+  navigation: null,
+} as const;
+
+const returnStop = {
+  ...validStop,
+  order_id: "44444444-4444-4444-4444-444444444444",
+  order_public_id: "ORD_defghijklmnopqrstuvwxy",
+  stop_type: "RETURN",
+  status: "RETURNING",
+} as const;
+
 describe("parseDriverStops", () => {
   it("accepts the exact DTO and preserves REST order", () => {
     const second = {
@@ -62,20 +84,18 @@ describe("parseDriverStops", () => {
     expect(parseDriverStops([validStop, second])).toEqual([validStop, second]);
   });
 
-  it("keeps a pickup's full contact name and a return's short one", () => {
-    const returning = {
-      ...deliveryStop,
-      order_id: "44444444-4444-4444-4444-444444444444",
-      order_public_id: "ORD_defghijklmnopqrstuvwxy",
-      stop_type: "RETURN",
-      status: "RETURNING",
-      cod: null,
-    };
-    const [pickup, back] = parseDriverStops([validStop, returning]);
+  it("keeps the full contact name of a pickup and a return and the short one of a delivery", () => {
+    const [pickup, back, delivery] = parseDriverStops([
+      validStop,
+      returnStop,
+      deliveryStop,
+    ]);
     expect(pickup.contact_full_name).toBe("Farmacia Sintética");
     expect(pickup.contact_short_name).toBeNull();
-    expect(back.contact_short_name).toBe("M. López");
-    expect(back.contact_full_name).toBeNull();
+    expect(back.contact_full_name).toBe("Farmacia Sintética");
+    expect(back.contact_short_name).toBeNull();
+    expect(delivery.contact_short_name).toBe("M. López");
+    expect(delivery.contact_full_name).toBeNull();
   });
 
   it("keeps the stop details and normalizes the window to UTC Z", () => {
@@ -89,6 +109,18 @@ describe("parseDriverStops", () => {
     });
     expect(Object.isFrozen(stop.navigation)).toBe(true);
     expect(Object.isFrozen(stop.cod)).toBe(true);
+  });
+
+  it("accepts a stop whose details are unavailable", () => {
+    const [stop] = parseDriverStops([unavailableStop]);
+    expect(stop).toMatchObject({
+      details_available: false,
+      contact_short_name: null,
+      contact_full_name: null,
+      navigation: null,
+      address_summary: "Centro, Culiacán",
+      cod: deliveryStop.cod,
+    });
   });
 
   it.each([
@@ -110,27 +142,33 @@ describe("parseDriverStops", () => {
     ["phone property", [{ ...validStop, contact_phone: "6670000000" }]],
     ["missing property", [{ ...validStop, address_summary: undefined }]],
     ["missing detail member", [omit(validStop, "navigation")]],
+    ["missing details flag", [omit(validStop, "details_available")]],
+    ["details flag as text", [{ ...validStop, details_available: "true" }]],
     [
       "legacy six-key stop",
-      [omit(omit(omit(omit(omit(omit(validStop, "navigation"), "cod"), "service_window"), "zone_name"), "contact_short_name"), "contact_full_name")],
+      [omit(omit(omit(omit(omit(omit(omit(validStop, "navigation"), "cod"), "service_window"), "zone_name"), "contact_short_name"), "contact_full_name"), "details_available")],
     ],
     ["missing full name member", [omit(validStop, "contact_full_name")]],
     ["duplicate order", [validStop, validStop]],
     ["blank short name", [{ ...deliveryStop, contact_short_name: " " }]],
+    ["invisible short name", [{ ...deliveryStop, contact_short_name: "​﻿" }]],
     [
       "long short name",
       [{ ...deliveryStop, contact_short_name: "M".repeat(MaximumContactShortNameLength + 1) }],
     ],
-    // Owner answer "Completo en recolección": the full name only at pickup.
+    // Owner answers: the full name at pickups and returns, the short one at deliveries.
     ["full name on a delivery stop", [{ ...deliveryStop, contact_full_name: "María López Pérez" }]],
-    ["full name on a return stop", [{ ...deliveryStop, stop_type: "RETURN", status: "RETURNING", cod: null, contact_short_name: null, contact_full_name: "María López Pérez" }]],
+    ["short name on a return stop", [{ ...returnStop, contact_full_name: null, contact_short_name: "F. Sintética" }]],
     ["short name on a pickup stop", [{ ...validStop, contact_short_name: "F. Sintética" }]],
     ["blank full name", [{ ...validStop, contact_full_name: "  " }]],
+    ["full name of format characters only", [{ ...validStop, contact_full_name: "﻿" }]],
     [
       "long full name",
       [{ ...validStop, contact_full_name: "F".repeat(MaximumContactFullNameLength + 1) }],
     ],
     ["non-text zone", [{ ...validStop, zone_name: 7 }]],
+    ["long zone", [{ ...validStop, zone_name: "Z".repeat(MaximumZoneNameLength + 1) }]],
+    ["invisible zone", [{ ...validStop, zone_name: "​" }]],
     ["window extra member", [{ ...deliveryStop, service_window: { ...deliveryStop.service_window, zone: "x" } }]],
     ["window with local offset", [{ ...deliveryStop, service_window: { from: "2026-10-11T13:00:00-07:00", to: "2026-10-11T22:00:00Z" } }]],
     ["window not ordered", [{ ...deliveryStop, service_window: { from: "2026-10-11T22:00:00Z", to: "2026-10-11T20:00:00Z" } }]],
@@ -155,7 +193,9 @@ describe("parseDriverStops", () => {
       "long references",
       [{ ...validStop, navigation: { ...validStop.navigation, references: "a".repeat(MaximumReferencesLength + 1) } }],
     ],
-    ["null navigation", [{ ...validStop, navigation: null }]],
+    ["details without navigation", [{ ...validStop, navigation: null }]],
+    ["unavailable details with navigation", [{ ...unavailableStop, navigation: deliveryStop.navigation }]],
+    ["unavailable details with a name", [{ ...unavailableStop, contact_short_name: "M. López" }]],
   ])("rejects %s", (_name, payload) => {
     expect(() => parseDriverStops(payload)).toThrow(DriverStopsContractError);
   });
@@ -169,6 +209,106 @@ describe("parseDriverStops", () => {
       }),
     );
     expect(() => parseDriverStops(payload)).toThrow(DriverStopsContractError);
+  });
+});
+
+describe("parseDriverStopList (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11)", () => {
+  it("reads the stops and today's completed count", () => {
+    expect(
+      parseDriverStopList({ stops: [validStop, deliveryStop], completed_today: 2 }),
+    ).toEqual({
+      stops: [
+        validStop,
+        {
+          ...deliveryStop,
+          service_window: {
+            from: "2026-10-11T20:00:00.000Z",
+            to: "2026-10-11T22:00:00.000Z",
+          },
+        },
+      ],
+      completedToday: 2,
+      droppedCount: 0,
+      degradedCount: 0,
+    });
+  });
+
+  it.each([
+    ["a bare array", [validStop]],
+    ["a missing count", { stops: [validStop] }],
+    ["a negative count", { stops: [], completed_today: -1 }],
+    ["a fractional count", { stops: [], completed_today: 1.5 }],
+    ["a count as text", { stops: [], completed_today: "2" }],
+    ["an extra member", { stops: [], completed_today: 0, total: 3 }],
+    ["stops that are not a list", { stops: {}, completed_today: 0 }],
+    [
+      "more stops than the defensive maximum",
+      {
+        stops: Array.from({ length: MaximumStopsPerResponse + 1 }, () => validStop),
+        completed_today: 0,
+      },
+    ],
+  ])("rejects an answer with %s", (_name, payload) => {
+    expect(() => parseDriverStopList(payload)).toThrow(DriverStopsContractError);
+  });
+
+  it("leaves out only a stop whose identity breaks the contract", () => {
+    const list = parseDriverStopList({
+      stops: [
+        { ...validStop, status: "AT_THE_MOON" },
+        deliveryStop,
+        { ...returnStop, aggregate_version: 0 },
+        null,
+      ],
+      completed_today: 0,
+    });
+    expect(list.stops.map((stop) => stop.order_id)).toEqual([deliveryStop.order_id]);
+    expect(list.droppedCount).toBe(3);
+    expect(list.degradedCount).toBe(0);
+  });
+
+  it("keeps the first stop of a repeated order", () => {
+    const list = parseDriverStopList({
+      stops: [validStop, { ...validStop, order_public_id: "ORD_zzzzzzzzzzzzzzzzzzzzzz" }],
+      completed_today: 0,
+    });
+    expect(list.stops).toEqual([validStop]);
+    expect(list.droppedCount).toBe(1);
+  });
+
+  it.each([
+    ["a delivery's full name", { ...deliveryStop, contact_full_name: "María López Pérez" }],
+    ["a name of format characters only", { ...deliveryStop, contact_short_name: "﻿​" }],
+    ["a navigation extra member", { ...deliveryStop, navigation: { ...deliveryStop.navigation, phone: "x" } }],
+    ["details without navigation", { ...deliveryStop, navigation: null }],
+  ])("keeps a stop without its details when %s breaks the contract", (_name, stop) => {
+    const list = parseDriverStopList({ stops: [stop, validStop], completed_today: 1 });
+    expect(list.stops).toHaveLength(2);
+    expect(list.stops[0]).toMatchObject({
+      order_id: deliveryStop.order_id,
+      details_available: false,
+      contact_short_name: null,
+      contact_full_name: null,
+      navigation: null,
+      zone_name: "Tres Ríos",
+      cod: deliveryStop.cod,
+    });
+    expect(list.stops[1]).toEqual(validStop);
+    expect(list.droppedCount).toBe(0);
+    expect(list.degradedCount).toBe(1);
+  });
+});
+
+describe("hasVisibleText", () => {
+  it.each([
+    ["M. López", true],
+    ["​A", true],
+    [" ", false],
+    [" \t\n", false],
+    ["﻿", false],
+    ["​‌‍⁠", false],
+  ])("judges %j", (value, expected) => {
+    expect(hasVisibleText(value)).toBe(expected);
   });
 });
 
