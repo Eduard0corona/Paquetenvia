@@ -2,7 +2,7 @@ meta:
   version: '0.6'
   generated: '2026-07-19'
   execution_order: topological by depends_on; P0 before P1
-  item_count: 66
+  item_count: 70
 definition_of_ready:
 - normative inputs identified
 - dependencies DONE
@@ -1587,3 +1587,138 @@ items:
   - migration up, idempotent re-apply and guarded down on real PostgreSQL; driver phone stored encrypted
   - PWA button and account form (Vitest)
   approval_gate: GATE-007
+- id: OBS-003
+  decision: PHASE4-PLATFORM-APPROVAL-2026-10-12, OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12 and OBS-003-TENANT-PSEUDONYM-2026-10-12 (project owner)
+  epic: Observability
+  release: MVP-1
+  title: Trazas y correlación con OpenTelemetry y Application Insights
+  priority: P1
+  depends_on:
+  - OBS-002
+  - ENV-001
+  expected_outputs:
+  - W3C Trace Context for every API request, Worker job cycle and outbox dispatch, built on System.Diagnostics.Activity with no new package (phase 4 PR 1)
+  - one identifier, the W3C trace id, in every log line, in platform.audit_logs.request_id and in the traceId of every problem+json answer (phase 4 PR 1)
+  - dependency admission entry and dependency PR through main for the OpenTelemetry and Azure Monitor packages (GOV-DEPENDENCY-ADMISSION-001, GOV-DEPENDENCY-ROUTE-001; phase 4 PR 4 and PR 5)
+  - OpenTelemetry traces and metrics exported through the official Azure Monitor exporter to a workspace-based Application Insights in Mexico Central on the pilot Log Analytics workspace, off by default, with 10 % sampling (phase 4 PR 6)
+  - a privacy allowlist of span attributes, and the pseudonymous organization code and actor role kind on traces and logs only (phase 4 PR 6)
+  acceptance_criteria:
+  - 'DECIDED PHASE4-PLATFORM-APPROVAL-2026-10-12 (literal): "Sí, avanza con la fase 4 (Recommended)" - "Empiezo por OpenTelemetry y correlación, y por los límites de tasa en endpoints pesados, que son lo que más ayuda a operar el piloto."'
+  - 'DECIDED OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12 (literal): "Application Insights (Recommended)" - "OpenTelemetry con el exportador oficial de Azure, en México Central, sobre el mismo Log Analytics con muestreo de 10 %. Aprox. 0–5 USD/mes; el peor caso del presupuesto no sube por el tope diario. Admite 7 paquetes nuevos y sube Azure.Core 1.61→1.63 (admisión explícita)."'
+  - the exact package list (ids, exact versions and content hashes of the seven new packages, and the move of Azure.Core from 1.61.0, admitted by ADP-001-AZURE, to 1.63) is not admitted by the decision; it needs the explicit per-package admission in dependency_admissions under GOV-DEPENDENCY-ADMISSION-001, naming OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12, before its dependency PR into main
+  - inbound traceparent, tracestate and baggage headers are ignored, so every API request starts a new trace
+  - no outbound request (Google Maps, messaging and voice providers, AuthCenter or Azure services) carries traceparent, tracestate or baggage
+  - the W3C trace id of a request is the single identifier written to every log line of that request, to platform.audit_logs.request_id and to the traceId of every problem+json answer, replacing HttpContext.TraceIdentifier
+  - every Worker job cycle and outbox dispatch runs in its own trace whose id is in its log lines
+  - the export is off by default and only configuration turns it on; with it off nothing leaves the process beyond the existing console logs
+  - span attributes pass a privacy allowlist - no URL query, header, cookie, body, SQL text or parameter, tracking token, user or subject id, name, e-mail, phone, address, coordinates or real organization id
+  - 'DECIDED OBS-003-TENANT-PSEUDONYM-2026-10-12 (literal): "Seudónimo de empresa (Recommended)" - "Un código HMAC con llave en Key Vault (no el id real) solo en trazas y logs, y el actor solo como tipo de rol; nunca en métricas ni alertas."'
+  - when there is an organization context, traces and logs carry the HMAC pseudonym of the organization and the actor role kind only; neither is ever a metric tag, an alert or workbook dimension or an entry of the OBS-002 TelemetryDimensions allowlist, which never gains them (AI-03 §18, AI-13 §10)
+  - the pseudonym key is a Key Vault secret read at start with a key version, never stored in the database, logged or committed; Development and Testing use a synthetic key
+  - 'PENDING OWNER DECISION (blocks phase 4 PR 7): trace context through the outbox - an outbox column (AI-06/AI-18 change and migration), a member of the immutable payload, or none (the Worker starts a new trace per message); carrying it on to SignalR clients also meets AI-12 correlation_id, typed uuid optional'
+  - 'PENDING OWNER DECISION: the alert e-mail address the owner sets at deploy (alertEmailAddress, still OWNER_DECISION_REQUIRED); no new alert rule on exported metrics is added without its own owner decision'
+  required_tests:
+  - inbound trace headers ignored and no trace header on outbound requests (fake HTTP handler)
+  - one trace id in the log lines, the audit row and the problem traceId of the same request (PostgreSQL)
+  - export off by default; with it on, sampling and the span attribute allowlist (test exporter)
+  - architecture test proving the organization pseudonym and actor role kind never reach a metric tag, an OBS-002 event property or an alert or workbook query
+  - fixed HMAC pseudonym vector and start failure without a key outside Development and Testing
+  approval_gate: owner_technology_operations
+- id: SEC-004
+  decision: PHASE4-PLATFORM-APPROVAL-2026-10-12 and SEC-004-RATE-LIMITS-2026-10-12 (project owner)
+  epic: Security
+  release: MVP-1
+  title: Límites de tasa en endpoints pesados
+  priority: P1
+  depends_on:
+  - AUTH-001
+  - TRK-001
+  - RTM-001
+  - DRV-003
+  - CSV-001
+  - SET-001
+  - GEO-001
+  - POD-001
+  - OBS-001
+  - ORD-001
+  - PRC-001
+  - DSP-001
+  expected_outputs:
+  - shared rate-limit plumbing - one registration of the policies, their partition keys and one rejection writer for every limited endpoint (phase 4 PR 2)
+  - 429 application/problem+json (AI-05 TooManyRequests) with Retry-After for every policy, GPS ingestion and SignalR negotiate included, which today answer 429 with an empty body (phase 4 PR 2)
+  - per-user limits on the decided heavy endpoints and the per-network sign-in limit, with 429 declared in AI-05 on every limited operation (phase 4 PR 3)
+  acceptance_criteria:
+  - 'DECIDED PHASE4-PLATFORM-APPROVAL-2026-10-12: rate limits on heavy endpoints come first in phase 4, with OpenTelemetry and correlation'
+  - 'DECIDED SEC-004-RATE-LIMITS-2026-10-12 (literal): "Lista corta y generosa (Recommended)" - "Por usuario: CSV 10/min (1 importación a la vez), exportar liquidación 10/min, crear dirección (cuesta Google) 30/min, fotos 30–60/min, tablero y conteos 60/min, lista de órdenes 120/min, cotizar 60/min, repartidores asignables 60/min; inicio de sesión 20/min por red. Se ajusta tras 2 semanas con métricas."'
+  - every 429 the API writes, public tracking, GPS ingestion and SignalR negotiate included, is application/problem+json per AI-05 TooManyRequests with a Retry-After header in whole seconds; public tracking keeps its uniform body and telemetry
+  - per-user partitions use a hash of the authenticated subject, never the raw subject; the sign-in partition is the client network (IPv4 address or IPv6 /64, ClientNetworkPartition); no partition key reaches logs, traces or metrics
+  - every limited operation declares 429 in AI-05, and the HTTP surface coverage test keeps requiring every emitted 429 to be declared
+  - the limits are configuration validated at start; rejections are counted per policy name only and are visible in the pilot workspace from the first deployment of the limits; a later owner decision re-sets the numbers after two weeks of pilot metrics
+  - the existing public tracking, SignalR connection, GPS ingestion and recipient call limits keep their numbers
+  - limiter state lives in the API process; the pilot runs exactly one API replica (GATE-013), so a second API replica needs shared limiter state or a recorded owner decision
+  - 'PENDING OWNER DECISION (blocks phase 4 PR 3): the operation-by-operation mapping of the decided list - which operations are "fotos" and where each falls within 30–60/min, whether "tablero y conteos" share one budget, whether CSV preview and commit share 10/min and how "1 importación a la vez" holds, and whether "inicio de sesión" covers /auth/login only or /signin-authcenter too'
+  - 'PENDING OWNER DECISION (blocks phase 4 PR 3): GET /operations/dashboard ("tablero") is outside AI-05 (ADR-OBS-001 and the KnownUndeclaredOperations waiver), so it cannot declare its 429 in AI-05 as the decision asks; either AI-05 declares the dashboard or an ADR-OBS-001 amendment records its 429'
+  - 'PENDING OWNER DECISION (blocks phase 4 PR 3): the Spanish text and behavior of each limited screen on a 429 (AI-07), including what the browser shows when /auth/login answers 429'
+  required_tests:
+  - each policy rejects past its limit with problem+json and Retry-After and admits again after its window (WebApplicationFactory)
+  - GPS ingestion and SignalR negotiate 429 bodies
+  - per-user partitions isolate users and the sign-in partition isolates networks
+  - HTTP surface coverage with the new 429 declarations and the AI-05 contract tests with their pinned counts
+  approval_gate: owner_technology_operations
+- id: SCL-007
+  decision: PHASE4-PLATFORM-APPROVAL-2026-10-12 (project owner)
+  epic: Scalability
+  release: MVP-1
+  title: Un pool de conexiones por rol y espera adaptativa del outbox
+  priority: P1
+  depends_on:
+  - SCL-001
+  - TEN-002
+  - RTM-002
+  - NTF-001
+  - OBS-002
+  expected_outputs:
+  - one NpgsqlDataSource per database role in each process (paqueteria_app in the API, paqueteria_worker in the Worker) shared by every module, instead of 22 separate pools (phase 4 PR 8)
+  - a connection budget - the configured maximum pool sizes of every process stay below the pilot PostgreSQL B1ms connection limit (about 50) with headroom for the migrator, maintenance and administration (phase 4 PR 8)
+  - adaptive outbox wait - a dispatcher claims again at once while its batches come back full and backs off while they come back empty, up to a maximum idle wait, instead of a fixed 250-500 ms poll (phase 4 PR 9)
+  acceptance_criteria:
+  - 'DECIDED PHASE4-PLATFORM-APPROVAL-2026-10-12: one connection pool per role and adaptive outbox wait are part of phase 4'
+  - every tenant query still runs inside an explicit transaction with set_config(..., true) after BEGIN and current_org_ids as uuid[]; no session-level state survives a return to the shared pool; the TEN-002 pooled-connection regression passes on the shared pools
+  - each pool authenticates as exactly one runtime role; no pool is shared across roles; API and Worker stay NOBYPASSRLS
+  - AI-15 pooling_contract is unchanged (transaction pooling compatible); PgBouncer stays behind GATE-014
+  - the adaptive wait uses only the existing claim, settle and requeue functions under lease_token; no new SQL and no direct outbox access
+  - business and location lanes keep independent waits, and each lane keeps its per-minute OBS-002 OutboxLaneSummary heartbeat while idle
+  - 'PENDING OWNER DECISION (blocks phase 4 PR 9): the maximum idle wait of each lane; it must keep the per-minute OBS-002 heartbeat, the AI-15 oldest_outbox_age_seconds warning (60 s) and, for the realtime lanes, the AI-15 event_delivery_p95_seconds warning (2 s)'
+  - 'PENDING OWNER DECISION: an Azure Monitor metric alert on PostgreSQL connections (threshold against AI-15 connection_pool_utilization 0.8/0.95, monthly cost against PILOT-BUDGET-ACCEPT-98-108) and the alert e-mail address the owner sets at deploy'
+  required_tests:
+  - architecture test - one data source per role, resolved by every module
+  - pooled-connection tenant context regression on the shared pools (PostgreSQL)
+  - connection count within the budget during the OPS-001 synthetic workflow
+  - adaptive wait backoff, reset on work, heartbeat while idle and cancellation (fake clock)
+  approval_gate: owner_technology_operations
+- id: OPS-005
+  decision: PHASE4-PLATFORM-APPROVAL-2026-10-12 (project owner)
+  epic: Operations
+  release: MVP-1
+  title: Pruebas de punta a punta de la plataforma
+  priority: P1
+  depends_on:
+  - OPS-001
+  - OBS-003
+  - SEC-004
+  - SCL-007
+  expected_outputs:
+  - an end-to-end suite in tests/Paqueteria.EndToEndTests that runs the assembled API, Worker and Web against real PostgreSQL/PostGIS (phase 4 PR 10)
+  acceptance_criteria:
+  - 'DECIDED PHASE4-PLATFORM-APPROVAL-2026-10-12: end-to-end tests are part of phase 4'
+  - one browser action yields one trace id across the API log lines, its audit row and, on an error, the problem traceId
+  - a limited operation answers 429 problem+json with Retry-After and the web shows the approved text
+  - the PostgreSQL connection count stays within the SCL-007 budget during the synthetic workflow
+  - an outbox event committed after an idle period reaches its SignalR client within the AI-15 event delivery budget
+  - with the telemetry export off nothing leaves the process
+  - synthetic data only (SEC-003) - no real PII, phone number, e-mail address or token in fixtures or evidence; no placeholder or always-passing test
+  - the suite runs inside an existing CI job; adding a job changes the 13-job Foundation topology and needs its own decision
+  - 'PENDING OWNER DECISION (blocks phase 4 PR 10): the business journeys the suite runs beyond the platform checks above'
+  required_tests:
+  - the end-to-end suite itself, green in CI
+  approval_gate: owner_technology_operations
