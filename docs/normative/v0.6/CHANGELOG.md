@@ -1,5 +1,47 @@
 # Changelog
 
+## REL-000: subidas encadenadas entre admisiones de dependencias (GOV-REL000-CHAINED-UPGRADES-2026-10-12, OBS-003-TEST-EXTENSIONS-ADMISSION-2026-10-12) — 2026-10-12
+
+- Preguntas y respuestas literales del project owner (2026-10-12), registradas en `decision-log.md`:
+  - `GOV-REL000-CHAINED-UPGRADES-2026-10-12`: "Fase 4, paquetes de telemetría: el exportador de Azure que elegiste
+    (1.10.0) sube Azure.Core 1.61→1.63, y eso arrastra 5 subidas más (System.ClientModel, Microsoft.Identity.Client y
+    su extensión Msal, Microsoft.Bcl.AsyncInterfaces y System.Memory.Data). El control de dependencias (REL-000) hoy
+    no puede registrar la subida de un paquete que ya admitió otra entrada (ADP-001). ¿Cómo seguimos?" → "Ajustar
+    REL-000 primero (Recommended)" ("Un PR de la herramienta, como el que necesitó ADP-001: una subida exacta puede
+    encadenarse sobre la de otra entrada solo si su versión de partida coincide, y las declaraciones que se encimen se
+    rechazan. Endurece el control, no lo relaja. Después va la admisión con el exportador 1.10.0 y Azure.Core 1.63,
+    tal como lo decidiste."); no elegidas: "Exportador 1.8.3" ("Funciona hoy sin tocar REL-000 ni Azure.Core (se queda
+    en 1.61): 12 paquetes nuevos y ninguna subida. Pero el exportador queda dos versiones atrás, contradice "sube
+    Azure.Core 1.61→1.63", y subirlo después choca con el mismo hueco.") y "Detener la exportación" ("Sigo con la
+    correlación (PR 1) y los límites de tasa, sin paquetes nuevos por ahora. Retomamos Application Insights
+    después.").
+  - `OBS-003-TEST-EXTENSIONS-ADMISSION-2026-10-12`: "Además, el proyecto de pruebas de arquitectura necesita 5
+    paquetes Microsoft.Extensions.* 10.0.0 (Configuration, Configuration.Binder, Configuration.EnvironmentVariables,
+    Logging.Configuration y Options.ConfigurationExtensions). Solo cambian el lock file de pruebas; nada de eso se
+    despliega. ¿Los admitimos?" → "Sí, admitirlos (Recommended)" ("Se suman a la lista que admites explícitamente al
+    aprobar el PR de admisión. Solo afectan pruebas."); no elegida: "No, usar el framework" ("El proyecto de pruebas
+    referencia el framework de ASP.NET. Eso también poda paquetes de la línea base y exige declarar esas bajas en la
+    admisión. Más cambios en REL-000.").
+- REL-000 (`tools/rel-000/rel000.py`), sólo más estricto:
+  - Las `baseline_package_upgrades` de un mismo nodo (archivo de lock, framework e `id`) declaradas por admisiones
+    distintas forman una cadena exacta en el orden de la política: cada paso empieza donde termina el anterior (versión
+    y `content_hash`) y no vuelve a una versión visitada. Cualquier otro encime entre admisiones se rechaza al cargar
+    la política con el código nuevo `DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT`; antes la última declaración reemplazaba
+    en silencio a la anterior.
+  - Un nodo se acepta sólo si se movió por pasos declarados consecutivos: un paso contra la base probada y la cadena
+    completa contra el baseline MVP-0 (`test_k`), por ejemplo 6.0.0 → 10.0.9 → 10.0.10.
+  - Una subida que aterriza en una versión de `additional_package_versions` de la misma admisión entrega ese
+    `id@version` en ese lock; sin esto, la subida de un nodo ya admitido (Azure.Core 1.61.0 de ADP-001) quedaba
+    siempre incompleta.
+  - La clave de uso de cada paso es `upgrade:<lock>:<framework>:<id>@<to_version>` y se acredita a la admisión que
+    lo declara. AUTH-001-OIDC y ADP-001-AZURE validan igual que antes.
+- Pruebas nuevas en `DependencyAdmissionAmendmentTests` con datos sintéticos: cadena aceptada contra la base probada
+  y contra el baseline, paso con otra versión o hash de partida, encimes entre admisiones, subida a una versión no
+  declarada, rama y entrega completa, y las admisiones registradas como cadenas de un paso.
+- Sin cambios en contratos normativos AI-xx, AI-08, `security-remediation-policy.json`, paquetes, lock files,
+  workflows ni código de la aplicación. La entrada de admisión de OBS-003 (fase 4, PR 4: exportador 1.10.0 y
+  Azure.Core 1.63) va después; el owner admite su lista exacta por paquete al aprobarla.
+
 ## Despacho: "Órdenes" y filtro por fecha de creación en `listOrders` (UI-PHASE3-ORDERS-LIST-2026-10-12, ORD-LIST-DATE-FILTER-2026-10-12) — 2026-10-12
 
 - Preguntas y respuestas literales del project owner (2026-10-12), registradas en `decision-log.md` como dos cambios

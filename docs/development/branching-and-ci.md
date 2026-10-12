@@ -61,7 +61,12 @@ A **new** package (MVP-1 onward) needs an owner-approved entry in `dependency_ad
     already admits, as a transitive node, only in the named lock files (for example MSAL's
     `Microsoft.IdentityModel.Abstractions` 8.14.0 where AUTH-001-OIDC admits 8.19.2);
   - `baseline_package_upgrades`: one baseline node moved from an exact version and hash to an
-    exact version and hash that this admission admits, keeping its node type;
+    exact version and hash that this admission admits, keeping its node type. A node that an
+    earlier admission already upgraded may only be moved again as the next exact step of that
+    chain: same lock file, framework and id, starting at the earlier step's exact version and
+    hash, never revisiting a version (GOV-REL000-CHAINED-UPGRADES-2026-10-12). An upgrade that
+    lands on this admission's declared additional version delivers that version in that lock
+    file;
   - `baseline_package_removals`: one exact baseline node removed from one lock file (a node the
     SDK prunes). Other baseline nodes of that lock file may then lose dependency edges to the
     removed nodes, and nothing else.
@@ -80,7 +85,7 @@ Order of operations:
 3. Back-sync (`MAIN_BACKSYNC`) as above.
 4. A follow-up PR into `development` flips the admission to `status: MERGED`. From then on the branch no longer opens PRs into `main`, but the packages stay admitted permanently: every later REL-000 run still compares against the MVP-0 baseline plus the admitted set.
 
-Anything unregistered still fails closed: an extra transitive package, another version or content hash, an undeclared change or removal of an existing package, a declared amendment in another lock file or framework, or `Directory.Packages.props` changed without an admission. `PR Gate` still rejects `DEPS` into `development`. `MAIN_BACKSYNC` remains the only way dependencies reach `development`. Details and reason codes: `docs/development/rel-000-internal-release.md`.
+Anything unregistered still fails closed: an extra transitive package, another version or content hash, an undeclared change or removal of an existing package, a declared amendment in another lock file or framework, two admissions amending the same node other than as an exact upgrade chain (`DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT` when the policy loads), or `Directory.Packages.props` changed without an admission. `PR Gate` still rejects `DEPS` into `development`. `MAIN_BACKSYNC` remains the only way dependencies reach `development`. Details and reason codes: `docs/development/rel-000-internal-release.md`.
 
 ## Re-running
 

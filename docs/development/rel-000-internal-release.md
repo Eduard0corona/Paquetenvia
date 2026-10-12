@@ -437,8 +437,8 @@ Todo lo demás sigue fallando cerrado con los códigos existentes
 `DEPENDENCY_ADMISSION_NODE_INVALID`,
 `DEPENDENCY_ADMISSION_BRANCH_NOT_AUTHORIZED`,
 `DEPENDENCY_ADMISSION_NOT_ACTIVE`, `DEPENDENCY_ADMISSION_EXPIRED`,
-`DEPENDENCY_ADMISSION_FILE_NOT_ALLOWED`, `DEPENDENCY_ADMISSION_INCOMPLETE` y
-`DEPENDENCY_ADMISSION_POLICY_INVALID`. Los modos `SECURITY_REMEDIATION` (Sharp,
+`DEPENDENCY_ADMISSION_FILE_NOT_ALLOWED`, `DEPENDENCY_ADMISSION_INCOMPLETE`,
+`DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT` y `DEPENDENCY_ADMISSION_POLICY_INVALID`. Los modos `SECURITY_REMEDIATION` (Sharp,
 SEC-2026-08, SEC-2026-09) no consultan admisiones y no cambian.
 
 La primera admisión es `AUTH-001-OIDC` (PR #92, rama `deps/auth-001-oidc`):
@@ -482,6 +482,33 @@ versión admitida por la misma admisión y un nodo enmendado dos veces. En la in
 (`validate_dependency_admission_source`) cada enmienda declarada debe entregarse en su lock
 (`DEPENDENCY_ADMISSION_INCOMPLETE` si no), y la capa permanente contra el baseline MVP-0 acepta
 las enmiendas de admisiones `ACTIVE` y `MERGED`. Pruebas: `DependencyAdmissionAmendmentTests`.
+
+### Subidas encadenadas entre admisiones (GOV-REL000-CHAINED-UPGRADES-2026-10-12)
+
+Una restauración nueva puede tener que mover otra vez un nodo que una admisión anterior ya
+subió (OBS-003: `Microsoft.Bcl.AsyncInterfaces` de `tests/Paqueteria.IntegrationTests` pasó de
+6.0.0 a 10.0.9 con ADP-001 y Azure.Core 1.63 lo lleva a 10.0.10), o un nodo que otra admisión
+admitió y que no está en el baseline (Azure.Core 1.61.0 de ADP-001 → 1.63.0). Dos reglas exactas,
+que sólo endurecen el control:
+
+- **Cadena exacta.** Para un mismo nodo (archivo de lock, framework e `id`), las
+  `baseline_package_upgrades` de admisiones distintas forman una cadena en el orden de la
+  política: cada paso empieza exactamente donde termina el anterior (`from_version` y
+  `from_content_hash` iguales a `to_version` y `to_content_hash` del paso previo, misma
+  escritura del `id`) y no vuelve a una versión ya visitada. Cualquier otro encime entre
+  admisiones (un paso que no continúa la cadena, una segunda baja del mismo nodo, una baja y una
+  subida del mismo nodo, la misma versión adicional dos veces) se rechaza al cargar la política
+  con `DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT`; ninguna declaración reemplaza a otra. Al comparar,
+  el nodo base debe estar exactamente donde empieza un paso declarado y el nodo actual exactamente
+  donde termina ese paso o uno posterior: contra la base probada es un paso; contra el baseline
+  MVP-0 (`test_k`) es la cadena completa (6.0.0 → 10.0.9 → 10.0.10), sólo por esos pasos
+  declarados. La clave de uso de cada paso incluye la versión de llegada,
+  `upgrade:<lock>:<framework>:<id>@<to_version>`, y se acredita a la admisión que lo declara.
+- **Subida sobre versión adicional.** Una subida que aterriza en una versión de
+  `additional_package_versions` de la misma admisión, con su hash y en un lock nombrado por esa
+  versión, entrega `id@version` en ese lock. Así la introducción contra la base probada deja de
+  marcar como incompleta la subida de un nodo ya admitido; una versión adicional nombrada para un
+  lock donde el nodo no subió sigue fallando con `DEPENDENCY_ADMISSION_INCOMPLETE`.
 
 ## Rollback REL-000
 

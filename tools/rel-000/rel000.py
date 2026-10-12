@@ -1291,6 +1291,9 @@ def validate_dependency_admission_registry(
                 version=entry["version"],
             )
         seen_additional.add((key, entry["version"]))
+    # Amendments of the same lockfile node by different admissions must form one exact
+    # upgrade chain; anything else is rejected instead of one declaration replacing another.
+    admission_amendments(admissions)
     return admissions
 
 
@@ -1317,6 +1320,8 @@ def _validate_admission_amendments(
       admission already admits, only in the named lockfiles, only as a transitive node;
     * ``baseline_package_upgrades``: one baseline node replaced by an exact version that
       this admission itself admits (directly, transitively or as an additional version);
+      a node another admission already upgraded continues that exact chain (see
+      ``admission_amendments``);
     * ``baseline_package_removals``: one exact baseline node removed from one lockfile
       (a node the SDK prunes); nodes may then drop dependency edges to removed nodes only.
     """
@@ -1428,33 +1433,105 @@ def _validate_admission_amendments(
     return list(additional)
 
 
+DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT = "DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT"
+
+
+def _amendment_conflict(message: str, **details: Any) -> None:
+    fail(DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT, message, **details)
+
+
 def admission_amendments(
     admissions: Iterable[dict[str, Any]] | None,
-) -> dict[str, dict[Any, dict[str, Any]]]:
-    """Index the declared baseline amendments of ACTIVE and MERGED admissions."""
+) -> dict[str, dict[Any, Any]]:
+    """Index the declared baseline amendments of ACTIVE and MERGED admissions.
+
+    ``upgrades`` maps each lockfile node (lockfile, framework, package) to its upgrade
+    chain: the exact steps declared by successive admissions, in policy order. A later
+    admission may only continue a chain where it ends: same package spelling, its
+    ``from_version`` and ``from_content_hash`` equal to the previous ``to_version`` and
+    ``to_content_hash``, and a version the chain has not visited. Any other overlap
+    between admissions (a step that does not continue the chain, a second removal of a
+    node, a removal and an upgrade of the same node, the same additional version twice)
+    fails with DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT; no declaration replaces another.
+    """
 
     extras: dict[tuple[str, str], dict[str, Any]] = {}
-    upgrades: dict[tuple[str, str, str], dict[str, Any]] = {}
+    upgrades: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     removals: dict[tuple[str, str, str], dict[str, Any]] = {}
     for admission in admissions or ():
         if admission.get("status") not in DEPENDENCY_ADMISSION_STATUSES:
             continue
         for entry in admission.get("additional_package_versions", []):
-            extras[(entry["id"].casefold(), entry["version"])] = {
+            key = (entry["id"].casefold(), entry["version"])
+            if key in extras:
+                _amendment_conflict(
+                    "An additional package version is declared by more than one admission.",
+                    admission_id=admission["id"],
+                    other_admission_id=extras[key]["admission_id"],
+                    package=entry["id"],
+                    version=entry["version"],
+                )
+            extras[key] = {
                 **entry,
                 "admission_id": admission["id"],
                 "usage_key": additional_version_usage_key(entry["id"], entry["version"]),
             }
-        for field, index, prefix in (
-            ("baseline_package_upgrades", upgrades, "upgrade"),
-            ("baseline_package_removals", removals, "removal"),
-        ):
-            for entry in admission.get(field, []):
-                index[(entry["lock_file"], entry["framework"], entry["id"].casefold())] = {
+        for entry in admission.get("baseline_package_removals", []):
+            node = (entry["lock_file"], entry["framework"], entry["id"].casefold())
+            other = removals.get(node) or (upgrades.get(node) or [None])[-1]
+            if other is not None:
+                _amendment_conflict(
+                    "A removed lockfile node cannot be amended by another declaration.",
+                    admission_id=admission["id"],
+                    other_admission_id=other["admission_id"],
+                    lock_file=entry["lock_file"],
+                    framework=entry["framework"],
+                    package=entry["id"],
+                )
+            removals[node] = {
+                **entry,
+                "admission_id": admission["id"],
+                "usage_key": removal_usage_key(entry),
+            }
+        for entry in admission.get("baseline_package_upgrades", []):
+            node = (entry["lock_file"], entry["framework"], entry["id"].casefold())
+            if node in removals:
+                _amendment_conflict(
+                    "A removed lockfile node cannot be amended by another declaration.",
+                    admission_id=admission["id"],
+                    other_admission_id=removals[node]["admission_id"],
+                    lock_file=entry["lock_file"],
+                    framework=entry["framework"],
+                    package=entry["id"],
+                )
+            chain = upgrades.setdefault(node, [])
+            if chain:
+                last = chain[-1]
+                visited = {chain[0]["from_version"], *(step["to_version"] for step in chain)}
+                if (
+                    last["admission_id"] == admission["id"]
+                    or entry["id"] != last["id"]
+                    or entry["from_version"] != last["to_version"]
+                    or entry["from_content_hash"] != last["to_content_hash"]
+                    or entry["to_version"] in visited
+                ):
+                    _amendment_conflict(
+                        "An upgrade of an already upgraded lockfile node must continue its exact chain.",
+                        admission_id=admission["id"],
+                        other_admission_id=last["admission_id"],
+                        lock_file=entry["lock_file"],
+                        framework=entry["framework"],
+                        package=entry["id"],
+                        from_version=entry["from_version"],
+                        chain_version=last["to_version"],
+                    )
+            chain.append(
+                {
                     **entry,
                     "admission_id": admission["id"],
-                    "usage_key": f"{prefix}:{entry['lock_file']}:{entry['framework']}:{entry['id']}",
+                    "usage_key": upgrade_usage_key(entry),
                 }
+            )
     return {"extras": extras, "upgrades": upgrades, "removals": removals}
 
 
@@ -1462,17 +1539,28 @@ def additional_version_usage_key(package: str, version: str) -> str:
     return f"{package}@{version}"
 
 
+def upgrade_usage_key(entry: dict[str, Any]) -> str:
+    """One step of an upgrade chain: the node and the exact version it lands on."""
+
+    return f"upgrade:{entry['lock_file']}:{entry['framework']}:{entry['id']}@{entry['to_version']}"
+
+
+def removal_usage_key(entry: dict[str, Any]) -> str:
+    return f"removal:{entry['lock_file']}:{entry['framework']}:{entry['id']}"
+
+
 def usage_admission_id(
     key: str,
     catalog: dict[str, dict[str, Any]],
-    amendments: dict[str, dict[Any, dict[str, Any]]],
+    amendments: dict[str, dict[Any, Any]],
 ) -> str:
     """The admission a lockfile usage key belongs to (package id or declared amendment)."""
 
     for index in amendments.values():
-        for entry in index.values():
-            if entry["usage_key"] == key:
-                return entry["admission_id"]
+        for value in index.values():
+            for entry in value if isinstance(value, list) else [value]:
+                if entry["usage_key"] == key:
+                    return entry["admission_id"]
     return catalog[key.casefold()]["admission_id"]
 
 
@@ -5513,7 +5601,7 @@ def _check_admitted_node(
     package: str,
     node: dict[str, Any],
     catalog: dict[str, dict[str, Any]],
-    amendments: dict[str, dict[Any, dict[str, Any]]] | None = None,
+    amendments: dict[str, dict[Any, Any]] | None = None,
 ) -> dict[str, Any]:
     """Fail unless a lockfile node is exactly an admitted package.
 
@@ -5633,16 +5721,18 @@ def _existing_lock_admitted_diff(
     base_packages: dict[tuple[str, str], dict[str, Any]],
     current_packages: dict[tuple[str, str], dict[str, Any]],
     catalog: dict[str, dict[str, Any]],
-    amendments: dict[str, dict[Any, dict[str, Any]]] | None = None,
+    amendments: dict[str, dict[Any, Any]] | None = None,
 ) -> list[str] | None:
     """Validate an existing lockfile whose graph changed.
 
     Returns ``None`` when no admitted package or declared amendment is involved (the
     caller keeps the legacy fail-closed path). Otherwise the diff must be exactly
     baseline + admitted nodes, where the only other differences are the declared,
-    exact amendments of an admission: a removed baseline node, an upgraded baseline
-    node, and baseline nodes that dropped dependency edges to removed nodes and
-    nothing else. Returns the usage keys (package ids and amendment keys).
+    exact amendments of an admission: a removed baseline node, a baseline node moved
+    through consecutive declared steps of its upgrade chain, and baseline nodes that
+    dropped dependency edges to removed nodes and nothing else. An upgrade that lands
+    on a declared additional version also delivers that ``id@version`` in this
+    lockfile. Returns the usage keys (package ids and amendment keys).
     """
 
     amendments = amendments or {"extras": {}, "upgrades": {}, "removals": {}}
@@ -5694,14 +5784,11 @@ def _existing_lock_admitted_diff(
     for framework, package in changed:
         base_node = base_packages[(framework, package)]
         current_node = current_packages[(framework, package)]
-        declaration = upgrades.get((relative, framework, package.casefold()))
-        if declaration is not None:
+        chain = upgrades.get((relative, framework, package.casefold()))
+        if chain is not None:
+            steps = _declared_upgrade_steps(chain, package, base_node, current_node)
             if (
-                declaration["id"] != package
-                or base_node.get("resolved") != declaration["from_version"]
-                or base_node.get("contentHash") != declaration["from_content_hash"]
-                or current_node.get("resolved") != declaration["to_version"]
-                or current_node.get("contentHash") != declaration["to_content_hash"]
+                steps is None
                 or current_node.get("type") != base_node.get("type")
                 or current_node.get("type") != "Transitive"
                 or "requested" in current_node
@@ -5714,18 +5801,30 @@ def _existing_lock_admitted_diff(
                     file=relative,
                     framework=framework,
                     package=package,
-                    admission_id=declaration["admission_id"],
+                    admission_id=chain[-1]["admission_id"],
+                    admission_ids=sorted({step["admission_id"] for step in chain}),
                 )
-            usage.add(declaration["usage_key"])
+            usage.update(step["usage_key"] for step in steps)
+            landed = steps[-1]
             primary = catalog.get(package.casefold())
             if (
                 primary is not None
                 and primary["id"] == package
-                and primary["version"] == declaration["to_version"]
-                and primary["content_hash"] == declaration["to_content_hash"]
+                and primary["version"] == landed["to_version"]
+                and primary["content_hash"] == landed["to_content_hash"]
             ):
                 # The upgraded node also delivers the admitted package itself.
                 usage.add(primary["id"])
+            extra = extras.get((package.casefold(), landed["to_version"]))
+            if (
+                extra is not None
+                and extra["admission_id"] == landed["admission_id"]
+                and extra["id"] == package
+                and extra["content_hash"] == landed["to_content_hash"]
+                and relative in extra["lock_files"]
+            ):
+                # The upgraded node also delivers the declared additional version here.
+                usage.add(extra["usage_key"])
             continue
         if _only_pruned_edges(base_node, current_node, removed_by_framework.get(framework, set())):
             continue
@@ -5745,6 +5844,38 @@ def _existing_lock_admitted_diff(
             )["usage_key"]
         )
     return sorted(usage)
+
+
+def _declared_upgrade_steps(
+    chain: list[dict[str, Any]],
+    package: str,
+    base_node: dict[str, Any],
+    current_node: dict[str, Any],
+) -> list[dict[str, Any]] | None:
+    """The exact consecutive steps of a declared upgrade chain from base to current.
+
+    The base node must be exactly where one declared step starts and the current node
+    exactly where the same or a later declared step ends (version and content hash).
+    Against the tested base this is normally one step; against the MVP-0 baseline it
+    may be the whole chain. Anything else returns ``None``.
+    """
+
+    for start, first in enumerate(chain):
+        if (
+            first["from_version"] != base_node.get("resolved")
+            or first["from_content_hash"] != base_node.get("contentHash")
+        ):
+            continue
+        for end in range(start, len(chain)):
+            last = chain[end]
+            if (
+                last["to_version"] == current_node.get("resolved")
+                and last["to_content_hash"] == current_node.get("contentHash")
+            ):
+                steps = chain[start : end + 1]
+                return steps if all(step["id"] == package for step in steps) else None
+        return None
+    return None
 
 
 def _only_pruned_edges(
@@ -7089,9 +7220,12 @@ def validate_dependency_admission_source(
         key = additional_version_usage_key(entry["id"], entry["version"])
         if not set(entry["lock_files"]).issubset(usage.get(key, [])):
             missing_packages.append(key)
-    for prefix, field in (("upgrade", "baseline_package_upgrades"), ("removal", "baseline_package_removals")):
+    for usage_key, field in (
+        (upgrade_usage_key, "baseline_package_upgrades"),
+        (removal_usage_key, "baseline_package_removals"),
+    ):
         for entry in admission.get(field, []):
-            key = f"{prefix}:{entry['lock_file']}:{entry['framework']}:{entry['id']}"
+            key = usage_key(entry)
             if entry["lock_file"] not in usage.get(key, []):
                 missing_packages.append(key)
     missing_packages = sorted(missing_packages)
