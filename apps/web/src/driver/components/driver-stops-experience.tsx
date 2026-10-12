@@ -9,8 +9,10 @@ import {
   DriverStopsApiError,
 } from "../api/driver-stops-api";
 import { createExternalOffersApi } from "../api/external-offers-api";
+import { createDriverDispatchContactApi } from "../api/dispatch-contact-api";
 import { createDriverOrganizationRolesApi } from "../api/organization-roles-api";
 import { createDriverVoiceApi, type DriverVoiceApi } from "../api/voice-api";
+import { IndexedDbDriverDispatchContactCache } from "../cache/driver-dispatch-contact-cache";
 import { IndexedDbDriverOrganizationRolesCache } from "../cache/driver-roles-cache";
 import { IndexedDbDriverStopsCache } from "../cache/driver-stops-cache";
 import type { DriverFailedDeliveryReason } from "../contracts/failed-delivery";
@@ -31,7 +33,7 @@ import {
   DriverSyncApiError,
 } from "../offline/driver-sync-api";
 import {
-  driverFailedReportAttentionMessage,
+  driverFailedReportAttention,
   driverFailedReportHoldState,
 } from "../offline/failed-delivery-policy";
 import {
@@ -60,7 +62,12 @@ import {
   type DriverSession,
 } from "../session/driver-session";
 import {
+  DriverDispatchContactController,
+  type DriverDispatchContactState,
+} from "../state/driver-dispatch-contact-controller";
+import {
   DriverOperationsController,
+  driverMessageCallsDispatch,
   type DriverFailedDeliveryEnqueueResult,
   type DriverOperationsState,
 } from "../state/driver-operations-controller";
@@ -78,6 +85,7 @@ import { formatMxnCents } from "../../operations/contracts/money";
 import { useConfirmDialog } from "../../components/confirm-dialog";
 import { DriverAccount } from "./driver-account";
 import { DriverCodCollection } from "./driver-cod-collection";
+import { DriverDispatchCall } from "./driver-dispatch-call";
 import { DriverFailedDelivery } from "./driver-failed-delivery";
 import { DriverProofCapture } from "./driver-proof-capture";
 import {
@@ -118,6 +126,11 @@ const loadingRolesState: DriverOrganizationRolesState = Object.freeze({
   roles: null,
   loading: true,
 });
+// DRV-DISPATCH-CONTACT-2026-10-12: no number is known until the controller
+// answers, so no "Llamar a despacho" is shown.
+const noDispatchContact: DriverDispatchContactState = Object.freeze({
+  phoneE164: null,
+});
 const stopUnavailableForReport: DriverFailedDeliveryEnqueueResult =
   Object.freeze({
     stored: false,
@@ -138,6 +151,10 @@ export function DriverStopsExperience() {
   const [rolesState, setRolesState] = useState<DriverOrganizationRolesState>(
     loadingRolesState,
   );
+  // DRV-DISPATCH-CONTACT-2026-10-12: the dispatch number of the session's
+  // organization (getMyDispatchContact, saved per partition), or null.
+  const [dispatchContactState, setDispatchContactState] =
+    useState<DriverDispatchContactState>(noDispatchContact);
   const [route, setRoute] = useState<DriverStopsRoute | null>(null);
   const controllerRef = useRef<DriverStopsController | null>(null);
   const operationsControllerRef = useRef<DriverOperationsController | null>(
@@ -147,6 +164,8 @@ export function DriverStopsExperience() {
     null,
   );
   const rolesControllerRef = useRef<DriverRolesController | null>(null);
+  const dispatchContactControllerRef =
+    useRef<DriverDispatchContactController | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
   const identity = sessionIdentity(session);
   // VOICE-001: online-only calls; never part of the offline queue.
@@ -181,6 +200,7 @@ export function DriverStopsExperience() {
       void operationsControllerRef.current?.dispose();
       externalOffersControllerRef.current?.dispose();
       rolesControllerRef.current?.dispose();
+      dispatchContactControllerRef.current?.dispose();
     };
     window.addEventListener(driverLogoutStartedEvent, stopControllers);
     return () =>
@@ -215,6 +235,13 @@ export function DriverStopsExperience() {
       session,
       api: createDriverOrganizationRolesApi({ baseUrl, session }),
       cache: new IndexedDbDriverOrganizationRolesCache(),
+    });
+    // DRV-DISPATCH-CONTACT-2026-10-12: asked once per session start too; the
+    // answer saved for the partition keeps "Llamar a despacho" working offline.
+    const dispatchContactController = new DriverDispatchContactController({
+      session,
+      api: createDriverDispatchContactApi({ baseUrl, session }),
+      cache: new IndexedDbDriverDispatchContactCache(),
     });
     const controller = new DriverStopsController({
       baseUrl,
@@ -260,12 +287,18 @@ export function DriverStopsExperience() {
     operationsControllerRef.current = operationsController;
     externalOffersControllerRef.current = externalOffersController;
     rolesControllerRef.current = rolesController;
+    dispatchContactControllerRef.current = dispatchContactController;
     const unsubscribe = controller.subscribe((next) => {
       if (active) setState(next);
     });
     const unsubscribeRoles = rolesController.subscribe((next) => {
       if (active) setRolesState(next);
     });
+    const unsubscribeDispatchContact = dispatchContactController.subscribe(
+      (next) => {
+        if (active) setDispatchContactState(next);
+      },
+    );
     const unsubscribeOperations = operationsController.subscribe((next) => {
       if (active) setOperationsState(next);
     });
@@ -278,6 +311,7 @@ export function DriverStopsExperience() {
     void operationsController.start();
     void externalOffersController.start();
     void rolesController.start();
+    void dispatchContactController.start();
 
     return () => {
       active = false;
@@ -285,12 +319,15 @@ export function DriverStopsExperience() {
       unsubscribeOperations();
       unsubscribeExternalOffers();
       unsubscribeRoles();
+      unsubscribeDispatchContact();
       controllerRef.current = null;
       operationsControllerRef.current = null;
       externalOffersControllerRef.current = null;
       rolesControllerRef.current = null;
+      dispatchContactControllerRef.current = null;
       externalOffersController.dispose();
       rolesController.dispose();
+      dispatchContactController.dispose();
       void operationsController.dispose();
       void controller.dispose();
     };
@@ -394,6 +431,7 @@ export function DriverStopsExperience() {
         operations={projection.operations}
         mutating={operationsState.mutating}
         message={operationsState.message}
+        dispatchPhone={dispatchContactState.phoneE164}
         onSync={() => void operationsControllerRef.current?.syncNow()}
       />
       {route.kind === "detail" ? (
@@ -408,6 +446,7 @@ export function DriverStopsExperience() {
             (operation) => operation.orderId === route.orderId,
           )}
           reportRole={driverReportRoleOf(rolesState)}
+          dispatchPhone={dispatchContactState.phoneE164}
           mutating={operationsState.mutating}
           onEnqueue={(kind, blob) =>
             stop && operationsControllerRef.current
@@ -493,6 +532,7 @@ export function DriverStopsExperience() {
           voiceApi={null}
           operations={[]}
           reportRole="unknown"
+          dispatchPhone={null}
           mutating={operationsState.mutating}
           onEnqueue={() => Promise.resolve(false)}
           onCollectCod={() => Promise.resolve(false)}
@@ -626,11 +666,14 @@ function QueueSummary({
   operations,
   mutating,
   message,
+  dispatchPhone,
   onSync,
 }: Readonly<{
   operations: readonly DriverOfflineOperation[];
   mutating: boolean;
   message: string | null;
+  /** DRV-DISPATCH-CONTACT-2026-10-12: "Llamar a despacho" next to a message that asks to call dispatch. */
+  dispatchPhone: string | null;
   onSync: () => void;
 }>) {
   if (operations.length === 0 && !message) return null;
@@ -653,6 +696,9 @@ function QueueSummary({
       <p className={styles.liveMessage} aria-live="polite">
         {message}
       </p>
+      {driverMessageCallsDispatch(message) ? (
+        <DriverDispatchCall phoneE164={dispatchPhone} />
+      ) : null}
     </section>
   );
 }
@@ -751,6 +797,7 @@ function StopDetail({
   voiceApi,
   operations,
   reportRole,
+  dispatchPhone,
   mutating,
   onEnqueue,
   onCollectCod,
@@ -769,6 +816,8 @@ function StopDetail({
   operations: readonly DriverOfflineOperation[];
   /** driverReportRoleOf what the phone knows of the roles getMyOrganizationRoles answers (ORG-MY-ROLES-2026-10-12). */
   reportRole: DriverReportRole;
+  /** The organization's dispatch number (getMyDispatchContact), or null (DRV-DISPATCH-CONTACT-2026-10-12). */
+  dispatchPhone: string | null;
   mutating: boolean;
   onEnqueue: (kind: DriverOperationKind, blob?: Blob) => Promise<boolean>;
   onCollectCod: () => Promise<boolean>;
@@ -872,6 +921,7 @@ function StopDetail({
           stop={stop}
           operations={operations}
           reportRole={reportRole}
+          dispatchPhone={dispatchPhone}
           disabled={mutating}
           onReport={onReportFailedDelivery}
           onDiscardCollection={(operationId) =>
@@ -885,6 +935,7 @@ function StopDetail({
         <ConflictResolution
           stop={stop}
           operations={operations}
+          dispatchPhone={dispatchPhone}
           disabled={mutating}
           onDiscard={onDiscard}
           onNewSession={onNewSession}
@@ -994,6 +1045,7 @@ function StopAction({
 function ConflictResolution({
   stop,
   operations,
+  dispatchPhone,
   disabled,
   onDiscard,
   onNewSession,
@@ -1002,6 +1054,7 @@ function ConflictResolution({
 }: Readonly<{
   stop: ProjectedDriverStop;
   operations: readonly DriverOfflineOperation[];
+  dispatchPhone: string | null;
   disabled: boolean;
   onDiscard: (
     operationId: string,
@@ -1063,6 +1116,11 @@ function ConflictResolution({
       ));
   const offerRebuild =
     driverOperationDefinitions[attention.kind].transition && !report;
+  // DRV-DISPATCH-CONTACT-2026-10-12: a report's notice that asks to call
+  // dispatch about the cash gets "Llamar a despacho" when the number is known.
+  const reportAttention = report
+    ? driverFailedReportAttention(attention, stop, operations)
+    : null;
   const closeConfirmation = () => {
     confirmationDialogRef.current?.close();
     setConfirmation(null);
@@ -1100,10 +1158,13 @@ function ConflictResolution({
     <section className={styles.conflict} aria-labelledby="conflict-heading">
       <h3 id="conflict-heading">Acción que requiere atención</h3>
       <p>
-        {report
-          ? driverFailedReportAttentionMessage(attention, stop, operations)
+        {reportAttention
+          ? reportAttention.message
           : driverRejectionMessage(attention.kind, attention.rejectionCode)}
       </p>
+      {reportAttention?.callDispatch ? (
+        <DriverDispatchCall phoneE164={dispatchPhone} />
+      ) : null}
       <dl>
         <div>
           <dt>Hora registrada en el dispositivo</dt>

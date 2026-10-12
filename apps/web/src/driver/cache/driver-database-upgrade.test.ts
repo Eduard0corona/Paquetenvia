@@ -5,6 +5,7 @@ import {
 } from "../offline/operation-contract";
 import {
   DriverDatabaseVersion,
+  DriverDispatchContactStoreName,
   DriverOfflineOperationsStoreName,
   DriverOrganizationRolesStoreName,
   DriverProofBlobsStoreName,
@@ -20,18 +21,20 @@ import {
  * queued operation, drops the detail-less schema 1 snapshots, and "Cerrar
  * sesión" wipes the saved stop details. UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12:
  * version 4 rewrites every queued operation as schema 3 and keeps the schema 2
- * snapshots. A minimal in-memory stand-in for the IndexedDB calls the module
+ * snapshots. DRV-DISPATCH-CONTACT-2026-10-12: version 5 only adds the dispatch
+ * contact store. A minimal in-memory stand-in for the IndexedDB calls the module
  * makes is enough here; the real browser upgrade runs in the Playwright driver
  * suite.
  */
 const partitionKey = "H".repeat(43);
 
-describe("driver database version 4 upgrade", () => {
-  it("creates every store on a fresh install, the organization roles included (ORG-MY-ROLES-2026-10-12)", async () => {
+describe("driver database version 5 upgrade", () => {
+  it("creates every store on a fresh install, the organization roles and the dispatch contacts included", async () => {
     const database = new FakeDatabase();
     upgradeDriverDatabase(database.asDatabase(), database.asTransaction(), 0);
     await settle();
     expect(database.storeNames()).toEqual([
+      DriverDispatchContactStoreName,
       DriverOfflineOperationsStoreName,
       DriverOrganizationRolesStoreName,
       DriverProofBlobsStoreName,
@@ -39,6 +42,7 @@ describe("driver database version 4 upgrade", () => {
       DriverSyncLeasesStoreName,
     ].sort());
     expect(DriverOrganizationRolesStoreName).toBe("organization_roles");
+    expect(DriverDispatchContactStoreName).toBe("dispatch_contacts");
   });
 
   it("drops DRV-001 snapshots from version 1, which carry no stop details", async () => {
@@ -47,7 +51,7 @@ describe("driver database version 4 upgrade", () => {
     upgradeDriverDatabase(database.asDatabase(), database.asTransaction(), 1);
     await settle();
     expect(database.records(DriverStopsStoreName)).toEqual([]);
-    expect(database.storeNames()).toHaveLength(5);
+    expect(database.storeNames()).toHaveLength(6);
   });
 
   it("keeps every queued operation, blob and lease from version 2 as schema 3", async () => {
@@ -125,8 +129,51 @@ describe("driver database version 4 upgrade", () => {
     expect(database.records(DriverStopsStoreName)).toEqual([snapshot]);
   });
 
-  it("opens with version 4", () => {
-    expect(DriverDatabaseVersion).toBe(4);
+  it("only adds the dispatch contact store from version 4, which already reached main (DRV-DISPATCH-CONTACT-2026-10-12)", async () => {
+    const database = new FakeDatabase();
+    for (const name of [
+      DriverStopsStoreName,
+      DriverOfflineOperationsStoreName,
+      DriverProofBlobsStoreName,
+      DriverSyncLeasesStoreName,
+      DriverOrganizationRolesStoreName,
+    ]) {
+      database.createObjectStore(name);
+    }
+    const operation = {
+      ...createDriverOfflineOperation({
+        partitionKey,
+        orderId: "33333333-3333-4333-8333-333333333333",
+        kind: "START_DELIVERY",
+        expectedVersion: 7,
+        now: () => new Date("2026-10-12T19:00:00.000Z"),
+        randomUuid: () => "11111111-1111-4111-8111-111111111111",
+      }),
+    };
+    const snapshot = { partitionKey, schemaVersion: 2, synchronizedAt: "2026-10-12T19:00:00.000Z", stops: [], completedToday: 1 };
+    const roles = { partitionKey, schemaVersion: 1, roles: ["DRIVER"] };
+    const blob = { schemaVersion: 1, partitionKey, operationId: "x" };
+    const lease = { schemaVersion: 1, partitionKey, ownerId: "y" };
+    database.seed(DriverOfflineOperationsStoreName, "operation", operation);
+    database.seed(DriverStopsStoreName, "snapshot", snapshot);
+    database.seed(DriverOrganizationRolesStoreName, "roles", roles);
+    database.seed(DriverProofBlobsStoreName, "blob", blob);
+    database.seed(DriverSyncLeasesStoreName, "lease", lease);
+
+    upgradeDriverDatabase(database.asDatabase(), database.asTransaction(), 4);
+    await settle();
+
+    expect(database.storeNames()).toHaveLength(6);
+    expect(database.records(DriverDispatchContactStoreName)).toEqual([]);
+    expect(database.records(DriverOfflineOperationsStoreName)).toEqual([operation]);
+    expect(database.records(DriverStopsStoreName)).toEqual([snapshot]);
+    expect(database.records(DriverOrganizationRolesStoreName)).toEqual([roles]);
+    expect(database.records(DriverProofBlobsStoreName)).toEqual([blob]);
+    expect(database.records(DriverSyncLeasesStoreName)).toEqual([lease]);
+  });
+
+  it("opens with version 5", () => {
+    expect(DriverDatabaseVersion).toBe(5);
   });
 });
 
@@ -157,7 +204,7 @@ describe("Cerrar sesión wipes the saved stop details", () => {
     Object.defineProperty(globalThis, "indexedDB", { value: original, configurable: true });
   });
 
-  it("clears every snapshot and every saved roles answer (ORG-MY-ROLES-2026-10-12), and nothing else", async () => {
+  it("clears every snapshot, every saved roles answer and every saved dispatch contact, and nothing else", async () => {
     const database = new FakeDatabase();
     for (const name of [
       DriverStopsStoreName,
@@ -165,12 +212,15 @@ describe("Cerrar sesión wipes the saved stop details", () => {
       DriverProofBlobsStoreName,
       DriverSyncLeasesStoreName,
       DriverOrganizationRolesStoreName,
+      DriverDispatchContactStoreName,
     ]) {
       database.createObjectStore(name);
     }
     database.seed(DriverStopsStoreName, "partition-a", { stops: ["a"] });
     database.seed(DriverStopsStoreName, "partition-b", { stops: ["b"] });
     database.seed(DriverOrganizationRolesStoreName, "partition-a", { roles: ["DRIVER"] });
+    database.seed(DriverDispatchContactStoreName, "partition-a", { phoneE164: null });
+    database.seed(DriverDispatchContactStoreName, "partition-b", { phoneE164: null });
     database.seed(DriverOfflineOperationsStoreName, "operation", { id: "kept" });
     const opened: [string, number][] = [];
     Object.defineProperty(globalThis, "indexedDB", {
@@ -193,6 +243,7 @@ describe("Cerrar sesión wipes the saved stop details", () => {
     expect(opened).toEqual([[DriverStopsDatabaseName, DriverDatabaseVersion]]);
     expect(database.records(DriverStopsStoreName)).toEqual([]);
     expect(database.records(DriverOrganizationRolesStoreName)).toEqual([]);
+    expect(database.records(DriverDispatchContactStoreName)).toEqual([]);
     expect(database.records(DriverOfflineOperationsStoreName)).toEqual([{ id: "kept" }]);
     expect(database.closed).toBe(true);
   });

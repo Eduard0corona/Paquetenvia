@@ -301,7 +301,9 @@ describe("AI-07 record", () => {
       '"Reporte guardado en el teléfono. Se enviará cuando haya conexión."',
       '"Intento fallido · El despacho decide"',
       '"No, llama a despacho (Recommended)"',
-      "no phone number is shown",
+      // DRV-DISPATCH-CONTACT-2026-10-12: the text itself never carries a number; "Llamar a despacho" goes next to it.
+      "the text never carries a number",
+      '"Llamar a despacho" goes next to it: dispatch_contact, DRV-DISPATCH-CONTACT-2026-10-12',
       "a report made by dispatch is not blocked",
       // Review of the PR: the attempt it describes, REST confirmation, the
       // owner answers "Registrar desde Despacho" and "Después, con ADR".
@@ -377,7 +379,10 @@ describe("stop wiring", () => {
     expect(conflict).toMatch(
       /cashHold !== "recorded" &&\s*confirmedOperationalStatus !== null &&\s*driverOperationApplies\(/,
     );
-    expect(conflict).toContain("driverFailedReportAttentionMessage(attention, stop, operations)");
+    // driverFailedReportAttention is driverFailedReportAttentionMessage plus whether it asks to call dispatch
+    // (DRV-DISPATCH-CONTACT-2026-10-12).
+    expect(conflict).toContain("driverFailedReportAttention(attention, stop, operations)");
+    expect(conflict).toContain("reportAttention.message");
     expect(conflict).toContain("{offerRebuild ? (");
   });
 

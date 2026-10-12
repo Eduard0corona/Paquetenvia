@@ -70,7 +70,7 @@ propios `GET /me/organization-roles` (`ORG-MY-ROLES-2026-10-12`, ver "Quien tamb
 | Igual, mientras la consulta de roles va en camino y no hay respuesta conocida (justo después de cada inicio de sesión, porque cerrar sesión borra la guardada, o durante un reintento) | Nada sobre el rol: el reporte todavía no se ofrece y no se muestra ningún aviso |
 | Igual, pero el teléfono no conoce los roles de la persona en la organización y no hay consulta en camino (ninguna respuesta de `GET /me/organization-roles` en esta sesión ni guardada para su partición) | "No pudimos confirmar tu rol. Vuelve a abrir la app con conexión para reportar." Sin formulario; nunca pide cerrar sesión, que borraría lo guardado en el teléfono |
 | Cobro guardado en el teléfono (en cola, reintentando o retenido) | "Hay un cobro guardado en el teléfono. Si fue un error, descártalo para poder reportar que no se pudo entregar." y "Descartar cobro guardado" (con la confirmación de siempre); si el cobro está retenido, se descarta desde su aviso |
-| Cobro registrado (`DriverStop.cod.recorded`, o el servidor ya aceptó el cobro y falta la confirmación REST) | "El cobro ya está registrado. Si no puedes entregar, llama a despacho: ellos deciden y coordinan la devolución del cobro." Sin número de teléfono: la app no tiene el de despacho |
+| Cobro registrado (`DriverStop.cod.recorded`, o el servidor ya aceptó el cobro y falta la confirmación REST) | "El cobro ya está registrado. Si no puedes entregar, llama a despacho: ellos deciden y coordinan la devolución del cobro." El texto no lleva número; con el número de despacho de la organización configurado, "Llamar a despacho" va debajo (`DRV-DISPATCH-CONTACT-2026-10-12`, [nota](ui-001-phase3-driver-dispatch-contact.md)) |
 | Reporte guardado, esperando sincronizar | "Reporte guardado en el teléfono. Se enviará cuando haya conexión." El estado confirmado sigue "En reparto" y "Estado por sincronizar" dice "Intento fallido" |
 | Reporte retenido | El aviso de la parada con el motivo en español (ver "Atención") |
 | FAILED_ATTEMPT confirmado por REST | "Intento fallido · El despacho decide" en el estado de la lista y del detalle; ninguna acción |
@@ -253,6 +253,9 @@ registrarla": dice que la incidencia quedó abierta y que despacho decide, y que
   tipo que la app no conoce, el parser lo rechaza y toda la cola se reporta no disponible, sin mandar ni borrar nada.
 - La caché del Service Worker sube a `paquetenvia-driver-shell-v7` para que el shell anterior (que abriría la versión
   3) no se sirva sin conexión.
+- Después, `DRV-DISPATCH-CONTACT-2026-10-12` subió la base a la versión 5 (y el shell a
+  `paquetenvia-driver-shell-v8`) solo para agregar el store `dispatch_contacts`; la operación sigue en el esquema 3.
+  Ver [la nota del teléfono de despacho](ui-001-phase3-driver-dispatch-contact.md).
 
 ## Cobro (respuesta del owner "No, llama a despacho (Recommended)")
 
@@ -380,7 +383,9 @@ python3 docs/normative/v0.6/tools/validate_contracts.py
 - Un reporte que vence (72 horas) después de abrir su incidencia deja esa incidencia abierta para despacho; el aviso lo
   dice y no invita a reportarlo de nuevo, pero el teléfono no impide que el repartidor, después de descartar un reporte
   con incidencia abierta, reporte otra vez en el mismo intento.
-- No hay número de despacho en la app; "llama a despacho" depende de que el repartidor lo tenga.
+- Mientras el owner no configure el número de despacho de la organización (`DRV-DISPATCH-CONTACT-2026-10-12`, "Sí,
+  configurable (Recommended)"), "llama a despacho" depende de que el repartidor lo tenga; con el número, la app
+  muestra "Llamar a despacho" junto a esos textos ([nota](ui-001-phase3-driver-dispatch-contact.md)).
 - Los roles se leen al arrancar la sesión en la página (inicio de sesión, cambio de organización o recarga con
   conexión): si a la persona le dan o le quitan DISPATCHER o PLATFORM_ADMIN con la página abierta, o mientras el
   teléfono está sin conexión con una respuesta guardada, el teléfono lo sabe hasta el siguiente arranque con conexión.

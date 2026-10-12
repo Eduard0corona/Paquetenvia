@@ -61,6 +61,11 @@ public static class TenantCapabilities
         Create("getRecipientCallAvailability", Driver);
     public static readonly TenantCapability RequestRecipientCall = Create("requestRecipientCall", Driver);
 
+    // x-capability-matrix dispatch_contact_operations (DRV-DISPATCH-CONTACT-2026-10-12): only a DRIVER reads the
+    // dispatch number of its selected organization, without MFA like listMyStops; every other role receives the
+    // uniform 403 before anything is read.
+    public static readonly TenantCapability GetMyDispatchContact = Create("getMyDispatchContact", Driver);
+
     // x-capability-matrix own_membership_operations (ORG-MY-ROLES-2026-10-12): every member role, without MFA, reads
     // its own roles in the selected organization and nothing else; a person without an ACTIVE membership there is
     // refused before (tenant context) and again here.

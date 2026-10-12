@@ -81,6 +81,13 @@ nueva la pide; si otra pestaña bloquea la subida, la pantalla pide cerrarla y
 recargar, y la conexión tardía se cierra. Ver
 `ui-001-phase3-driver-failed-delivery.md`.
 
+Actualización `DRV-DISPATCH-CONTACT-2026-10-12`: la base sube a la versión `5` solo para crear el store
+`dispatch_contacts` (la última respuesta de `getMyDispatchContact` por partición: el número de despacho o null). La
+versión 4 ya había llegado a main, así que el store nuevo necesita su propia versión. La subida desde la 4 no toca
+operaciones (siguen en esquema 3), fotos, leases, instantáneas ni roles guardados; una app de la versión 4 no puede
+abrir la base. El shell del Service Worker sube a `paquetenvia-driver-shell-v8`. El store sale del teléfono con la
+partición ante 401/403 y al cerrar sesión, como las instantáneas. Ver `ui-001-phase3-driver-dispatch-contact.md`.
+
 La base conserva el nombre `paquetenvia-driver-stops-v1` y sube su versión de
 base de datos a `2`. El snapshot DRV-001 conserva `schemaVersion: 1`. La
 actualización agrega:
