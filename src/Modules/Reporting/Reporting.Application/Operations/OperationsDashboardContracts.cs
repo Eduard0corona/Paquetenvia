@@ -69,7 +69,11 @@ public sealed record OperationsDashboardCursor(
     DateTimeOffset UpdatedAt,
     Guid OrderId);
 
-public sealed record OperationsOrganizationSummary(Guid OrganizationId, string DisplayName);
+/// <param name="DisplayName">
+/// OBS-001-OPERATED-OWNER-NAME-2026-10-12: the name RLS lets the selected organization read, which is only its own;
+/// <c>null</c> for the other party of an order (<see cref="OperationsDashboardProjectionPolicy.IsVisibleName"/>).
+/// </param>
+public sealed record OperationsOrganizationSummary(Guid OrganizationId, string? DisplayName);
 
 public sealed record OperationsClientSummary(Guid ClientAccountId, string DisplayName);
 
@@ -160,6 +164,23 @@ public static class OperationsDashboardProjectionPolicy
 {
     public static bool IsUnassignedAlert(string status, bool hasActiveAssignment) =>
         status is "READY_FOR_PICKUP" or "RESCHEDULED" && !hasActiveAssignment;
+
+    /// <summary>
+    /// RLS (AI-06 <c>orders_tenant</c>) shows the selected organization only the orders it owns or operates; a row
+    /// outside both is an inconsistent projection and fails closed.
+    /// </summary>
+    public static bool IsReaderParty(Guid readerOrganizationId, Guid ownerOrganizationId, Guid? operatorOrganizationId) =>
+        ownerOrganizationId == readerOrganizationId || operatorOrganizationId == readerOrganizationId;
+
+    /// <summary>
+    /// OBS-001-OPERATED-OWNER-NAME-2026-10-12: <c>app.current_org_ids</c> holds only the selected organization, so
+    /// AI-06 <c>organizations_tenant</c> lets it read only its own organizations row. Its own name is therefore present
+    /// and the other party of an order - the owner of an order it only operates, or the operator of an order it owns -
+    /// has no name; <c>owner_org_id</c> and <c>operator_org_id</c> stay distinct (AI-01 §2.5). A missing own name, or
+    /// a name RLS should have hidden, is an inconsistent projection and fails closed instead of reaching the page.
+    /// </summary>
+    public static bool IsVisibleName(Guid readerOrganizationId, Guid organizationId, string? displayName) =>
+        organizationId == readerOrganizationId ? displayName is not null : displayName is null;
 
     /// <summary>The shared non-PII driver label; the assignable-driver list uses the same one.</summary>
     public static string DriverReference(Guid driverId) =>

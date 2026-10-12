@@ -69,7 +69,11 @@ por ID y nunca sustituye una versión por otra menor.
 La respuesta contiene sólo `generated_at`, `items` y `next_cursor`. Cada item
 conserva el DTO exacto de OBS-001:
 
-- owner/operator con nombre canónico visible bajo RLS;
+- owner/operator con nombre canónico visible bajo RLS, que solo es el de la organización seleccionada
+  (OBS-001-OPERATED-OWNER-NAME-2026-10-12): la otra parte de la orden (la dueña de una orden que solo opera, o el
+  operador de una orden propia) conserva su id con `display_name: null`, y la PWA la muestra como "Otra organización"
+  y no la ofrece en los filtros Dueño/Opera; una fila que no posee ni opera, su propio nombre ausente o un nombre
+  que RLS debía ocultar fallan cerrado (503);
 - cliente visible o `null`;
 - zona operativa de destino o `null`;
 - `pickup_window` en `null`; `delivery_window` es la ventana de servicio de la orden (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02) o `null`, representada como `Horario de la zona`;
@@ -150,7 +154,9 @@ lista semánticas, `time datetime`, aria-live/aria-busy, foco visible, targets d
 - Unit: contrato, filtros, cursor, 17 estados, assignments, alertas, referencia,
   ubicación, costo y UTC.
 - `OperationsDashboardPostgreSql`: PostgreSQL/PostGIS real, RLS, autorización,
-  aislamiento, filtros, respuesta/headers y privacidad.
+  aislamiento, filtros, respuesta/headers y privacidad; una orden de Synthetic Viewer operada por Synthetic
+  Operations carga para el operador (Tablero, cada cola de la bandeja y conteos iguales a las listas) sin nombre,
+  cliente, zona ni dirección de la dueña, y para la dueña sin el nombre del operador.
 - Vitest: parsers, API/filtros, labels/zona horaria, SW, CSP, almacenamiento y
   acciones; deferreds cubren single-flight, request previa, lectura obligatoria,
   snapshot exacto, cambio de sesión, fallo y el par de detalle.

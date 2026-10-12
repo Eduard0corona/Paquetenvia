@@ -82,6 +82,12 @@ public sealed class OperationsDashboardImplementationContractTests
             "assignment_id", "assignment_type", "driver_id", "driver_reference", "status");
         AssertJsonProperties<OperationsDriverLocationResponse>(
             "accuracy_m", "captured_at", "lat", "lng");
+        // OBS-001-OPERATED-OWNER-NAME-2026-10-12: an owner or operator is its id and the name RLS lets the selected
+        // organization read (null for the other party of the order); never a legal name or another column.
+        AssertJsonProperties<OperationsOrganizationResponse>("display_name", "organization_id");
+        Assert.Equal(
+            typeof(string),
+            typeof(OperationsOrganizationResponse).GetProperty(nameof(OperationsOrganizationResponse.DisplayName))!.PropertyType);
         // UI-PHASE3-INBOX-TOTAL-2026-10-10: the order total in the AI-05 Money shape, int64 cents only.
         AssertJsonProperties<OperationsMoneyResponse>("amount_cents", "currency");
         Assert.Equal(
@@ -125,6 +131,40 @@ public sealed class OperationsDashboardImplementationContractTests
         Assert.DoesNotContain("UPDATE ", source, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("DELETE FROM", source, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("CREATE TABLE", source, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void Organization_names_come_only_from_the_RLS_scoped_projection()
+    {
+        // OBS-001-OPERATED-OWNER-NAME-2026-10-12: the owner of an order the selected organization only operates (and
+        // the operator of one it owns) keeps the name RLS hides as null. No SECURITY DEFINER lookup, role or grant
+        // reads it; the reader checks every row against the selected organization instead of failing the page.
+        var reader = Read(
+            "src", "Modules", "Reporting", "Reporting.Infrastructure",
+            "Operations", "PostgreSqlOperationsDashboardReader.cs");
+        Assert.Contains(
+            "LEFT JOIN organizations.organizations AS owner_organization",
+            reader,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "LEFT JOIN organizations.organizations AS operator_organization",
+            reader,
+            StringComparison.Ordinal);
+        Assert.Contains("items.Add(Map(reader, request.OrganizationId));", reader, StringComparison.Ordinal);
+        Assert.Contains(
+            "OperationsDashboardProjectionPolicy.IsReaderParty(readerOrganizationId, ownerId, operatorId)",
+            reader,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "OperationsDashboardProjectionPolicy.IsVisibleName(readerOrganizationId, ownerId, ownerName)",
+            reader,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "OperationsDashboardProjectionPolicy.IsVisibleName(readerOrganizationId, operatorId.Value, operatorName)",
+            reader,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("legal_name", reader, StringComparison.Ordinal);
+        Assert.DoesNotContain("security.", reader, StringComparison.Ordinal);
     }
 
     [Fact]

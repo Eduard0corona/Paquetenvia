@@ -101,6 +101,34 @@ regla, la proyección es inconsistente y responde 503. No cambian la forma de la
 PLATFORM_ADMIN con MFA); los demás roles siguen con 403. `getOperationsQueueCounts` (AI-05) cuenta `queues.price_review`
 con el mismo predicado. El endpoint sigue fuera de AI-05 y es la única excepción de `HttpSurfaceOpenApiCoverageTests`.
 
+## Enmienda 2026-10-12: la otra parte de la orden sin nombre (OBS-001-OPERATED-OWNER-NAME-2026-10-12)
+
+Defecto preexistente (riesgo residual del PR #221): cuando la organización seleccionada es el `operator_org_id` de una
+orden de otra dueña, AI-06 `organizations_tenant` le oculta la fila de la dueña (`app.current_org_ids` solo contiene la
+seleccionada), el nombre llegaba `NULL` y "una ausencia inconsistente falla cerrado" respondía 503 para toda la
+página: cada cola de la bandeja y el Tablero, mientras `getOperationsQueueCounts` sí contaba esas órdenes. El caso
+espejo fallaba igual: la dueña que lee una orden que opera otra organización no ve el nombre del operador.
+
+Instrucción del owner (2026-10-11): "Pick the minimal option consistent with `owner_org_id` ≠ `operator_org_id`
+semantics (CLAUDE.md invariant 2), and document the choice." Se elige no devolver nombre, para las dos partes:
+
+- `owner` y `operator` conservan la forma `{organization_id, display_name}`. `display_name` es el nombre propio de la
+  organización seleccionada y `null` para la otra parte de la orden (la dueña de una orden que solo opera, o el
+  operador de una orden propia). Los ids se conservan: el operador ya lee `owner_org_id` en la fila de la orden
+  (`orders_tenant`, AI-05 `getOrder`).
+- "Visible bajo RLS" queda exacto: solo el nombre propio está presente. Falla cerrado (503) una fila que la
+  organización seleccionada no posee ni opera, su propio nombre ausente o un nombre que RLS debía ocultar.
+- Cliente, zona y demás filas de la dueña siguen ausentes para el operador, como antes. Misma transacción RLS, los
+  mismos dos comandos, los mismos lectores (DISPATCHER y PLATFORM_ADMIN con MFA) y el mismo 403 para los demás roles.
+- La PWA acepta `display_name: null`, exige una parte con nombre por orden, muestra "Otra organización" (nunca el id)
+  en la tarjeta del Tablero y en el detalle, y los filtros Dueño/Opera solo ofrecen organizaciones con nombre
+  visible, igual que clientes y zonas.
+
+Se descarta una función SECURITY DEFINER que devuelva el nombre de la dueña al operador: ampliaría lo que el operador
+lee de otra organización (decisión de privacidad y aislamiento, BLOCKER según AI-01 §7) y exigiría función, rol o
+grant nuevos en AI-06/AI-18 con su propia decisión; el trabajo del operador no necesita ese nombre. Sin cambios en
+AI-04, AI-05, AI-06, AI-18, migraciones, roles, grants ni flujos cross-module. Rollback: revertir el commit.
+
 ## Alternativas descartadas
 
 - Ampliar `listOrders`: modificaría AI-05 y acoplaría consumidores existentes.
@@ -109,6 +137,8 @@ con el mismo predicado. El endpoint sigue fuera de AI-05 y es la única excepci�
 - Construir estado desde SignalR: pierde eventos, viola autoridad REST y complica
   reconexión.
 - Elegir un proveedor de mapas: anticipa GATE-003 y añade terceros no aprobados.
+- Leer el nombre de la otra parte de la orden con una función SECURITY DEFINER: amplía lo que una organización lee
+  de otra; ver la enmienda OBS-001-OPERATED-OWNER-NAME-2026-10-12.
 
 ## Rollback
 

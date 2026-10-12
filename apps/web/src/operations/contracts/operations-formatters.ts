@@ -1,4 +1,4 @@
-import type { OrderStatus } from "./operations-dashboard";
+import type { OperationsOrganizationSummary, OrderStatus } from "./operations-dashboard";
 
 export const orderStatusLabels: Readonly<Record<OrderStatus, string>> = {
   DRAFT: "Borrador",
@@ -63,6 +63,22 @@ const assignmentTypeLabels: Readonly<Record<string, string>> = {
 export function assignmentTypeLabel(value: string | null | undefined): string {
   if (value === null || value === undefined) return "Sin asignación";
   return assignmentTypeLabels[value] ?? "Asignada";
+}
+
+/**
+ * OBS-001-OPERATED-OWNER-NAME-2026-10-12: the read model names only the active organization. The other party of an
+ * order - the owner of an order it only operates, or the operator of an order it owns - reads "Otra organización",
+ * never its id. The dashboard card and the order detail share these labels.
+ */
+export const otherOrganizationLabel = "Otra organización";
+
+export function ownerLabel(owner: OperationsOrganizationSummary): string {
+  return owner.display_name ?? otherOrganizationLabel;
+}
+
+export function operatorLabel(operator: OperationsOrganizationSummary | null): string {
+  if (operator === null) return "Sin operador";
+  return operator.display_name ?? otherOrganizationLabel;
 }
 
 export function serviceTypeLabel(value: string): string {

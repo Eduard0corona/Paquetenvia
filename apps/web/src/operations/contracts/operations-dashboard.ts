@@ -31,7 +31,11 @@ export type OperationsCostWarning =
 
 export interface OperationsOrganizationSummary {
   readonly organization_id: string;
-  readonly display_name: string;
+  /**
+   * OBS-001-OPERATED-OWNER-NAME-2026-10-12: the active organization's own name; `null` for the other party of the
+   * order (the owner of an order it only operates, or the operator of an order it owns), whose row RLS hides.
+   */
+  readonly display_name: string | null;
 }
 
 export interface OperationsClientSummary {
