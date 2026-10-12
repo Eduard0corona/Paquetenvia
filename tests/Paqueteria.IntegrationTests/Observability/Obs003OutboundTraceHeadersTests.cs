@@ -100,8 +100,7 @@ public sealed class Obs003OutboundTraceHeadersTests
     public async Task Worker_clients_send_no_trace_context_inside_a_cycle()
     {
         await using var capture = await TraceHeaderCaptureServer.StartAsync();
-        await using var worker = new WebApplicationFactory<WorkerProgram>().WithWebHostBuilder(builder =>
-            builder.UseEnvironment("Production"));
+        await using var worker = new ProductionWorkerFactory();
         var clients = worker.Services.GetRequiredService<IHttpClientFactory>();
         AssertRegistered(worker.Services, WhatsAppClient);
         AssertRegistered(worker.Services, AcsEmailClient);
@@ -183,6 +182,11 @@ public sealed class Obs003OutboundTraceHeadersTests
             builder.ConfigureTestServices(services =>
                 services.AddSingleton<IStartupFilter>(new ProbeStartupFilter(capture)));
         }
+    }
+
+    private sealed class ProductionWorkerFactory : WebApplicationFactory<WorkerProgram>
+    {
+        protected override void ConfigureWebHost(IWebHostBuilder builder) => builder.UseEnvironment("Production");
     }
 
     private sealed class ProbeStartupFilter(TraceHeaderCaptureServer capture) : IStartupFilter
