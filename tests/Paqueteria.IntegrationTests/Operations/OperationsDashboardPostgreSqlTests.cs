@@ -19,6 +19,21 @@ public sealed class OperationsDashboardPostgreSqlTests(
         Guid.Parse("71000000-0000-0000-0000-000000000001");
     private static readonly Guid AssignedOrderId =
         Guid.Parse("71000000-0000-0000-0000-000000000002");
+    private static readonly Guid OperatedOrderId =
+        Guid.Parse("71000000-0000-0000-0000-000000000003");
+    private static readonly Guid OperatedQuoteId =
+        Guid.Parse("76000000-0000-0000-0000-000000000003");
+
+    // What RLS keeps from the operator of an order Synthetic Viewer owns: the owner's organizations row (display and
+    // legal name), its client account, its operating zone and service area, and the destination's address summary.
+    private static readonly string[] OwnerOnlyValues =
+    [
+        "Synthetic Viewer",
+        "Synthetic Client",
+        "Synthetic Core",
+        "Synthetic Area",
+        "Private synthetic destination",
+    ];
 
     public async Task InitializeAsync() => await SeedAsync();
 
@@ -263,7 +278,11 @@ public sealed class OperationsDashboardPostgreSqlTests(
     }
 
     /// <summary>Every page of <c>price_review=true</c> for one organization, following the cursor.</summary>
-    private async Task<List<JsonElement>> ReadAllPriceReviewAsync(string credential, Guid organizationId)
+    private Task<List<JsonElement>> ReadAllPriceReviewAsync(string credential, Guid organizationId) =>
+        ReadAllAsync(credential, organizationId, "price_review=true");
+
+    /// <summary>Every page of one dashboard filter for one organization, following the cursor.</summary>
+    private async Task<List<JsonElement>> ReadAllAsync(string credential, Guid organizationId, string filter)
     {
         var items = new List<JsonElement>();
         string? cursor = null;
@@ -272,7 +291,7 @@ public sealed class OperationsDashboardPostgreSqlTests(
             using var response = await SendAsync(
                 credential,
                 organizationId,
-                "?price_review=true" + (cursor is null ? string.Empty : "&cursor=" + Uri.EscapeDataString(cursor)));
+                "?" + filter + (cursor is null ? string.Empty : "&cursor=" + Uri.EscapeDataString(cursor)));
             Assert.Equal(HttpStatusCode.OK, response.StatusCode);
             var body = await response.Content.ReadFromJsonAsync<JsonElement>();
             items.AddRange(body.GetProperty("items").EnumerateArray().Select(item => item.Clone()));
@@ -284,8 +303,212 @@ public sealed class OperationsDashboardPostgreSqlTests(
             cursor = body.GetProperty("next_cursor").GetString();
         }
 
-        throw new InvalidOperationException("The price review list did not end.");
+        throw new InvalidOperationException("The dashboard list did not end.");
     }
+
+    [Fact]
+    public async Task Operator_loads_the_orders_it_operates_for_another_owner_without_owner_data()
+    {
+        // OBS-001-OPERATED-OWNER-NAME-2026-10-12: Synthetic Operations operates an order Synthetic Viewer owns. RLS
+        // hides the owner's organizations row from the operator, which made every page holding the order answer 503.
+        // The page now loads with the owner's id and no name, and nothing else RLS hides from the operator leaks.
+        try
+        {
+            await AddOperatedOrderAsync();
+
+            using var detail = await SendAsync(
+                MockIdentityProfiles.ActiveMultiOrganization,
+                PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId,
+                $"?order_id={OperatedOrderId:D}");
+            Assert.Equal(HttpStatusCode.OK, detail.StatusCode);
+            var json = await detail.Content.ReadAsStringAsync();
+            AssertNoOwnerOnlyData(json);
+            var item = Assert.Single(JsonSerializer.Deserialize<JsonElement>(json).GetProperty("items").EnumerateArray());
+            Assert.Equal(
+                [
+                    "aggregate_version", "assignment", "client", "cost_warning", "created_at", "delivery_window",
+                    "delivery_zone", "latest_driver_location", "operator", "order_id", "owner", "pickup_window",
+                    "public_id", "service_type", "status", "total", "unassigned_alert", "updated_at",
+                ],
+                PropertyNames(item));
+            var owner = item.GetProperty("owner");
+            Assert.Equal(["display_name", "organization_id"], PropertyNames(owner));
+            Assert.Equal(
+                PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId,
+                owner.GetProperty("organization_id").GetGuid());
+            Assert.Equal(JsonValueKind.Null, owner.GetProperty("display_name").ValueKind);
+            var operatorOrganization = item.GetProperty("operator");
+            Assert.Equal(["display_name", "organization_id"], PropertyNames(operatorOrganization));
+            Assert.Equal(
+                PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId,
+                operatorOrganization.GetProperty("organization_id").GetGuid());
+            Assert.Equal("Synthetic Operations", operatorOrganization.GetProperty("display_name").GetString());
+            // The owner's client account and destination zone are owner rows under RLS: absent, as for any reader
+            // that cannot see them.
+            Assert.Equal(JsonValueKind.Null, item.GetProperty("client").ValueKind);
+            Assert.Equal(JsonValueKind.Null, item.GetProperty("delivery_zone").ValueKind);
+            Assert.Equal(JsonValueKind.Null, item.GetProperty("assignment").ValueKind);
+            Assert.Equal(JsonValueKind.Null, item.GetProperty("latest_driver_location").ValueKind);
+            // The order's own columns, the ones the operator already reads through getOrder.
+            Assert.Equal("ORD_obs_operated", item.GetProperty("public_id").GetString());
+            Assert.Equal("READY_FOR_PICKUP", item.GetProperty("status").GetString());
+            Assert.True(item.GetProperty("unassigned_alert").GetBoolean());
+            Assert.Equal("BELOW_MINIMUM_SNAPSHOT", item.GetProperty("cost_warning").GetString());
+            Assert.Equal(9_000L, item.GetProperty("total").GetProperty("amount_cents").GetInt64());
+
+            // The Tablero and every list of the inbox that holds the order load, without the owner's other orders.
+            foreach (var query in new[]
+            {
+                string.Empty,
+                "?unassigned=true",
+                "?price_review=true",
+                "?status=READY_FOR_PICKUP",
+                "?status=READY_FOR_PICKUP&unassigned=true",
+                $"?owner_org_id={PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId:D}",
+                $"?operator_org_id={PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId:D}",
+            })
+            {
+                using var page = await SendAsync(
+                    MockIdentityProfiles.ActiveMultiOrganization,
+                    PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId,
+                    query);
+                Assert.Equal(HttpStatusCode.OK, page.StatusCode);
+                var body = await page.Content.ReadAsStringAsync();
+                AssertNoOwnerOnlyData(body);
+                var publicIds = JsonSerializer.Deserialize<JsonElement>(body)
+                    .GetProperty("items")
+                    .EnumerateArray()
+                    .Select(listed => listed.GetProperty("public_id").GetString())
+                    .ToArray();
+                Assert.Contains("ORD_obs_operated", publicIds);
+                Assert.DoesNotContain("ORD_obs_ready", publicIds);
+                Assert.DoesNotContain("ORD_obs_assigned", publicIds);
+            }
+
+            // The queue counts already counted the order; the lists now hold exactly what they count.
+            using var counts = await SendAsync(
+                MockIdentityProfiles.ActiveMultiOrganization,
+                PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId,
+                path: "/api/v1/operations/queue-counts");
+            Assert.Equal(HttpStatusCode.OK, counts.StatusCode);
+            var queues = (await counts.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("queues");
+            var unassigned = await ReadAllAsync(
+                MockIdentityProfiles.ActiveMultiOrganization,
+                PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId,
+                "unassigned=true");
+            var priceReview = await ReadAllPriceReviewAsync(
+                MockIdentityProfiles.ActiveMultiOrganization,
+                PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId);
+            Assert.Equal(unassigned.Count, queues.GetProperty("unassigned").GetInt64());
+            Assert.Equal(priceReview.Count, queues.GetProperty("price_review").GetInt64());
+            Assert.Contains(unassigned, listed => listed.GetProperty("public_id").GetString() == "ORD_obs_operated");
+        }
+        finally
+        {
+            await DeleteOperatedOrderAsync();
+        }
+    }
+
+    [Fact]
+    public async Task Owner_loads_the_orders_another_organization_operates_without_the_operator_name()
+    {
+        // OBS-001-OPERATED-OWNER-NAME-2026-10-12, the mirror case: the owner keeps its name, client and zone, and the
+        // operator's organizations row, hidden from the owner by RLS, keeps its id and no name.
+        try
+        {
+            await AddOperatedOrderAsync();
+
+            using var detail = await SendAsync(
+                MockIdentityProfiles.ActivePlatformAdminMfa,
+                PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId,
+                $"?order_id={OperatedOrderId:D}");
+            Assert.Equal(HttpStatusCode.OK, detail.StatusCode);
+            var json = await detail.Content.ReadAsStringAsync();
+            Assert.DoesNotContain("Synthetic Operations", json, StringComparison.Ordinal);
+            var item = Assert.Single(JsonSerializer.Deserialize<JsonElement>(json).GetProperty("items").EnumerateArray());
+            Assert.Equal("Synthetic Viewer", item.GetProperty("owner").GetProperty("display_name").GetString());
+            var operatorOrganization = item.GetProperty("operator");
+            Assert.Equal(["display_name", "organization_id"], PropertyNames(operatorOrganization));
+            Assert.Equal(
+                PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId,
+                operatorOrganization.GetProperty("organization_id").GetGuid());
+            Assert.Equal(JsonValueKind.Null, operatorOrganization.GetProperty("display_name").ValueKind);
+            Assert.Equal("Synthetic Client", item.GetProperty("client").GetProperty("display_name").GetString());
+            Assert.Equal("Synthetic Core", item.GetProperty("delivery_zone").GetProperty("name").GetString());
+
+            using var board = await SendAsync(
+                MockIdentityProfiles.ActivePlatformAdminMfa,
+                PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId);
+            Assert.Equal(HttpStatusCode.OK, board.StatusCode);
+            var boardJson = await board.Content.ReadAsStringAsync();
+            Assert.DoesNotContain("Synthetic Operations", boardJson, StringComparison.Ordinal);
+            Assert.Contains(
+                JsonSerializer.Deserialize<JsonElement>(boardJson).GetProperty("items").EnumerateArray(),
+                listed => listed.GetProperty("public_id").GetString() == "ORD_obs_operated");
+        }
+        finally
+        {
+            await DeleteOperatedOrderAsync();
+        }
+    }
+
+    /// <summary>
+    /// A copy of the ready order - owned by Synthetic Viewer, with its client, destination and cost warning - that
+    /// Synthetic Operations operates, with its own quote. The tests delete it afterwards.
+    /// </summary>
+    private async Task AddOperatedOrderAsync()
+    {
+        await using var connection = new NpgsqlConnection(factory.AdminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            """
+            INSERT INTO pricing.quotes
+            SELECT (jsonb_populate_record(NULL::pricing.quotes, to_jsonb(q) || jsonb_build_object(
+              'id',@quote,'input_hash',decode(md5(@quote::text) || md5(@quote::text),'hex')))).*
+            FROM pricing.quotes q WHERE q.id='76000000-0000-0000-0000-000000000001';
+            INSERT INTO orders.orders
+            SELECT (jsonb_populate_record(NULL::orders.orders, to_jsonb(o) || jsonb_build_object(
+              'id',@order,'quote_id',@quote,'public_id',@public_id,'operator_org_id',@operator))).*
+            FROM orders.orders o WHERE o.id='71000000-0000-0000-0000-000000000001';
+            """,
+            connection);
+        command.Parameters.AddWithValue("quote", OperatedQuoteId);
+        command.Parameters.AddWithValue("order", OperatedOrderId);
+        command.Parameters.AddWithValue("public_id", "ORD_obs_operated");
+        command.Parameters.AddWithValue("operator", PostgreSqlSecurityWebApplicationFactory.OperationsOrganizationId);
+        await command.ExecuteNonQueryAsync();
+    }
+
+    private async Task DeleteOperatedOrderAsync()
+    {
+        await using var connection = new NpgsqlConnection(factory.AdminConnectionString);
+        await connection.OpenAsync();
+        await using var cleanup = new NpgsqlCommand(
+            """
+            DELETE FROM orders.orders WHERE id = @order;
+            DELETE FROM pricing.quotes WHERE id = @quote;
+            """,
+            connection);
+        cleanup.Parameters.AddWithValue("order", OperatedOrderId);
+        cleanup.Parameters.AddWithValue("quote", OperatedQuoteId);
+        await cleanup.ExecuteNonQueryAsync();
+    }
+
+    private static void AssertNoOwnerOnlyData(string json)
+    {
+        foreach (var value in OwnerOnlyValues)
+        {
+            Assert.DoesNotContain(value, json, StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("legal_name", json, StringComparison.Ordinal);
+        Assert.DoesNotContain("email", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("phone", json, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("address", json, StringComparison.OrdinalIgnoreCase);
+    }
+
+    private static string[] PropertyNames(JsonElement element) =>
+        element.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal).ToArray();
 
     /// <summary>
     /// Finished copies of the assigned order, with its authorized financial override (so they keep a cost warning),

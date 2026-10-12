@@ -1,5 +1,27 @@
 # Changelog
 
+## Tablero y bandeja: la otra parte de la orden sin nombre en lugar de 503 (OBS-001-OPERATED-OWNER-NAME-2026-10-12) — 2026-10-12
+
+- Instrucción literal del project owner (2026-10-11), registrada en `decision-log.md` como cambio MAJOR (AI-01 §7):
+  "Pick the minimal option consistent with `owner_org_id` ≠ `operator_org_id` semantics (CLAUDE.md invariant 2), and
+  document the choice.", entre "Return no owner name, or a neutral label, for orders the reader only operates." y "Add
+  a narrow SECURITY DEFINER lookup that returns only the display name of owners that have an operator relationship
+  with the caller." Se eligió la primera, para las dos partes de la orden.
+- Defecto preexistente (riesgo residual del PR #221): AI-06 `organizations_tenant` oculta al operador la fila de la
+  organización dueña, el read model OBS-001 leía su nombre `NULL` y respondía 503 para toda la página (cada cola de la
+  bandeja y el Tablero), aunque `getOperationsQueueCounts` contaba esas órdenes. La dueña que lee una orden que opera
+  otra organización fallaba igual con el nombre del operador.
+- Read model `GET /api/v1/operations/dashboard` (ADR-OBS-001, fuera de AI-05): `owner` y `operator` conservan
+  `{organization_id, display_name}`; `display_name` es el nombre propio de la organización seleccionada y `null` para
+  la otra parte. Falla cerrado (503) una fila que no posee ni opera, su propio nombre ausente o un nombre que RLS debía
+  ocultar. Cliente, zona y demás filas de la dueña siguen ausentes para el operador; misma transacción RLS, mismos dos
+  comandos, mismos lectores y mismo 403.
+- PWA: el parser acepta `display_name: null` y exige una parte con nombre por orden; la tarjeta del Tablero y el
+  detalle muestran "Otra organización" (nunca el id); los filtros Dueño/Opera solo ofrecen organizaciones con nombre.
+- AI-07 `dispatch_dashboard`: `decision_amendments` y `organization_names`.
+- Sin cambios en AI-04, AI-05, AI-06, AI-18, migraciones, roles, grants, funciones SECURITY DEFINER, capacidades ni
+  flujos cross-module.
+
 ## Rutas: errores por motivo con "Verificar identidad", fechas legibles, todas las páginas, "Agregar entrega" por guía y detalle sin IDs (UI-PHASE3-ROUTES-NO-IDS-2026-10-12) — 2026-10-12
 
 - Pregunta y respuesta literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR

@@ -324,6 +324,8 @@ routes:
     - UI-PHASE3-DRIVERS-2026-10-11
 screen_contracts:
   dispatch_dashboard:
+    decision_amendments:
+    - OBS-001-OPERATED-OWNER-NAME-2026-10-12
     must_show:
     - public_id
     - owner_brand
@@ -342,6 +344,13 @@ screen_contracts:
     - operator_org
     - service_type
     - date
+    # OBS-001-OPERATED-OWNER-NAME-2026-10-12 (project owner, 2026-10-11, "Pick the minimal option consistent with
+    # owner_org_id ≠ operator_org_id semantics"): no SECURITY DEFINER lookup of another organization's name.
+    organization_names: owner_brand and the operator are the names RLS lets the active organization read, only its
+      own (AI-06 organizations_tenant); the other party of an order, that is the owner of an order it only operates or
+      the operator of an order it owns, shows "Otra organización" on the card and in the order detail, never its id,
+      and the owner_org and operator_org filters offer only organizations with a visible name; a page holding such an
+      order loads instead of failing
     actions:
     - open_order
     - assign_own

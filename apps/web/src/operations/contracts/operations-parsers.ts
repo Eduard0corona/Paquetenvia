@@ -170,12 +170,17 @@ function parseDashboardOrder(value: unknown): OperationsDashboardOrder {
     "cost_warning",
     "unassigned_alert",
   ]);
+  const owner = organization(object.owner);
+  const operator = object.operator === null ? null : organization(object.operator);
+  // OBS-001-OPERATED-OWNER-NAME-2026-10-12: the active organization owns or operates every order and always sees its
+  // own name, so an order with no named party fails closed.
+  if (owner.display_name === null && (operator === null || operator.display_name === null)) fail();
   return {
     order_id: uuid(object.order_id),
     aggregate_version: positiveInteger(object.aggregate_version),
     public_id: boundedString(object.public_id, 1, 128),
-    owner: organization(object.owner),
-    operator: object.operator === null ? null : organization(object.operator),
+    owner,
+    operator,
     client: object.client === null ? null : client(object.client),
     status: status(object.status),
     created_at: utc(object.created_at),
@@ -209,7 +214,8 @@ function organization(value: unknown): OperationsOrganizationSummary {
   const object = exactObject(value, ["organization_id", "display_name"]);
   return {
     organization_id: uuid(object.organization_id),
-    display_name: boundedString(object.display_name, 1, 200),
+    display_name:
+      object.display_name === null ? null : boundedString(object.display_name, 1, 200),
   };
 }
 

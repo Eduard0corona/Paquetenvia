@@ -351,9 +351,13 @@ public sealed record OperationsMoneyResponse(
     [property: JsonPropertyName("currency")] string Currency,
     [property: JsonPropertyName("amount_cents")] long AmountCents);
 
+/// <summary>
+/// OBS-001-OPERATED-OWNER-NAME-2026-10-12: <c>display_name</c> is the selected organization's own name, or
+/// <c>null</c> for the other party of the order, whose organizations row RLS hides; never a legal name or a label.
+/// </summary>
 public sealed record OperationsOrganizationResponse(
     [property: JsonPropertyName("organization_id")] Guid OrganizationId,
-    [property: JsonPropertyName("display_name")] string DisplayName);
+    [property: JsonPropertyName("display_name")] string? DisplayName);
 
 public sealed record OperationsClientResponse(
     [property: JsonPropertyName("client_account_id")] Guid ClientAccountId,
