@@ -221,15 +221,21 @@ function projectionOptions(items: readonly OperationsDashboardOrder[]) {
             }],
       ),
     ),
+    // OBS-001-OPERATED-OWNER-NAME-2026-10-12: like a client or zone RLS hides, an organization without a visible name
+    // (the other party of an order) is not offered; options never show an id.
     owners: unique(
-      items.map((item) => ({
-        id: item.owner.organization_id,
-        label: item.owner.display_name,
-      })),
+      items.flatMap((item) =>
+        item.owner.display_name === null
+          ? []
+          : [{
+              id: item.owner.organization_id,
+              label: item.owner.display_name,
+            }],
+      ),
     ),
     operators: unique(
       items.flatMap((item) =>
-        item.operator === null
+        item.operator === null || item.operator.display_name === null
           ? []
           : [{
               id: item.operator.organization_id,

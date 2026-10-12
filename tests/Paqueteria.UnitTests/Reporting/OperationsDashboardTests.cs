@@ -9,6 +9,9 @@ namespace Paqueteria.UnitTests.Reporting;
 
 public sealed class OperationsDashboardTests
 {
+    private static readonly Guid Reader = Guid.Parse("22222222-2222-2222-2222-222222222222");
+    private static readonly Guid OtherOrganization = Guid.Parse("11111111-1111-1111-1111-111111111111");
+
     public static TheoryData<string> Statuses
     {
         get
@@ -83,6 +86,28 @@ public sealed class OperationsDashboardTests
         Assert.Equal(
             expected,
             OperationsDashboardProjectionPolicy.IsUnassignedAlert(status, activeAssignment));
+
+    [Fact]
+    public void Reader_must_own_or_operate_every_projected_order()
+    {
+        Assert.True(OperationsDashboardProjectionPolicy.IsReaderParty(Reader, Reader, null));
+        Assert.True(OperationsDashboardProjectionPolicy.IsReaderParty(Reader, Reader, Reader));
+        Assert.True(OperationsDashboardProjectionPolicy.IsReaderParty(Reader, Reader, OtherOrganization));
+        Assert.True(OperationsDashboardProjectionPolicy.IsReaderParty(Reader, OtherOrganization, Reader));
+        Assert.False(OperationsDashboardProjectionPolicy.IsReaderParty(Reader, OtherOrganization, null));
+        Assert.False(OperationsDashboardProjectionPolicy.IsReaderParty(Reader, OtherOrganization, OtherOrganization));
+    }
+
+    [Fact]
+    public void Only_the_reader_organization_name_is_visible()
+    {
+        // OBS-001-OPERATED-OWNER-NAME-2026-10-12: RLS lets the reader see only its own organizations row, so its own
+        // name is required and the other party of an order (owner it operates for, operator it delegated to) has none.
+        Assert.True(OperationsDashboardProjectionPolicy.IsVisibleName(Reader, Reader, "Synthetic Operations"));
+        Assert.True(OperationsDashboardProjectionPolicy.IsVisibleName(Reader, OtherOrganization, null));
+        Assert.False(OperationsDashboardProjectionPolicy.IsVisibleName(Reader, Reader, null));
+        Assert.False(OperationsDashboardProjectionPolicy.IsVisibleName(Reader, OtherOrganization, "Synthetic Viewer"));
+    }
 
     [Fact]
     public void Driver_reference_is_stable_bounded_and_not_uuid()

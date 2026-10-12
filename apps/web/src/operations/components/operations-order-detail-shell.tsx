@@ -4,6 +4,8 @@ import Link from "next/link";
 import type { OperationsDashboardOrder } from "../contracts/operations-dashboard";
 import {
   assignmentTypeLabel,
+  operatorLabel,
+  ownerLabel,
   serviceTypeLabel,
   timelineLabel,
 } from "../contracts/operations-formatters";
@@ -97,8 +99,8 @@ export function OperationsOrderDetailShell({
         variant="grid"
         label="Resumen de la orden"
         items={[
-          { label: "Dueño", value: projection.owner.display_name },
-          { label: "Opera", value: projection.operator?.display_name ?? "Sin operador" },
+          { label: "Dueño", value: ownerLabel(projection.owner) },
+          { label: "Opera", value: operatorLabel(projection.operator) },
           { label: "Cliente", value: projection.client?.display_name ?? "No disponible" },
           { label: "Servicio", value: serviceTypeLabel(order.service_type) },
           { label: "Zona", value: projection.delivery_zone?.name ?? "Sin zona asignada" },
