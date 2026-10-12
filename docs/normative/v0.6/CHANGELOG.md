@@ -23,6 +23,75 @@
 - La bandeja no crea rutas: si el repartidor no tiene una en borrador, la pantalla indica crearla en Rutas. Sin
   cambios en AI-04, AI-05, AI-06, AI-18, backend, roles, capacidades ni migraciones.
 
+## Llamadas enmascaradas: confirmar con una tecla (VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11) — 2026-10-11
+
+- Pregunta y respuesta literales del project owner: "Llamadas enmascaradas: si contesta un buzón de voz, el saludo del
+  buzón puede decir el número del repartidor o del destinatario, y eso rompe el enmascarado. ¿Cómo lo evitamos?" →
+  "Confirmar con una tecla (Recommended)" ("Al repartidor le dice "Presiona 1 para llamar al destinatario". Al
+  destinatario: "Tiene una llamada sobre su envío; presione 1 para contestar" (texto neutro, sin marca). Si nadie
+  presiona, se cuelga sin enlazar. Gratis y no falla con buzones."); registrada como
+  `VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11` en `decision-log.md` y en `docs/adr/ADR-VOICE-001-MASKED-CALL-BRIDGE.md`.
+- AI-05: webhooks firmados `confirmTwilioDriverKeypress`, `screenTwilioRecipient` y `confirmTwilioRecipientKeypress`
+  (esquemas `TwilioKeypressForm` y `TwilioRecipientKeypressForm`); `RecipientCallAvailability.retry_after_seconds`;
+  descripciones de `requestRecipientCall` (tecla en ambos tramos, cualquier 5xx es ambiguo, reserva propia tras un
+  commit, solicitudes abandonadas), `receiveTwilioCallStatus` (nunca promueve una solicitud `FAILED`) y del celular del
+  repartidor (consultar y borrar con cualquier estado del perfil; registrar solo con perfil `ACTIVE`); entrada
+  `VOICE-001-VOICEMAIL-KEYPRESS` en `x-pilot-contract-deltas`.
+- AI-07: `driver_stop.recipient_call` (botón deshabilitado sin conexión solo tras confirmar la disponibilidad,
+  respuestas tardías descartadas, una nueva consulta al terminar la espera) y `driver_account` (borrar el celular con
+  cualquier estado del perfil).
+- AI-08: VOICE-001 agrega la decisión, criterios de aceptación (tecla, 5xx ambiguo, solicitudes abandonadas, ARCO) y
+  pruebas de las teclas.
+- AI-24 `voice_bridge`: `call`, `key_presses`, `resilience`, `request`, `webhooks`, `audit` y `erasure`.
+- Sin cambios en AI-06, AI-18 ni AI-12; la columna `bridge_stage` entra en la migración del lane Drivers
+  `20261011000100_AddDriverVoiceBridge`, que aún no se fusiona. No es un sexto flujo de AI-13 §4.
+
+## Llamadas enmascaradas repartidor–destinatario con Twilio (VOICE-001) — 2026-10-11
+
+- Preguntas y respuestas literales del project owner: "App del repartidor: hoy no ve el teléfono del destinatario.
+  ¿Debe poder llamarle desde la app?" → "Sí, con número enmascarado"; "Número enmascarado: … ¿Cómo seguimos?" →
+  "Investiga y propón (Recommended)"; "Número enmascarado: comparé proveedores. Azure Communication Services queda
+  descartado: no vende números mexicanos para llamar y Microsoft lo va a retirar. ¿Con cuál seguimos?" → "Twilio
+  (Recommended)". Registradas como `VOICE-001-MASKED-CALLS-2026-10-11` y `VOICE-001-PROVIDER-TWILIO-2026-10-11` (ADR:
+  Twilio como nuevo encargado de datos personales) en `decision-log.md` y en
+  `docs/adr/ADR-VOICE-001-MASKED-CALL-BRIDGE.md`.
+- AI-05: `getMyDriverPhone`, `registerMyDriverPhone`, `removeMyDriverPhone` (`/driver/me/phone`),
+  `getRecipientCallAvailability` y `requestRecipientCall` (`/driver/me/stops/{orderId}/recipient-call`, solo DRIVER,
+  `x-capability-matrix.voice_call_operations`, 404 uniforme, Idempotency-Key, 429, sin números en petición ni
+  respuesta) y los webhooks firmados `receiveTwilioCallStatus` y `answerTwilioInboundCall` (etiqueta Voice); entrada
+  `VOICE-001-MASKED-CALLS` en `x-pilot-contract-deltas`.
+- AI-07: `driver_stop.recipient_call` ("Llamar al destinatario" solo si el servidor lo permite; acción solo en línea,
+  nunca en la cola offline; "masked phone or relay") y `driver_account` (celular propio con consentimiento explícito).
+- AI-08: ítem VOICE-001 (MVP-1, P1, compuerta GATE-007; el piloto no usa números reales antes de resolver GATE-007).
+- AI-24 `voice_bridge`; AI-03 §15 añade `IVoiceBridgeProvider`; AI-04 `privacy_invariants` añade la regla de los
+  teléfonos de la llamada puente.
+- Sin cambios en AI-06, AI-18 ni AI-12: el lane Drivers `20261011000100_AddDriverVoiceBridge` agrega las columnas del
+  celular del repartidor y la tabla `drivers.recipient_call_requests`. No es un sexto flujo de AI-13 §4.
+
+## Repartidores del despacho y selector de repartidor en liquidaciones (UI-PHASE3-DRIVERS-2026-10-11) — 2026-10-11
+
+- Respuestas literales del project owner: "avanza con la fase 3" (2026-10-09) y, el 2026-10-11, "Lista de consulta
+  (Recommended)" y "Sí, con referencia DRV- (Recommended)"; registradas con sus preguntas y el texto de cada opción en
+  `decision-log.md` como cambio MAJOR (AI-01 §7), cuyo ADR es esa fila.
+- AI-05 `listOrganizationDrivers` (`GET /drivers`, esquemas `OrganizationDriver` y `OrganizationDriverPage`): lista por
+  cursor los repartidores OWN de la organización activa que no están INACTIVE, con la referencia `DRV-`, vehículo,
+  estado, paradas activas (las mismas que el repartidor ve en su app, sin filtro por día) y la hora de su última
+  ubicación, nunca la ubicación. Solo DISPATCHER y PLATFORM_ADMIN con MFA, los roles del selector de asignación.
+- AI-05 `listSettlementPayees` (`GET /settlement-payees`, esquemas `SettlementPayee` y `SettlementPayeePage`): lista por
+  cursor todos los repartidores de la organización que `createSettlement` acepta (cualquier tipo y estado, para pagar
+  también a uno suspendido o dado de baja), solo con `DRV-` y vehículo. Solo FINANCE y PLATFORM_ADMIN con MFA, los
+  roles de `createSettlement`; Finanzas no ve estado, paradas ni ubicaciones.
+- Ambas operaciones en `x-capability-matrix.driver_list_operations`; capacidad antes de leer, 403 uniforme, sin 404,
+  falla cerrada con 503 y no leen nombre, correo, teléfono ni documentos. Solo lectura, sin migraciones, tablas,
+  índices, roles, grants ni flujos nuevos; AI-06 y AI-18 sin cambios.
+- AI-07: ruta `/ops/drivers` con el contrato `driver_roster` ("Repartidores" después de "Importar CSV", sin acciones) y
+  contrato `settlement_desk` de `/finance/settlements`: el repartidor se elige de la lista, el periodo es "Semana
+  pasada", "Quincena pasada" (hora de Mazatlán) o "Fechas a mano" con las fechas explicadas ("1–7 sep 2026"), y cada
+  liquidación nombra a su repartidor por `DRV-`.
+- Libreta de direcciones de "Nueva orden" (UI-PHASE3-ADDRESS-BOOK-MVP2-2026-10-11): respuesta literal "Después del
+  piloto (Recommended)" ("Se queda en MVP-2, como dice el backlog."); sigue en BUS-001 (MVP-2) y el asistente del piloto
+  sigue capturando las direcciones. Sin cambios de contrato ni de código.
+
 ## Bandeja: "Precio por revisar" solo con órdenes activas y "Asignar seleccionadas…" con costo por orden (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11) — 2026-10-11
 
 - Respuestas literales del project owner, registradas con sus preguntas en `decision-log.md` como cambio MAJOR

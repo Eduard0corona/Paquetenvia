@@ -52,6 +52,15 @@ public static class TenantCapabilities
     public static readonly TenantCapability ListMyEligibleExternalOffers =
         Create("listMyEligibleExternalOffers", Driver);
 
+    // x-capability-matrix voice_call_operations (VOICE-001-MASKED-CALLS-2026-10-11): only a DRIVER, for its own
+    // phone and its own current assignments; every other role receives the uniform 403 before any state is read.
+    public static readonly TenantCapability GetMyDriverPhone = Create("getMyDriverPhone", Driver);
+    public static readonly TenantCapability RegisterMyDriverPhone = Create("registerMyDriverPhone", Driver);
+    public static readonly TenantCapability RemoveMyDriverPhone = Create("removeMyDriverPhone", Driver);
+    public static readonly TenantCapability GetRecipientCallAvailability =
+        Create("getRecipientCallAvailability", Driver);
+    public static readonly TenantCapability RequestRecipientCall = Create("requestRecipientCall", Driver);
+
     // D5-CAPABILITY-MATRIX: FINANCE is limited to settlements and finance.
     public static readonly TenantCapability CreateSettlement = Settlement("createSettlement");
     public static readonly TenantCapability ListSettlements = Settlement("listSettlements");
@@ -76,6 +85,14 @@ public static class TenantCapabilities
     // admits exactly who may assignDriver; a VIEWER, a DRIVER, FINANCE and every other role never.
     public static readonly TenantCapability ListAssignableDrivers =
         Create("listAssignableDrivers", Dispatcher, PlatformAdminMfa);
+
+    // x-capability-matrix driver_list_operations (UI-PHASE3-DRIVERS-2026-10-11): the dispatcher's read-only driver
+    // list admits the roles of the driver picker it extends; the settlement payee list admits exactly the
+    // createSettlement roles it serves (FINANCE, and PLATFORM_ADMIN with MFA). A VIEWER, a DRIVER and every other
+    // role never; FINANCE never reads the dispatcher's list and DISPATCHER never reads the payee list.
+    public static readonly TenantCapability ListOrganizationDrivers =
+        Create("listOrganizationDrivers", Dispatcher, PlatformAdminMfa);
+    public static readonly TenantCapability ListSettlementPayees = Settlement("listSettlementPayees");
 
     // x-capability-matrix operations_queue_operations (UI-PHASE2-QUEUE-COUNTS-2026-10-05): the work-queue counts admit
     // exactly the roles of the operations dashboard they feed (OperationsRolePolicy): DISPATCHER, and PLATFORM_ADMIN

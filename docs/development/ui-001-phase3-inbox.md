@@ -9,7 +9,7 @@ sección "Despacho: bandeja de trabajo"). Contrato: AI-07 ruta `/ops/inbox` y `s
   (`landingPathForRole`) y primer elemento del menú. La ofrece `canOpenWorkInbox`: los roles del tablero (OBS-001)
   y de `getOperationsQueueCounts`; VIEWER y los demás roles quedan fuera igual que allí, y la API responde 403.
 - Menú en el orden aprobado hasta donde hay pantallas: Bandeja · Tablero · + Nueva orden · Rutas · Incidencias ·
-  Importar CSV, y luego los elementos de finanzas del rol. `/ops/dashboard` no cambia y se llama "Tablero";
+  Importar CSV · Repartidores (UI-PHASE3-DRIVERS-2026-10-11), y luego los elementos de finanzas del rol. `/ops/dashboard` no cambia y se llama "Tablero";
   `?view=positions` abre su vista de posiciones ("Mapa de posiciones" desde la bandeja). El detalle de una orden
   pertenece a Bandeja en el menú.
 - Sin endpoints nuevos: la bandeja solo usa operaciones existentes (el Total agrega un campo al read model del
@@ -205,7 +205,8 @@ historial y sin recargar las órdenes. Corrige el hallazgo de revisión del PR #
   ninguna pantalla. Hace falta una decisión del owner (selector de repartidor y ciudad en Rutas o "Crear ruta nueva"
   en este paso).
 - El costo sugerido por el tabulador: el owner aún no envía sus montos; hoy cada costo se captura a mano.
-- Entradas "Órdenes" y "Repartidores" del menú aprobado: aún no hay pantallas.
+- Entrada "Órdenes" del menú aprobado: aún no hay pantalla. "Repartidores" ya existe (`/ops/drivers`,
+  UI-PHASE3-DRIVERS-2026-10-11; ver `ui-001-phase3-drivers.md`).
 
 ## Validación
 

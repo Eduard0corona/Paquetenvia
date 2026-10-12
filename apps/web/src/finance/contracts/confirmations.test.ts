@@ -23,34 +23,48 @@ const settlement: Settlement = {
   lines: [],
 };
 
+/** UI-PHASE3-DRIVERS-2026-10-11: the payee by its DRV- reference, as the settlements screen names it. */
+const payee = "DRV-3d93b4c6";
+
 describe("finance confirmations", () => {
   it("states the settlement total in exact pesos and the payee before approving or paying", () => {
-    const approval = settlementApprovalConfirmation(settlement);
+    const approval = settlementApprovalConfirmation(settlement, payee);
     expect(approval.confirmLabel).toBe("Aprobar");
-    expect(approval.description).toContain("$1,234,567.89 MXN");
-    expect(approval.description).toContain("repartidor d71e0000");
-    expect(approval.description).toContain("2026-09-01 a 2026-09-15");
+    expect(approval.description).toBe(
+      "Se aprobará la liquidación del repartidor DRV-3d93b4c6 (1–15 sep 2026) por un total de " +
+        "$1,234,567.89 MXN. Después ya no se podrán agregar ajustes.",
+    );
+    expect(approval.description).not.toContain("d71e0000");
 
-    const payment = settlementPaymentConfirmation({ ...settlement, status: "APPROVED", total_cents: 5 });
+    const payment = settlementPaymentConfirmation({ ...settlement, status: "APPROVED", total_cents: 5 }, payee);
     expect(payment.confirmLabel).toBe("Marcar pagada");
     expect(payment.description).toContain("$0.05 MXN");
+    expect(payment.description).toContain("del repartidor DRV-3d93b4c6 (1–15 sep 2026)");
   });
 
   it("states the exact adjustment and refuses to describe an invalid amount", () => {
-    const discount = settlementAdjustmentConfirmation(settlement, "-40.5");
+    const discount = settlementAdjustmentConfirmation(settlement, "-40.5", payee);
     expect(discount?.confirmLabel).toBe("Agregar ajuste");
     expect(discount?.description).toContain("descontará $40.50 MXN");
-    const bonus = settlementAdjustmentConfirmation(settlement, "0.29");
+    expect(discount?.description).toContain("repartidor DRV-3d93b4c6");
+    const bonus = settlementAdjustmentConfirmation(settlement, "0.29", payee);
     expect(bonus?.description).toContain("sumará $0.29 MXN");
-    expect(settlementAdjustmentConfirmation(settlement, "0")).toBeNull();
-    expect(settlementAdjustmentConfirmation(settlement, "1e3")).toBeNull();
+    expect(settlementAdjustmentConfirmation(settlement, "0", payee)).toBeNull();
+    expect(settlementAdjustmentConfirmation(settlement, "1e3", payee)).toBeNull();
   });
 
   it("warns that voiding a settlement cannot be undone", () => {
-    const voided = settlementVoidConfirmation(settlement);
+    const voided = settlementVoidConfirmation(settlement, payee);
     expect(voided.confirmLabel).toBe("Anular");
     expect(voided.description).toContain("$1,234,567.89 MXN");
     expect(voided.description).toContain("no se puede deshacer");
+    expect(voided.description).toContain("repartidor DRV-3d93b4c6");
+  });
+
+  it("names a payee the list does not have without its internal id", () => {
+    const unknown = settlementApprovalConfirmation(settlement, "sin referencia");
+    expect(unknown.description).toContain("del repartidor sin referencia (1–15 sep 2026)");
+    expect(unknown.description).not.toContain("d71e0000");
   });
 
   it("names the order and states the amount before reconciling a COD collection", () => {
@@ -96,36 +110,39 @@ describe("finance confirmations", () => {
     );
   });
 
-  it("names the driver and the period in readable Mazatlán days before calculating", () => {
-    const calculation = settlementCreationConfirmation({
+  it("names the driver by reference and vehicle and the period in readable Mazatlán days before calculating", () => {
+    const picked = {
       driver_id: "d71e0000-0000-4000-8000-000000000002",
-      period_from: "2026-09-01",
-      period_to: "2026-09-15",
-    });
+      driver_reference: "DRV-3d93b4c6",
+      vehicle_type: "MOTORCYCLE",
+    } as const;
+    const calculation = settlementCreationConfirmation(
+      { driver_id: picked.driver_id, period_from: "2026-09-01", period_to: "2026-09-15" },
+      picked,
+    );
     expect(calculation).toEqual({
       title: "¿Calcular liquidación?",
       description:
-        "Se calculará la liquidación del repartidor d71e0000 del 1 de septiembre de 2026 " +
+        "Se calculará la liquidación del repartidor DRV-3d93b4c6 (motocicleta) del 1 de septiembre de 2026 " +
         "al 15 de septiembre de 2026 (días completos, hora de Mazatlán).",
       confirmLabel: "Calcular",
     });
+    expect(calculation.description).not.toContain("d71e0000");
     // Calendar days are shown as written, never shifted by a zone offset.
     expect(
-      settlementCreationConfirmation({
-        driver_id: "d71e0000-0000-4000-8000-000000000002",
-        period_from: "2026-12-31",
-        period_to: "2026-12-31",
-      }).description,
+      settlementCreationConfirmation(
+        { driver_id: picked.driver_id, period_from: "2026-12-31", period_to: "2026-12-31" },
+        { ...picked, vehicle_type: "VAN" },
+      ).description,
     ).toBe(
-      "Se calculará la liquidación del repartidor d71e0000 del 31 de diciembre de 2026 " +
+      "Se calculará la liquidación del repartidor DRV-3d93b4c6 (van) del 31 de diciembre de 2026 " +
         "(día completo, hora de Mazatlán).",
     );
     expect(
-      settlementCreationConfirmation({
-        driver_id: "d71e0000-0000-4000-8000-000000000002",
-        period_from: "2026-01-01",
-        period_to: "2026-03-01",
-      }).description,
+      settlementCreationConfirmation(
+        { driver_id: picked.driver_id, period_from: "2026-01-01", period_to: "2026-03-01" },
+        picked,
+      ).description,
     ).toContain("del 1 de enero de 2026 al 1 de marzo de 2026");
   });
 });

@@ -321,6 +321,51 @@ public sealed class CapabilityMatrixContractTests
     }
 
     /// <summary>
+    /// UI-PHASE3-DRIVERS-2026-10-11: AI-05 publishes both driver lists in their own section, citing the owner's
+    /// literal answers. The dispatcher's list grants exactly the picker's roles (DISPATCHER without MFA,
+    /// PLATFORM_ADMIN with MFA) and the payee list exactly createSettlement's (FINANCE without MFA, PLATFORM_ADMIN
+    /// with MFA); FINANCE never reads the dispatcher's list and DISPATCHER, VIEWER and DRIVER never read either.
+    /// </summary>
+    [Fact]
+    public void Driver_list_operations_mirror_the_picker_and_createSettlement()
+    {
+        var decision = Matrix.Scalar("driver_list_operations_decision");
+        Assert.StartsWith("UI-PHASE3-DRIVERS-2026-10-11", decision, StringComparison.Ordinal);
+        Assert.Contains("\"Lista de consulta (Recommended)\"", decision, StringComparison.Ordinal);
+        Assert.Contains("\"Sí, con referencia DRV- (Recommended)\"", decision, StringComparison.Ordinal);
+        Assert.Contains("the roles of the assignment picker it extends", decision, StringComparison.Ordinal);
+        Assert.Contains("exactly the roles of createSettlement it serves", decision, StringComparison.Ordinal);
+        Assert.Equal(
+            ["listOrganizationDrivers", "listSettlementPayees"],
+            OperationIds(Matrix.Mapping("driver_list_operations")).Order(StringComparer.Ordinal));
+
+        Assert.Equal(
+            TenantCapabilities.ListAssignableDrivers.Grants.Select(grant => (grant.Role, grant.RequiresMfa)),
+            TenantCapabilities.ListOrganizationDrivers.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        Assert.Equal(
+            [(OrganizationRole.Dispatcher, false), (OrganizationRole.PlatformAdmin, true)],
+            TenantCapabilities.ListOrganizationDrivers.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        Assert.Equal(
+            TenantCapabilities.CreateSettlement.Grants.Select(grant => (grant.Role, grant.RequiresMfa)),
+            TenantCapabilities.ListSettlementPayees.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        Assert.Equal(
+            [(OrganizationRole.Finance, false), (OrganizationRole.PlatformAdmin, true)],
+            TenantCapabilities.ListSettlementPayees.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        foreach (var role in new[] { OrganizationRole.Viewer, OrganizationRole.Driver })
+        {
+            Assert.DoesNotContain(TenantCapabilities.ListOrganizationDrivers.Grants, grant => grant.Role == role);
+            Assert.DoesNotContain(TenantCapabilities.ListSettlementPayees.Grants, grant => grant.Role == role);
+        }
+
+        Assert.DoesNotContain(
+            TenantCapabilities.ListOrganizationDrivers.Grants,
+            grant => grant.Role == OrganizationRole.Finance);
+        Assert.DoesNotContain(
+            TenantCapabilities.ListSettlementPayees.Grants,
+            grant => grant.Role == OrganizationRole.Dispatcher);
+    }
+
+    /// <summary>
     /// UI-PHASE2-QUEUE-COUNTS-2026-10-05: AI-05 publishes the work-queue counts read in its own section, citing the
     /// owner literal, and the server grants exactly the roles of the operations dashboard it feeds
     /// (OperationsRolePolicy): DISPATCHER without MFA and PLATFORM_ADMIN with MFA; VIEWER never.
@@ -346,6 +391,58 @@ public sealed class CapabilityMatrixContractTests
                     .Any(grant => grant.Role == role && (mfa || !grant.RequiresMfa));
                 Assert.Equal(OperationsRolePolicy.IsAllowed(role, mfa), admitted);
             }
+        }
+    }
+
+    /// <summary>
+    /// VOICE-001-MASKED-CALLS-2026-10-11: AI-05 publishes the masked call operations in their own section, citing the
+    /// owner literals, and the server grants exactly DRIVER without MFA (like listMyStops); every other role, MFA or
+    /// not, is refused before any state is read. The provider webhooks are not tenant operations.
+    /// </summary>
+    [Fact]
+    public void Voice_call_operations_take_only_DRIVER_without_MFA()
+    {
+        var decision = Matrix.Scalar("voice_call_operations_decision");
+        Assert.StartsWith("VOICE-001-MASKED-CALLS-2026-10-11", decision, StringComparison.Ordinal);
+        Assert.Contains("\"Sí, con número enmascarado\"", decision, StringComparison.Ordinal);
+        Assert.Contains("VOICE-001-PROVIDER-TWILIO-2026-10-11", decision, StringComparison.Ordinal);
+        Assert.Contains("\"Twilio (Recommended)\"", decision, StringComparison.Ordinal);
+        string[] expected =
+        [
+            "getMyDriverPhone",
+            "getRecipientCallAvailability",
+            "registerMyDriverPhone",
+            "removeMyDriverPhone",
+            "requestRecipientCall",
+        ];
+        Assert.Equal(expected, OperationIds(Matrix.Mapping("voice_call_operations")).Order(StringComparer.Ordinal));
+        Assert.Equal(
+            [
+                TenantCapabilities.GetMyDriverPhone,
+                TenantCapabilities.GetRecipientCallAvailability,
+                TenantCapabilities.RegisterMyDriverPhone,
+                TenantCapabilities.RemoveMyDriverPhone,
+                TenantCapabilities.RequestRecipientCall,
+            ],
+            expected.Select(operationId => TenantCapabilities.All[operationId]));
+        foreach (var operationId in expected)
+        {
+            var capability = TenantCapabilities.All[operationId];
+            Assert.Equal(
+                [(OrganizationRole.Driver, false)],
+                capability.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+            Assert.Equal(
+                TenantCapabilities.ListMyStops.Grants.Select(grant => (grant.Role, grant.RequiresMfa)),
+                capability.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        }
+
+        foreach (var webhook in new[]
+                 {
+                     "receiveTwilioCallStatus", "answerTwilioInboundCall", "confirmTwilioDriverKeypress",
+                     "screenTwilioRecipient", "confirmTwilioRecipientKeypress",
+                 })
+        {
+            Assert.DoesNotContain(webhook, TenantCapabilities.All.Keys);
         }
     }
 
@@ -435,7 +532,7 @@ public sealed class CapabilityMatrixContractTests
                  {
                      "operations", "finance_operations", "platform_operations", "membership_operations",
                      "tracking_link_operations", "incident_operations", "assignable_driver_operations",
-                     "operations_queue_operations",
+                     "operations_queue_operations", "driver_list_operations", "voice_call_operations",
                  })
         {
             foreach (var (key, value) in Matrix.Mapping(section).Children)
