@@ -29,6 +29,9 @@ describe("driver stop details retention", () => {
       "void controllerRef.current?.dispose();",
       "void operationsControllerRef.current?.dispose();",
       "externalOffersControllerRef.current?.dispose();",
+      "rolesControllerRef.current?.dispose();",
+      // DRV-DISPATCH-CONTACT-2026-10-12: the dispatch contact read stops too, so nothing writes it back.
+      "dispatchContactControllerRef.current?.dispose();",
     ]) {
       expect(experience).toContain(dispose);
     }
@@ -44,13 +47,18 @@ describe("driver stop details retention", () => {
     expect(forget).toContain("transaction.objectStore(store).clear();");
     expect(forget).not.toContain("DriverOfflineOperationsStoreName");
     expect(forget).not.toContain("DriverProofBlobsStoreName");
-    // The stores it clears: the stop snapshots and the saved organization roles (ORG-MY-ROLES-2026-10-12).
+    // The stores it clears: the stop snapshots, the saved organization roles (ORG-MY-ROLES-2026-10-12) and the
+    // saved dispatch contacts (DRV-DISPATCH-CONTACT-2026-10-12), each of the last two only when the database has it.
     const stores = cache.slice(
       cache.indexOf("function partitionCacheStores"),
       cache.indexOf("/**", cache.indexOf("function partitionCacheStores")),
     );
-    expect(stores).toContain("[DriverStopsStoreName, DriverOrganizationRolesStoreName]");
-    expect(stores).toContain(": [DriverStopsStoreName];");
+    expect(stores).toMatch(
+      /\[\s*DriverStopsStoreName,\s*DriverOrganizationRolesStoreName,\s*DriverDispatchContactStoreName,\s*\]/,
+    );
+    expect(stores).toMatch(
+      /store === DriverStopsStoreName \|\|\s*database\.objectStoreNames\.contains\(store\)/,
+    );
     expect(stores).not.toContain("DriverOfflineOperationsStoreName");
     expect(stores).not.toContain("DriverProofBlobsStoreName");
     expect(stores).not.toContain("DriverSyncLeasesStoreName");

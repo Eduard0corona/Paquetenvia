@@ -140,9 +140,11 @@ const incidentMessages: Readonly<Record<DriverIncidentRejectionCode, string>> = 
  * despacho"): why a failed-delivery report was held before its incident was
  * requested. With the cash recorded on the server the driver calls dispatch,
  * who decides and coordinates returning the cash; with a collection still
- * saved on the phone the driver discards it first if it was a mistake. The app
- * has no dispatch phone number, so none is shown. A report whose incident is
- * (or may be) open uses driverFailedReportAttentionMessage instead.
+ * saved on the phone the driver discards it first if it was a mistake. The text
+ * itself never carries a number: with the cash recorded, the stop adds the
+ * "Llamar a despacho" link next to it when the organization's dispatch number
+ * is known (DRV-DISPATCH-CONTACT-2026-10-12). A report whose incident is (or
+ * may be) open uses driverFailedReportAttentionMessage instead.
  */
 export const driverCashRecordedReportMessage =
   "El cobro de esta entrega ya está registrado, así que el reporte no se envió. " +

@@ -280,6 +280,19 @@ start if `Pricing__PricingPolicyVersion` is still set.
 Driver eligibility maps (`Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TYPE>__0`,
 `Drivers__Eligibility__VehicleCapacity__<TYPE>__MaximumPackageCount`, …) go in the same file.
 
+**Dispatch number for the driver app (DRV-DISPATCH-CONTACT-2026-10-12, owner 2026-10-12: "Sí, configurable
+(Recommended)").** The driver app shows "Llamar a despacho" (a `tel:` link) next to its texts that ask the driver to
+call dispatch about a recorded cash collection, only for an organization with a number configured. The setting is
+empty by default and the file has no entry today, so the pilot shows no button until the owner gives the number.
+Each organization takes two entries in the same file, numbered `0`, `1`, … without gaps:
+`Drivers__DispatchContacts__<n>__OrganizationId` (the organization's UUID, lowercase) and
+`Drivers__DispatchContacts__<n>__PhoneE164` (`+52` and ten digits, the first one 2-9). The API refuses to start with
+an invalid entry or an organization written twice; `settings-check` (guard P17) applies the same rules before
+deploying and never echoes a value (a malformed entry is named by its canonical name or its position in the file).
+Configuration names ignore case in .NET, so P17 refuses these names in any other casing and treats names that differ
+only in case as the same setting. The number is a business contact, never logged. See
+`docs/development/ui-001-phase3-driver-dispatch-contact.md`.
+
 **Accepted terms and privacy versions (UI-001, owner decision pending).** The operator-assisted order
 screen (`/ops/orders/new`) reads two server-only runtime settings on the web container:
 `PAQUETERIA_TERMS_VERSION` and `PAQUETERIA_PRIVACY_VERSION`. Each must match the AI-05
