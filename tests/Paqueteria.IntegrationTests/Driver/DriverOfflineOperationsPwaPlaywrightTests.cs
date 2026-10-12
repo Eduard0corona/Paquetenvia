@@ -692,9 +692,11 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             ["partitionKey", "roles", "schemaVersion"],
             saved.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
         Assert.Equal(["DRIVER"], saved.GetProperty("roles").EnumerateArray().Select(role => role.GetString() ?? string.Empty));
-        // The start's sync pass releases its lease before the page goes away; a lease left by a page closed mid-pass
-        // would hold the next sync for its 15 seconds and make the timing below depend on the machine.
-        await WaitForStoreCountAsync(page, "sync_leases", 0);
+        // A page that went away mid-pass (the navigations above) leaves its sync lease behind until it expires (15
+        // seconds), and a sync asked for meanwhile does nothing (DRV-002). Waiting until no lease is active keeps the
+        // sync after the connection returns independent of how fast the machine is. An expired lease is never
+        // removed on its own, so the store is not expected to be empty.
+        await WaitForNoActiveSyncLeaseAsync(page);
         await context.SetOfflineAsync(true);
         try
         {
@@ -1912,6 +1914,45 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
               };
             })
             """);
+
+    /// <summary>Waits until no page holds an unexpired sync lease (an expired one stays in the store).</summary>
+    private static async Task WaitForNoActiveSyncLeaseAsync(IPage page)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
+        while (true)
+        {
+            var active = await page.EvaluateAsync<int>(
+                """
+                () => new Promise((resolve, reject) => {
+                  const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
+                  open.onerror = () => reject(open.error);
+                  open.onsuccess = () => {
+                    const database = open.result;
+                    const request = database.transaction("sync_leases", "readonly")
+                      .objectStore("sync_leases").getAll();
+                    request.onerror = () => {
+                      database.close();
+                      reject(request.error);
+                    };
+                    request.onsuccess = () => {
+                      database.close();
+                      const now = Date.now();
+                      resolve(request.result.filter(lease => Date.parse(lease.expiresAt) > now).length);
+                    };
+                  };
+                })
+                """);
+            if (active == 0)
+            {
+                return;
+            }
+            if (DateTimeOffset.UtcNow >= deadline)
+            {
+                throw new TimeoutException($"Expected no active sync lease but found {active}.");
+            }
+            await Task.Delay(250);
+        }
+    }
 
     private static Task<int> ReadStoreCountAsync(IPage page, string storeName) =>
         page.EvaluateAsync<int>(
