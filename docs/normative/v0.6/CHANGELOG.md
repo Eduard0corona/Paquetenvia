@@ -42,6 +42,34 @@
 - Pendientes: "No pagó el cobro" (intento fallido). Datos de prueba hasta cerrar GATE-007. Sin cambios en AI-04, AI-06,
   AI-18, roles, permisos ni migraciones, y sin un flujo atómico nuevo.
 
+## Bandeja y Rutas: "Crear ruta nueva" dentro del paso y selectores en "Crear ruta" (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11) — 2026-10-11
+
+- Pregunta y respuesta literales del project owner (2026-10-11), registradas en `decision-log.md` como cambio MAJOR
+  (AI-01 §7): "Bandeja, "Agregar estas órdenes a una ruta…": si el repartidor no tiene una ruta en borrador, hoy hay
+  que ir a Rutas a crearla. ¿Agregamos "Crear ruta nueva" dentro de ese mismo paso?" → "Sí, en el paso (Recommended)"
+  ("Crea la ruta en borrador para ese repartidor, con la ciudad de las órdenes y la fecha de hoy (hora de Mazatlán), y
+  sigue a la vista previa."). La otra opción, "Solo en Rutas" ("El paso sigue mandando a Rutas para crearla; ahí cambio
+  los IDs por selectores de repartidor y ciudad."), no se eligió. Después se le dijo al owner que el mismo cambio
+  sustituye también los campos de ID internos del formulario "Crear ruta" de Rutas por selectores, y no objetó; la
+  propuesta UX aprobada (UI-001) nombra "Las rutas piden el UUID del repartidor" como problema por corregir. La fase 3
+  se aprobó con "avanza con la fase 3".
+- AI-07 `work_inbox.bulk_add_to_route.create_route`: "Crear ruta nueva" aparece solo donde el paso dice que el
+  repartidor no tiene rutas en borrador. Cada orden del lote se lee con `getOrder`, una tras otra, para su `city_id`:
+  una sola ciudad ofrece el botón (nombrada con `listCities`, sin su id); órdenes de ciudades distintas no lo ofrecen y
+  el paso explica que una ruta cubre una sola ciudad y que se crean en Rutas; una orden que no se puede leer deja el
+  mensaje de no disponible. `createRoute` va con el repartidor del lote, la ciudad de las órdenes,
+  `service_area_id` nulo y la fecha de hoy en America/Mazatlan, con una Idempotency-Key que solo se reutiliza para
+  reenviar la misma solicitud tras una falla de red o del servidor; el botón espera mientras se envía. La ruta creada
+  queda elegida y el paso sigue a la misma vista previa, confirmación y `addRouteStop`. Las negativas (sesión, rol,
+  MFA con "Verificar identidad", 404 uniforme, DRIVER_INELIGIBLE, INVALID_REQUEST) dicen en español que no se creó la
+  ruta; ante una falla que no confirma si se creó, primero se vuelven a listar las rutas en borrador para encontrarla
+  en vez de duplicarla. `work_inbox.not_supported` deja solo los lotes con órdenes de ciudades distintas.
+- AI-07 `route_planner.create_form` (`/ops/routes`): "Crear ruta" ya no pide pegar IDs. Repartidor es un selector de
+  `listOrganizationDrivers` (todas las páginas, solo ACTIVE, `DRV-` con vehículo y estado), Ciudad uno de
+  `listCities` (nombre y estado) y Área de servicio uno de `listServiceAreas` (solo ACTIVE, con "Toda la ciudad");
+  cada lista tiene estados de carga, vacío y error, y el envío espera repartidor y ciudad. El resto de Rutas no cambia.
+- Sin cambios en AI-04, AI-05, AI-06, AI-18, backend, roles, capacidades, migraciones ni flujos cross-module.
+
 ## Bandeja: "Agregar estas órdenes a una ruta…" al terminar una asignación en lote (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11) — 2026-10-11
 
 - Respuesta literal del project owner, registrada con su pregunta en `decision-log.md` como cambio MAJOR (AI-01 §7):

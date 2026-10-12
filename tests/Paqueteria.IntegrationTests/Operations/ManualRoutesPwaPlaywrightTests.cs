@@ -12,7 +12,10 @@ public sealed class ManualRoutesPwaPlaywrightTests(DriverStopsNextServerFixture 
     private const string RouteA = "a1000000-0000-0000-0000-000000000001";
     private const string RouteB = "b2000000-0000-0000-0000-000000000001";
     private const string DriverId = "55555555-5555-5555-5555-555555555551";
+    private const string SuspendedDriverId = "55555555-5555-5555-5555-555555555552";
     private const string CityId = "33333333-3333-3333-3333-333333333333";
+    private const string ServiceAreaId = "34343434-3434-3434-3434-343434343434";
+    private const string RetiredServiceAreaId = "35353535-3535-3535-3535-353535353535";
 
     [Fact]
     [Trait("Category", "OperationsDashboardPwa")]
@@ -45,15 +48,74 @@ public sealed class ManualRoutesPwaPlaywrightTests(DriverStopsNextServerFixture 
             Assert.Equal(OrganizationA, organization);
             await state.HandleAsync(route);
         });
+        // UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11: "Crear ruta" picks the driver, the city and the area from lists.
+        var selectorRequests = new List<(string Organization, string PathAndQuery)>();
+        await page.RouteAsync("**/api/v1/drivers**", async route =>
+        {
+            selectorRequests.Add(SelectorRequest(route));
+            await FulfillAsync(route, new
+            {
+                items = new object[]
+                {
+                    Driver(DriverId, "DRV-55555555", "ACTIVE"),
+                    Driver(SuspendedDriverId, "DRV-55555552", "SUSPENDED"),
+                },
+                next_cursor = (string?)null,
+            });
+        });
+        await page.RouteAsync("**/api/v1/cities**", async route =>
+        {
+            selectorRequests.Add(SelectorRequest(route));
+            await FulfillAsync(route, new[]
+            {
+                new { id = CityId, name = "Culiacán", state_code = "SIN", country_code = "MX", timezone = "America/Mazatlan" },
+            });
+        });
+        await page.RouteAsync("**/api/v1/service-areas**", async route =>
+        {
+            selectorRequests.Add(SelectorRequest(route));
+            await FulfillAsync(route, new[]
+            {
+                new { id = ServiceAreaId, city_id = CityId, name = "Centro", status = "ACTIVE" },
+                new { id = RetiredServiceAreaId, city_id = CityId, name = "Antigua", status = "INACTIVE" },
+            });
+        });
 
         var response = await page.GotoAsync(new Uri(server.BaseAddress, "/ops/routes").AbsoluteUri);
         Assert.NotNull(response);
         await page.GetByRole(AriaRole.Heading, new() { Name = "Rutas manuales", Exact = true }).WaitForAsync();
 
-        await page.GetByLabel("ID del repartidor (flota propia)").FillAsync(DriverId);
-        await page.GetByLabel("ID de la ciudad").FillAsync(CityId);
-        await page.GetByRole(AriaRole.Button, new() { Name = "Crear ruta (borrador)", Exact = true }).ClickAsync();
+        Assert.Equal(0, await page.GetByText("ID del repartidor", new() { Exact = false }).CountAsync());
+        Assert.Equal(0, await page.GetByText("ID de la ciudad", new() { Exact = false }).CountAsync());
+        var create = page.GetByRole(AriaRole.Button, new() { Name = "Crear ruta (borrador)", Exact = true });
+        var driverSelect = page.GetByLabel("Repartidor (flota propia)");
+        await driverSelect.Locator("option", new() { HasText = "DRV-55555555" })
+            .WaitForAsync(new() { State = WaitForSelectorState.Attached });
+        Assert.True(await create.IsDisabledAsync());
+        // Only ACTIVE drivers are offered, by reference, vehicle and status; no internal id is shown.
+        Assert.Equal(
+            new[] { "Elige un repartidor", "DRV-55555555 · Motocicleta · Activo" },
+            await driverSelect.Locator("option").AllTextContentsAsync());
+        await driverSelect.SelectOptionAsync(new SelectOptionValue { Label = "DRV-55555555 · Motocicleta · Activo" });
+        Assert.True(await create.IsDisabledAsync());
+        await page.GetByLabel("Ciudad", new() { Exact = true })
+            .SelectOptionAsync(new SelectOptionValue { Label = "Culiacán, SIN" });
+        var areaSelect = page.GetByLabel("Área de servicio (opcional)");
+        await areaSelect.Locator("option", new() { HasText = "Centro" })
+            .WaitForAsync(new() { State = WaitForSelectorState.Attached });
+        Assert.Equal(new[] { "Toda la ciudad", "Centro" }, await areaSelect.Locator("option").AllTextContentsAsync());
+        Assert.Equal(string.Empty, await areaSelect.InputValueAsync());
+        Assert.Equal(0, await page.GetByText(DriverId, new() { Exact = false }).CountAsync());
+        Assert.Equal(0, await page.GetByText(CityId, new() { Exact = false }).CountAsync());
+        Assert.False(await create.IsDisabledAsync());
+        await create.ClickAsync();
         await page.GetByRole(AriaRole.Heading, new() { Name = "Ruta a1000000", Exact = true }).WaitForAsync();
+        var createBody = Assert.Single(state.CreateBodies);
+        Assert.Equal(DriverId, createBody.GetProperty("driver_id").GetString());
+        Assert.Equal(CityId, createBody.GetProperty("city_id").GetString());
+        Assert.Equal(JsonValueKind.Null, createBody.GetProperty("service_area_id").ValueKind);
+        Assert.Contains(selectorRequests, request => request.PathAndQuery == $"/api/v1/service-areas?city_id={CityId}");
+        Assert.All(selectorRequests, request => Assert.Equal(OrganizationA, request.Organization));
 
         foreach (var orderId in RouteApiState.OrderIds)
         {
@@ -99,6 +161,8 @@ public sealed class ManualRoutesPwaPlaywrightTests(DriverStopsNextServerFixture 
         Assert.False(await page.GetByText("a1000000", new() { Exact = false }).IsVisibleAsync());
         Assert.DoesNotContain(state.RequestOrganizations, organization =>
             organization != OrganizationA && organization != OrganizationB);
+        Assert.DoesNotContain(selectorRequests, request =>
+            request.Organization != OrganizationA && request.Organization != OrganizationB);
     }
 
     private static async Task InstallSessionAsync(IPage page) =>
@@ -151,6 +215,20 @@ public sealed class ManualRoutesPwaPlaywrightTests(DriverStopsNextServerFixture 
 
     private static object Page(object route) => new { items = new[] { route }, next_cursor = (string?)null };
 
+    private static (string Organization, string PathAndQuery) SelectorRequest(IRoute route) =>
+        (route.Request.Headers.TryGetValue("x-organization-id", out var organization) ? organization : string.Empty,
+            new Uri(route.Request.Url).PathAndQuery);
+
+    private static object Driver(string driverId, string reference, string status) => new
+    {
+        driver_id = driverId,
+        driver_reference = reference,
+        vehicle_type = "MOTORCYCLE",
+        status,
+        active_stop_count = 0,
+        last_position_at = (string?)null,
+    };
+
     private static object Detail(string routeId, int version, object[] stops) => new
     {
         id = routeId,
@@ -190,6 +268,7 @@ public sealed class ManualRoutesPwaPlaywrightTests(DriverStopsNextServerFixture 
         internal int LastMutationVersion { get; private set; }
         internal int DetailReadsAfterConflict { get; private set; }
         internal List<string> RequestOrganizations { get; } = [];
+        internal List<JsonElement> CreateBodies { get; } = [];
 
         internal async Task HandleAsync(IRoute route)
         {
@@ -205,6 +284,7 @@ public sealed class ManualRoutesPwaPlaywrightTests(DriverStopsNextServerFixture 
             }
             if (method == "POST" && path == "/api/v1/routes")
             {
+                CreateBodies.Add(JsonDocument.Parse(route.Request.PostData ?? "{}").RootElement.Clone());
                 exists = true;
                 Version = LastMutationVersion = 1;
                 await FulfillAsync(route, Summary(RouteA, Version, 0, 0), 201);

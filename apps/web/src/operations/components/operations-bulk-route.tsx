@@ -9,7 +9,9 @@ import type { BulkOrder } from "../contracts/bulk-assignment";
 import {
   bulkRouteConfirmation,
   bulkRouteGoneMessage,
+  bulkRouteMixedCitiesMessage,
   bulkRoutePreviewText,
+  createRouteOfferText,
   draftRouteChoices,
   ordersText,
   routeStopConflictMessages,
@@ -22,6 +24,8 @@ import {
   BulkRouteController,
   initialBulkRouteState,
   sendableRouteOrders,
+  type BulkRouteCreation,
+  type BulkRouteNotice,
   type BulkRouteRowResult,
   type BulkRoutesLoad,
   type BulkRouteState,
@@ -30,6 +34,9 @@ import {
 /** The id of the step heading; the step's section is labelled with it. */
 export const bulkRouteTitleId = "inbox-bulk-route-title";
 const previewCaptionId = "inbox-bulk-route-preview";
+/** The preview region; focus lands on it once "Crear ruta nueva" created the route. */
+const previewRegionId = "inbox-bulk-route-preview-region";
+const createOfferId = "inbox-bulk-route-create-offer";
 
 /**
  * UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11 ("Al terminar el lote (Recommended)"): "Agregar
@@ -39,8 +46,12 @@ const previewCaptionId = "inbox-bulk-route-preview";
  * Only the driver's DRAFT routes can be chosen, named by date and current stops (no identifier,
  * no amount). The preview lists the orders in the order they are added; nothing is sent before the
  * confirmation, which names the route, the driver and the number of orders. Then each order is
- * added on its own and keeps its own result. The inbox does not create routes: when the driver has
- * none, the step says routes are created in Rutas. The backend and RLS decide every stop again.
+ * added on its own and keeps its own result. The backend and RLS decide every stop again.
+ *
+ * UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11 ("Sí, en el paso (Recommended)"): when the driver has
+ * no DRAFT route and every order of the batch is in one city, "Crear ruta nueva" creates the DRAFT
+ * route for that driver, in that city and for today (Mazatlán), and the step goes on to the preview
+ * with it selected. Orders in different cities are sent to Rutas, where routes are also created.
  */
 export function OperationsBulkRoute({
   orders,
@@ -73,7 +84,9 @@ export function OperationsBulkRoute({
   const onChangedRef = useRef(onChanged);
   const onRunningChangeRef = useRef(onRunningChange);
   const { confirm, dialog } = useConfirmDialog();
-  const running = state.phase === "running";
+  const creating = state.creation.kind === "creating";
+  // A route being created holds the batch panel open too: closing it would cut the request.
+  const running = state.phase === "running" || creating;
 
   useEffect(() => {
     onChangedRef.current = onChanged;
@@ -87,6 +100,11 @@ export function OperationsBulkRoute({
   useEffect(() => {
     sectionRef.current?.focus();
   }, []);
+
+  // The created route is selected: focus moves to the preview it now names.
+  useEffect(() => {
+    if (state.createdRouteId !== null) document.getElementById(previewRegionId)?.focus();
+  }, [state.createdRouteId]);
 
   useEffect(() => {
     let controller: BulkRouteController | null = null;
@@ -118,7 +136,9 @@ export function OperationsBulkRoute({
   const reference = routeDriver.driverReference;
   const choices = state.routes.kind === "ready" ? draftRouteChoices(state.routes.routes) : [];
   const fixedId = state.route?.id ?? null;
-  const chosen = choices.find((choice) => choice.route.id === (fixedId ?? routeId)) ?? null;
+  // The route "Crear ruta nueva" just created is the selected one until the person picks another.
+  const selectedId = routeId ?? state.createdRouteId;
+  const chosen = choices.find((choice) => choice.route.id === (fixedId ?? selectedId)) ?? null;
   const choosing = state.phase === "choosing";
   const started = Object.keys(state.results).length > 0;
   const sendable = sendableRouteOrders(state);
@@ -154,7 +174,7 @@ export function OperationsBulkRoute({
           Agregar {ordersText(count)} de {reference} a una ruta
         </h3>
         {choosing && !started && (
-          <button type="button" className="btn btnSecondary" onClick={onCancel}>
+          <button type="button" className="btn btnSecondary" onClick={onCancel} disabled={creating}>
             Cancelar
           </button>
         )}
@@ -175,13 +195,19 @@ export function OperationsBulkRoute({
             driverReference={reference}
             routes={state.routes}
             choices={choices}
-            selected={routeId}
+            selected={selectedId}
             disabled={!choosing}
+            creation={state.creation}
+            notice={state.creationNotice}
             onSelect={(id) => {
               setRouteId(id);
               setFormError(null);
             }}
             onReload={reload}
+            onCreate={() => {
+              setFormError(null);
+              void controllerRef.current?.createRoute();
+            }}
           />
         ) : (
           <BulkRouteFixed
@@ -250,7 +276,9 @@ export function OperationsBulkRoute({
 
 /**
  * The driver's DRAFT routes before the first run: only they can be chosen, by date and current
- * stops, newest first. The inbox does not create routes; the step says where they are created.
+ * stops, newest first. When the driver has none, "Crear ruta nueva" is offered if every order of
+ * the batch is in one city (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11); routes are also created in
+ * Rutas, opened in another tab.
  */
 export function BulkRouteChoices({
   driverReference,
@@ -258,17 +286,25 @@ export function BulkRouteChoices({
   choices,
   selected,
   disabled,
+  creation,
+  notice,
   onSelect,
   onReload,
+  onCreate,
 }: {
   readonly driverReference: string;
   readonly routes: BulkRoutesLoad;
   readonly choices: readonly DraftRouteChoice[];
   readonly selected: string | null;
   readonly disabled: boolean;
+  readonly creation: BulkRouteCreation;
+  readonly notice: BulkRouteNotice | null;
   readonly onSelect: (routeId: string) => void;
   readonly onReload: () => void;
+  readonly onCreate: () => void;
 }) {
+  const creating = creation.kind === "creating";
+  const offered = creation.kind === "offered" || creating;
   return (
     <fieldset className="opsBulkDrivers" disabled={disabled}>
       <legend>Ruta en borrador de {driverReference}</legend>
@@ -288,10 +324,7 @@ export function BulkRouteChoices({
         </p>
       )}
       {routes.kind === "ready" && choices.length === 0 && (
-        <p className="emptyState">
-          <strong>{driverReference} no tiene rutas en borrador.</strong>{" "}
-          Crea una para este repartidor en Rutas y vuelve a buscar aquí.
-        </p>
+        <BulkRouteNoDraft driverReference={driverReference} creation={creation} onCreate={onCreate} />
       )}
       {choices.length > 0 && (
         <>
@@ -314,19 +347,71 @@ export function BulkRouteChoices({
           <p className="fieldHint">De la más reciente a la más antigua.</p>
         </>
       )}
+      {notice !== null && (
+        <p className={notice.tone === "info" ? "notice noticeInfo" : "notice noticeWarn"} role="status">
+          {notice.text}{" "}
+          {notice.stepUpHref !== null && (
+            <Link className="btn btnPrimary" href={notice.stepUpHref}>
+              Verificar identidad
+            </Link>
+          )}
+        </p>
+      )}
       <p className="fieldHint">
-        Las rutas se crean en Rutas.{" "}
+        {offered ? "Las rutas también se crean en Rutas." : "Las rutas se crean en Rutas."}{" "}
         <Link href="/ops/routes" target="_blank" rel="noopener noreferrer">
           Abrir Rutas en otra pestaña
         </Link>{" "}
         y, cuando la ruta exista, elige «Buscar rutas de nuevo».
       </p>
       <p>
-        <button type="button" className="btnLink" onClick={onReload} disabled={routes.kind === "loading"}>
+        <button type="button" className="btnLink" onClick={onReload} disabled={routes.kind === "loading" || creating}>
           Buscar rutas de nuevo
         </button>
       </p>
     </fieldset>
+  );
+}
+
+/**
+ * The driver has no DRAFT route (the only place "Crear ruta nueva" appears): the button when the
+ * orders share one city, why not when they do not. Never an identifier: the city is its name.
+ */
+function BulkRouteNoDraft({
+  driverReference,
+  creation,
+  onCreate,
+}: {
+  readonly driverReference: string;
+  readonly creation: BulkRouteCreation;
+  readonly onCreate: () => void;
+}) {
+  if (creation.kind === "offered" || creation.kind === "creating") {
+    const creating = creation.kind === "creating";
+    return (
+      <div className="opsBulkRouteCreate">
+        <p className="emptyState">
+          <strong>{driverReference} no tiene rutas en borrador.</strong>
+        </p>
+        <p id={createOfferId}>{createRouteOfferText(driverReference, creation.cityName)}</p>
+        <button type="button" className="btn btnPrimary" onClick={onCreate} disabled={creating} aria-describedby={createOfferId}>
+          Crear ruta nueva
+        </button>
+        {creating && (
+          <p className="live" aria-live="polite">
+            Creando la ruta en borrador…
+          </p>
+        )}
+      </div>
+    );
+  }
+  return (
+    <p className="emptyState">
+      <strong>{driverReference} no tiene rutas en borrador.</strong>{" "}
+      {creation.kind === "mixed_cities"
+        ? bulkRouteMixedCitiesMessage
+        : "Crea una para este repartidor en Rutas y vuelve a buscar aquí."}
+    </p>
   );
 }
 
@@ -390,7 +475,7 @@ export function BulkRoutePreview({
   readonly results: BulkRouteState["results"];
 }) {
   return (
-    <div className="opsTableScroll" role="region" aria-labelledby={previewCaptionId} tabIndex={0}>
+    <div id={previewRegionId} className="opsTableScroll" role="region" aria-labelledby={previewCaptionId} tabIndex={0}>
       <table className="opsInboxTable opsBulkRoutePreview">
         <caption id={previewCaptionId}>
           <strong>Vista previa:</strong> {bulkRoutePreviewText(driverReference, orders.length, choice)}

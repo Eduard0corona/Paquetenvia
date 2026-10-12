@@ -9,15 +9,18 @@ import {
   routeStopTypeLabels,
   type ManualRouteStop,
 } from "../contracts/manual-route";
+import { useCreateRouteForm } from "../state/use-create-route-form";
 import { useManualRoutes } from "../state/use-manual-routes";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Field } from "../../components/ui/field";
 import { Money } from "../../components/ui/money";
 import { PageHeader } from "../../components/ui/page-header";
 import { shortId } from "../../lib/short-id";
+import { CreateRouteForm } from "./create-route-form";
 
 export function ManualRoutesShell() {
   const state = useManualRoutes();
+  const form = useCreateRouteForm();
   const dragged = useRef<string | null>(null);
   const { confirm, dialog } = useConfirmDialog();
   return (
@@ -37,17 +40,7 @@ export function ManualRoutesShell() {
       <section className="opsRouteLayout">
         <aside className="panel opsRoutePanel">
           <h2>Crear ruta</h2>
-          <form onSubmit={(event) => {
-            event.preventDefault(); const data = new FormData(event.currentTarget);
-            void state.create({ driverId: String(data.get("driver")), cityId: String(data.get("city")),
-              serviceAreaId: nullable(String(data.get("serviceArea"))), scheduledFor: nullable(String(data.get("scheduledFor"))) });
-          }}>
-            <TextField name="driver" label="ID del repartidor (flota propia)" help="Pega el ID completo del repartidor." required />
-            <TextField name="city" label="ID de la ciudad" help="Pega el ID completo de la ciudad." required />
-            <TextField name="serviceArea" label="ID del área de servicio (opcional)" help="Déjalo vacío si la ruta cubre toda la ciudad." />
-            <label>Fecha<input name="scheduledFor" type="date" /></label>
-            <button className="btn btnPrimary" type="submit" disabled={state.mutating}>Crear ruta (borrador)</button>
-          </form>
+          <CreateRouteForm form={form.state} controller={form.controller} mutating={state.mutating} onCreate={(input) => void state.create(input)} />
           <h2>Rutas</h2>
           <ul className="opsRouteList">{state.routes.map((route) => <li key={route.id}>
             <button type="button" aria-current={state.selected?.id === route.id} onClick={() => void state.select(route.id)}>
@@ -98,7 +91,6 @@ function TextField({ name, label, help, required = false, defaultValue }: { read
     </Field>
   );
 }
-function nullable(value: string): string | null { return value.trim() || null; }
 function queryOrder(): string { return typeof window === "undefined" ? "" : new URL(window.location.href).searchParams.get("orderId") ?? ""; }
 function swap(stops: readonly ManualRouteStop[], left: number, right: number): string[] { const ids = stops.map((stop) => stop.id); [ids[left], ids[right]] = [ids[right], ids[left]]; return ids; }
 function move(stops: readonly ManualRouteStop[], source: string, target: string): string[] { const ids = stops.map((stop) => stop.id); const from = ids.indexOf(source); const to = ids.indexOf(target); if (from < 0 || to < 0) return ids; ids.splice(to, 0, ids.splice(from, 1)[0]); return ids; }

@@ -1,8 +1,16 @@
 import { describe, expect, it, vi } from "vitest";
-import type { BulkRouteApi } from "../api/bulk-route-api";
+import type { BulkRouteApi, CreateRouteBody } from "../api/bulk-route-api";
+import { OperationsApiError } from "../api/operations-api";
 import { TenantApiError } from "../api/tenant-request";
 import type { BulkOrder } from "../contracts/bulk-assignment";
-import { routeStopConflictMessages, routeStopNotFoundMessage } from "../contracts/bulk-route";
+import {
+  createRouteConflictMessages,
+  createRouteNotFoundMessage,
+  routeStopConflictMessages,
+  routeStopNotFoundMessage,
+  unconfirmedRouteText,
+} from "../contracts/bulk-route";
+import type { City } from "../contracts/locations";
 import type { ManualRoute, ManualRouteDetail, ManualRoutePage } from "../contracts/manual-route";
 import { syntheticUuid } from "../contracts/ui-001-screens.fixtures";
 import {
@@ -69,19 +77,77 @@ interface AddCall {
   readonly key: string;
 }
 
+interface CreateCall {
+  readonly body: CreateRouteBody;
+  readonly key: string;
+}
+
+/** UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11: the orders' city and the one other city of the tests. */
+const cityA = syntheticUuid(0x900);
+const cityB = syntheticUuid(0x901);
+const culiacan: City = {
+  id: cityA,
+  name: "Culiacán",
+  state_code: "SIN",
+  country_code: "MX",
+  timezone: "America/Mazatlan",
+};
+
+/** The route createRoute answers for a body: DRAFT at version 1, without stops. */
+function createdRoute(body: CreateRouteBody): ManualRoute {
+  return {
+    id: syntheticUuid(0x8ff),
+    status: "DRAFT",
+    version: 1,
+    driver_id: body.driverId,
+    city_id: body.cityId,
+    service_area_id: null,
+    scheduled_for: body.scheduledFor,
+    assignment_cost_cents_total: 0,
+    stop_count: 0,
+  };
+}
+
 /**
  * Answers listDraftRoutes per cursor, getRoute and addRouteStop per order, recording every call in
  * order. An addRouteStop without a scripted answer succeeds like the server (the route one version
  * later) and a getRoute without one returns the route at the last version the fake answered.
+ * getOrder answers every order in Culiacán, listCities lists it, and a createRoute without a
+ * scripted answer creates the route of its body.
  */
 class FakeApi implements BulkRouteApi {
   public readonly calls: string[] = [];
   public readonly addCalls: AddCall[] = [];
+  public readonly createCalls: CreateCall[] = [];
   public readonly signals: AbortSignal[] = [];
   public lists: Record<string, () => Promise<ManualRoutePage>> = {};
   public addAnswers: Record<string, (() => Promise<ManualRouteDetail>)[]> = {};
   public routeAnswers: (() => Promise<ManualRouteDetail>)[] = [];
+  public orderAnswers: Record<string, () => Promise<{ readonly id: string; readonly city_id: string }>> = {};
+  public cityAnswer: () => Promise<readonly City[]> = () => Promise.resolve([culiacan]);
+  public createAnswers: ((body: CreateRouteBody) => Promise<ManualRoute>)[] = [];
   private serverVersion = target.version;
+
+  public getOrder(orderId: string, signal?: AbortSignal): Promise<{ readonly id: string; readonly city_id: string }> {
+    this.calls.push(`order ${orderId}`);
+    if (signal !== undefined) this.signals.push(signal);
+    const answer = this.orderAnswers[orderId];
+    return answer === undefined ? Promise.resolve({ id: orderId, city_id: cityA }) : answer();
+  }
+
+  public listCities(signal?: AbortSignal): Promise<readonly City[]> {
+    this.calls.push("cities");
+    if (signal !== undefined) this.signals.push(signal);
+    return this.cityAnswer();
+  }
+
+  public createRoute(body: CreateRouteBody, key: string, signal?: AbortSignal): Promise<ManualRoute> {
+    this.calls.push("create");
+    this.createCalls.push({ body, key });
+    if (signal !== undefined) this.signals.push(signal);
+    const answer = this.createAnswers.shift();
+    return answer === undefined ? Promise.resolve(createdRoute(body)) : answer(body);
+  }
 
   public listDraftRoutes(driverId: string, cursor: string | null, signal?: AbortSignal): Promise<ManualRoutePage> {
     this.calls.push(`list ${driverId}${cursor === null ? "" : `@${cursor}`}`);
@@ -133,7 +199,11 @@ function detail(routeId: string, version: number, stopCount: number): ManualRout
   };
 }
 
-function setup(api = new FakeApi(), orders: readonly BulkOrder[] = [first, second, third]) {
+function setup(
+  api = new FakeApi(),
+  orders: readonly BulkOrder[] = [first, second, third],
+  clock: { now: Date } = { now: new Date("2026-10-12T18:00:00Z") },
+) {
   const states: BulkRouteState[] = [];
   const onChanged = vi.fn();
   let counter = 0;
@@ -145,8 +215,15 @@ function setup(api = new FakeApi(), orders: readonly BulkOrder[] = [first, secon
     onChanged,
     "/ops/inbox?queue=unassigned",
     () => `uuid-${++counter}`,
+    () => clock.now,
   );
-  return { controller, api, states, onChanged };
+  return { controller, api, states, onChanged, clock };
+}
+
+/** A driver without DRAFT routes: the case "Crear ruta nueva" is offered in. */
+function withoutRoutes(api = new FakeApi()): FakeApi {
+  api.lists = { "": () => Promise.resolve(page([])) };
+  return api;
 }
 
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -508,5 +585,361 @@ describe("bulk add to route controller (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-1
     expect(api.addCalls).toHaveLength(1);
     expect(states).toHaveLength(seen);
     expect(onChanged).not.toHaveBeenCalled();
+  });
+});
+
+describe("Crear ruta nueva in the step (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)", () => {
+  it("is offered only when the driver has no DRAFT route, after reading every order one after another", async () => {
+    const api = withoutRoutes();
+    const firstOrder = deferred<{ readonly id: string; readonly city_id: string }>();
+    api.orderAnswers = { [first.orderId]: () => firstOrder.promise };
+    const { controller } = setup(api);
+    const loading = controller.loadRoutes();
+    await flush();
+    // The second order is read only after the first one answered; nothing is offered meanwhile.
+    expect(api.calls).toEqual([`list ${driver.driverId}`, `order ${first.orderId}`]);
+    expect(controller.current.routes).toEqual({ kind: "loading" });
+    expect(controller.current.creation).toEqual({ kind: "none" });
+    firstOrder.resolve({ id: first.orderId, city_id: cityA });
+    await loading;
+    expect(api.calls).toEqual([
+      `list ${driver.driverId}`,
+      `order ${first.orderId}`,
+      `order ${second.orderId}`,
+      `order ${third.orderId}`,
+      "cities",
+    ]);
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [] });
+    expect(controller.current.creation).toEqual({ kind: "offered", cityId: cityA, cityName: "Culiacán, SIN" });
+    // Nothing is created before the button is pressed.
+    expect(api.createCalls).toEqual([]);
+  });
+
+  it("is never offered next to the driver's DRAFT routes: no order is even read", async () => {
+    const { controller, api } = setup();
+    await controller.loadRoutes();
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [target, otherRoute] });
+    expect(controller.current.creation).toEqual({ kind: "none" });
+    expect(api.calls).toEqual([`list ${driver.driverId}`]);
+    await controller.createRoute();
+    expect(api.createCalls).toEqual([]);
+  });
+
+  it("says the orders are in different cities and offers nothing", async () => {
+    const api = withoutRoutes();
+    api.orderAnswers = { [third.orderId]: () => Promise.resolve({ id: third.orderId, city_id: cityB }) };
+    const { controller } = setup(api);
+    await controller.loadRoutes();
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [] });
+    expect(controller.current.creation).toEqual({ kind: "mixed_cities" });
+    // No city name is needed: the step names no city.
+    expect(api.calls).not.toContain("cities");
+    await controller.createRoute();
+    expect(api.createCalls).toEqual([]);
+  });
+
+  it("offers nothing when an order cannot be read and shows the step's unavailable message", async () => {
+    for (const failure of [new OperationsApiError("not_found"), new OperationsApiError("network"), new TenantApiError("invalid")]) {
+      const api = withoutRoutes();
+      api.orderAnswers = { [second.orderId]: () => Promise.reject(failure) };
+      const { controller } = setup(api);
+      await controller.loadRoutes();
+      expect(controller.current.routes).toEqual({ kind: "failed", message: bulkRoutesUnavailableMessage, stepUpHref: null });
+      expect(controller.current.creation).toEqual({ kind: "none" });
+      // The read stops at the order that failed.
+      expect(api.calls).toEqual([`list ${driver.driverId}`, `order ${first.orderId}`, `order ${second.orderId}`]);
+      await controller.createRoute();
+      expect(api.createCalls).toEqual([]);
+    }
+  });
+
+  it("reads the orders again only until they answered once, and leaves the city name out when it cannot be read", async () => {
+    const api = withoutRoutes();
+    let failing = true;
+    api.orderAnswers = {
+      [first.orderId]: () =>
+        failing ? Promise.reject(new OperationsApiError("unavailable")) : Promise.resolve({ id: first.orderId, city_id: cityA }),
+    };
+    api.cityAnswer = () => Promise.reject(new TenantApiError("network"));
+    const { controller } = setup(api);
+    await controller.loadRoutes();
+    expect(controller.current.routes).toMatchObject({ kind: "failed", message: bulkRoutesUnavailableMessage });
+    failing = false;
+    await controller.loadRoutes();
+    expect(controller.current.creation).toEqual({ kind: "offered", cityId: cityA, cityName: null });
+    // An order keeps its city: "Buscar rutas de nuevo" reads the routes (and the missing name) again, not the orders.
+    api.cityAnswer = () => Promise.resolve([{ ...culiacan, id: cityB }]);
+    const before = api.calls.filter((call) => call.startsWith("order")).length;
+    await controller.loadRoutes();
+    expect(api.calls.filter((call) => call.startsWith("order"))).toHaveLength(before);
+    // A list without the orders' city leaves the name out too.
+    expect(controller.current.creation).toEqual({ kind: "offered", cityId: cityA, cityName: null });
+  });
+
+  it("creates the route for the driver and the orders' city, with no area and today's date in Mazatlán", async () => {
+    const api = withoutRoutes();
+    // 05:30 UTC on 12 October is still 11 October in Mazatlán (UTC-7), whatever the device's zone says.
+    const { controller } = setup(api, [first, second, third], { now: new Date("2026-10-12T05:30:00Z") });
+    await controller.loadRoutes();
+    await controller.createRoute();
+    expect(api.createCalls).toEqual([
+      {
+        body: { driverId: driver.driverId, cityId: cityA, scheduledFor: "2026-10-11" },
+        key: "create-route-uuid-1",
+      },
+    ]);
+  });
+
+  it("takes the new date once midnight passes in Mazatlán", async () => {
+    const api = withoutRoutes();
+    const { controller } = setup(api, [first], { now: new Date("2026-10-12T07:00:00Z") });
+    await controller.loadRoutes();
+    await controller.createRoute();
+    expect(api.createCalls[0]?.body.scheduledFor).toBe("2026-10-12");
+  });
+
+  it("sends one request however often it is pressed while in flight", async () => {
+    const api = withoutRoutes();
+    const answer = deferred<ManualRoute>();
+    api.createAnswers = [() => answer.promise];
+    const { controller } = setup(api);
+    await controller.loadRoutes();
+    const creating = controller.createRoute();
+    expect(controller.current.creation).toEqual({ kind: "creating", cityId: cityA, cityName: "Culiacán, SIN" });
+    await controller.createRoute();
+    await controller.createRoute();
+    // Nor does "Buscar rutas de nuevo" read anything while the route is being created.
+    await controller.loadRoutes();
+    expect(api.createCalls).toHaveLength(1);
+    expect(api.calls.filter((call) => call.startsWith("list"))).toHaveLength(1);
+    answer.resolve(createdRoute(api.createCalls[0]!.body));
+    await creating;
+    await controller.createRoute();
+    expect(api.createCalls).toHaveLength(1);
+  });
+
+  it("goes straight to the preview with the created route selected, then adds the orders from its version", async () => {
+    const api = withoutRoutes();
+    const { controller, onChanged } = setup(api);
+    await controller.loadRoutes();
+    await controller.createRoute();
+    const created = createdRoute(api.createCalls[0]!.body);
+    expect(controller.current.phase).toBe("choosing");
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [created] });
+    expect(controller.current.createdRouteId).toBe(created.id);
+    expect(controller.current.creation).toEqual({ kind: "none" });
+    expect(controller.current.creationNotice).toEqual({
+      tone: "info",
+      text: `Se creó «Ruta del 12 de octubre de 2026» en borrador para ${driver.driverReference}. Revisa la vista previa y confirma para agregar las órdenes.`,
+      stepUpHref: null,
+    });
+    // Nothing was added: the preview and its confirmation come first.
+    expect(api.addCalls).toEqual([]);
+    expect(onChanged).not.toHaveBeenCalled();
+
+    await controller.execute(created.id);
+    expect(api.addCalls).toEqual([
+      { routeId: created.id, orderId: first.orderId, expectedVersion: 1, key: "add-route-stop-uuid-2" },
+      { routeId: created.id, orderId: second.orderId, expectedVersion: 2, key: "add-route-stop-uuid-3" },
+      { routeId: created.id, orderId: third.orderId, expectedVersion: 3, key: "add-route-stop-uuid-4" },
+    ]);
+    expect(controller.current.phase).toBe("done");
+    expect(controller.current.message).toBe("Se agregaron las 3 órdenes a la ruta.");
+    expect(controller.current.creationNotice).toBeNull();
+    expect(onChanged).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps the button after a refusal, with its es-MX reason and a new key for the next request", async () => {
+    const refusals: readonly [TenantApiError, string, string | null][] = [
+      [new TenantApiError("conflict", "DRIVER_INELIGIBLE"), createRouteConflictMessages.DRIVER_INELIGIBLE ?? "", null],
+      [new TenantApiError("conflict", "INVALID_REQUEST"), createRouteConflictMessages.INVALID_REQUEST ?? "", null],
+      [new TenantApiError("not_found"), createRouteNotFoundMessage, null],
+      [new TenantApiError("unauthorized"), "No se creó la ruta: Tu sesión no es válida; inicia sesión de nuevo.", null],
+      [new TenantApiError("forbidden"), "No se creó la ruta: Tu rol no permite esta acción en la organización activa.", null],
+      [
+        new TenantApiError("forbidden", "MFA_REQUIRED", true),
+        "No se creó la ruta: Esta acción requiere verificar tu identidad (MFA).",
+        "/login?mfa=required&return_url=%2Fops%2Finbox%3Fqueue%3Dunassigned",
+      ],
+    ];
+    for (const [error, text, stepUpHref] of refusals) {
+      const api = withoutRoutes();
+      api.createAnswers = [() => Promise.reject(error)];
+      const { controller } = setup(api);
+      await controller.loadRoutes();
+      await controller.createRoute();
+      expect(controller.current.creationNotice, text).toEqual({ tone: "warn", text, stepUpHref });
+      expect(controller.current.creation).toEqual({ kind: "offered", cityId: cityA, cityName: "Culiacán, SIN" });
+      expect(controller.current.routes).toEqual({ kind: "ready", routes: [] });
+      // A refusal created nothing for sure: the routes are not read again and no success is shown.
+      expect(api.calls.filter((call) => call.startsWith("list"))).toHaveLength(1);
+      expect(controller.current.createdRouteId).toBeNull();
+      // Pressing again is a new request with a new key, and it clears the reason.
+      await controller.createRoute();
+      expect(api.createCalls.map((call) => call.key)).toEqual(["create-route-uuid-1", "create-route-uuid-2"]);
+      expect(controller.current.createdRouteId).toBe(syntheticUuid(0x8ff));
+    }
+    for (const [code, message] of Object.entries(createRouteConflictMessages)) {
+      expect(message, code).not.toContain(code);
+      expect(message, code).not.toMatch(/[A-Z]{2,}_[A-Z]|[0-9a-f]{8}-[0-9a-f]{4}/);
+    }
+  });
+
+  it("after no answer, reads the DRAFT routes again before offering it again, then resends the same key", async () => {
+    for (const failure of [new TenantApiError("network"), new TenantApiError("unavailable")]) {
+      const api = withoutRoutes();
+      api.createAnswers = [() => Promise.reject(failure)];
+      const { controller } = setup(api);
+      await controller.loadRoutes();
+      await controller.createRoute();
+      // Never a success by guess: the routes were listed again and none appeared.
+      expect(api.calls.filter((call) => call.startsWith("list"))).toHaveLength(2);
+      expect(controller.current.createdRouteId).toBeNull();
+      expect(controller.current.creation).toEqual({ kind: "offered", cityId: cityA, cityName: "Culiacán, SIN" });
+      expect(controller.current.creationNotice).toEqual({
+        tone: "warn",
+        text: unconfirmedRouteText("none", true, driver.driverReference),
+        stepUpHref: null,
+      });
+      expect(controller.current.creationNotice?.text).toContain("se reenvía la misma solicitud sin duplicarla");
+      await controller.createRoute();
+      expect(api.createCalls).toHaveLength(2);
+      expect(api.createCalls[1]).toEqual(api.createCalls[0]);
+      expect(controller.current.createdRouteId).toBe(syntheticUuid(0x8ff));
+      expect(controller.current.creationNotice?.tone).toBe("info");
+    }
+  });
+
+  it("finds a route created anyway after an ambiguous failure and never creates another", async () => {
+    const api = withoutRoutes();
+    api.createAnswers = [
+      (body) => {
+        // The server created the route, but the answer never arrived.
+        api.lists = { "": () => Promise.resolve(page([createdRoute(body)])) };
+        return Promise.reject(new TenantApiError("network"));
+      },
+    ];
+    const { controller } = setup(api);
+    await controller.loadRoutes();
+    await controller.createRoute();
+    const created = createdRoute(api.createCalls[0]!.body);
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [created] });
+    expect(controller.current.creation).toEqual({ kind: "none" });
+    expect(controller.current.creationNotice).toEqual({
+      tone: "warn",
+      text: unconfirmedRouteText("found", true, driver.driverReference),
+      stepUpHref: null,
+    });
+    // The route found is chosen like any DRAFT route; creating again is not possible.
+    await controller.createRoute();
+    expect(api.createCalls).toHaveLength(1);
+    await controller.execute(created.id);
+    expect(api.addCalls.map((call) => [call.routeId, call.expectedVersion])).toEqual([
+      [created.id, 1],
+      [created.id, 2],
+      [created.id, 3],
+    ]);
+  });
+
+  it("treats a generic conflict, an unknown code or an unexpected answer as unconfirmed, with a new key next time", async () => {
+    for (const failure of [
+      new TenantApiError("conflict", "CONFLICT"),
+      new TenantApiError("conflict"),
+      new TenantApiError("conflict", "SOMETHING_NEW"),
+      new TenantApiError("invalid"),
+    ]) {
+      const api = withoutRoutes();
+      api.createAnswers = [() => Promise.reject(failure)];
+      const { controller } = setup(api);
+      await controller.loadRoutes();
+      await controller.createRoute();
+      expect(api.calls.filter((call) => call.startsWith("list"))).toHaveLength(2);
+      expect(controller.current.creationNotice?.text).toBe(unconfirmedRouteText("none", false, driver.driverReference));
+      expect(controller.current.creationNotice?.text).not.toContain("misma solicitud");
+      await controller.createRoute();
+      expect(api.createCalls.map((call) => call.key)).toEqual(["create-route-uuid-1", "create-route-uuid-2"]);
+    }
+  });
+
+  it("offers nothing while the routes cannot be read again after an ambiguous failure", async () => {
+    const api = withoutRoutes();
+    api.createAnswers = [
+      () => {
+        api.lists = { "": () => Promise.reject(new TenantApiError("network")) };
+        return Promise.reject(new TenantApiError("unavailable"));
+      },
+    ];
+    const { controller } = setup(api);
+    await controller.loadRoutes();
+    await controller.createRoute();
+    expect(controller.current.routes).toEqual({ kind: "failed", message: bulkRoutesUnavailableMessage, stepUpHref: null });
+    expect(controller.current.creation).toEqual({ kind: "none" });
+    expect(controller.current.creationNotice?.text).toBe(unconfirmedRouteText("unread", true, driver.driverReference));
+    await controller.createRoute();
+    expect(api.createCalls).toHaveLength(1);
+    // Once the routes are read (still none), the button comes back with the same request.
+    api.lists = { "": () => Promise.resolve(page([])) };
+    await controller.loadRoutes();
+    expect(controller.current.creation.kind).toBe("offered");
+    expect(controller.current.creationNotice?.text).toBe(unconfirmedRouteText("none", true, driver.driverReference));
+    await controller.createRoute();
+    expect(api.createCalls[1]).toEqual(api.createCalls[0]);
+  });
+
+  it("uses a new key when the retry is another request: the day changed in Mazatlán", async () => {
+    const api = withoutRoutes();
+    api.createAnswers = [() => Promise.reject(new TenantApiError("network"))];
+    const { controller, clock } = setup(api, [first], { now: new Date("2026-10-12T06:59:59Z") });
+    await controller.loadRoutes();
+    await controller.createRoute();
+    clock.now = new Date("2026-10-12T07:00:00Z");
+    await controller.createRoute();
+    expect(api.createCalls).toEqual([
+      { body: { driverId: driver.driverId, cityId: cityA, scheduledFor: "2026-10-11" }, key: "create-route-uuid-1" },
+      { body: { driverId: driver.driverId, cityId: cityA, scheduledFor: "2026-10-12" }, key: "create-route-uuid-2" },
+    ]);
+  });
+
+  it("aborts the order reads and the request in flight when the step closes, ignoring late answers", async () => {
+    const reading = withoutRoutes();
+    const order = deferred<{ readonly id: string; readonly city_id: string }>();
+    reading.orderAnswers = { [first.orderId]: () => order.promise };
+    const readRun = setup(reading);
+    const loading = readRun.controller.loadRoutes();
+    await flush();
+    readRun.controller.dispose();
+    expect(reading.signals.at(-1)?.aborted).toBe(true);
+    const seenWhileReading = readRun.states.length;
+    order.resolve({ id: first.orderId, city_id: cityA });
+    await loading;
+    expect(readRun.states).toHaveLength(seenWhileReading);
+    expect(reading.calls.filter((call) => call.startsWith("order"))).toHaveLength(1);
+
+    const creating = withoutRoutes();
+    const answer = deferred<ManualRoute>();
+    creating.createAnswers = [() => answer.promise];
+    const createRun = setup(creating);
+    await createRun.controller.loadRoutes();
+    const pending = createRun.controller.createRoute();
+    createRun.controller.dispose();
+    expect(creating.signals.at(-1)?.aborted).toBe(true);
+    const seen = createRun.states.length;
+    answer.resolve(createdRoute(creating.createCalls[0]!.body));
+    await pending;
+    expect(createRun.states).toHaveLength(seen);
+    expect(createRun.controller.current.createdRouteId).toBeNull();
+  });
+
+  it("is not offered once a run fixed a route that later left DRAFT", async () => {
+    const api = new FakeApi();
+    api.addAnswers = { [first.orderId]: [() => Promise.reject(new TenantApiError("conflict", "VERSION_CONFLICT"))] };
+    const { controller } = setup(api);
+    await controller.loadRoutes();
+    api.lists = { "": () => Promise.resolve(page([])) };
+    await controller.execute(target.id);
+    expect(controller.current.route).not.toBeNull();
+    expect(controller.current.routes).toEqual({ kind: "ready", routes: [] });
+    expect(controller.current.creation).toEqual({ kind: "none" });
+    expect(api.calls.some((call) => call.startsWith("order"))).toBe(false);
   });
 });

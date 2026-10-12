@@ -25,6 +25,9 @@ const inboxSources = [
 /** The routing client of the bulk add to route; it holds the only API paths of the inbox's bulk actions. */
 const bulkRouteApi = "src/operations/api/bulk-route-api.ts";
 
+/** UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11: the Locations client and contract "Crear ruta nueva" names the city with. */
+const locationSources = ["src/operations/api/locations-api.ts", "src/operations/contracts/locations.ts"];
+
 const shell = () => read("src/operations/components/operations-inbox-shell.tsx");
 
 describe("work inbox page policy (UI-PHASE3-INBOX-2026-10-10)", () => {
@@ -37,7 +40,7 @@ describe("work inbox page policy (UI-PHASE3-INBOX-2026-10-10)", () => {
   });
 
   it("keeps tenant data in memory only and never logs it", () => {
-    for (const path of [...inboxSources, bulkRouteApi]) {
+    for (const path of [...inboxSources, bulkRouteApi, ...locationSources]) {
       const source = read(path);
       expect(source, path).not.toMatch(/localStorage|sessionStorage|indexedDB|caches\.|console\.|sendBeacon/);
       expect(source, path).not.toMatch(/parseFloat|toFixed/);
@@ -63,24 +66,41 @@ describe("work inbox page policy (UI-PHASE3-INBOX-2026-10-10)", () => {
     expect(bulkController).toContain("await this.api.assignDriver(");
     expect(bulkController).not.toMatch(/Promise\.all|transitionOrder|routes/);
     // UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11: the existing listRoutes (the driver's DRAFT routes),
-    // getRoute (to check the route after a generic conflict) and addRouteStop, one order at a time; it
-    // never creates a route nor touches another operation.
+    // getRoute (to check the route after a generic conflict) and addRouteStop, one order at a time.
     const routeStep = read("src/operations/components/operations-bulk-route.tsx");
     expect(routeStep).toContain("createBulkRouteApi(apiBaseUrl, session)");
     const routeController = read("src/operations/state/bulk-route-controller.ts");
     expect(routeController).toContain("this.api.listDraftRoutes(this.driver.driverId, cursor, this.abort.signal)");
     expect(routeController).toContain("this.api.getRoute(route.id, this.abort.signal)");
     expect(routeController).toContain("await this.api.addRouteStop(");
-    expect(routeController).not.toMatch(/Promise\.all|transitionOrder|assignDriver|createRoute|removeStop|reorder/);
+    // UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11: "Crear ruta nueva" adds the existing getOrder (every order of
+    // the batch, one after another), listCities (the city's name) and createRoute; nothing else, never in
+    // parallel.
+    expect(routeController).toContain("await this.api.getOrder(order.orderId, this.abort.signal)");
+    expect(routeController).toContain("await this.api.listCities(this.abort.signal)");
+    expect(routeController).toContain("await this.api.createRoute(prepared.payload, prepared.key, this.abort.signal)");
+    expect(routeController).not.toMatch(/Promise\.all|transitionOrder|assignDriver|removeStop|reorder/);
     const api = read(bulkRouteApi);
     expect(api).toContain("createTenantRequester(baseUrl, session)");
     expect(api).toContain('new URLSearchParams({ status: "DRAFT", driver_id: driverId })');
     expect(api.match(/path: [`"]\/api\/v1\/[^`"]*[`"]/g)).toEqual([
+      // createRoute (POST), then listRoutes (GET).
+      'path: "/api/v1/routes"',
       'path: "/api/v1/routes"',
       "path: `/api/v1/routes/${encodeURIComponent(routeId)}`",
       "path: `/api/v1/routes/${encodeURIComponent(routeId)}/stops`",
     ]);
+    // getOrder is the existing client of the order detail; the city's name comes from listCities.
+    expect(api).toContain("createOperationsApi(baseUrl, session)");
+    expect(api).toContain("createLocationsApi(baseUrl, session)");
+    expect(api).toContain("service_area_id: null,");
     expect(api).not.toMatch(/\bfetch\(|"PUT"|"DELETE"/);
+    const locations = read("src/operations/api/locations-api.ts");
+    expect(locations.match(/path: [`"]\/api\/v1\/[^`"]*[`"]/g)).toEqual([
+      'path: "/api/v1/cities"',
+      'path: "/api/v1/service-areas"',
+    ]);
+    expect(locations).not.toMatch(/\bfetch\(|"POST"|"PUT"|"DELETE"/);
   });
 
   it("shows server counts on every queue tab, price review a server list like the others", () => {
@@ -151,9 +171,34 @@ describe("work inbox page policy (UI-PHASE3-INBOX-2026-10-10)", () => {
     expect(step).toContain("<strong>Vista previa:</strong>");
     expect(step).toContain("bulkRouteConfirmation(choice, reference, sendable.length)");
     expect(step).toContain("controllerRef.current?.execute(choice.route.id)");
-    // No amount, identifier or route creation: routes are created in Rutas, opened in another tab.
-    expect(step).not.toMatch(/<Money\b|assignment_cost_cents_total|shortId|createRoute|\.create\(/);
+    // No amount nor identifier; Rutas stays reachable in another tab.
+    expect(step).not.toMatch(/<Money\b|assignment_cost_cents_total|shortId|\.create\(/);
     expect(step).toContain('<Link href="/ops/routes" target="_blank" rel="noopener noreferrer">');
+  });
+
+  it("offers Crear ruta nueva only where the driver has no DRAFT route, then the usual preview", () => {
+    const aiSeven = read(resolve(process.cwd(), "../../docs/normative/v0.6/specs/AI-07_UI_CONTRACTS.yaml"));
+    expect(aiSeven).toContain("      create_route:\n        decision: UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11\n");
+    expect(aiSeven).toContain("    - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11\n");
+    expect(aiSeven).not.toContain("the inbox creates no route");
+    const step = read("src/operations/components/operations-bulk-route.tsx");
+    // A single button, inside the part that says the driver has no DRAFT route; the DRAFT route list has none.
+    expect(step.match(/Crear ruta nueva\s*<\/button>/g)).toHaveLength(1);
+    const noDraft = step.slice(step.indexOf("function BulkRouteNoDraft("));
+    expect(noDraft).toContain("no tiene rutas en borrador.");
+    expect(noDraft).toContain('if (creation.kind === "offered" || creation.kind === "creating") {');
+    expect(noDraft).toContain("disabled={creating}");
+    expect(noDraft).toContain("bulkRouteMixedCitiesMessage");
+    expect(step).toContain("void controllerRef.current?.createRoute();");
+    // The created route is the selected one, and focus lands on the preview that now names it.
+    expect(step).toContain("const selectedId = routeId ?? state.createdRouteId;");
+    expect(step).toContain("document.getElementById(previewRegionId)?.focus()");
+    // Today in Mazatlán comes from the injected clock, never from the browser's local date.
+    const routeController = read("src/operations/state/bulk-route-controller.ts");
+    expect(routeController).toContain("scheduledFor: todayInMazatlan(this.now()),");
+    expect(`${routeController}\n${read("src/operations/contracts/bulk-route.ts")}`).not.toMatch(
+      /toLocaleDateString|getFullYear\(|getDate\(|toISOString\(\)\.slice/,
+    );
   });
 
   it("keeps the queue and the chips in the URL and filters only on the server", () => {
