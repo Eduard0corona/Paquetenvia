@@ -29,7 +29,7 @@ on:
           - none
           - bind
       rotate_runtime_logins:
-        description: Generate new runtime LOGIN passwords for API and Worker (new secret versions, re-keyed logins, restarted revisions).
+        description: Generate new runtime LOGIN passwords for the API, the Worker and the API realtime dispatchers (new secret versions, re-keyed logins, restarted revisions).
         required: false
         type: boolean
         default: false
@@ -366,7 +366,9 @@ jobs:
           unset admin
           put_secret pg-migrate-connection "${RUNNER_TEMP}/s"
           # Runtime LOGIN passwords are generated once; the job receives only their SCRAM verifiers.
-          for role in api worker; do
+          # RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: "realtime" is the API's in-process realtime dispatcher login
+          # (pv_pilot_realtime, member of paqueteria_realtime only); the API never reads the Worker credential.
+          for role in api worker realtime; do
             if [[ "${ROTATE_RUNTIME_LOGINS}" != "true" ]] && has_secret "pg-${role}-runtime-connection" && has_secret "pg-${role}-login-verifier"; then continue; fi
             password="$(openssl rand -hex 32)"
             echo "::add-mask::${password}"

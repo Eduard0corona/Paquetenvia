@@ -322,6 +322,50 @@ def auto_close_errors(role_sql: str) -> list[str]:
     return errors
 
 
+# RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the API's realtime dispatcher runtime role. AI-18 creates it with no
+# privilege; every grant (six lease-token functions, seven schemas, the evidence columns) belongs to the Notifications
+# lane step 20261012000100_AddRealtimeDispatcherRole, which verifies the exact set against the catalog.
+REALTIME_DISPATCHER_FUNCTIONS = [
+    "security.claim_realtime_outbox(text,integer,interval)",
+    "security.requeue_stale_realtime_outbox(interval,integer,integer)",
+    "security.settle_outbox(uuid,uuid,text,text,timestamptz)",
+    "security.claim_location_outbox(text,integer,interval)",
+    "security.settle_location_outbox(uuid,uuid,text,text,timestamptz)",
+    "security.requeue_stale_location_outbox(interval,integer,integer)",
+]
+
+
+def realtime_dispatcher_errors(role_sql: str) -> list[str]:
+    """RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12 ("Rol propio y mínimo"): the API's in-process realtime dispatchers
+    have their own NOLOGIN NOBYPASSRLS runtime role, created by AI-18 with no privilege, never granted to a group role,
+    and granted its exact privileges only by its Notifications lane step."""
+    errors = []
+    executable_roles = SQL_LINE_COMMENT.sub("", role_sql)
+    for fragment in [
+        "CREATE ROLE paqueteria_realtime NOLOGIN NOBYPASSRLS;",
+        "REVOKE paqueteria_realtime FROM paqueteria_app, paqueteria_worker, paqueteria_bootstrap;",
+        "FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;",
+        "RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12",
+        "Rol propio y mínimo (Recommended)",
+        "20261012000100_AddRealtimeDispatcherRole",
+        "SET LOCAL ROLE paqueteria_realtime",
+        "Every\n-- column it reads is also readable by paqueteria_app",
+        *REALTIME_DISPATCHER_FUNCTIONS,
+    ]:
+        if fragment not in role_sql:
+            errors.append(f"Missing realtime dispatcher role contract in AI-18: {fragment}")
+    if re.search(r"CREATE ROLE paqueteria_realtime\b[^;]*\bBYPASSRLS", executable_roles.replace("NOBYPASSRLS", "")):
+        errors.append("The realtime dispatcher role must be NOBYPASSRLS")
+    if re.search(r"GRANT\s+paqueteria_realtime\s+TO", executable_roles):
+        errors.append("Realtime dispatcher role membership granted contrary to RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12")
+    if grants_to_role(role_sql, "paqueteria_realtime"):
+        errors.append("The realtime dispatcher role is granted by its Notifications lane step, never by AI-18: "
+                      f"{grants_to_role(role_sql, 'paqueteria_realtime')}")
+    if re.search(r"ALTER\s+(ROLE|FUNCTION|TABLE)[^;]*OWNER\s+TO\s+paqueteria_realtime", executable_roles):
+        errors.append("The realtime dispatcher role must own nothing")
+    return errors
+
+
 def load_yaml(relative: str) -> Any:
     return yaml.safe_load((ROOT / relative).read_text(encoding="utf-8"))
 
@@ -796,6 +840,8 @@ def main() -> int:
     checks.append("Operator outbox executor: dedicated NOLOGIN role, exact column grants, lane-granted API-only functions")
     errors.extend(auto_close_errors(role_sql))
     checks.append("Auto-close executor: dedicated NOLOGIN role, two column grants, lane-granted Worker-only discovery function")
+    errors.extend(realtime_dispatcher_errors(role_sql))
+    checks.append("Realtime dispatcher role: dedicated NOLOGIN NOBYPASSRLS runtime role, no AI-18 grant, lane-granted lease-token functions")
     checks.append("BFF session store: pre-tenant table, session executor grants only, function-only runtime access")
     # D8-OUTBOX-LANE-DISPATCH: the DISPATCH lane is installed after the baseline by a module lane, so
     # the role model records its contract; it must never grant the lane to anyone but the Worker.

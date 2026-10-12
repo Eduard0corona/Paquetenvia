@@ -32,6 +32,93 @@ public sealed class DatabaseBaselineAssertions
         "paqueteria_auto_close_executor",
     ];
 
+    /// <summary>
+    /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the API's realtime dispatcher runtime role. AI-18 creates it with no
+    /// privilege; the Notifications lane step 20261012000100_AddRealtimeDispatcherRole grants exactly
+    /// <see cref="RealtimeDispatcherFunctions"/>, <see cref="RealtimeDispatcherUsageSchemas"/> and
+    /// <see cref="RealtimeDispatcherColumnGrants"/>, and its rollback revokes them.
+    /// </summary>
+    public const string RealtimeDispatcherRole = "paqueteria_realtime";
+
+    /// <summary>RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the six lease-token lifecycle functions the role executes.</summary>
+    public static IReadOnlyList<string> RealtimeDispatcherFunctions { get; } = Array.AsReadOnly(new[]
+    {
+        "security.claim_realtime_outbox(text,integer,interval)",
+        "security.requeue_stale_realtime_outbox(interval,integer,integer)",
+        "security.settle_outbox(uuid,uuid,text,text,timestamp with time zone)",
+        "security.claim_location_outbox(text,integer,interval)",
+        "security.settle_location_outbox(uuid,uuid,text,text,timestamp with time zone)",
+        "security.requeue_stale_location_outbox(interval,integer,integer)",
+    });
+
+    /// <summary>RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the only schemas the role may use.</summary>
+    public static IReadOnlyList<string> RealtimeDispatcherUsageSchemas { get; } = Array.AsReadOnly(new[]
+    {
+        "dispatch", "drivers", "identity", "orders", "organizations", "routes", "security",
+    });
+
+    /// <summary>
+    /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the role's exact column grants (schema.table.column:privilege), the
+    /// columns the realtime evidence reads select, join or filter on under FORCE RLS. Each is also readable by
+    /// <c>paqueteria_app</c>, so the API gains no read.
+    /// </summary>
+    public static IReadOnlyList<string> RealtimeDispatcherColumnGrants { get; } = Array.AsReadOnly(new[]
+    {
+        "dispatch.assignments.assignment_type:SELECT",
+        "dispatch.assignments.driver_id:SELECT",
+        "dispatch.assignments.id:SELECT",
+        "dispatch.assignments.operator_org_id:SELECT",
+        "dispatch.assignments.order_id:SELECT",
+        "dispatch.assignments.owner_org_id:SELECT",
+        "dispatch.assignments.status:SELECT",
+        "dispatch.external_offers.accepted_by_driver_id:SELECT",
+        "dispatch.external_offers.commission_cents:SELECT",
+        "dispatch.external_offers.expires_at:SELECT",
+        "dispatch.external_offers.id:SELECT",
+        "dispatch.external_offers.owner_org_id:SELECT",
+        "dispatch.external_offers.status:SELECT",
+        "dispatch.external_offers.version:SELECT",
+        "drivers.driver_positions.accuracy_m:SELECT",
+        "drivers.driver_positions.captured_at:SELECT",
+        "drivers.driver_positions.driver_id:SELECT",
+        "drivers.driver_positions.id:SELECT",
+        "drivers.driver_positions.org_id:SELECT",
+        "drivers.driver_positions.point:SELECT",
+        "drivers.driver_positions.publish_realtime:SELECT",
+        "drivers.driver_profiles.driver_type:SELECT",
+        "drivers.driver_profiles.id:SELECT",
+        "drivers.driver_profiles.org_id:SELECT",
+        "drivers.driver_profiles.status:SELECT",
+        "drivers.driver_profiles.user_id:SELECT",
+        "identity.users.id:SELECT",
+        "identity.users.status:SELECT",
+        "orders.order_events.aggregate_version:SELECT",
+        "orders.order_events.event_type:SELECT",
+        "orders.order_events.id:SELECT",
+        "orders.order_events.occurred_at:SELECT",
+        "orders.order_events.order_id:SELECT",
+        "orders.order_events.owner_org_id:SELECT",
+        "orders.order_events.payload:SELECT",
+        "orders.order_events.public_event_code:SELECT",
+        "orders.orders.id:SELECT",
+        "orders.orders.operator_org_id:SELECT",
+        "orders.orders.owner_org_id:SELECT",
+        "orders.orders.public_id:SELECT",
+        "organizations.organization_memberships.organization_id:SELECT",
+        "organizations.organization_memberships.role:SELECT",
+        "organizations.organization_memberships.status:SELECT",
+        "organizations.organization_memberships.user_id:SELECT",
+        "routes.route_stops.id:SELECT",
+        "routes.route_stops.operator_org_id:SELECT",
+        "routes.route_stops.route_id:SELECT",
+        "routes.route_stops.sequence:SELECT",
+        "routes.routes.driver_id:SELECT",
+        "routes.routes.id:SELECT",
+        "routes.routes.operator_org_id:SELECT",
+        "routes.routes.updated_at:SELECT",
+        "routes.routes.version:SELECT",
+    });
+
     /// <summary>ORD-AUTO-CLOSE-2026-10-10: the auto-close owner discovery function.</summary>
     public const string AutoCloseFunction = "security.list_auto_close_owner_organizations(uuid,integer)";
 
@@ -312,6 +399,7 @@ public sealed class DatabaseBaselineAssertions
         "BFF session executor boundary (BFF-SESSION-TABLE-SHAPE)",
         "master data executor and loader boundary (MDM-001-OPERATOR-LOADER)",
         "auto-close executor boundary (ORD-AUTO-CLOSE-2026-10-10)",
+        "realtime dispatcher role boundary (RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12)",
         "real default-privilege inheritance probes",
     });
 
@@ -394,6 +482,9 @@ public sealed class DatabaseBaselineAssertions
                 violations.Add("extensions.digest(bytea,text) did not return a 32-byte SHA-256 value.");
             }
 
+            var realtimeDispatcherApplied = await E002NotificationStateReader
+                .IsRealtimeDispatcherRoleAppliedAsync(connection, activeTransaction, cancellationToken)
+                .ConfigureAwait(false);
             await AddRowsAsync(
                 violations,
                 connection,
@@ -448,7 +539,12 @@ public sealed class DatabaseBaselineAssertions
                 auto_close(name,bypass_rls) AS (
                   SELECT 'paqueteria_auto_close_executor',true
                   WHERE pg_catalog.to_regrole('paqueteria_auto_close_executor') IS NOT NULL
-                     OR pg_catalog.to_regprocedure('security.list_auto_close_owner_organizations(uuid,integer)') IS NOT NULL)
+                     OR pg_catalog.to_regprocedure('security.list_auto_close_owner_organizations(uuid,integer)') IS NOT NULL),
+                -- RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the same rule for installations that predate the realtime
+                -- dispatcher runtime role (its lane step installs no function, so its recorded history row decides).
+                realtime_dispatcher(name,bypass_rls) AS (
+                  SELECT 'paqueteria_realtime',false
+                  WHERE pg_catalog.to_regrole('paqueteria_realtime') IS NOT NULL OR @realtime_applied)
                 SELECT 'role ' || expected.name || ' flags differ from least-privilege NOLOGIN contract'
                 FROM (SELECT name,bypass_rls FROM expected UNION ALL SELECT name,bypass_rls FROM lifecycle
                       UNION ALL SELECT name,bypass_rls FROM cleanup
@@ -456,12 +552,14 @@ public sealed class DatabaseBaselineAssertions
                       UNION ALL SELECT name,bypass_rls FROM session_store
                       UNION ALL SELECT name,bypass_rls FROM master_data
                       UNION ALL SELECT name,bypass_rls FROM operator_outbox
-                      UNION ALL SELECT name,bypass_rls FROM auto_close) expected
+                      UNION ALL SELECT name,bypass_rls FROM auto_close
+                      UNION ALL SELECT name,bypass_rls FROM realtime_dispatcher) expected
                 LEFT JOIN pg_catalog.pg_roles r ON r.rolname=expected.name
                 WHERE r.oid IS NULL OR r.rolcanlogin OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication
                   OR r.rolbypassrls IS DISTINCT FROM expected.bypass_rls
                 """,
-                cancellationToken).ConfigureAwait(false);
+                cancellationToken,
+                new NpgsqlParameter<bool>("realtime_applied", realtimeDispatcherApplied)).ConfigureAwait(false);
             checks++;
 
             await AddRowsAsync(
@@ -524,6 +622,10 @@ public sealed class DatabaseBaselineAssertions
             checks++;
 
             await AssertAutoCloseExecutorBoundaryAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
+            checks++;
+
+            await AssertRealtimeDispatcherBoundaryAsync(
+                connection, activeTransaction, realtimeDispatcherApplied, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 
             await AssertDefaultAclCatalogAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
@@ -770,7 +872,7 @@ public sealed class DatabaseBaselineAssertions
             WHERE owner.rolname IN ('paqueteria_bootstrap','paqueteria_outbox_executor','paqueteria_maintenance',
                 'paqueteria_lifecycle_executor','paqueteria_cleanup_executor','paqueteria_registration_executor',
                 'paqueteria_session_executor','paqueteria_master_data_executor','paqueteria_master_data_loader',
-                'paqueteria_operator_outbox_executor','paqueteria_auto_close_executor')
+                'paqueteria_operator_outbox_executor','paqueteria_auto_close_executor','paqueteria_realtime')
               AND NOT EXISTS (SELECT 1 FROM expected WHERE pg_catalog.to_regprocedure(expected.signature)=p.oid AND expected.owner=owner.rolname)
             UNION ALL
             SELECT 'general function owner mismatch for ' || n.nspname || '.' || p.proname || ', actual ' || owner.rolname
@@ -1762,6 +1864,159 @@ public sealed class DatabaseBaselineAssertions
             cancellationToken,
             new NpgsqlParameter<string[]>("grants", AutoCloseExecutorGrants.ToArray()),
             new NpgsqlParameter<string>("function", AutoCloseFunction),
+            new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray())).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12 lane contract: after the Notifications lane step the role must exist
+    /// and hold exactly its lane grants.
+    /// </summary>
+    public static async Task AssertRealtimeDispatcherRoleInstalledAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(connection);
+        ArgumentNullException.ThrowIfNull(transaction);
+        var violations = new List<string>();
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            "SELECT 'realtime dispatcher role is missing' WHERE pg_catalog.to_regrole('paqueteria_realtime') IS NULL",
+            cancellationToken).ConfigureAwait(false);
+        await AssertRealtimeDispatcherBoundaryAsync(connection, transaction, laneApplied: true, violations, cancellationToken)
+            .ConfigureAwait(false);
+        if (violations.Count != 0)
+        {
+            throw new DatabaseAssertionException(violations.AsReadOnly());
+        }
+    }
+
+    /// <summary>
+    /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: once <c>paqueteria_realtime</c> exists it is NOLOGIN NOBYPASSRLS
+    /// (checked with the other role flags), inherits nothing, no group role reaches it, it owns nothing and has no
+    /// default privilege, no table-wide grant, no direct privilege on either outbox table and no CREATE anywhere. With its
+    /// Notifications lane step recorded it holds exactly USAGE on <see cref="RealtimeDispatcherUsageSchemas"/>, EXECUTE
+    /// on <see cref="RealtimeDispatcherFunctions"/> and SELECT on <see cref="RealtimeDispatcherColumnGrants"/>, none
+    /// grantable, every column also readable by <c>paqueteria_app</c>, and no EXECUTE beyond what PUBLIC holds on any
+    /// other security, platform, notifications or extensions routine; without it (fresh AI-18, or after the step is
+    /// rolled back) it holds none of them. Privileges are read from the catalog ACLs.
+    /// </summary>
+    private static async Task AssertRealtimeDispatcherBoundaryAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        bool laneApplied,
+        ICollection<string> violations,
+        CancellationToken cancellationToken)
+    {
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            WITH realtime AS (
+              SELECT oid FROM pg_catalog.pg_roles WHERE rolname='paqueteria_realtime'
+            ),
+            expected AS (
+              SELECT split_part(grant_text, '.', 1) AS table_schema,
+                     split_part(grant_text, '.', 2) AS table_name,
+                     split_part(split_part(grant_text, '.', 3), ':', 1) AS column_name,
+                     split_part(grant_text, ':', 2) AS privilege_type
+              FROM unnest(@grants::text[]) grant_text
+              WHERE @applied),
+            actual AS (
+              SELECT n.nspname::text AS table_schema, c.relname::text AS table_name, att.attname::text AS column_name,
+                     acl.privilege_type, acl.is_grantable
+              FROM pg_catalog.pg_attribute att
+              JOIN pg_catalog.pg_class c ON c.oid=att.attrelid
+              JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+              CROSS JOIN LATERAL pg_catalog.aclexplode(att.attacl) acl
+              WHERE att.attacl IS NOT NULL AND acl.grantee IN (SELECT oid FROM realtime)),
+            functions AS (
+              SELECT signature, pg_catalog.to_regprocedure(signature)::oid AS oid
+              FROM unnest(@functions::text[]) signature)
+            SELECT 'realtime dispatcher role is missing while its lane step is recorded'
+            WHERE @applied AND NOT EXISTS (SELECT 1 FROM realtime)
+            UNION ALL
+            SELECT 'missing realtime dispatcher column grant: ' || e.table_schema || '.' || e.table_name || '.' || e.column_name || ':' || e.privilege_type
+            FROM expected e CROSS JOIN realtime
+            LEFT JOIN actual a USING(table_schema,table_name,column_name,privilege_type)
+            WHERE a.column_name IS NULL
+            UNION ALL
+            SELECT 'unexpected realtime dispatcher column grant: ' || a.table_schema || '.' || a.table_name || '.' || a.column_name || ':' || a.privilege_type
+            FROM actual a LEFT JOIN expected e USING(table_schema,table_name,column_name,privilege_type)
+            WHERE e.column_name IS NULL
+            UNION ALL
+            SELECT 'realtime dispatcher column grant is grantable: ' || a.table_schema || '.' || a.table_name || '.' || a.column_name
+            FROM actual a WHERE a.is_grantable
+            UNION ALL
+            SELECT 'realtime dispatcher reads a column paqueteria_app cannot read: ' || e.table_schema || '.' || e.table_name || '.' || e.column_name
+            FROM expected e
+            WHERE NOT has_column_privilege('paqueteria_app', e.table_schema || '.' || e.table_name, e.column_name, 'SELECT')
+            UNION ALL
+            SELECT 'unexpected realtime dispatcher table grant: ' || n.nspname || '.' || c.relname || ':' || acl.privilege_type
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+            CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) acl
+            WHERE c.relacl IS NOT NULL AND acl.grantee IN (SELECT oid FROM realtime)
+            UNION ALL
+            SELECT 'realtime dispatcher has direct outbox access: ' || lane
+            FROM unnest(ARRAY['platform.outbox_events','platform.location_outbox_events']) lane CROSS JOIN realtime
+            WHERE has_table_privilege(realtime.oid, lane, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE')
+            UNION ALL
+            SELECT 'realtime dispatcher has a default privilege'
+            FROM pg_catalog.pg_default_acl d CROSS JOIN LATERAL pg_catalog.aclexplode(d.defaclacl) acl
+            WHERE acl.grantee IN (SELECT oid FROM realtime)
+            UNION ALL
+            SELECT 'realtime dispatcher schema privilege differs: ' || n.nspname
+            FROM pg_catalog.pg_namespace n CROSS JOIN realtime
+            WHERE n.nspname=ANY(@schemas::text[])
+              AND (has_schema_privilege(realtime.oid,n.oid,'CREATE')
+                OR has_schema_privilege(realtime.oid,n.oid,'USAGE') IS DISTINCT FROM
+                  (@applied AND n.nspname=ANY(@usage::text[])))
+            UNION ALL
+            SELECT 'realtime dispatcher has CREATE on public'
+            FROM realtime WHERE has_schema_privilege(realtime.oid,'public','CREATE')
+            UNION ALL
+            SELECT 'missing realtime dispatcher EXECUTE: ' || f.signature
+            FROM functions f CROSS JOIN realtime
+            WHERE @applied AND (f.oid IS NULL OR NOT has_function_privilege(realtime.oid,f.oid,'EXECUTE'))
+            UNION ALL
+            SELECT 'unexpected realtime dispatcher EXECUTE: ' || p.oid::regprocedure::text
+            FROM pg_catalog.pg_proc p
+            JOIN pg_catalog.pg_namespace n ON n.oid=p.pronamespace
+            CROSS JOIN realtime
+            WHERE n.nspname IN ('security','platform','notifications','extensions')
+              AND has_function_privilege(realtime.oid,p.oid,'EXECUTE')
+              AND NOT has_function_privilege('public',p.oid,'EXECUTE')
+              AND NOT (@applied AND p.oid IN (SELECT oid FROM functions WHERE oid IS NOT NULL))
+            UNION ALL
+            SELECT 'realtime dispatcher routine grant is grantable or not EXECUTE: ' || p.oid::regprocedure::text
+            FROM pg_catalog.pg_proc p CROSS JOIN LATERAL pg_catalog.aclexplode(p.proacl) acl
+            WHERE p.proacl IS NOT NULL AND acl.grantee IN (SELECT oid FROM realtime)
+              AND (acl.privilege_type<>'EXECUTE' OR acl.is_grantable)
+            UNION ALL
+            SELECT 'realtime dispatcher inherits role ' || pg_catalog.pg_get_userbyid(m.roleid)
+            FROM pg_catalog.pg_auth_members m WHERE m.member IN (SELECT oid FROM realtime)
+            UNION ALL
+            SELECT 'realtime dispatcher is reachable from group role ' || member.rolname
+            FROM pg_catalog.pg_auth_members m
+            JOIN pg_catalog.pg_roles member ON member.oid=m.member
+            WHERE m.roleid IN (SELECT oid FROM realtime) AND NOT member.rolcanlogin
+            UNION ALL
+            SELECT 'realtime dispatcher owns a relation, schema, type or function'
+            FROM realtime
+            WHERE EXISTS (SELECT 1 FROM pg_catalog.pg_class WHERE relowner=realtime.oid)
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspowner=realtime.oid)
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_type WHERE typowner=realtime.oid)
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_proc WHERE proowner=realtime.oid)
+            """,
+            cancellationToken,
+            new NpgsqlParameter<bool>("applied", laneApplied),
+            new NpgsqlParameter<string[]>("grants", RealtimeDispatcherColumnGrants.ToArray()),
+            new NpgsqlParameter<string[]>("functions", RealtimeDispatcherFunctions.ToArray()),
+            new NpgsqlParameter<string[]>("usage", RealtimeDispatcherUsageSchemas.ToArray()),
             new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray())).ConfigureAwait(false);
     }
 

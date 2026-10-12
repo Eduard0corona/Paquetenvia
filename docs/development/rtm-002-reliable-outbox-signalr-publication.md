@@ -48,8 +48,10 @@ claim_* -> settle_* (PROCESSED | RETRY | DEAD)
         \-> requeue_stale_*
 ```
 
-La conexión usa una credencial login sintética separada y
-`SET LOCAL ROLE paqueteria_worker`. No hay `INSERT`, `UPDATE` o `DELETE`
+La conexión usa una credencial login separada (`ConnectionStrings:PaqueteriaRealtime`)
+y `SET LOCAL ROLE paqueteria_realtime`, un rol mínimo que sólo ejecuta estas seis
+funciones y lee la evidencia (RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12; antes
+usaba la credencial y el rol del Worker). No hay `INSERT`, `UPDATE` o `DELETE`
 directo sobre outbox desde los consumidores. Cada claim se confirma antes de
 publicar. El settle exige el lease token; perderlo se registra y nunca se
 simula éxito: un `false` incrementa `lease_lost`, no registra un settlement
@@ -191,8 +193,9 @@ cardinalidad: lane, event type, audience, outcome y error class. Logs y métrica
 no incluyen payload, tokens, coordenadas, IDs, grupos ni PII.
 
 Readiness abre una transacción corta, aplica
-`SET LOCAL ROLE paqueteria_worker`, ejecuta sólo introspección y hace rollback.
-Comprueba `current_user`, `NOBYPASSRLS`, existencia y privilegio `EXECUTE` de
+`SET LOCAL ROLE paqueteria_realtime`, ejecuta sólo introspección y hace rollback.
+Comprueba `current_user`, `NOBYPASSRLS`, que el login no pueda asumir
+`paqueteria_worker` ni `paqueteria_app`, existencia y privilegio `EXECUTE` de
 las seis firmas canónicas: claim, settle y requeue stale para business y
 location. No reclama filas, no crea leases y no ejecuta settle ni requeue.
 Falta de cualquier firma/permiso o `BYPASSRLS` produce `unhealthy`; provider

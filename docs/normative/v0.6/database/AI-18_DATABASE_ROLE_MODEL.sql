@@ -16,6 +16,7 @@ DO $$ BEGIN CREATE ROLE paqueteria_master_data_executor NOLOGIN BYPASSRLS; EXCEP
 DO $$ BEGIN CREATE ROLE paqueteria_master_data_loader NOLOGIN NOBYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE paqueteria_operator_outbox_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE paqueteria_auto_close_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE ROLE paqueteria_realtime NOLOGIN NOBYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- Normalize ownership after AI-06 was applied by the privileged deployment owner.
 DO $$
@@ -65,7 +66,7 @@ END $$;
 
 -- Runtime roles cannot inherit or SET ROLE into privileged roles.
 REVOKE paqueteria_migrator, paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance
-  FROM paqueteria_app, paqueteria_worker;
+  FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;
 
 REVOKE ALL ON SCHEMA extensions FROM PUBLIC;
 GRANT USAGE ON SCHEMA extensions TO paqueteria_bootstrap;
@@ -444,8 +445,48 @@ REVOKE paqueteria_auto_close_executor FROM paqueteria_app, paqueteria_worker;
 GRANT USAGE ON SCHEMA orders TO paqueteria_auto_close_executor;
 GRANT SELECT (owner_org_id,status) ON orders.orders TO paqueteria_auto_close_executor;
 
+-- The API's in-process realtime outbox dispatchers are a separate runtime credential
+-- (RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12, project owner: "Rol propio y mínimo (Recommended)": "Un rol de base de
+-- datos nuevo que solo puede tomar y cerrar mensajes de tiempo real, con su propio secreto en Key Vault para la API
+-- (ADR + AI-18 + migración). La API no gana ningún otro permiso."). Under RTM-002-INPROCESS-DISPATCHER-COLOCATION the
+-- API process claims, publishes and settles the REALTIME business lane and the location lane; it must not hold the
+-- Worker credential (paqueteria_worker reaches every module table, the NOTIFICATIONS and DISPATCH lanes and the purges).
+-- paqueteria_realtime is NOLOGIN NOBYPASSRLS like paqueteria_app and paqueteria_worker: its only members are the API's
+-- realtime LOGIN (pv_pilot_realtime in the pilot; LOGIN NOINHERIT NOBYPASSRLS, member of exactly this role, SET LOCAL
+-- ROLE paqueteria_realtime after BEGIN in every transaction), it inherits no role, no group role is granted it, it owns
+-- nothing and it has no default privilege. AI-18 creates it with no privilege at all. Its privileges are granted,
+-- verified and revoked by the Notifications lane step 20261012000100_AddRealtimeDispatcherRole, which runs after the
+-- NTF-001 REALTIME lane functions exist, never by this baseline:
+--   EXECUTE on security.claim_realtime_outbox(text,integer,interval),
+--     security.requeue_stale_realtime_outbox(interval,integer,integer),
+--     security.settle_outbox(uuid,uuid,text,text,timestamptz), security.claim_location_outbox(text,integer,interval),
+--     security.settle_location_outbox(uuid,uuid,text,text,timestamptz) and
+--     security.requeue_stale_location_outbox(interval,integer,integer): the lease_token claim, settle and stale requeue of
+--     the REALTIME business lane and the location lane (owned by paqueteria_outbox_executor). settle_outbox is the
+--     shared settle; it changes only the row whose unexpired lease_token the caller presents, and this role obtains lease
+--     tokens only from the two REALTIME/location claims;
+--   USAGE on schemas security, orders, dispatch, drivers, identity, organizations and routes;
+--   SELECT on exactly the columns the dispatchers read to re-derive each audience from committed state, under FORCE RLS
+--     with one owner or operator organization in app.current_org_ids per transaction:
+--     orders.orders(id,public_id,owner_org_id,operator_org_id);
+--     orders.order_events(id,order_id,owner_org_id,aggregate_version,event_type,payload,public_event_code,occurred_at);
+--     dispatch.assignments(id,order_id,driver_id,owner_org_id,operator_org_id,assignment_type,status);
+--     dispatch.external_offers(id,owner_org_id,status,commission_cents,expires_at,version,accepted_by_driver_id);
+--     drivers.driver_profiles(id,user_id,org_id,driver_type,status);
+--     drivers.driver_positions(id,org_id,driver_id,point,accuracy_m,captured_at,publish_realtime);
+--     identity.users(id,status); organizations.organization_memberships(user_id,organization_id,role,status);
+--     routes.routes(id,operator_org_id,driver_id,version,updated_at); routes.route_stops(id,route_id,operator_org_id,sequence).
+-- It has no INSERT, UPDATE or DELETE anywhere, no table-wide grant, no privilege on either outbox table, no USAGE on
+-- schema platform, no CREATE, and no EXECUTE on the NOTIFICATIONS, DISPATCH or UNROUTED lane functions, on
+-- security.claim_outbox/requeue_stale_outbox, on any purge or maintenance function or on any executor's function. Every
+-- column it reads is also readable by paqueteria_app, so the API process gains no read it did not already have; the only
+-- new capability is claiming and closing realtime messages. The lane step's rollback revokes every one of these
+-- privileges; the role then stays, inert.
+REVOKE paqueteria_realtime FROM paqueteria_app, paqueteria_worker, paqueteria_bootstrap;
+
 -- Mandatory deployment assertions:
--- 1. API login SET ROLE paqueteria_app; Worker login SET ROLE paqueteria_worker.
+-- 1. API login SET ROLE paqueteria_app; Worker login SET ROLE paqueteria_worker. The API's realtime dispatcher login
+--    (RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12) SET LOCAL ROLE paqueteria_realtime and is a member of nothing else.
 -- 2. all application schemas/tables/sequences are owned by paqueteria_migrator before specialized function ownership; runtime roles own nothing and rolbypassrls=false.
 -- 3. privileged NOLOGIN roles have no login membership granted to runtime roles.
 -- 4. runtime roles have no SELECT/UPDATE/DELETE on either outbox table.
@@ -479,3 +520,6 @@ GRANT SELECT (owner_org_id,status) ON orders.orders TO paqueteria_auto_close_exe
 -- 32. paqueteria_auto_close_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime or bootstrap role and, once the Orders ORD-AUTO-CLOSE lane is recorded, owns only security.list_auto_close_owner_organizations(uuid,integer). The role and its grants persist after that lane is rolled back: AI-18 declares them, and without the function they are inert.
 -- 33. paqueteria_auto_close_executor holds only USAGE on schema orders and SELECT(owner_org_id,status) on orders.orders, none grantable: no table-wide grant, no INSERT, UPDATE or DELETE, no CREATE, no other table, no outbox, bootstrap, lifecycle, cleanup, registration, session, master data or purge privilege.
 -- 34. security.list_auto_close_owner_organizations(uuid,integer) is STABLE SECURITY DEFINER with search_path=pg_catalog, orders, pg_temp, contains no dynamic SQL and no RETURNING, accepts only a bounded limit, returns only owner organization identifiers, and only paqueteria_worker may EXECUTE it; PUBLIC, paqueteria_app and paqueteria_bootstrap may not.
+-- 35. paqueteria_realtime is NOLOGIN NOBYPASSRLS, inherits no role, is granted to no group role (only to the API's realtime LOGIN), owns nothing, has no default privilege and, until the Notifications lane step 20261012000100_AddRealtimeDispatcherRole is recorded (or after it is rolled back), holds no privilege at all. The role persists after that step is rolled back: AI-18 declares it, and without the grants it is inert.
+-- 36. once that step is recorded, paqueteria_realtime holds exactly USAGE on schemas security, orders, dispatch, drivers, identity, organizations and routes, EXECUTE on the six lease-token functions above and SELECT on the 53 columns above, none grantable: no table-wide grant, no INSERT, UPDATE or DELETE, no privilege on either outbox table, no USAGE on platform, no CREATE anywhere and no EXECUTE beyond PUBLIC on any other security, platform, notifications or extensions routine; every column it reads is also readable by paqueteria_app.
+-- 37. the role cannot bypass RLS: every table it reads has ENABLE and FORCE ROW LEVEL SECURITY, so with no app.current_org_ids it reads no row and with one organization it reads only that organization's rows.

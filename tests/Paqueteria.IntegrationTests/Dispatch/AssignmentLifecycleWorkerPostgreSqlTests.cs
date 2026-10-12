@@ -113,7 +113,7 @@ public sealed class AssignmentLifecycleWorkerPostgreSqlTests(PostgreSqlSecurityW
                 """,
                 ("assignment", scenario.AssignmentId)));
 
-            await using var connections = new RealtimeWorkerConnectionFactory(database.WorkerConnectionString);
+            await using var connections = new RealtimeDispatcherConnectionFactory(database.RealtimeConnectionString);
             var evidence = await new PostgreSqlRealtimeOutboxEvidenceReader(connections)
                 .ReadClosedAssignmentAsync(OwnerId, scenario.AssignmentId, closing.Version, default);
             Assert.NotNull(evidence);

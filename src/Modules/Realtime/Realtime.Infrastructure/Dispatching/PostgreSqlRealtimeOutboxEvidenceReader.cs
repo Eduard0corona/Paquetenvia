@@ -5,7 +5,7 @@ using Realtime.Application.Dispatching;
 namespace Realtime.Infrastructure.Dispatching;
 
 internal sealed class PostgreSqlRealtimeOutboxEvidenceReader(
-    RealtimeWorkerConnectionFactory connections) : IRealtimeOutboxEvidenceReader
+    RealtimeDispatcherConnectionFactory connections) : IRealtimeOutboxEvidenceReader
 {
     public Task<OrderEventEvidence?> ReadOrderEventAsync(
         Guid ownerOrganizationId,
@@ -568,7 +568,7 @@ internal sealed class PostgreSqlRealtimeOutboxEvidenceReader(
 
         await using var connection = await connections.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await PostgreSqlRealtimeOutboxStore.SetWorkerRoleAsync(
+        await PostgreSqlRealtimeOutboxStore.SetDispatcherRoleAsync(
             connection,
             transaction,
             cancellationToken);

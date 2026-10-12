@@ -181,6 +181,39 @@ order_auto_close:
     identifier or personal datum
   rollback: Orders:AutoClose:Enabled=false; REVOKE EXECUTE on the discovery function from paqueteria_worker; orders
     already closed stay closed
+realtime_dispatcher_role:
+  decision: RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12
+  host: the realtime outbox dispatchers the API runs in process while SignalR uses the InProcess backplane
+    (RTM-002-INPROCESS-DISPATCHER-COLOCATION, GATE-013 open)
+  settings:
+    provider: Realtime:OutboxDispatcher:Provider; PostgreSql requires ConnectionStrings:PaqueteriaRealtime
+    connection: ConnectionStrings:PaqueteriaRealtime, validated on start; its login must parse and differ from the
+      logins of ConnectionStrings:Paqueteria and ConnectionStrings:PaqueteriaWorker; the dispatchers never read
+      ConnectionStrings:PaqueteriaWorker
+  role: paqueteria_realtime NOLOGIN NOBYPASSRLS (AI-18); member of no role, granted to no group role, owns nothing, no
+    default privileges; each login is LOGIN NOINHERIT NOBYPASSRLS and a member of paqueteria_realtime only
+  transaction: BEGIN, set_config(..., true) tenant context, SET LOCAL ROLE paqueteria_realtime; one organization per
+    evidence read; row_security=off is refused
+  grants:
+    lane: Notifications 20261012000100_AddRealtimeDispatcherRole (its Down revokes every grant)
+    execute:
+    - security.claim_realtime_outbox(text,integer,interval)
+    - security.requeue_stale_realtime_outbox(interval,integer,integer)
+    - security.settle_outbox(uuid,uuid,text,text,timestamp with time zone)
+    - security.claim_location_outbox(text,integer,interval)
+    - security.settle_location_outbox(uuid,uuid,text,text,timestamp with time zone)
+    - security.requeue_stale_location_outbox(interval,integer,integer)
+    schema_usage: [security, orders, dispatch, drivers, identity, organizations, routes]
+    column_select: the 53 columns of AI-18 RTM-API-REALTIME-DISPATCHER-ROLE, each also readable by paqueteria_app
+    prohibited: INSERT, UPDATE, DELETE or table-wide privileges; any privilege on platform.outbox_events or
+      platform.location_outbox_events; USAGE on platform; CREATE; the NOTIFICATIONS, DISPATCH and UNROUTED queues;
+      claim_outbox and requeue_stale_outbox; purge, maintenance and other executor functions
+  readiness: realtime_outbox_dispatcher is healthy only when current_user is paqueteria_realtime, NOBYPASSRLS, the six
+    functions exist and are executable, and the session login cannot assume paqueteria_worker or paqueteria_app
+  pilot: Key Vault pg-realtime-runtime-connection (read by the API identity only) and pg-realtime-login-verifier (read
+    by the logins job); login pv_pilot_realtime
+  rollback: Realtime:OutboxDispatcher:Provider=Disabled (screens lose instant updates); Down of the lane step; never the
+    Worker credential
 tenant_context:
   current_org_ids: parameterized uuid[] cast to text for set_config; empty is {} and never NULL
   statement: SELECT set_config('app.current_org_ids', @organization_ids::uuid[]::text, true)

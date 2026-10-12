@@ -14,7 +14,7 @@ role model. Their mandatory hashes and order are declared in
 
 ```text
 AI-06 f069b455894eb825f252f59c1a50373cd6a0d13d50d6b4493c53024f0d4b7ba7
-AI-18 79733422531adcf4bdb39a420c30fa2639a9aa9e1d42dab911eccafd285ef804
+AI-18 a92f8bd3befddaa0891cfbc0ef63a16ae5c18f81d54701f88570b34627b0eb27
 ```
 
 ## Migrator and commands
@@ -91,14 +91,17 @@ ENV-001 adds `runtime-logins --connection-env NAME` for the Azure pilot, where n
 operator can reach the private database. The command:
 
 - runs only against an Applied baseline;
-- creates or re-keys `pv_pilot_api` (member of `paqueteria_app` only) and
-  `pv_pilot_worker` (member of `paqueteria_worker` only), both as
+- creates or re-keys `pv_pilot_api` (member of `paqueteria_app` only),
+  `pv_pilot_worker` (member of `paqueteria_worker` only) and `pv_pilot_realtime`
+  (member of `paqueteria_realtime` only, the API's realtime dispatchers,
+  RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12), all three as
   `LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`;
 - removes any other membership, asserts the exact shape and commits in one
   transaction.
 
-It accepts SCRAM-SHA-256 verifiers only, in `PAQUETERIA_API_LOGIN_VERIFIER` and
-`PAQUETERIA_WORKER_LOGIN_VERIFIER`, never a plaintext password. On failure it
+It accepts SCRAM-SHA-256 verifiers only, in `PAQUETERIA_API_LOGIN_VERIFIER`,
+`PAQUETERIA_WORKER_LOGIN_VERIFIER` and `PAQUETERIA_REALTIME_LOGIN_VERIFIER`, never a
+plaintext password. On failure it
 reports only the stage and SQLSTATE (exit code 7). See
 `docs/operations/env-001-pilot/README.md`.
 

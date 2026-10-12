@@ -2,9 +2,11 @@ using System.Text.RegularExpressions;
 using Npgsql;
 
 /// <summary>
-/// ENV-001: creates or re-keys the two least-privilege runtime LOGIN roles of the pilot database. Each login is
+/// ENV-001: creates or re-keys the three least-privilege runtime LOGIN roles of the pilot database. Each login is
 /// <c>LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS</c> and a member of exactly one
-/// canonical runtime role (<c>paqueteria_app</c> for the API, <c>paqueteria_worker</c> for the Worker).
+/// canonical runtime role (<c>paqueteria_app</c> for the API, <c>paqueteria_worker</c> for the Worker and, since
+/// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12, <c>paqueteria_realtime</c> for the API's in-process realtime outbox
+/// dispatchers).
 /// </summary>
 /// <remarks>
 /// Only SCRAM-SHA-256 verifiers are accepted, never a plaintext password: the deployment workflow derives the
@@ -15,13 +17,17 @@ internal static partial class RuntimeLoginProvisioner
 {
     internal const string ApiVerifierVariable = "PAQUETERIA_API_LOGIN_VERIFIER";
     internal const string WorkerVerifierVariable = "PAQUETERIA_WORKER_LOGIN_VERIFIER";
+    internal const string RealtimeVerifierVariable = "PAQUETERIA_REALTIME_LOGIN_VERIFIER";
     internal const string ApiLogin = "pv_pilot_api";
     internal const string WorkerLogin = "pv_pilot_worker";
+    internal const string RealtimeLogin = "pv_pilot_realtime";
 
     internal static readonly (string Login, string RuntimeRole, string VerifierVariable)[] Logins =
     [
         (ApiLogin, "paqueteria_app", ApiVerifierVariable),
         (WorkerLogin, "paqueteria_worker", WorkerVerifierVariable),
+        // RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the API's realtime dispatchers never use the Worker login.
+        (RealtimeLogin, "paqueteria_realtime", RealtimeVerifierVariable),
     ];
 
     internal static bool IsScramVerifier(string? value) => value is not null && ScramVerifier().IsMatch(value);

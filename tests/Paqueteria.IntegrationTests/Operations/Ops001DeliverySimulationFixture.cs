@@ -59,7 +59,7 @@ public sealed class Ops001DeliverySimulationFixture : IAsyncLifetime
 
     internal RealtimeKestrelWebApplicationFactory CreateApiHost(
         Ops001ScenarioData data,
-        string? workerConnectionString = null,
+        string? realtimeConnectionString = null,
         IRealtimeOutboxFailureInjector? failureInjector = null,
         ILoggerProvider? logProvider = null,
         RealtimeAuthorizationRecorder? authorizationRecorder = null,
@@ -70,7 +70,7 @@ public sealed class Ops001DeliverySimulationFixture : IAsyncLifetime
             Database.ApplicationConnectionString,
             authorizationRecorder ?? new RealtimeAuthorizationRecorder(),
             port,
-            workerConnectionString,
+            realtimeConnectionString,
             failureInjector,
             logProvider,
             configurationOverrides: configuration,

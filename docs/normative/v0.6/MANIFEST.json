@@ -24,8 +24,8 @@
     },
     {
       "path": "CANONICAL_SOURCE_OF_TRUTH.md",
-      "bytes": 4566,
-      "sha256": "597ebb197094432126d6a2ae527c328f8aaf30ecc24306c8f89a58ce848bee0e"
+      "bytes": 4696,
+      "sha256": "aa8d9fcef2be79855ab306d11aaf1853b7493caac018720f004ef71183d15e71"
     },
     {
       "path": "CHANGED_FILES_SINCE_V0.5.md",
@@ -34,13 +34,13 @@
     },
     {
       "path": "CHANGELOG.md",
-      "bytes": 125253,
-      "sha256": "84f270983f9f95af73d984f75fbd606e41235fe584e5f9c300a152aa40c1aebe"
+      "bytes": 127679,
+      "sha256": "cfc5b29b411900c0954f2bef8d38245b65ea5049808fe53b76fe3707d0aaa056"
     },
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "924ab5e689d00b02a182e4a6405c903ab6873021fa3c437a39b13363f3d09451"
+      "sha256": "fc4b1a420cb25f039c963e36a3b503a2bfa6f85ca737de9fd76bb089be429707"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
@@ -69,13 +69,13 @@
     },
     {
       "path": "database/AI-18_DATABASE_ROLE_MODEL.sql",
-      "bytes": 47556,
-      "sha256": "79733422531adcf4bdb39a420c30fa2639a9aa9e1d42dab911eccafd285ef804"
+      "bytes": 52963,
+      "sha256": "a92f8bd3befddaa0891cfbc0ef63a16ae5c18f81d54701f88570b34627b0eb27"
     },
     {
       "path": "decision-log.md",
-      "bytes": 232128,
-      "sha256": "c5b1c1ef30643834a53fba0e092e442f776383350da80a639dc9e67893b5e083"
+      "bytes": 236338,
+      "sha256": "6492098820a218201a3e8471f6cb40cfb19e9b832810f86cbc66ab4bd25412c4"
     },
     {
       "path": "docs/AI-14_TECH_REFERENCES.md",
@@ -324,8 +324,8 @@
     },
     {
       "path": "specs/AI-03_ARCHITECTURE.md",
-      "bytes": 36036,
-      "sha256": "e457b085da032be168300d261a4e07fd854e940408999cbdd731127cc6fbcda2"
+      "bytes": 36650,
+      "sha256": "68d821fb24803d83c7727cbf6b007fe90834a6bebfce625d58ce439dc69df12d"
     },
     {
       "path": "specs/AI-04_DOMAIN_MODEL.yaml",
@@ -364,8 +364,8 @@
     },
     {
       "path": "specs/AI-24_RUNTIME_HARDENING_CONTRACT.yaml",
-      "bytes": 23263,
-      "sha256": "225792a2de0676ddc447add19c9180309a135d6fac23599a72d8816b24c1e5df"
+      "bytes": 25890,
+      "sha256": "004c8f2d0264a0683d5e797af7c62e518d79ad16c596626ffd9e304b77b3eb9b"
     },
     {
       "path": "tests/AI-09_ACCEPTANCE_TESTS.feature",
@@ -374,8 +374,8 @@
     },
     {
       "path": "tools/validate_contracts.py",
-      "bytes": 49644,
-      "sha256": "849836c10b846884b8c2996d3c38f7ab5b23ff49969073029f85d94e2c984a76"
+      "bytes": 52608,
+      "sha256": "7b872d685b86ae6f8e8bd0d2f87e659986d3760411e6c08020874ef80958abb1"
     }
   ]
 }

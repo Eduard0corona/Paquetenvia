@@ -206,7 +206,7 @@ public sealed partial class DispatchPostgreSqlContractTests
 
         // AI12-ASSIGNMENT-TERMINAL-STATES: Realtime finds evidence for the closed assignment at the
         // closing order version, with the affected driver still an authorized audience.
-        await using (var realtimeConnections = new RealtimeWorkerConnectionFactory(fixture.WorkerConnectionString))
+        await using (var realtimeConnections = new RealtimeDispatcherConnectionFactory(fixture.RealtimeConnectionString))
         {
             var evidenceReader = new PostgreSqlRealtimeOutboxEvidenceReader(realtimeConnections);
             var evidence = await evidenceReader.ReadClosedAssignmentAsync(

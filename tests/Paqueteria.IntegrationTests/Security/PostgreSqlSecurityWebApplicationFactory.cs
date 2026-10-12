@@ -28,10 +28,12 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
     private readonly string _adminPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
     private readonly string _appPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
     private readonly string _workerPassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
+    private readonly string _realtimePassword = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
     private PostgreSqlContainer? _container;
     private string _adminConnectionString = string.Empty;
     private string _applicationConnectionString = string.Empty;
     private string _workerConnectionString = string.Empty;
+    private string _realtimeConnectionString = string.Empty;
     private readonly bool _seedSyntheticData;
 
     public PostgreSqlSecurityWebApplicationFactory()
@@ -49,6 +51,12 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
     internal string AdminConnectionString => _adminConnectionString;
     public string ApplicationConnectionString => _applicationConnectionString;
     public string WorkerConnectionString => _workerConnectionString;
+
+    /// <summary>
+    /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the API realtime dispatchers' own login, a member of
+    /// <c>paqueteria_realtime</c> only.
+    /// </summary>
+    public string RealtimeConnectionString => _realtimeConnectionString;
 
     public async Task InitializeAsync()
     {
@@ -75,6 +83,8 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
             GRANT paqueteria_app TO paqueteria_sec002_api;
             CREATE ROLE paqueteria_sec002_worker LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '{{_workerPassword}}';
             GRANT paqueteria_worker TO paqueteria_sec002_worker;
+            CREATE ROLE paqueteria_sec002_realtime LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS PASSWORD '{{_realtimePassword}}';
+            GRANT paqueteria_realtime TO paqueteria_sec002_realtime;
             """))
         {
             await command.ExecuteNonQueryAsync();
@@ -109,6 +119,10 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
         builder.Password = _workerPassword;
         builder.ApplicationName = "Paqueteria.RTM002.IntegrationTests";
         _workerConnectionString = builder.ConnectionString;
+        builder.Username = "paqueteria_sec002_realtime";
+        builder.Password = _realtimePassword;
+        builder.ApplicationName = "Paqueteria.RTM002.Realtime.IntegrationTests";
+        _realtimeConnectionString = builder.ConnectionString;
     }
 
     public new async Task DisposeAsync()
@@ -1162,7 +1176,7 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
             0,
             TimeSpan.Zero).AddTicks(1_234_560);
 
-    internal async Task SetOutboxFunctionExecuteAsync(string signature, bool granted)
+    internal async Task SetRealtimeOutboxFunctionExecuteAsync(string signature, bool granted)
     {
         var allowed = new HashSet<string>(StringComparer.Ordinal)
         {
@@ -1182,8 +1196,8 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand(
             granted
-                ? $"GRANT EXECUTE ON FUNCTION {signature} TO paqueteria_worker"
-                : $"REVOKE EXECUTE ON FUNCTION {signature} FROM paqueteria_worker",
+                ? $"GRANT EXECUTE ON FUNCTION {signature} TO paqueteria_realtime"
+                : $"REVOKE EXECUTE ON FUNCTION {signature} FROM paqueteria_realtime",
             connection);
         await command.ExecuteNonQueryAsync();
     }
@@ -1287,25 +1301,43 @@ public class PostgreSqlSecurityWebApplicationFactory : WebApplicationFactory<Pro
         await context.Database.MigrateAsync();
     }
 
-    internal async Task SetWorkerBypassRlsAsync(bool enabled)
+    internal async Task SetRealtimeBypassRlsAsync(bool enabled)
     {
         await using var connection = new NpgsqlConnection(_adminConnectionString);
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand(
-            $"ALTER ROLE paqueteria_worker {(enabled ? "BYPASSRLS" : "NOBYPASSRLS")}",
+            $"ALTER ROLE paqueteria_realtime {(enabled ? "BYPASSRLS" : "NOBYPASSRLS")}",
             connection);
         await command.ExecuteNonQueryAsync();
     }
 
-    internal async Task SetWorkerRoleMembershipAsync(bool granted)
+    internal async Task SetRealtimeRoleMembershipAsync(bool granted)
     {
         NpgsqlConnection.ClearAllPools();
         await using var connection = new NpgsqlConnection(_adminConnectionString);
         await connection.OpenAsync();
         await using var command = new NpgsqlCommand(
             granted
-                ? "GRANT paqueteria_worker TO paqueteria_sec002_worker"
-                : "REVOKE paqueteria_worker FROM paqueteria_sec002_worker",
+                ? "GRANT paqueteria_realtime TO paqueteria_sec002_realtime"
+                : "REVOKE paqueteria_realtime FROM paqueteria_sec002_realtime",
+            connection);
+        await command.ExecuteNonQueryAsync();
+        NpgsqlConnection.ClearAllPools();
+    }
+
+    /// <summary>
+    /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: grants or revokes the Worker role to the realtime login, to prove a
+    /// realtime credential that could also assume the Worker role is never reported ready.
+    /// </summary>
+    internal async Task SetRealtimeLoginWorkerMembershipAsync(bool granted)
+    {
+        NpgsqlConnection.ClearAllPools();
+        await using var connection = new NpgsqlConnection(_adminConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(
+            granted
+                ? "GRANT paqueteria_worker TO paqueteria_sec002_realtime"
+                : "REVOKE paqueteria_worker FROM paqueteria_sec002_realtime",
             connection);
         await command.ExecuteNonQueryAsync();
         NpgsqlConnection.ClearAllPools();

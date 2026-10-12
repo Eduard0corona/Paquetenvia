@@ -94,6 +94,36 @@ class ExecutorGrantRuleTests(unittest.TestCase):
             any("differ from the contract" in error for error in self.validator.executor_grant_errors(missing))
         )
 
+    def test_realtime_dispatcher_role_contract_holds_and_any_baseline_grant_fails(self) -> None:
+        """RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: NOLOGIN NOBYPASSRLS, no AI-18 grant, never a group member."""
+        self.assertEqual([], self.validator.realtime_dispatcher_errors(self.role_sql))
+        for widening in [
+            "GRANT EXECUTE ON FUNCTION security.claim_realtime_outbox(text,integer,interval) TO paqueteria_realtime;",
+            "GRANT EXECUTE ON FUNCTION security.claim_notifications_outbox(text,integer,interval) TO paqueteria_worker, paqueteria_realtime;",
+            "GRANT SELECT ON orders.orders TO paqueteria_app, paqueteria_realtime;",
+            "GRANT SELECT ON platform.outbox_events TO paqueteria_realtime;",
+            "GRANT USAGE ON SCHEMA platform TO paqueteria_realtime;",
+            "GRANT paqueteria_worker TO paqueteria_realtime;",
+            "GRANT paqueteria_realtime TO paqueteria_app;",
+            "GRANT paqueteria_realtime TO paqueteria_worker;",
+            "ALTER FUNCTION security.settle_outbox(uuid,uuid,text,text,timestamptz) OWNER TO paqueteria_realtime;",
+        ]:
+            with self.subTest(widening=widening):
+                widened = self.role_sql + "\n" + widening + "\n"
+                self.assertTrue(self.validator.realtime_dispatcher_errors(widened))
+        bypass = self.role_sql.replace(
+            "CREATE ROLE paqueteria_realtime NOLOGIN NOBYPASSRLS;", "CREATE ROLE paqueteria_realtime NOLOGIN BYPASSRLS;"
+        )
+        self.assertNotEqual(bypass, self.role_sql)
+        self.assertTrue(self.validator.realtime_dispatcher_errors(bypass))
+        unrevoked = self.role_sql.replace(
+            "REVOKE paqueteria_realtime FROM paqueteria_app, paqueteria_worker, paqueteria_bootstrap;", ""
+        )
+        self.assertNotEqual(unrevoked, self.role_sql)
+        self.assertTrue(self.validator.realtime_dispatcher_errors(unrevoked))
+        commented = self.role_sql + "\n-- GRANT SELECT ON orders.orders TO paqueteria_realtime;\n"
+        self.assertEqual([], self.validator.realtime_dispatcher_errors(commented))
+
     def test_multi_grantee_grants_fail_for_either_executor(self) -> None:
         for widening in [
             "GRANT SELECT ON orders.order_events TO paqueteria_app, paqueteria_cleanup_executor;",
