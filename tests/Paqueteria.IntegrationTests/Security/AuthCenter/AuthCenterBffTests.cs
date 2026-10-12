@@ -1,6 +1,7 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text.Json;
+using System.Text.RegularExpressions;
 using Identity.Endpoints.AuthCenter;
 
 namespace Paqueteria.IntegrationTests.Security.AuthCenter;
@@ -516,6 +517,12 @@ public sealed partial class AuthCenterBffTests
             Assert.DoesNotContain(token, text, StringComparison.Ordinal);
         }
 
-        Assert.DoesNotContain("eyJ", text, StringComparison.Ordinal);
+        // A JWT is three base64url segments joined by dots, its header starting with "eyJ" ('{"'). The
+        // session cookie is random base64url, so the three letters alone can appear in it by chance; match the
+        // header and payload segments instead.
+        Assert.DoesNotMatch(JwtShape(), text);
     }
+
+    [GeneratedRegex("eyJ[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.", RegexOptions.CultureInvariant)]
+    private static partial Regex JwtShape();
 }
