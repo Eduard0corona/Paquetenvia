@@ -111,9 +111,19 @@ Otherwise the deploy job stops before logging in to Azure.
   with `Orders__AutoClose__Enabled=true` (`apps.bicep`); its `orders_auto_close` readiness check fails until the lane
   has installed the discovery function.
 - `job-pv-pilot-logins` runs the new migrator command `runtime-logins`. It creates or re-keys
-  `pv_pilot_api` → `paqueteria_app` and `pv_pilot_worker` → `paqueteria_worker` as
-  `LOGIN NOINHERIT NOBYPASSRLS` with exactly one membership. It receives **SCRAM-SHA-256 verifiers
-  only**, so no plaintext runtime password reaches PostgreSQL or its logs.
+  `pv_pilot_api` → `paqueteria_app`, `pv_pilot_worker` → `paqueteria_worker` and `pv_pilot_realtime` →
+  `paqueteria_realtime` as `LOGIN NOINHERIT NOBYPASSRLS` with exactly one membership. It receives
+  **SCRAM-SHA-256 verifiers only**, so no plaintext runtime password reaches PostgreSQL or its logs.
+- RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12 (owner: "Rol propio y mínimo (Recommended)"): the API runs the
+  realtime outbox dispatchers in process (`Realtime__OutboxDispatcher__Provider=PostgreSql`) with its **own**
+  login, `pv_pilot_realtime`, never the Worker's. Its role `paqueteria_realtime` (NOLOGIN NOBYPASSRLS, created by
+  AI-18 with no privilege) receives from the Notifications lane step `20261012000100_AddRealtimeDispatcherRole`
+  exactly: EXECUTE on the six lease-token claim, settle and stale-requeue functions of the REALTIME business lane
+  and the location lane; USAGE on seven schemas; SELECT on the 53 evidence columns, each also readable by
+  `paqueteria_app`. No write, no outbox table, no other lane, no maintenance or purge
+  (`docs/development/rtm-api-realtime-dispatcher-role.md`). On a fresh pilot database the E-002 bridge pre-creates
+  the role like every AI-18 role; the lane needs no extra administrator step. The API's readiness check
+  `realtime_outbox_dispatcher` is unhealthy if its login could assume `paqueteria_worker` or `paqueteria_app`.
 - `job-pv-pilot-verify` runs the read-only `assert` after every deployment. The restore drill also
   uses it.
 
@@ -174,10 +184,10 @@ Guard P06 checks three things:
 
 | Workload (identity) | Secret → configuration key |
 |---|---|
-| API (`id-pv-pilot-api`) | `pg-api-runtime-connection` → `ConnectionStrings:Paqueteria`; `authcenter-paquetenvia-client-secret` → `AuthCenter:ClientSecret`; `paquetenvia-email-lookup-key-1` → `EmailLookup:Keys:1`; `google-maps-api-key` → `Locations:GoogleMaps:ApiKey`; `public-tracking-link-key` → `PublicTracking:LinkKeys:1` |
+| API (`id-pv-pilot-api`) | `pg-api-runtime-connection` → `ConnectionStrings:Paqueteria`; `authcenter-paquetenvia-client-secret` → `AuthCenter:ClientSecret`; `paquetenvia-email-lookup-key-1` → `EmailLookup:Keys:1`; `google-maps-api-key` → `Locations:GoogleMaps:ApiKey`; `public-tracking-link-key` → `PublicTracking:LinkKeys:1`; `pg-realtime-runtime-connection` → `ConnectionStrings:PaqueteriaRealtime` (the in-process realtime dispatchers; never the Worker's connection) |
 | Worker (`id-pv-pilot-worker`) | `pg-worker-runtime-connection` → `ConnectionStrings:PaqueteriaWorker` and `ConnectionStrings:Paqueteria` (one secret, read once, mapped to both keys) |
 | Migrate and verify jobs (`id-pv-pilot-migrate`) | `pg-migrate-connection` → `PAQUETERIA_MIGRATION_CONNECTION` |
-| Logins job (`id-pv-pilot-logins`) | `pg-migrate-connection` → `PAQUETERIA_MIGRATION_CONNECTION`; `pg-api-login-verifier` → `PAQUETERIA_API_LOGIN_VERIFIER`; `pg-worker-login-verifier` → `PAQUETERIA_WORKER_LOGIN_VERIFIER` |
+| Logins job (`id-pv-pilot-logins`) | `pg-migrate-connection` → `PAQUETERIA_MIGRATION_CONNECTION`; `pg-api-login-verifier` → `PAQUETERIA_API_LOGIN_VERIFIER`; `pg-worker-login-verifier` → `PAQUETERIA_WORKER_LOGIN_VERIFIER`; `pg-realtime-login-verifier` → `PAQUETERIA_REALTIME_LOGIN_VERIFIER` |
 
 The GitHub runner is outside the VNet. `deploy/azure/pilot/kv-firewall.sh` opens a temporary `/32`
 rule for the runner's public IP only around its secret reads and writes, and an `always()` step closes
@@ -192,8 +202,8 @@ the app restarts or starts a new revision; the workflow restarts the API and Wor
 |---|---|---|
 | `pg-admin-password` | workflow (generated once, never printed) | workflow only |
 | `pg-migrate-connection` | workflow (every run, derived from the admin password) | migrate, logins and verify jobs |
-| `pg-api-runtime-connection` / `pg-worker-runtime-connection` | workflow (generated once, 64 hex chars) | API / Worker |
-| `pg-api-login-verifier` / `pg-worker-login-verifier` | workflow (SCRAM of the above) | logins job (its own identity) |
+| `pg-api-runtime-connection` / `pg-worker-runtime-connection` / `pg-realtime-runtime-connection` | workflow (generated once, 64 hex chars) | API / Worker / API realtime dispatchers |
+| `pg-api-login-verifier` / `pg-worker-login-verifier` / `pg-realtime-login-verifier` | workflow (SCRAM of the above) | logins job (its own identity) |
 | `paquetenvia-email-lookup-key-1` | workflow (generated once: 32 random bytes, base64) | API (`EmailLookup__Keys__1`) |
 | `authcenter-paquetenvia-client-secret` | **owner** (AuthCenter hands it over once) | API (`AuthCenter__ClientSecret`) |
 | `google-maps-api-key` | **owner** (Google Cloud Console, GATE-003-PROVIDER-GOOGLE) | API (`Locations__GoogleMaps__ApiKey`) |
@@ -225,6 +235,10 @@ App settings wired by `apps.bicep`:
 
 - **API:**
   - `ConnectionStrings__Paqueteria`.
+  - `ConnectionStrings__PaqueteriaRealtime` (Key Vault `pg-realtime-runtime-connection`) for the in-process realtime
+    outbox dispatchers (`Realtime__OutboxDispatcher__Provider=PostgreSql`, `WorkerId=pilot-api`). The API refuses to
+    start without it, or when its login equals the API's or the Worker's; it never receives
+    `ConnectionStrings__PaqueteriaWorker`.
   - AuthCenter (`Authority`/`Issuer` `https://authcenter.info`, `ClientId` `paquetenvia-web-prod`,
     `PublicOrigin`, `SessionStore=PostgreSql`).
   - `EmailLookup__CurrentKeyVersion=1`, `EmailLookup__Keys__1`.
@@ -279,6 +293,19 @@ start if `Pricing__PricingPolicyVersion` is still set.
 
 Driver eligibility maps (`Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TYPE>__0`,
 `Drivers__Eligibility__VehicleCapacity__<TYPE>__MaximumPackageCount`, …) go in the same file.
+
+**Dispatch number for the driver app (DRV-DISPATCH-CONTACT-2026-10-12, owner 2026-10-12: "Sí, configurable
+(Recommended)").** The driver app shows "Llamar a despacho" (a `tel:` link) next to its texts that ask the driver to
+call dispatch about a recorded cash collection, only for an organization with a number configured. The setting is
+empty by default and the file has no entry today, so the pilot shows no button until the owner gives the number.
+Each organization takes two entries in the same file, numbered `0`, `1`, … without gaps:
+`Drivers__DispatchContacts__<n>__OrganizationId` (the organization's UUID, lowercase) and
+`Drivers__DispatchContacts__<n>__PhoneE164` (`+52` and ten digits, the first one 2-9). The API refuses to start with
+an invalid entry or an organization written twice; `settings-check` (guard P17) applies the same rules before
+deploying and never echoes a value (a malformed entry is named by its canonical name or its position in the file).
+Configuration names ignore case in .NET, so P17 refuses these names in any other casing and treats names that differ
+only in case as the same setting. The number is a business contact, never logged. See
+`docs/development/ui-001-phase3-driver-dispatch-contact.md`.
 
 **Accepted terms and privacy versions (UI-001, owner decision pending).** The operator-assisted order
 screen (`/ops/orders/new`) reads two server-only runtime settings on the web container:
@@ -338,7 +365,7 @@ hours a month. Sized for 50–100 real deliveries.
 | Defender for Storage (per account) | 0.0134 per hour | 9.78 |
 | Malware scanning | 0.15 per GB scanned (~0.2 GB of photos) | 0.03 |
 | Log Analytics | 5 GB/month free, then 2.53 per GB; cap 0.3 GB/day ⇒ ≤ 9.1 GB | 0 – 10.40 |
-| Key Vault | RSA-3072 operations 0.165 per 10 k; secrets 0.033 per 10 k | ~0.30 |
+| Key Vault | RSA-3072 operations 0.165 per 10 k; secrets 0.033 per 10 k (the API realtime login adds two secrets read once per start: no measurable change) | ~0.30 |
 | Blob storage | a few GB Hot LRS | ~0.20 |
 | Private DNS zone | 0.50 per zone | 0.50 |
 | VNet, route, managed certificate, budget | free | 0.00 |
@@ -415,6 +442,21 @@ Two further caveats:
 11. Run the restore drill (§6.4) and keep its `EVIDENCE` line. The ENV-001 criterion "restore drill
     evidence is current before pilot start" requires it.
 
+**Owner actions for RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12:** none by hand. The workflow generates
+`pg-realtime-runtime-connection` and `pg-realtime-login-verifier` (also on a vault populated by an earlier run:
+they are created the first time they are missing), the logins job creates `pv_pilot_realtime`, the migrate job
+grants the role and `apps.bicep` gives the API identity *Key Vault Secrets User* on that one secret. After step 10,
+the owner can confirm in Log Analytics that `ca-pv-pilot-api` logs `realtime_outbox_dispatcher_started` with
+`provider=postgresql` and no `realtime_outbox_message_failed`.
+
+**Still blocks the API start, separate owner decision (found by `PilotApiStartupConfigurationTests`):** with
+`Drivers__Provider=PostgreSql` and `Routing__Provider=PostgreSql` the API refuses to start until
+`apps.settings.json` carries the driver eligibility maps for every vehicle type (MOTORCYCLE, CAR, VAN, BICYCLE,
+WALKER): `Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TYPE>__<n>` and
+`Drivers__Eligibility__VehicleCapacity__<TYPE>__{MaximumPackageCount,MaximumTotalWeightGrams,MaximumSinglePackageWeightGrams,MaximumLengthMillimeters,MaximumWidthMillimeters,MaximumHeightMillimeters}`
+(optionally `Drivers__Eligibility__NonExpiringDocumentTypes__<n>`). The file has none today; the values are
+business rules the owner must choose.
+
 ### 6.2 Redeploy
 
 Promote, wait for 13/13 on `main`, then dispatch with the new SHA and run id. Keep
@@ -459,7 +501,7 @@ The recovery target is any point in the last 14 days (PITR, locally redundant, n
   3. Put the restored server in place. There are two options.
      - **Swap names (preferred):** delete the old server, then restore again under the original
        name `pg-pv-pilot-<suffix>`. This keeps every connection secret valid.
-     - **Point secrets at the new host:** update the three connection secrets (`pg-migrate-connection`, `pg-api-runtime-connection`, `pg-worker-runtime-connection`) to the restored
+     - **Point secrets at the new host:** update the four connection secrets (`pg-migrate-connection`, `pg-api-runtime-connection`, `pg-worker-runtime-connection`, `pg-realtime-runtime-connection`) to the restored
        host, then restart the API and Worker revisions.
   4. Re-run the workflow for the current SHA. This restores the replica counts and re-applies the
      runtime logins.
@@ -531,8 +573,8 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
 **Rotation:**
 
 - **Runtime logins:** dispatch the workflow with `rotate_runtime_logins=true`. It writes new secret
-  versions, the logins job re-keys `pv_pilot_api`/`pv_pilot_worker`, and the API and Worker revisions
-  restart. Expect a few seconds of errors while the restart completes. Never delete these secrets:
+  versions, the logins job re-keys `pv_pilot_api`/`pv_pilot_worker`/`pv_pilot_realtime`, and the API and
+  Worker revisions restart. Expect a few seconds of errors while the restart completes. Never delete these secrets:
   the vault has purge protection, so a deleted name stays blocked for 90 days.
 - **PostgreSQL administrator:**
   1. `az postgres flexible-server update -g <rg> -n <pg> --admin-password <new>`.
@@ -550,8 +592,15 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
   rule's query from Azure Monitor → Alerts → the alert → *View query results*. The query shows the
   lane, job, app or status counts that tripped it (§10).
 - **PostgreSQL connections:** B1ms allows about 50. API and Worker pools are capped at 5 per data
-  source (`Maximum Pool Size=5;Minimum Pool Size=0`). `too many connections` means lowering those
-  or moving to B2s (+≈41 USD/month, over budget).
+  source (`Maximum Pool Size=5;Minimum Pool Size=0`); the API's realtime dispatcher login is one more data
+  source of 5 (it replaces the Worker connection the dispatchers would otherwise have opened).
+  `too many connections` means lowering those or moving to B2s (+≈41 USD/month, over budget).
+- **Realtime dispatcher not ready:** `/health/ready` reports `realtime_outbox_dispatcher` unhealthy when
+  `pg-realtime-runtime-connection` is missing or its login is not `pv_pilot_realtime` (member of
+  `paqueteria_realtime` only), when the Notifications lane step `20261012000100_AddRealtimeDispatcherRole` has not
+  run, or when the login is a member of any other role (directly or through a chain) or has SUPERUSER, BYPASSRLS,
+  CREATEROLE, CREATEDB, REPLICATION or INHERIT. Re-run the workflow (it regenerates a missing secret and the logins job
+  resets the attributes and the direct memberships).
 - **TLS:** connection strings use `SSL Mode=VerifyFull`. If the image's CA bundle ever lacks the
   PostgreSQL certificate chain, the migrate job fails at connect. Fix the CA bundle; do not downgrade
   to `Require` without an owner decision.
@@ -647,7 +696,7 @@ Details, format and error codes: `docs/development/mdm-001-master-data-loader.md
 
 ## 8. Static guards (`tools/azr-001/env001_pilot_guards.py`)
 
-The 23 guards (P00–P22) run on the compiled ARM output and the workflow:
+The 24 guards (P00–P23) run on the compiled ARM output and the workflow:
 
 - **Resources:** only authorized resource types and exactly six workloads. Redis, Azure SignalR,
   Front Door and PostgreSQL firewall rules are rejected.
@@ -683,6 +732,10 @@ The 23 guards (P00–P22) run on the compiled ARM output and the workflow:
 - **Accepted terms and privacy versions (P22, UI-001):** the web receives `PAQUETERIA_TERMS_VERSION` and
   `PAQUETERIA_PRIVACY_VERSION` from `apps.bicep` parameters without a default (1 to 64 characters), no
   other workload receives them, `web.parameters.json` is well formed, and the workflow checks and deploys it.
+- **API realtime dispatcher credential (P23, RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12):** with the PostgreSQL
+  dispatcher on, the API maps `ConnectionStrings:PaqueteriaRealtime` from `pg-realtime-runtime-connection`; it never
+  maps `ConnectionStrings:PaqueteriaWorker` or a Worker secret; no other workload maps the realtime secret; and the
+  workflow generates exactly the `api`, `worker` and `realtime` runtime logins.
 
 The unit tests compile the real templates whenever the pinned Bicep CLI is present (the azr-static CI
 job installs it). They mutate the ARM output to prove that each guard fails closed.

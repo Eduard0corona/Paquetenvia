@@ -28,7 +28,7 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
             new(
                 database.ApplicationConnectionString,
                 recorder,
-                workerConnectionString: database.WorkerConnectionString,
+                realtimeConnectionString: database.RealtimeConnectionString,
                 allowedOrigin: nextOrigin,
                 enableDriverApiCors: true,
                 configurationOverrides: DashboardConfiguration());
@@ -283,7 +283,7 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                 database.ApplicationConnectionString,
                 recorder,
                 apiPort,
-                database.WorkerConnectionString,
+                database.RealtimeConnectionString,
                 allowedOrigin: nextOrigin,
                 enableDriverApiCors: true,
                 configurationOverrides: DashboardConfiguration());
@@ -437,7 +437,7 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
                 database.ApplicationConnectionString,
                 recorder,
                 apiPort,
-                database.WorkerConnectionString,
+                database.RealtimeConnectionString,
                 allowedOrigin: nextOrigin,
                 enableDriverApiCors: true,
                 configurationOverrides: DashboardConfiguration("Disabled"));

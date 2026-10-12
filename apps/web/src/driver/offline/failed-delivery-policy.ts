@@ -274,15 +274,29 @@ const incidentLead: Readonly<Record<"open" | "maybe", string>> = {
 };
 
 /**
+ * What the stop says about a "No se pudo entregar" report held for the
+ * driver's attention: its Spanish message and whether that message asks the
+ * driver to call dispatch, so "Llamar a despacho" goes next to it when the
+ * organization's number is known (DRV-DISPATCH-CONTACT-2026-10-12). See
+ * {@link driverFailedReportAttentionMessage}.
+ */
+export interface DriverFailedReportAttention {
+  readonly message: string;
+  /** True only for the texts that ask to call dispatch about a recorded (or still saved) cash collection. */
+  readonly callDispatch: boolean;
+}
+
+/**
  * The Spanish message of a "No se pudo entregar" report held for the driver's
  * attention, so the stop never says "not sent" for a report whose incident is
  * (or may be) open and never invites reporting it again:
  *
  * - incident open or maybe open: that first, then the cash that holds the
  *   transition, if any (recorded: call dispatch; saved: discard it if it was a
- *   mistake; gone: retry the same action to finish);
+ *   mistake, otherwise call dispatch; gone: retry the same action to finish);
  * - incident refused by the server (a rule code of openIncident): its message;
- * - held for the cash before any incident: the cash messages;
+ * - held for the cash before any incident: the cash messages (recorded: call
+ *   dispatch);
  * - held before any request because the attempt moved on: dispatch already
  *   registered the failed attempt, or the stop changed since the report;
  * - anything else: the rule message of its code, or the generic one.
@@ -295,6 +309,20 @@ export function driverFailedReportAttentionMessage(
   >,
   operations: readonly DriverOfflineOperation[],
 ): string {
+  return driverFailedReportAttention(report, stop, operations).message;
+}
+
+/** {@link driverFailedReportAttentionMessage} with whether the message asks to call dispatch. */
+export function driverFailedReportAttention(
+  report: DriverOfflineOperation,
+  stop: Pick<
+    ProjectedDriverStop,
+    "order_id" | "cod" | "confirmedStatus" | "confirmedVersion"
+  >,
+  operations: readonly DriverOfflineOperation[],
+): DriverFailedReportAttention {
+  const say = (message: string, callDispatch = false): DriverFailedReportAttention =>
+    Object.freeze({ message, callDispatch });
   const incident = driverFailedReportIncident(report);
   const cash =
     report.safeError === "COD_COLLECTED"
@@ -304,47 +332,51 @@ export function driverFailedReportAttentionMessage(
     const lead = incidentLead[incident];
     switch (cash) {
       case "recorded":
-        return (
+        return say(
           `${lead}, pero el cobro de esta entrega también quedó registrado, así que el intento fallido ` +
-          "no se envió. Llama a despacho: ellos deciden y coordinan la devolución del cobro. No lo " +
-          "vuelvas a reportar: descarta esta acción."
+            "no se envió. Llama a despacho: ellos deciden y coordinan la devolución del cobro. No lo " +
+            "vuelvas a reportar: descarta esta acción.",
+          true,
         );
       case "saved":
-        return (
+        return say(
           `${lead}, pero hay un cobro guardado en el teléfono, así que el intento fallido no se envió. ` +
-          "Si el cobro fue un error, descártalo y el reporte terminará de enviarse; si no, llama a despacho."
+            "Si el cobro fue un error, descártalo y el reporte terminará de enviarse; si no, llama a despacho.",
+          true,
         );
       case "gone":
-        return `${lead}. Ya no hay un cobro guardado: reintenta la misma acción para terminar de enviarlo.`;
+        return say(`${lead}. Ya no hay un cobro guardado: reintenta la misma acción para terminar de enviarlo.`);
       case null:
-        return incident === "open"
-          ? driverIncidentOpenReportMessage
-          : driverIncidentMaybeOpenReportMessage;
+        return say(
+          incident === "open"
+            ? driverIncidentOpenReportMessage
+            : driverIncidentMaybeOpenReportMessage,
+        );
     }
   }
   if (report.rejectionCode !== null) {
-    return driverRejectionMessage(report.kind, report.rejectionCode);
+    return say(driverRejectionMessage(report.kind, report.rejectionCode));
   }
   switch (cash) {
     case "recorded":
-      return driverCashRecordedReportMessage;
+      return say(driverCashRecordedReportMessage, true);
     case "saved":
-      return driverCashSavedReportMessage;
+      return say(driverCashSavedReportMessage);
     case "gone":
-      return driverCashGoneReportMessage;
+      return say(driverCashGoneReportMessage);
     case null:
       break;
   }
   if (report.safeError === "VERSION_CONFLICT") {
     if (stop.confirmedStatus === "FAILED_ATTEMPT") {
-      return driverDispatchReportedFailedAttemptMessage;
+      return say(driverDispatchReportedFailedAttemptMessage);
     }
     if (
       stop.confirmedStatus !== "DELIVERING" ||
       stop.confirmedVersion !== report.expectedVersion
     ) {
-      return driverStaleReportMessage;
+      return say(driverStaleReportMessage);
     }
   }
-  return driverRejectionMessage(report.kind, null);
+  return say(driverRejectionMessage(report.kind, null));
 }

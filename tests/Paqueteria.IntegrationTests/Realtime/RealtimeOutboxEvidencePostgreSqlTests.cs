@@ -109,8 +109,8 @@ public sealed class RealtimeOutboxEvidencePostgreSqlTests(
         Guid assignmentId,
         Guid? organizationId = null)
     {
-        await using var connections = new RealtimeWorkerConnectionFactory(
-            database.WorkerConnectionString);
+        await using var connections = new RealtimeDispatcherConnectionFactory(
+            database.RealtimeConnectionString);
         var reader = new PostgreSqlRealtimeOutboxEvidenceReader(connections);
         return await reader.ReadAssignmentAsync(
             organizationId ?? PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId,

@@ -65,7 +65,7 @@ internal static class DriverOrganizationRoles
         var json = await page.EvaluateAsync<string>(
             """
             () => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 5);
               open.onerror = () => reject(open.error);
               open.onsuccess = () => {
                 const database = open.result;

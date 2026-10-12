@@ -11,6 +11,7 @@ import {
   driverDispatchReportedFailedAttemptMessage,
   driverDispatchRoleReportMessage,
   driverFailedDeliveryAvailability,
+  driverFailedReportAttention,
   driverFailedReportAttentionMessage,
   driverFailedReportCashHold,
   driverFailedReportHoldState,
@@ -452,6 +453,57 @@ describe("a held report whose incident is or may be open (MINOR 8)", () => {
     const moved = projectDriverOperations([deliveryStop({ aggregate_version: 10 })], []).stops[0];
     expect(driverFailedReportAttentionMessage(stale, moved, [])).toBe(driverStaleReportMessage);
     expect(driverStaleReportMessage).toContain("foto nueva");
+  });
+
+  /**
+   * DRV-DISPATCH-CONTACT-2026-10-12: exactly the notices that ask to call
+   * dispatch about the cash get "Llamar a despacho" (when the number is known);
+   * the texts themselves do not change.
+   */
+  it("marks only the notices that ask to call dispatch about the cash", () => {
+    const recordedStop = projectDriverOperations([cashStop(true)], []).stops[0];
+    const savedStop = projectDriverOperations([cashStop(false)], []).stops[0];
+    const movedStop = projectDriverOperations([deliveryStop({ aggregate_version: 10 })], []).stops[0];
+    const held = failedDeliveryOperation({ status: "NEEDS_ATTENTION", safeError: "COD_COLLECTED" });
+    const calls: [DriverOfflineOperation, typeof recordedStop, DriverOfflineOperation[]][] = [
+      // Held before its incident with the cash recorded (driverCashRecordedReportMessage).
+      [held, recordedStop, [held]],
+      // Incident open or maybe open, cash recorded: "Llama a despacho…".
+      [{ ...open, safeError: "COD_COLLECTED" }, recordedStop, []],
+      [{ ...maybe, safeError: "COD_COLLECTED" }, recordedStop, []],
+      // Incident open, cash still saved: "…; si no, llama a despacho."
+      [{ ...open, safeError: "COD_COLLECTED" }, savedStop, [collectionOperation()]],
+    ];
+    for (const [report, stop, operations] of calls) {
+      const attention = driverFailedReportAttention(report, stop, operations);
+      expect(attention.callDispatch).toBe(true);
+      expect(attention.message).toBe(driverFailedReportAttentionMessage(report, stop, operations));
+      expect(attention.message).toMatch(/[Ll]lama a despacho/);
+      expect(attention.message).not.toContain("tel:");
+    }
+    expect(driverFailedReportAttention(held, recordedStop, [held]).message).toBe(driverCashRecordedReportMessage);
+
+    const quiet: [DriverOfflineOperation, typeof recordedStop, DriverOfflineOperation[]][] = [
+      // A saved collection before the incident: discard one of the two, no call.
+      [held, savedStop, [held, collectionOperation()]],
+      // The collection is gone: retry.
+      [held, savedStop, [held]],
+      [{ ...open, safeError: "COD_COLLECTED" }, savedStop, []],
+      // No cash in the way.
+      [{ ...open, safeError: "VERSION_CONFLICT" }, movedStop, []],
+      [{ ...maybe, safeError: "VERSION_CONFLICT" }, movedStop, []],
+      [failedDeliveryOperation({ status: "NEEDS_ATTENTION", safeError: "VERSION_CONFLICT" }), movedStop, []],
+      [
+        failedDeliveryOperation({ status: "NEEDS_ATTENTION", rejectionCode: "INVALID_REQUEST" }),
+        recordedStop,
+        [],
+      ],
+    ];
+    for (const [report, stop, operations] of quiet) {
+      const attention = driverFailedReportAttention(report, stop, operations);
+      expect(attention.callDispatch).toBe(false);
+      expect(attention.message).toBe(driverFailedReportAttentionMessage(report, stop, operations));
+    }
   });
 });
 

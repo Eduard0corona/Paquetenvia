@@ -15,7 +15,7 @@ built on `System.Diagnostics.Activity`.
 | Outbound | No request carries those headers: Google Maps, WhatsApp, ACS e-mail, Twilio, the AuthCenter OIDC back-channel (discovery, JWKS, token, revocation), Azure Key Vault (secrets, keys, cryptography), Blob Storage, the data protection key resolver and the managed identity token requests. |
 | One identifier | The 32 lowercase hex W3C trace id is `HttpContext.TraceIdentifier`, `platform.audit_logs.request_id`, the `traceId` of every `application/problem+json` and `State.TraceId` in every JSON console line of the request. |
 | Worker | Every job cycle (ADR-034 `PeriodicJobScheduler`, proof validation) and every outbox dispatch cycle (notifications and dispatch lanes in the Worker, the two realtime lanes in the API) runs in its own new root trace. Its id is in the cycle's lines. |
-| AI-05 | `Problem` documents the optional `traceId` (`^[0-9a-f]{32}$`). The change is additive. The contract delta `OBS-003-W3C-CORRELATION` records it. Paths, schemas and internal references stay at 68, 124 and 646. |
+| AI-05 | `Problem` documents the optional `traceId` (`^[0-9a-f]{32}$`). The change is additive. The contract delta `OBS-003-W3C-CORRELATION` records it. This change adds no path, schema or internal reference (69, 125 and 651 on the merged base). |
 
 Public tracking is unchanged. The `publicTracking` 404, 429 and 503 bodies and the tracking hub's bodies stay
 uniform and never carry `traceId` (Invariant 5). AI-05 types those answers as `Problem`, where `traceId` is

@@ -14,6 +14,7 @@ import hashlib
 import hmac
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -106,6 +107,111 @@ class SettingsTests(unittest.TestCase):
                 self.assertIn(f"setting {name} is platform-managed by apps.bicep and cannot be overridden", failures)
         entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
         self.assertFalse(any(entry["name"].startswith("Voice__") for entry in entries))
+
+    def test_dispatch_contacts_are_empty_by_default_and_checked_before_deploying(self):
+        # DRV-DISPATCH-CONTACT-2026-10-12: the owner gives the number later; until then the file has no entry and
+        # the driver app shows no "Llamar a despacho". The numbers below are synthetic.
+        entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
+        self.assertFalse(any(entry["name"].startswith("Drivers__DispatchContacts") for entry in entries))
+
+        def contact(index, organization, phone):
+            return [
+                {"name": f"Drivers__DispatchContacts__{index}__OrganizationId", "value": organization},
+                {"name": f"Drivers__DispatchContacts__{index}__PhoneE164", "value": phone},
+            ]
+
+        first = "3f2504e0-4f89-41d3-9a0c-0305e82c3301"
+        second = "22222222-2222-4222-8222-222222222222"
+        number = "+522000000001"
+        valid = contact(0, first, number) + contact(1, second, number)
+        self.assertEqual([], guards.validate_settings(valid, allow_sentinel=False))
+
+        invalid = {
+            "uppercase id": contact(0, first.upper(), number),
+            "nil id": contact(0, "00000000-0000-0000-0000-000000000000", number),
+            "id without hyphens": contact(0, first.replace("-", ""), number),
+            "no country code": contact(0, first, "2000000001"),
+            "spaces": contact(0, first, "+52 2000000001"),
+            "first digit 1": contact(0, first, "+521000000001"),
+            "other country": contact(0, first, "+12025550100"),
+            "trailing line break": contact(0, first, number + "\n"),
+            "missing number": contact(0, first, number)[:1],
+            "missing organization": contact(0, first, number)[1:],
+            "organization twice": contact(0, first, number) + contact(1, first, "+522000000002"),
+            "gap": contact(0, first, number) + contact(2, second, number),
+            "unknown member": contact(0, first, number) + [{"name": "Drivers__DispatchContacts__0__Label", "value": "x"}],
+            # Review of #235: a mistyped entry never makes the guard print its value.
+            "number as a JSON number": contact(0, first, number)[:1]
+            + [{"name": "Drivers__DispatchContacts__0__PhoneE164", "value": 522000000009}],
+            "extra member": contact(0, first, number)[:1]
+            + [{"name": "Drivers__DispatchContacts__0__PhoneE164", "value": "+522000000009", "slotSetting": False}],
+        }
+        for case, settings in invalid.items():
+            with self.subTest(case=case):
+                failures = guards.validate_settings(settings, allow_sentinel=False)
+                self.assertTrue(failures)
+                self.assertTrue(all("DispatchContacts" in failure for failure in failures), failures)
+                self.assert_no_value_echoed(settings, failures)
+
+        # Review of #235: .NET binds configuration names in any casing, so another casing is refused (and its value
+        # still checked), a case variant of a name counts as the same name, and an unverified name is never echoed.
+        lowercase = [
+            {"name": "drivers__dispatchcontacts__0__organizationid", "value": first},
+            {"name": "drivers__dispatchcontacts__0__phonee164", "value": number},
+        ]
+        failures = guards.validate_settings(lowercase, allow_sentinel=False)
+        self.assertEqual(2, sum("must be spelled exactly Drivers__DispatchContacts__<n>__" in f for f in failures), failures)
+        self.assertTrue(all(f.startswith(("setting #1 ", "setting #2 ")) for f in failures), failures)
+        self.assert_no_value_echoed(lowercase, failures)
+
+        cased = {
+            "lowercase names with bad values": contact(0, first, number) + [
+                {"name": "drivers__dispatchcontacts__1__organizationid", "value": "not-a-uuid-2000000009"},
+                {"name": "drivers__dispatchcontacts__1__phonee164", "value": "2000000009"},
+            ],
+            "the same name in another casing": contact(0, first, number)
+            + [{"name": "DRIVERS__DISPATCHCONTACTS__0__PHONEE164", "value": "+522000000002"}],
+            "an index long enough to be a number": contact(0, first, number)
+            + [{"name": "Drivers__DispatchContacts__2000000009__PhoneE164", "value": number}],
+            "a number typed as a name": contact(0, first, number) + [{"name": "+522000000009", "value": "x"}],
+        }
+        for case, settings in cased.items():
+            with self.subTest(case=case):
+                failures = guards.validate_settings(settings, allow_sentinel=False)
+                self.assertTrue(failures)
+                self.assert_no_value_echoed(settings, failures)
+        bad_values = guards.validate_settings(cased["lowercase names with bad values"], allow_sentinel=False)
+        self.assertIn("Drivers__DispatchContacts__1__OrganizationId must be a canonical lowercase UUID", bad_values)
+        self.assertIn("Drivers__DispatchContacts__1__PhoneE164 must be +52 and ten digits, the first one 2-9", bad_values)
+        self.assertTrue(any("declared twice" in f for f in guards.validate_settings(
+            cased["the same name in another casing"], allow_sentinel=False)))
+
+    def test_setting_names_are_compared_ignoring_case(self):
+        # .NET configuration keys ignore case: a platform-managed, removed or repeated name in another casing is the
+        # same setting for the API, so the guard refuses it as such.
+        cases = {
+            "voice__provider": "is platform-managed by apps.bicep",
+            "connectionstrings__Paqueteria": "is platform-managed by apps.bicep",
+            "pricing__pricingpolicyversion": "was removed by PRC-POLICY-VERSION-PER-ORG",
+        }
+        for name, fragment in cases.items():
+            with self.subTest(name=name):
+                failures = guards.validate_settings([{"name": name, "value": "1"}], allow_sentinel=False)
+                self.assertTrue(any(fragment in failure for failure in failures), failures)
+        failures = guards.validate_settings(
+            [{"name": "Finance__OperationalTimeZone", "value": "America/Mazatlan"},
+             {"name": "finance__operationaltimezone", "value": "America/Mexico_City"}],
+            allow_sentinel=False)
+        self.assertEqual(["setting finance__operationaltimezone declared twice (configuration names ignore case)"], failures)
+
+    def assert_no_value_echoed(self, settings, failures):
+        """No failure carries a phone-like digit run or any submitted value of eight or more characters."""
+        for failure in failures:
+            self.assertIsNone(re.search(r"\d{7,}", failure), failure)
+            for entry in settings:
+                value = entry.get("value") if isinstance(entry, dict) else None
+                if value is not None and len(str(value).strip()) >= 8:
+                    self.assertNotIn(str(value).strip(), failure)
 
     def test_removed_global_pricing_policy_version_is_rejected(self):
         # PRC-POLICY-VERSION-PER-ORG: the version comes from each organization's tariff rules.
@@ -621,6 +727,52 @@ class TemplateGuardTests(unittest.TestCase):
         not_deployed = text.replace('"@deploy/azure/pilot/web.parameters.json" \\\n', "")
         self.assertNotEqual(text, not_deployed)
         self.assert_fails(22, self.context(workflow_text=not_deployed), "web.parameters.json")
+
+    def test_api_realtime_dispatcher_reads_its_own_credential_and_never_the_workers(self):
+        """RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: own Key Vault connection, per-secret RBAC, login generated."""
+        ctx = self.context()
+        api = ctx.workload(guards.API_APP)
+        self.assertEqual("PostgreSql", api.value("Realtime__OutboxDispatcher__Provider"))
+        self.assertEqual("pg-realtime-runtime-connection", guards.secret_mappings(api)["ConnectionStrings:PaqueteriaRealtime"])
+        self.assertIn("pg-realtime-runtime-connection", ctx.templates["apps"]["variables"]["apiSecretNames"])
+        self.assertNotIn("pg-worker-runtime-connection", ctx.templates["apps"]["variables"]["apiSecretNames"])
+        logins = ctx.workload(guards.LOGINS_JOB)
+        self.assertEqual("pg-realtime-login-verifier", guards.secret_mappings(logins)["PAQUETERIA_REALTIME_LOGIN_VERIFIER"])
+
+        def unmapped(t):
+            self.edit(t, "apps", "'KeyVaultSecrets__Mappings__5__ConfigurationKey', 'value', 'ConnectionStrings:PaqueteriaRealtime')",
+                      "'KeyVaultSecrets__Mappings__5__ConfigurationKey', 'value', 'ConnectionStrings:PaqueteriaOther')")
+        self.assert_fails(23, self.context(unmapped), "does not map ConnectionStrings:PaqueteriaRealtime")
+        self.assert_fails(6, self.context(unmapped), "differ from the least-privilege set")
+
+        def worker_credential(t):
+            self.edit(t, "apps",
+                      "'KeyVaultSecrets__Mappings__5__SecretName', 'value', 'pg-realtime-runtime-connection')",
+                      "'KeyVaultSecrets__Mappings__5__SecretName', 'value', 'pg-worker-runtime-connection')")
+            self.edit(t, "apps", "'KeyVaultSecrets__Mappings__5__ConfigurationKey', 'value', 'ConnectionStrings:PaqueteriaRealtime')",
+                      "'KeyVaultSecrets__Mappings__5__ConfigurationKey', 'value', 'ConnectionStrings:PaqueteriaWorker')")
+        self.assert_fails(23, self.context(worker_credential), "the Worker credential must never reach the API")
+        self.assert_fails(23, self.context(worker_credential), "api maps Worker secrets")
+
+        def worker_reads_realtime(t):
+            self.edit(t, "apps", "'KeyVaultSecrets__Mappings__1__SecretName', 'value', 'pg-worker-runtime-connection')",
+                      "'KeyVaultSecrets__Mappings__1__SecretName', 'value', 'pg-realtime-runtime-connection')")
+        self.assert_fails(23, self.context(worker_reads_realtime), "only the API's realtime dispatchers read it")
+
+        def rbac_missing(t):
+            t["apps"]["variables"]["apiSecretNames"] = [n for n in t["apps"]["variables"]["apiSecretNames"]
+                                                        if n != "pg-realtime-runtime-connection"]
+        self.assert_fails(6, self.context(rbac_missing), "apps.apiSecretNames")
+
+        def verifier_missing(t):
+            t["jobs"]["variables"]["loginsSecretNames"] = [n for n in t["jobs"]["variables"]["loginsSecretNames"]
+                                                           if n != "pg-realtime-login-verifier"]
+        self.assert_fails(6, self.context(verifier_missing), "jobs.loginsSecretNames")
+
+        text = (REPO_ROOT / guards.PILOT_WORKFLOW).read_text(encoding="utf-8")
+        not_generated = text.replace("for role in api worker realtime; do", "for role in api worker; do")
+        self.assertNotEqual(text, not_generated)
+        self.assert_fails(23, self.context(workflow_text=not_generated), "api, worker and realtime runtime logins")
 
     def test_observability_template_is_required(self):
         def drop(t):

@@ -582,7 +582,7 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         await page.WaitForFunctionAsync(
             """
             async () => {
-              const cache = await caches.open("paquetenvia-driver-shell-v7");
+              const cache = await caches.open("paquetenvia-driver-shell-v8");
               const keys = await cache.keys();
               return keys.some(key => new URL(key.url).pathname.startsWith("/_next/static/"));
             }
@@ -594,7 +594,7 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         await page.WaitForFunctionAsync(
             """
             minimum => new Promise(resolve => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 5);
               open.onerror = () => resolve(false);
               open.onsuccess = () => {
                 const database = open.result;
@@ -623,7 +623,7 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         var state = await page.EvaluateAsync<bool[]>(
             """
             async orderId => {
-              const cache = await caches.open("paquetenvia-driver-shell-v7");
+              const cache = await caches.open("paquetenvia-driver-shell-v8");
               const shell = await cache.match("/driver/stops");
               const exact = await cache.match(`/driver/stops/${orderId}`);
               const shellText = shell ? await shell.clone().text() : "";

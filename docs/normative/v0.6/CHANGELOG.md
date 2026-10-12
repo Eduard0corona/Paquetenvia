@@ -18,8 +18,81 @@
 - Worker: cada ciclo de job y cada ciclo de despacho del outbox (también los despachadores de tiempo real en la API)
   corre en su propia traza raíz.
 - AI-05, cambio aditivo: `Problem` documenta `traceId` opcional (`^[0-9a-f]{32}$`) y `x-pilot-contract-deltas` agrega
-  `OBS-003-W3C-CORRELATION`; rutas, esquemas y referencias internas siguen en 68, 124 y 646. Sin cambios en AI-04,
+  `OBS-003-W3C-CORRELATION`; este cambio no altera rutas, esquemas ni referencias internas (69, 125 y 651 en la base fusionada). Sin cambios en AI-04,
   AI-06, AI-18, roles, permisos, migraciones ni paquetes. Nota: `docs/development/obs-003-w3c-correlation.md`.
+
+## Credencial propia y mínima para el tiempo real de la API (RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12) — 2026-10-12
+
+- BLOCKER de seguridad y privilegio mínimo (AI-01 §7); el cambio de operación del piloto es MAJOR y lo registra
+  `docs/adr/ADR-RTM-API-REALTIME-DISPATCHER-ROLE.md`. Pregunta y respuesta literales del project owner (2026-10-12):
+  "Bloqueo del primer despliegue: la API del piloto envía los avisos en tiempo real (tablero, repartidor) leyendo la cola con la credencial del Worker, que hoy no tiene, así que no arrancaría. ¿Cómo lo resolvemos?" → "Rol propio y mínimo (Recommended)" ("Un rol de base de datos nuevo que solo puede tomar y cerrar mensajes de tiempo real, con su propio secreto en Key Vault para la API (ADR + AI-18 + migración). La API no gana ningún otro permiso."); no elegidas: "Darle a la API la del Worker" ("La API lee también el secreto del Worker. Es rápido, pero la API queda con todos los permisos del Worker (otras colas y mantenimiento).") y "Sin tiempo real en el piloto" ("Se apaga el despachador en la API; las pantallas se actualizan por consulta cada 30 s y el repartidor no recibe avisos al instante.").
+- AI-18: rol `paqueteria_realtime NOLOGIN NOBYPASSRLS`, creado sin privilegios, revocado de `paqueteria_app`,
+  `paqueteria_worker` y `paqueteria_bootstrap`, y sin poder heredar roles privilegiados (aserciones 35 a 37).
+- Lane Notifications `20261012000100_AddRealtimeDispatcherRole`: EXECUTE en las seis funciones con `lease_token` de
+  REALTIME y ubicación (`claim_realtime_outbox`, `requeue_stale_realtime_outbox`, `settle_outbox`,
+  `claim_location_outbox`, `settle_location_outbox`, `requeue_stale_location_outbox`), USAGE en siete esquemas y
+  SELECT en las 53 columnas que leen las lecturas de evidencia, todas también legibles por `paqueteria_app`. Sin
+  escrituras, sin tablas de outbox, sin otras colas, sin purgas ni mantenimiento. El Down revoca todo y lo verifica.
+- AI-24 `realtime_dispatcher_role`: `ConnectionStrings:PaqueteriaRealtime` validada al arrancar (login distinto del de
+  la API y del Worker), `SET LOCAL ROLE paqueteria_realtime`, readiness y rollback.
+- Piloto: secretos `pg-realtime-runtime-connection` y `pg-realtime-login-verifier`, login `pv_pilot_realtime`, la
+  identidad de la API lee solo ese secreto nuevo; guardas P06 y P23. Sin cambios en AI-04, AI-05, AI-06, AI-12 ni en
+  los flujos atómicos de AI-13 §4.
+- Correcciones de la revisión de seguridad (misma decisión): la readiness exige que el login tenga la forma
+  aprovisionada (`LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`) y no sea miembro,
+  directo o por cadena, de ningún rol fuera de `paqueteria_realtime`. AI-18 dice que las dos funciones de reclamo
+  devuelven filas completas de outbox REALTIME y de ubicación de todos los tenants (`payload` incluido), revoca cada
+  ejecutor también de `paqueteria_realtime` y precisa la aserción 37; AI-24 lista los pasos en el orden del código
+  (`BEGIN`, `SET LOCAL ROLE`, `set_config`).
+
+## Repartidor: "Llamar a despacho" con el teléfono de despacho de la empresa (DRV-DISPATCH-CONTACT-2026-10-12) — 2026-10-12
+
+- Pregunta y respuesta literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR
+  del contrato de la API (AI-01 §7): "En la app del repartidor, "Llama a despacho" (cuando ya registró un cobro y no
+  puede entregar) no muestra ningún número porque la app no tiene uno. ¿Agregamos un teléfono de despacho?" → "Sí,
+  configurable (Recommended)" ("Un número de despacho por empresa en la configuración del piloto; la app lo muestra
+  como botón "Llamar a despacho". Tú me das el número cuando lo tengas."); no elegida: "No, ya lo saben" ("Los
+  repartidores ya tienen el número de despacho; la app solo dice que llamen."). El owner todavía no da el número: no
+  hay ninguno configurado y las pruebas usan solo números sintéticos.
+- AI-05: nueva operación `getMyDispatchContact` (`GET /driver/me/dispatch-contact`, etiqueta Driver, con
+  `X-Organization-Id`) y esquema `DriverDispatchContact`: el objeto cerrado `{"phone_e164": "+52…"}` o
+  `{"phone_e164": null}` cuando la organización elegida no tiene número; 200, 401, 403 y 503, como
+  `getMyDriverPhone`; `Cache-Control: no-store`. `x-capability-matrix` agrega `dispatch_contact_operations` (solo
+  DRIVER, sin MFA, como `listMyStops`) y `x-pilot-contract-deltas` la entrada `DRV-DISPATCH-CONTACT`.
+- Servidor: `Drivers:DispatchContacts` (lista de `{OrganizationId, PhoneE164}`), vacía por omisión. Al arrancar se
+  valida (falla y no arranca): `OrganizationId` como UUID canónico en minúsculas y nunca el nulo; `PhoneE164` como
+  número mexicano E.164 (`+52` y diez dígitos ASCII, el primero de 2 a 9, los que llama `VoicePhoneNumber`; se eligió
+  México y no E.164 general porque el piloto y todas las reglas de teléfono del sistema son mexicanas); cada
+  organización una sola vez (un mismo número puede servir a varias). El mensaje de error no lleva valores y
+  `ToString` oculta el número. `DriverDispatchContactEndpoints` revisa la sesión, el contexto tenant (403) y la
+  capacidad antes de leer; lee solo la configuración (sin base de datos, sin transacción tenant, sin escribir, sin
+  logs) y nunca contesta el número de otra organización. Sin PII, secreto, tabla, índice, rol, permiso, migración ni
+  flujo atómico nuevo; AI-04, AI-06 y AI-18 sin cambios.
+- Piloto: el número es un valor de negocio del owner en `deploy/azure/pilot/apps.settings.json` (`businessSettings`,
+  que `apps.bicep` agrega a los ajustes de la API y del Worker): `Drivers__DispatchContacts__0__OrganizationId` y
+  `Drivers__DispatchContacts__0__PhoneE164`. Hoy no hay ninguna entrada. `env001_pilot_guards.py settings-check`
+  (guarda P17) aplica las mismas reglas antes de desplegar y nunca repite un número.
+- PWA del repartidor: `DriverDispatchContactController` pide el número al instalar la sesión del repartidor y en
+  cada sesión nueva (otro inicio de sesión u otra organización); usa al instante la respuesta guardada para la
+  partición, la reemplaza con cada respuesta correcta (número o null), la borra ante 401 o 403 y la conserva ante
+  cualquier otra falla, preguntando de nuevo como la lectura de roles (al volver la conexión o la app, hasta 5 veces
+  por sesión). Se guarda en el IndexedDB particionado de siempre, store nuevo `dispatch_contacts` (esquema 1: llave
+  de partición, esquema y número o null), que necesita la versión 5 porque la 4 ya llegó a main; la subida desde la
+  4 solo crea el store (acciones en cola, fotos, leases, instantáneas y roles guardados quedan igual) y el shell del
+  Service Worker sube a `paquetenvia-driver-shell-v8`. Sale del teléfono con la partición ante 401 o 403 y con todas
+  las instantáneas al cerrar sesión.
+- "Llamar a despacho" es un enlace `tel:` de al menos 44 px que aparece solo junto a los textos que piden llamar a
+  despacho por el cobro: el de la parada con el cobro registrado, el rechazo de "Enviar reporte" con el cobro
+  registrado (formulario y resumen de sincronización), el reporte retenido antes de su incidencia por el cobro
+  registrado y el reporte con incidencia abierta (o posiblemente abierta) retenido por el cobro registrado o todavía
+  guardado. Sin número conocido los textos quedan exactamente igual y no se muestra nada; el número nunca se escribe
+  en pantalla.
+- AI-07 `driver_stop`: nuevo `dispatch_contact`; `failed_delivery.cash` y `offline` lo citan; `offline_cache` y
+  `details.retention` agregan la respuesta guardada.
+- Despliegue: no hace falta ningún orden (la web anterior nunca llama la lectura; esta web con una API anterior
+  recibe 404 y no muestra el enlace). Rollback: la parte del API se revierte sola; la de la web no es un revert
+  simple, porque una compilación de la versión 4 no abre una base en la versión 5: es una versión que conserva
+  IndexedDB 5 con el store y deja de mostrar el enlace.
 
 ## Despacho: "Órdenes" y filtro por fecha de creación en `listOrders` (UI-PHASE3-ORDERS-LIST-2026-10-12, ORD-LIST-DATE-FILTER-2026-10-12) — 2026-10-12
 

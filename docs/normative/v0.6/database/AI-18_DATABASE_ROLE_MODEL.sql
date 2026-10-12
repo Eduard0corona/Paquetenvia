@@ -16,6 +16,7 @@ DO $$ BEGIN CREATE ROLE paqueteria_master_data_executor NOLOGIN BYPASSRLS; EXCEP
 DO $$ BEGIN CREATE ROLE paqueteria_master_data_loader NOLOGIN NOBYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE paqueteria_operator_outbox_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE paqueteria_auto_close_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE ROLE paqueteria_realtime NOLOGIN NOBYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- Normalize ownership after AI-06 was applied by the privileged deployment owner.
 DO $$
@@ -65,7 +66,7 @@ END $$;
 
 -- Runtime roles cannot inherit or SET ROLE into privileged roles.
 REVOKE paqueteria_migrator, paqueteria_bootstrap, paqueteria_outbox_executor, paqueteria_maintenance
-  FROM paqueteria_app, paqueteria_worker;
+  FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;
 
 REVOKE ALL ON SCHEMA extensions FROM PUBLIC;
 GRANT USAGE ON SCHEMA extensions TO paqueteria_bootstrap;
@@ -196,7 +197,7 @@ GRANT EXECUTE ON FUNCTION security.purge_location_outbox(timestamptz,timestamptz
 -- The executor only discovers, locks and finalizes expired CLOSED claim windows inside
 -- security.finalize_expired_orders(integer), installed by the Orders migration lane after this
 -- baseline. It has no outbox, bootstrap or purge rights and no broad business-schema grant.
-REVOKE paqueteria_lifecycle_executor FROM paqueteria_app, paqueteria_worker;
+REVOKE paqueteria_lifecycle_executor FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;
 GRANT USAGE ON SCHEMA orders TO paqueteria_lifecycle_executor;
 GRANT SELECT (id,status,claim_window_ends_at,finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;
 GRANT UPDATE (finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;
@@ -228,7 +229,7 @@ GRANT UPDATE (finalized_at) ON orders.orders TO paqueteria_lifecycle_executor;
 -- retention, in batches of 1..1000 in total, returns only a count, is SECURITY DEFINER
 -- with search_path=pg_catalog, identity, pg_temp and only paqueteria_worker may EXECUTE it. Those grants
 -- live in that lane and not in this baseline, because the OPS-003 lane asserts its own exact grant set.
-REVOKE paqueteria_cleanup_executor FROM paqueteria_app, paqueteria_worker;
+REVOKE paqueteria_cleanup_executor FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;
 GRANT USAGE ON SCHEMA platform,custody TO paqueteria_cleanup_executor;
 GRANT SELECT (owner_org_id,scope,idempotency_key,created_at,expires_at) ON platform.idempotency_keys TO paqueteria_cleanup_executor;
 GRANT DELETE ON platform.idempotency_keys TO paqueteria_cleanup_executor;
@@ -255,7 +256,7 @@ GRANT UPDATE (status,updated_at) ON custody.proof_upload_sessions TO paqueteria_
 --     with one audit row in the platform organization and one in the ALLY organization.
 -- It has no outbox, bootstrap, lifecycle, cleanup or purge rights, no USAGE on schema security and no
 -- broad business-schema grant.
-REVOKE paqueteria_registration_executor FROM paqueteria_app, paqueteria_worker;
+REVOKE paqueteria_registration_executor FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;
 GRANT USAGE ON SCHEMA identity,organizations,platform TO paqueteria_registration_executor;
 GRANT SELECT (id,identity_subject,status) ON identity.users TO paqueteria_registration_executor;
 GRANT INSERT (id,identity_subject,status,created_at) ON identity.users TO paqueteria_registration_executor;
@@ -301,7 +302,7 @@ GRANT UPDATE (status,expires_at,accepted_user_id,accepted_at,revoked_at) ON orga
 --     NOTHING and returns true only the first time any replica registers it (BFF-LOGOUT-JTI-PERSISTENCE).
 -- Revocation sets revoked_at and erases ticket_ciphertext; the revoke functions return only a count.
 -- The role has no DELETE: revoked and expired rows are purged by paqueteria_cleanup_executor.
-REVOKE paqueteria_session_executor FROM paqueteria_app, paqueteria_worker;
+REVOKE paqueteria_session_executor FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;
 GRANT USAGE ON SCHEMA identity TO paqueteria_session_executor;
 GRANT SELECT (session_key_hash,identity_subject,authcenter_sid,ticket_ciphertext,created_at,expires_at,revoked_at) ON identity.bff_sessions TO paqueteria_session_executor;
 GRANT INSERT (session_key_hash,identity_subject,authcenter_sid,ticket_ciphertext,created_at,expires_at) ON identity.bff_sessions TO paqueteria_session_executor;
@@ -356,8 +357,8 @@ GRANT INSERT (jti_hash,created_at,expires_at) ON identity.bff_logout_jtis TO paq
 -- rollback revokes the grants and keeps the table, which resolves the pseudonyms of append-only audit rows.
 -- master-data-gate records the deployment login's reference from the same table as paqueteria_migrator and
 -- serializes its runs on pg_advisory_xact_lock(2026092803) before reading the deployment marker.
-REVOKE paqueteria_master_data_executor FROM paqueteria_app, paqueteria_worker;
-REVOKE paqueteria_master_data_loader FROM paqueteria_app, paqueteria_worker;
+REVOKE paqueteria_master_data_executor FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;
+REVOKE paqueteria_master_data_loader FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;
 REVOKE ALL ON platform.master_data_deployment_gate FROM paqueteria_app, paqueteria_worker;
 CREATE POLICY master_data_deployment_gate_migrator ON platform.master_data_deployment_gate
   TO paqueteria_migrator USING (true) WITH CHECK (true);
@@ -414,7 +415,7 @@ GRANT USAGE ON SCHEMA security TO paqueteria_master_data_loader;
 -- purge right, no USAGE on schema security and no broad business-schema grant; its outbox and audit SELECT is
 -- limited to the columns that prove a row is not repeated. The functions' rollback drops only them; the role and
 -- these grants then stay inert.
-REVOKE paqueteria_operator_outbox_executor FROM paqueteria_app, paqueteria_worker;
+REVOKE paqueteria_operator_outbox_executor FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;
 GRANT USAGE ON SCHEMA identity,organizations,orders,dispatch,platform TO paqueteria_operator_outbox_executor;
 GRANT SELECT (id,status) ON identity.users TO paqueteria_operator_outbox_executor;
 GRANT SELECT (user_id,organization_id,role,status) ON organizations.organization_memberships TO paqueteria_operator_outbox_executor;
@@ -440,12 +441,59 @@ GRANT INSERT (id,org_id,actor_id,action,entity_type,entity_id,request_id,payload
 -- input, no write and no decision. The executor has no INSERT, UPDATE or DELETE, no outbox, bootstrap, lifecycle,
 -- cleanup, registration, session, master data or purge right, no USAGE on schema security and no other grant. The
 -- function's rollback drops only it; the role and these grants then stay inert.
-REVOKE paqueteria_auto_close_executor FROM paqueteria_app, paqueteria_worker;
+REVOKE paqueteria_auto_close_executor FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;
 GRANT USAGE ON SCHEMA orders TO paqueteria_auto_close_executor;
 GRANT SELECT (owner_org_id,status) ON orders.orders TO paqueteria_auto_close_executor;
 
+-- The API's in-process realtime outbox dispatchers are a separate runtime credential
+-- (RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12, project owner: "Rol propio y mínimo (Recommended)": "Un rol de base de
+-- datos nuevo que solo puede tomar y cerrar mensajes de tiempo real, con su propio secreto en Key Vault para la API
+-- (ADR + AI-18 + migración). La API no gana ningún otro permiso."). Under RTM-002-INPROCESS-DISPATCHER-COLOCATION the
+-- API process claims, publishes and settles the REALTIME business lane and the location lane; it must not hold the
+-- Worker credential (paqueteria_worker reaches every module table, the NOTIFICATIONS and DISPATCH lanes and the purges).
+-- paqueteria_realtime is NOLOGIN NOBYPASSRLS like paqueteria_app and paqueteria_worker: its only members are the API's
+-- realtime LOGIN (pv_pilot_realtime in the pilot; LOGIN NOINHERIT NOBYPASSRLS, member of exactly this role, SET LOCAL
+-- ROLE paqueteria_realtime after BEGIN in every transaction), it inherits no role, no group role is granted it, it owns
+-- nothing and it has no default privilege. AI-18 creates it with no privilege at all. Its privileges are granted,
+-- verified and revoked by the Notifications lane step 20261012000100_AddRealtimeDispatcherRole, which runs after the
+-- NTF-001 REALTIME lane functions exist, never by this baseline:
+--   EXECUTE on security.claim_realtime_outbox(text,integer,interval),
+--     security.requeue_stale_realtime_outbox(interval,integer,integer),
+--     security.settle_outbox(uuid,uuid,text,text,timestamptz), security.claim_location_outbox(text,integer,interval),
+--     security.settle_location_outbox(uuid,uuid,text,text,timestamptz) and
+--     security.requeue_stale_location_outbox(interval,integer,integer): the lease_token claim, settle and stale requeue of
+--     the REALTIME business lane and the location lane (owned by paqueteria_outbox_executor). settle_outbox is the
+--     shared settle; it changes only the row whose unexpired lease_token the caller presents, and this role obtains lease
+--     tokens only from the two REALTIME/location claims;
+--   USAGE on schemas security, orders, dispatch, drivers, identity, organizations and routes;
+--   SELECT on exactly the columns the dispatchers read to re-derive each audience from committed state, under FORCE RLS
+--     with one owner or operator organization in app.current_org_ids per transaction:
+--     orders.orders(id,public_id,owner_org_id,operator_org_id);
+--     orders.order_events(id,order_id,owner_org_id,aggregate_version,event_type,payload,public_event_code,occurred_at);
+--     dispatch.assignments(id,order_id,driver_id,owner_org_id,operator_org_id,assignment_type,status);
+--     dispatch.external_offers(id,owner_org_id,status,commission_cents,expires_at,version,accepted_by_driver_id);
+--     drivers.driver_profiles(id,user_id,org_id,driver_type,status);
+--     drivers.driver_positions(id,org_id,driver_id,point,accuracy_m,captured_at,publish_realtime);
+--     identity.users(id,status); organizations.organization_memberships(user_id,organization_id,role,status);
+--     routes.routes(id,operator_org_id,driver_id,version,updated_at); routes.route_stops(id,route_id,operator_org_id,sequence).
+-- It has no INSERT, UPDATE or DELETE anywhere, no table-wide grant, no privilege on either outbox table, no USAGE on
+-- schema platform, no CREATE, and no EXECUTE on the NOTIFICATIONS, DISPATCH or UNROUTED lane functions, on
+-- security.claim_outbox/requeue_stale_outbox, on any purge or maintenance function or on any executor's function. Every
+-- column it reads is also readable by paqueteria_app, so its table reads give the API process no column it could not
+-- already read. Its claims are different, and they are the new capability the owner approved (taking and closing
+-- realtime messages): claim_realtime_outbox and claim_location_outbox are SECURITY DEFINER functions owned by the
+-- BYPASSRLS paqueteria_outbox_executor and run with no tenant context, so each returns whole claimed rows of every
+-- tenant: platform.outbox_events rows of the REALTIME lane and platform.location_outbox_events rows, including payload
+-- (a location payload carries the driver_id and the driver's latitude and longitude), tenant_context and owner_org_id,
+-- columns paqueteria_app cannot read. Through those two claims only, the API process therefore reads the realtime and
+-- location outbox rows of every tenant; the dispatchers publish each row only to the audience they re-derive from
+-- committed state under FORCE RLS and never log a payload. The lane step's rollback revokes every one of these
+-- privileges; the role then stays, inert.
+REVOKE paqueteria_realtime FROM paqueteria_app, paqueteria_worker, paqueteria_bootstrap;
+
 -- Mandatory deployment assertions:
--- 1. API login SET ROLE paqueteria_app; Worker login SET ROLE paqueteria_worker.
+-- 1. API login SET ROLE paqueteria_app; Worker login SET ROLE paqueteria_worker. The API's realtime dispatcher login
+--    (RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12) SET LOCAL ROLE paqueteria_realtime and is a member of nothing else.
 -- 2. all application schemas/tables/sequences are owned by paqueteria_migrator before specialized function ownership; runtime roles own nothing and rolbypassrls=false.
 -- 3. privileged NOLOGIN roles have no login membership granted to runtime roles.
 -- 4. runtime roles have no SELECT/UPDATE/DELETE on either outbox table.
@@ -479,3 +527,6 @@ GRANT SELECT (owner_org_id,status) ON orders.orders TO paqueteria_auto_close_exe
 -- 32. paqueteria_auto_close_executor is NOLOGIN BYPASSRLS, inherits no role, is granted to no runtime or bootstrap role and, once the Orders ORD-AUTO-CLOSE lane is recorded, owns only security.list_auto_close_owner_organizations(uuid,integer). The role and its grants persist after that lane is rolled back: AI-18 declares them, and without the function they are inert.
 -- 33. paqueteria_auto_close_executor holds only USAGE on schema orders and SELECT(owner_org_id,status) on orders.orders, none grantable: no table-wide grant, no INSERT, UPDATE or DELETE, no CREATE, no other table, no outbox, bootstrap, lifecycle, cleanup, registration, session, master data or purge privilege.
 -- 34. security.list_auto_close_owner_organizations(uuid,integer) is STABLE SECURITY DEFINER with search_path=pg_catalog, orders, pg_temp, contains no dynamic SQL and no RETURNING, accepts only a bounded limit, returns only owner organization identifiers, and only paqueteria_worker may EXECUTE it; PUBLIC, paqueteria_app and paqueteria_bootstrap may not.
+-- 35. paqueteria_realtime is NOLOGIN NOBYPASSRLS, inherits no role, is granted to no group role (only to the API's realtime LOGIN), owns nothing, has no default privilege and, until the Notifications lane step 20261012000100_AddRealtimeDispatcherRole is recorded (or after it is rolled back), holds no privilege at all. The role persists after that step is rolled back: AI-18 declares it, and without the grants it is inert.
+-- 36. once that step is recorded, paqueteria_realtime holds exactly USAGE on schemas security, orders, dispatch, drivers, identity, organizations and routes, EXECUTE on the six lease-token functions above and SELECT on the 53 columns above, none grantable: no table-wide grant, no INSERT, UPDATE or DELETE, no privilege on either outbox table, no USAGE on platform, no CREATE anywhere and no EXECUTE beyond PUBLIC on any other security, platform, notifications or extensions routine; every column it reads is also readable by paqueteria_app.
+-- 37. the role cannot bypass RLS: every table it reads has ENABLE and FORCE ROW LEVEL SECURITY, so, exactly like paqueteria_app, it reads only the rows the tenant policies admit for the context its own transaction sets: rows of the organizations in app.current_org_ids and, on identity.users and organizations.organization_memberships, also the rows of the user named in app.current_user_id (security.app_current_user(), a setting the session controls). With both settings empty it reads no row; the dispatchers set app.current_user_id empty and exactly one organization in app.current_org_ids, so they read only that organization's rows. Only its two claim functions return rows of every tenant, as described above.

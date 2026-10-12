@@ -80,7 +80,9 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
                     TO {{_login}} WITH ADMIN TRUE, SET TRUE;
                     -- MDM-001 N2: the deployment principal administers the operator grantee (AI-18 revokes it from
                     -- the runtime roles) but can never use it, like a CREATEROLE creator's automatic grant.
-                    GRANT paqueteria_master_data_loader TO {{_login}} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE;
+                    -- RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the same for the API's realtime dispatcher role.
+                    GRANT paqueteria_master_data_loader, paqueteria_realtime
+                    TO {{_login}} WITH ADMIN TRUE, INHERIT FALSE, SET FALSE;
                     DO $$ BEGIN CREATE ROLE azure_pg_admin NOLOGIN; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
                     {{(azureAdmin ? $"GRANT azure_pg_admin TO {_login};" : string.Empty)}}
                     {{(allowlist is null ? string.Empty : $"ALTER DATABASE \"{database}\" SET azure.extensions = '{allowlist}';")}}
@@ -321,6 +323,7 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
                 ("paqueteria_master_data_loader", false),
                 ("paqueteria_operator_outbox_executor", true),
                 ("paqueteria_auto_close_executor", true),
+                ("paqueteria_realtime", false),
             ],
             E002Guards.CanonicalRoles);
         Assert.Equal(
@@ -332,7 +335,7 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             E002Guards.SpecializedOwners);
         Assert.Equal(
             ["paqueteria_master_data_executor", "paqueteria_master_data_loader", "paqueteria_operator_outbox_executor",
-             "paqueteria_auto_close_executor"],
+             "paqueteria_auto_close_executor", "paqueteria_realtime"],
             E002Guards.LaneIntroducedRoles);
         Assert.Equal(
             Identity.Infrastructure.Persistence.Migrations.AddBffSessionStore.MigrationId,
@@ -519,6 +522,34 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         Assert.Equal(
             "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_V1",
             E002RoutineMap.Name(E002RoutineMapState.Applied, true, true, true, true, true, true, true, true, true, true));
+
+        // RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: no new routine; paqueteria_realtime joins the Worker as grantee of
+        // the six realtime and location lease-token routines, and nothing else changes.
+        var withoutRealtime = E002RoutineMap.Select(
+            E002RoutineMapState.Applied, true, true, true, true, true, true, true, true, true, true);
+        var withRealtime = E002RoutineMap.Select(
+            E002RoutineMapState.Applied, true, true, true, true, true, true, true, true, true, true,
+            realtimeDispatcherApplied: true);
+        Assert.Equal(51, withRealtime.Count);
+        Assert.Equal(withoutRealtime.Select(entry => entry.Signature), withRealtime.Select(entry => entry.Signature));
+        var widened = withRealtime.Where(entry => entry.Grantees.Contains("paqueteria_realtime")).ToArray();
+        Assert.Equal(
+            E002RoutineMap.RealtimeDispatcherRoutines.Order(StringComparer.Ordinal),
+            widened.Select(entry => entry.Signature).Order(StringComparer.Ordinal));
+        Assert.All(widened, entry =>
+        {
+            Assert.Equal("paqueteria_outbox_executor", entry.Owner);
+            Assert.Equal(["paqueteria_worker", "paqueteria_realtime"], entry.Grantees);
+        });
+        Assert.Equal(
+            withoutRealtime.Where(entry => !E002RoutineMap.RealtimeDispatcherRoutines.Contains(entry.Signature)),
+            withRealtime.Where(entry => !E002RoutineMap.RealtimeDispatcherRoutines.Contains(entry.Signature)));
+        Assert.Throws<InvalidOperationException>(() => E002RoutineMap.Select(
+            E002RoutineMapState.Pending, false, realtimeDispatcherApplied: true));
+        Assert.Equal(
+            "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_PLUS_RTMAPIROLE_V1",
+            E002RoutineMap.Name(E002RoutineMapState.Applied, true, true, true, true, true, true, true, true, true, true,
+                realtimeDispatcherApplied: true));
     }
 
     [PostgreSqlContractFact]
@@ -616,10 +647,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
             Assert.Equal(
-                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_V1",
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_PLUS_RTMAPIROLE_V1",
                 semantic.RoutineMap);
             Assert.Equal(51, semantic.ControlledIdentities);
-            Assert.Equal(100, semantic.NormalizedExecuteRows);
+            Assert.Equal(106, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> CustodyLaneAsync() =>
@@ -700,10 +731,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
             Assert.Equal(
-                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_V1",
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_PLUS_RTMAPIROLE_V1",
                 semantic.RoutineMap);
             Assert.Equal(51, semantic.ControlledIdentities);
-            Assert.Equal(100, semantic.NormalizedExecuteRows);
+            Assert.Equal(106, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> IdentityLaneAsync() =>
@@ -790,10 +821,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
             Assert.Equal(
-                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_V1",
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_PLUS_RTMAPIROLE_V1",
                 semantic.RoutineMap);
             Assert.Equal(51, semantic.ControlledIdentities);
-            Assert.Equal(100, semantic.NormalizedExecuteRows);
+            Assert.Equal(106, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> PricingLaneAsync() =>
@@ -883,10 +914,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
             Assert.Equal(
-                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_V1",
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_PLUS_RTMAPIROLE_V1",
                 semantic.RoutineMap);
             Assert.Equal(51, semantic.ControlledIdentities);
-            Assert.Equal(100, semantic.NormalizedExecuteRows);
+            Assert.Equal(106, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> OrganizationsLaneAsync() =>
@@ -1045,10 +1076,10 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             // The Notifications lane also installed the D8 DISPATCH lane and the Custody OPS-003 lane is applied
             // too: two routines each, owner + Worker.
             Assert.Equal(
-                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_V1",
+                "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_PLUS_RTMAPIROLE_V1",
                 semantic.RoutineMap);
             Assert.Equal(51, semantic.ControlledIdentities);
-            Assert.Equal(100, semantic.NormalizedExecuteRows);
+            Assert.Equal(106, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> OrdersLaneAsync() =>
@@ -1129,9 +1160,9 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         {
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
-            Assert.EndsWith("_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_V1", semantic.RoutineMap, StringComparison.Ordinal);
+            Assert.EndsWith("_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_PLUS_RTMAPIROLE_V1", semantic.RoutineMap, StringComparison.Ordinal);
             Assert.Equal(51, semantic.ControlledIdentities);
-            Assert.Equal(100, semantic.NormalizedExecuteRows);
+            Assert.Equal(106, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> DispatchLaneAsync() =>
@@ -1213,9 +1244,9 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         {
             await deployment.OpenAsync();
             var semantic = await new E002SemanticAssertions().AssertAsync(deployment, E002NotificationState.Applied);
-            Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_V1", semantic.RoutineMap);
+            Assert.Equal("ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_PLUS_RTMAPIROLE_V1", semantic.RoutineMap);
             Assert.Equal(51, semantic.ControlledIdentities);
-            Assert.Equal(100, semantic.NormalizedExecuteRows);
+            Assert.Equal(106, semantic.NormalizedExecuteRows);
         }
 
         async Task<string> OrdersLaneAsync() =>

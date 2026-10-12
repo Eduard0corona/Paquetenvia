@@ -57,11 +57,12 @@ fixed by the application):
 | --- | --- | --- |
 | API | `ConnectionStrings:Paqueteria` | PostgreSQL connection of `paqueteria_app` login |
 | API | `EmailLookup:Keys:1` | REG-002 email lookup HMAC key (Base64) |
+| API | `ConnectionStrings:PaqueteriaRealtime` | PostgreSQL connection of the API's realtime dispatcher login (member of `paqueteria_realtime` only; never the Worker's, RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12) |
 | API | any other secret setting (for example the AuthCenter client secret, maps API key) | same mechanism |
 | Worker | `ConnectionStrings:PaqueteriaWorker` | PostgreSQL connection of the worker login |
 | Worker | `ConnectionStrings:Paqueteria` | the Custody/Worker components read it; map the **same** secret as `ConnectionStrings:PaqueteriaWorker` (two mappings, one `SecretName`) |
 | DatabaseMigrator job | `PAQUETERIA_MIGRATION_CONNECTION` | the value `--connection-env PAQUETERIA_MIGRATION_CONNECTION` reads |
-| DatabaseMigrator job | `PAQUETERIA_API_LOGIN_VERIFIER`, `PAQUETERIA_WORKER_LOGIN_VERIFIER` | SCRAM verifiers read by `runtime-logins` (ENV-001, #123) |
+| DatabaseMigrator job | `PAQUETERIA_API_LOGIN_VERIFIER`, `PAQUETERIA_WORKER_LOGIN_VERIFIER`, `PAQUETERIA_REALTIME_LOGIN_VERIFIER` | SCRAM verifiers read by `runtime-logins` (ENV-001, #123; the third by RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12) |
 
 The migrator resolves every named setting through one lookup, `DatabaseMigratorProgram.ReadSetting`:
 environment variables overlaid by the mapped Key Vault secrets, built on first use (so `verify` never
