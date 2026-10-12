@@ -208,6 +208,8 @@ describe("BFF session installation", () => {
       organizationId: organizationA,
       displayName: "A",
       landingPath: "/driver/stops",
+      // DISPATCHER in another organization does not count.
+      alsoDispatch: false,
     });
     expect(selectSessionInstallation([])).toEqual({ kind: "none" });
   });
@@ -259,11 +261,34 @@ describe("BFF session installation", () => {
     const result = await bootstrapBffSession(target, fetcher as unknown as typeof fetch);
     expect(result.installation.kind).toBe("driver");
     expect(target.__paquetenviaDriverSession?.cacheNamespace).toBe(namespace);
+    expect(target.__paquetenviaDriverSession?.alsoDispatch).toBeUndefined();
     for (const call of fetcher.mock.calls as unknown as [string, RequestInit][]) {
       expect(call[0].startsWith("/")).toBe(true);
       expect(call[1].credentials).toBe("include");
     }
   });
+
+  it.each(["DISPATCHER", "PLATFORM_ADMIN"])(
+    "marks a driver who is also %s in the same organization, in memory only (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12)",
+    async (role) => {
+      const sameOrganization = [
+        { organization_id: organizationA, display_name: "A", role: "DRIVER", is_default: true },
+        { organization_id: organizationA, display_name: "A", role, is_default: false },
+      ];
+      expect(selectSessionInstallation(sameOrganization)).toMatchObject({
+        kind: "driver",
+        alsoDispatch: true,
+      });
+      const target = host();
+      const fetcher = vi.fn(async (input: RequestInfo | URL) =>
+        String(input) === "/auth/session"
+          ? jsonResponse(200, sessionBody())
+          : jsonResponse(200, sameOrganization),
+      );
+      await bootstrapBffSession(target, fetcher as unknown as typeof fetch);
+      expect(target.__paquetenviaDriverSession?.alsoDispatch).toBe(true);
+    },
+  );
 
   it("clears sessions for unauthorized identities and never lists organizations", async () => {
     const target = host();

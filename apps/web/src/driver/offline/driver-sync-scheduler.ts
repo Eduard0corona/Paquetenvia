@@ -19,6 +19,7 @@ import {
 import {
   compareDriverOperationDependency,
   driverDeliveryAwaitsCash,
+  driverOperationConfirmedByStop,
   orderDriverOperations,
 } from "./operation-projection";
 import {
@@ -241,6 +242,24 @@ export class DriverSyncScheduler {
           await this.expire(stale, pass.signal);
           continue;
         }
+        // UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: an action the server
+        // already accepted is only waiting for REST to show it. When REST
+        // cannot show its stop (for example a stop left out of the answer for
+        // breaking the contract) it would be polled forever, so past the same
+        // window it leaves the queue. Nothing is lost: the server has it.
+        const unconfirmed = operations.find(
+          (candidate) =>
+            candidate.status === "AWAITING_REST_CONFIRMATION" &&
+            isOfflineOperationExpired(candidate.clientOccurredAt, this.now()),
+        );
+        if (unconfirmed) {
+          await this.options.queue.deleteOperation(
+            this.options.partition,
+            unconfirmed.id,
+          );
+          this.telemetry.conflictRaised("rest-confirmation-expired");
+          continue;
+        }
         const operation = selectRunnableOperation(
           operations,
           this.now(),
@@ -317,11 +336,22 @@ export class DriverSyncScheduler {
         this.telemetry.syncDeferred("cod-required");
         return;
       }
-      // UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: cash is recorded only at
-      // the door. A collection whose stop REST shows outside DELIVERING (for
-      // example after a failed attempt) is held, never sent: the server would
-      // still accept it in FAILED_ATTEMPT, and a collection and a failed
-      // report are never both sent.
+      // UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: the cash rules need the
+      // stop. When REST answered without it (left out for breaking the
+      // contract), a collection or a report is not sent: it waits and is read
+      // again; it cannot outlive the OPS-003 window.
+      if (
+        (current.kind === "COD_COLLECTION" ||
+          current.kind === "FAILED_DELIVERY") &&
+        initial.stop === null
+      ) {
+        if (signal.aborted) return;
+        await this.deferForMissingStop(current);
+        return;
+      }
+      // Cash is recorded only at the door. A collection whose stop REST shows
+      // outside DELIVERING (for example after a failed attempt) is held, never
+      // sent: the server would still accept it in FAILED_ATTEMPT.
       if (
         current.kind === "COD_COLLECTION" &&
         initial.stop !== null &&
@@ -331,17 +361,13 @@ export class DriverSyncScheduler {
         await this.markAttentionAndBlock(current, "VERSION_CONFLICT");
         return;
       }
-      // Owner answer "No, llama a despacho (Recommended)": a failed-delivery
-      // report is never sent while its order has a collection saved on the
-      // phone or recorded on the server.
+      // A report goes only to the attempt it describes, and (owner answer "No,
+      // llama a despacho (Recommended)") never while its order has a
+      // collection saved on the phone or recorded on the server.
       if (
         current.kind === "FAILED_DELIVERY" &&
-        (await this.holdFailedReportForCash(
-          current,
-          initial.stop,
-          operations,
-          signal,
-        ))
+        initial.stop !== null &&
+        (await this.holdFailedReport(current, initial.stop, operations, signal))
       ) {
         return;
       }
@@ -377,19 +403,26 @@ export class DriverSyncScheduler {
         }
         if (current.kind === "FAILED_DELIVERY") {
           // UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: steps 4 and 5 of the
-          // AI-05 sequence. The cash is checked again right before each step
-          // that follows a request, so a collection recorded meanwhile (for
-          // example by dispatch) still holds the report.
+          // AI-05 sequence. The stop is read again right before each step that
+          // follows a request, so a collection recorded meanwhile (for example
+          // by dispatch) or an attempt dispatch already moved on still holds
+          // the report before its incident is opened.
           if (
             sentSinceCashCheck &&
-            (await this.recheckFailedReportForCash(current, signal))
+            (await this.recheckFailedReport(current, signal))
           ) {
             return;
           }
-          const report = current.failedDelivery;
+          let report = current.failedDelivery;
           if (report === null) throw new DriverSyncApiError("invalid-contract");
           if (report.incidentId === null) {
             failurePhase = "incident";
+            if (!report.incidentRequested) {
+              // From here on the incident may exist even if its answer is
+              // lost; a held report then says so instead of "not sent".
+              report = Object.freeze({ ...report, incidentRequested: true });
+              current = await this.persist(current, { failedDelivery: report });
+            }
             const incident = await this.options.api.openFailedDeliveryIncident(
               current,
               signal,
@@ -411,7 +444,7 @@ export class DriverSyncScheduler {
               }),
             });
             failurePhase = "transition";
-            if (await this.recheckFailedReportForCash(current, signal)) return;
+            if (await this.recheckFailedReport(current, signal)) return;
           }
         }
         const receipt = await this.options.api.transitionOrder(current, signal);
@@ -563,36 +596,83 @@ export class DriverSyncScheduler {
   }
 
   /**
-   * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 (owner answer "No, llama a
-   * despacho (Recommended)"): holds a failed-delivery report for the driver's
-   * attention, unsent, when REST reports its order's cash recorded or the
-   * queue holds a collection of the same order. Resolves whether it held it.
+   * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: holds a failed-delivery
+   * report for the driver's attention, unsent, and resolves whether it did.
+   *
+   * - Until its incident exists, a report goes only to the attempt it was made
+   *   at: REST must show the stop DELIVERING at exactly the version the report
+   *   was built on. Otherwise (dispatch registered the failed attempt itself,
+   *   or moved the order on, for example "Reintentar hoy") nothing is sent, no
+   *   photo is uploaded and no incident is opened (VERSION_CONFLICT). After
+   *   the incident exists the transition is replayed as it is: its stored
+   *   answer, if the server applied it, is what tells the phone.
+   * - Owner answer "No, llama a despacho (Recommended)": never while REST
+   *   reports the order's cash recorded or the queue holds a collection of the
+   *   same order (COD_COLLECTED).
    */
-  private async holdFailedReportForCash(
+  private async holdFailedReport(
     report: DriverOfflineOperation,
-    stop: DriverStop | null,
+    stop: DriverStop,
     operations: readonly DriverOfflineOperation[],
     signal: AbortSignal,
   ): Promise<boolean> {
-    if (driverFailedReportCashHold(report, stop, operations) === null) {
-      return false;
-    }
+    const atItsAttempt =
+      report.failedDelivery?.incidentId != null ||
+      (stop.status === "DELIVERING" &&
+        stop.aggregate_version === report.expectedVersion);
+    const held = !atItsAttempt
+      ? "VERSION_CONFLICT"
+      : driverFailedReportCashHold(report, stop, operations) !== null
+        ? "COD_COLLECTED"
+        : null;
+    if (held === null) return false;
     if (signal.aborted) return true;
-    await this.markAttentionAndBlock(report, "COD_COLLECTED");
+    await this.markAttentionAndBlock(report, held);
     return true;
   }
 
-  /** The same check with a fresh REST read and the queue as it is now. */
-  private async recheckFailedReportForCash(
+  /**
+   * The same checks with a fresh REST read and the queue as it is now. A stop
+   * REST no longer shows sends nothing; the report waits for the next read.
+   */
+  private async recheckFailedReport(
     report: DriverOfflineOperation,
     signal: AbortSignal,
   ): Promise<boolean> {
-    const { stop } = await this.confirmationByRest(report, signal);
+    const { outcome, stop } = await this.confirmationByRest(report, signal);
     if (signal.aborted) return true;
+    // REST already shows the failed attempt behind this phone's incident: the
+    // next look at the operation removes it, nothing more is sent.
+    if (outcome === "confirmed") return true;
+    if (stop === null) {
+      await this.deferForMissingStop(report);
+      return true;
+    }
     const operations = await this.options.queue.listOperations(
       this.options.partition,
     );
-    return this.holdFailedReportForCash(report, stop, operations, signal);
+    return this.holdFailedReport(report, stop, operations, signal);
+  }
+
+  /**
+   * A collection or a report whose stop REST did not show: it is read again
+   * after the backoff and is never sent meanwhile.
+   */
+  private async deferForMissingStop(
+    operation: DriverOfflineOperation,
+  ): Promise<void> {
+    const attemptCount = operation.attemptCount + 1;
+    const delay =
+      DriverSyncBackoffMilliseconds[
+        Math.min(attemptCount - 1, DriverSyncBackoffMilliseconds.length - 1)
+      ];
+    await this.persist(operation, {
+      status: "RETRY_WAIT",
+      attemptCount,
+      nextAttemptAt: new Date(this.now().getTime() + delay).toISOString(),
+      safeError: "RESOURCE_UNAVAILABLE",
+    });
+    this.telemetry.syncDeferred("stop-unavailable");
   }
 
   private async handleFailure(
@@ -734,10 +814,9 @@ export class DriverSyncScheduler {
     let held = false;
     for (const candidate of dependents) {
       if (signal.aborted) return;
-      if (
-        candidate.status !== "AWAITING_REST_CONFIRMATION" &&
-        isOfflineOperationExpired(candidate.clientOccurredAt, this.now())
-      ) {
+      // Accepted by the server: it only waits for REST (see run).
+      if (candidate.status === "AWAITING_REST_CONFIRMATION") continue;
+      if (isOfflineOperationExpired(candidate.clientOccurredAt, this.now())) {
         await this.options.queue.deleteOperation(
           this.options.partition,
           candidate.id,
@@ -777,7 +856,12 @@ export class DriverSyncScheduler {
           safeError,
           rejectionCode,
         });
-      } else if (found) {
+      } else if (
+        found &&
+        // An action the server already accepted only waits for REST; it is
+        // never turned back into one to send.
+        candidate.status !== "AWAITING_REST_CONFIRMATION"
+      ) {
         await this.persist(candidate, { status: "BLOCKED" });
       }
     }
@@ -804,24 +888,13 @@ export class DriverSyncScheduler {
         stop: null,
       };
     }
-    if (operation.kind === "COD_COLLECTION") {
-      // REST confirms a collection once the stop reports exactly its cash as
-      // recorded (the DELIVERED guard condition); the status never changes.
-      return {
-        outcome:
-          stop.cod?.recorded === true &&
-          stop.cod.expected.amount_cents === operation.cod?.amountCents
-            ? "confirmed"
-            : "pending",
-        stop,
-      };
-    }
+    // See driverOperationConfirmedByStop: a collection by its recorded cash,
+    // a failed-delivery report only by this phone's own incident or accepted
+    // transition, every other action by its target status and version.
     return {
-      outcome:
-        stop.status === operation.targetStatus &&
-        stop.aggregate_version >= operation.expectedVersion + 1
-          ? "confirmed"
-          : "pending",
+      outcome: driverOperationConfirmedByStop(operation, stop)
+        ? "confirmed"
+        : "pending",
       stop,
     };
   }

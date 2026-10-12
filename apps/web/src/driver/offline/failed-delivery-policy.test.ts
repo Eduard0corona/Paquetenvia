@@ -8,10 +8,16 @@ import {
 } from "../contracts/labels";
 import {
   driverCashGoneReportMessage,
+  driverDispatchReportedFailedAttemptMessage,
+  driverDispatchRoleReportMessage,
   driverFailedDeliveryAvailability,
+  driverFailedReportAttentionMessage,
   driverFailedReportCashHold,
-  driverFailedReportHoldMessage,
   driverFailedReportHoldState,
+  driverFailedReportIncident,
+  driverIncidentMaybeOpenReportMessage,
+  driverIncidentOpenReportMessage,
+  driverStaleReportMessage,
 } from "./failed-delivery-policy";
 import {
   cashStop,
@@ -108,6 +114,64 @@ describe("projection of a failed-delivery report", () => {
       ["FAILED_DELIVERY", "PENDING"],
       ["COD_COLLECTION", "NEEDS_ATTENTION"],
     ]);
+  });
+
+  it("treats an accepted report as settled once REST moved past it, whatever dispatch decided (MAJOR 3)", () => {
+    const accepted = failedDeliveryOperation({
+      proofId: "00000000-0000-4000-8000-000000000600",
+      status: "AWAITING_REST_CONFIRMATION",
+      failedDelivery: {
+        reasonCode: "RECIPIENT_ABSENT",
+        incidentIdempotencyKey: `drv2-${failedDeliveryOperation().id}-incident`,
+        incidentRequested: true,
+        incidentId: "00000000-0000-4000-8000-000000000700",
+      },
+    });
+    // "Reintentar hoy": DELIVERING again at version 10.
+    const projection = projectDriverOperations([deliveryStop({ aggregate_version: 10 })], [accepted]);
+    expect(projection.stops[0]).toMatchObject({
+      projectedStatus: "DELIVERING",
+      projectedVersion: 10,
+      pendingCount: 0,
+      attentionCount: 0,
+      failedReport: "none",
+    });
+    expect(projection.operations).toEqual([]);
+    expect(nextDriverOperationKind(projection.stops[0].projectedStatus)).toBe("DELIVERY_PROOF");
+    // Before REST moved past it, it is still shown as the status to sync.
+    const waiting = projectDriverOperations([deliveryStop()], [accepted]);
+    expect(waiting.stops[0]).toMatchObject({ projectedStatus: "FAILED_ATTEMPT", failedReport: "queued" });
+  });
+
+  it("shows a pending report as held, not confirmed, when dispatch registered the failed attempt itself (BLOCKER 1)", () => {
+    const report = failedDeliveryOperation();
+    const stop = deliveryStop({ status: "FAILED_ATTEMPT", aggregate_version: 9 });
+    const projection = projectDriverOperations([stop], [report]);
+    expect(projection.operations).toEqual([
+      expect.objectContaining({ id: report.id, status: "NEEDS_ATTENTION", safeError: "VERSION_CONFLICT" }),
+    ]);
+    expect(
+      driverFailedReportAttentionMessage(projection.operations[0], projection.stops[0], projection.operations),
+    ).toBe(driverDispatchReportedFailedAttemptMessage);
+  });
+
+  it("surfaces a blocked action with nothing held ahead of it, so it can always be discarded (MAJOR 5)", () => {
+    const delivery = {
+      ...failedDeliveryOperation(),
+      kind: "DELIVERY_PROOF" as const,
+      targetStatus: "DELIVERED" as const,
+      reason: "DRIVER_DELIVERY_CONFIRMED",
+      failedDelivery: null,
+      status: "BLOCKED" as const,
+    };
+    const projection = projectDriverOperations(
+      [deliveryStop({ status: "FAILED_ATTEMPT", aggregate_version: 9 })],
+      [delivery],
+    );
+    expect(projection.operations).toEqual([
+      expect.objectContaining({ id: delivery.id, status: "NEEDS_ATTENTION", safeError: "VERSION_CONFLICT" }),
+    ]);
+    expect(projection.stops[0].attentionCount).toBe(1);
   });
 
   it("no longer counts the cash of a stop whose delivery failed as pending", () => {
@@ -223,6 +287,23 @@ describe("when the stop offers \"No se pudo entregar\"", () => {
     const stop = { ...projection.stops[0], attentionCount: 1 };
     expect(driverFailedDeliveryAvailability(stop, [])).toEqual({ kind: "hidden" });
   });
+
+  it("tells a person who is also dispatch to register the attempt from Despacho (owner answer \"Registrar desde Despacho\")", () => {
+    const at = (stop: DriverStop, operations: readonly DriverOfflineOperation[] = []) => {
+      const projection = projectDriverOperations([stop], operations);
+      return driverFailedDeliveryAvailability(projection.stops[0], projection.operations, true);
+    };
+    expect(at(deliveryStop())).toEqual({ kind: "dispatch-role" });
+    expect(at(cashStop(false))).toEqual({ kind: "dispatch-role" });
+    expect(driverDispatchRoleReportMessage).toBe(
+      "También eres despacho en esta organización, así que el intento fallido no se reporta desde el teléfono: " +
+        "regístralo desde la orden en Despacho, donde eliges el motivo y el siguiente paso.",
+    );
+    // Everything that is not the offer itself reads the same as for a driver.
+    expect(at(cashStop(true))).toEqual({ kind: "cod-recorded" });
+    expect(at(deliveryStop(), [failedDeliveryOperation()])).toEqual({ kind: "queued" });
+    expect(at(deliveryStop({ stop_type: "PICKUP", status: "AT_PICKUP" }))).toEqual({ kind: "hidden" });
+  });
 });
 
 describe("the cash that holds a report", () => {
@@ -252,18 +333,19 @@ describe("the cash that holds a report", () => {
   });
 
   it("explains each case in Spanish without a phone number", () => {
+    const held = failedDeliveryOperation({ status: "NEEDS_ATTENTION", safeError: "COD_COLLECTED" });
     const stop = projectDriverOperations([cashStop(true)], []).stops[0];
     expect(driverFailedReportHoldState(stop, [])).toBe("recorded");
-    expect(driverFailedReportHoldMessage(stop, [])).toBe(driverCashRecordedReportMessage);
+    expect(driverFailedReportAttentionMessage(held, stop, [held])).toBe(driverCashRecordedReportMessage);
     expect(driverCashRecordedReportMessage).toBe(
       "El cobro de esta entrega ya está registrado, así que el reporte no se envió. " +
         "Llama a despacho: ellos deciden y coordinan la devolución del cobro.",
     );
     const saved = projectDriverOperations([cashStop(false)], []).stops[0];
-    expect(driverFailedReportHoldMessage(saved, [collectionOperation()])).toBe(
+    expect(driverFailedReportAttentionMessage(held, saved, [held, collectionOperation()])).toBe(
       driverCashSavedReportMessage,
     );
-    expect(driverFailedReportHoldMessage(saved, [])).toBe(driverCashGoneReportMessage);
+    expect(driverFailedReportAttentionMessage(held, saved, [held])).toBe(driverCashGoneReportMessage);
     for (const message of [
       driverCashRecordedReportMessage,
       driverCashSavedReportMessage,
@@ -276,9 +358,75 @@ describe("the cash that holds a report", () => {
   });
 });
 
+describe("a held report whose incident is or may be open (MINOR 8)", () => {
+  const requested = (incidentId: string | null, patch: Partial<DriverOfflineOperation> = {}) =>
+    failedDeliveryOperation({
+      proofId: "00000000-0000-4000-8000-000000000600",
+      status: "NEEDS_ATTENTION",
+      failedDelivery: {
+        reasonCode: "RECIPIENT_ABSENT",
+        incidentIdempotencyKey: `drv2-${failedDeliveryOperation().id}-incident`,
+        incidentRequested: true,
+        incidentId,
+      },
+      ...patch,
+    });
+  const open = requested("00000000-0000-4000-8000-000000000700");
+  const maybe = requested(null);
+
+  it("tells whether the incident exists", () => {
+    expect(driverFailedReportIncident(failedDeliveryOperation())).toBe("none");
+    expect(driverFailedReportIncident(open)).toBe("open");
+    expect(driverFailedReportIncident(maybe)).toBe("maybe");
+    // A rule code of openIncident means the server refused it: nothing was opened.
+    expect(driverFailedReportIncident({ ...maybe, rejectionCode: "INVALID_REQUEST" })).toBe("none");
+    expect(driverFailedReportIncident(collectionOperation())).toBe("none");
+  });
+
+  it("never says \"not sent\" nor invites reporting it again", () => {
+    const stop = projectDriverOperations([deliveryStop({ aggregate_version: 10 })], []).stops[0];
+    const cases = [
+      driverFailedReportAttentionMessage(
+        { ...open, safeError: "VERSION_CONFLICT", rejectionCode: "DISPATCH_DECISION_REQUIRED" },
+        stop,
+        [],
+      ),
+      driverFailedReportAttentionMessage({ ...open, safeError: "VERSION_CONFLICT" }, stop, []),
+      driverFailedReportAttentionMessage({ ...maybe, safeError: "VERSION_CONFLICT" }, stop, []),
+      driverFailedReportAttentionMessage(
+        { ...open, safeError: "COD_COLLECTED" },
+        projectDriverOperations([cashStop(true)], []).stops[0],
+        [],
+      ),
+      driverFailedReportAttentionMessage(
+        { ...maybe, safeError: "COD_COLLECTED" },
+        projectDriverOperations([cashStop(false)], []).stops[0],
+        [collectionOperation()],
+      ),
+    ];
+    expect(cases[0]).toBe(driverIncidentOpenReportMessage);
+    expect(cases[1]).toBe(driverIncidentOpenReportMessage);
+    expect(cases[2]).toBe(driverIncidentMaybeOpenReportMessage);
+    expect(cases[3]).toContain("Llama a despacho");
+    expect(cases[4]).toContain("descártalo y el reporte terminará de enviarse");
+    for (const message of cases) {
+      expect(message).toMatch(/abierto como incidencia/);
+      expect(message).not.toContain("el reporte no se envió");
+      expect(message).not.toMatch(/vuelve a reportar|vuelve a registrar/i);
+    }
+  });
+
+  it("says a report built on an attempt that moved on was not sent, and asks for a new photo", () => {
+    const stale = failedDeliveryOperation({ status: "NEEDS_ATTENTION", safeError: "VERSION_CONFLICT" });
+    const moved = projectDriverOperations([deliveryStop({ aggregate_version: 10 })], []).stops[0];
+    expect(driverFailedReportAttentionMessage(stale, moved, [])).toBe(driverStaleReportMessage);
+    expect(driverStaleReportMessage).toContain("foto nueva");
+  });
+});
+
 describe("refused reports in Spanish", () => {
   it.each([
-    ["INVALID_REQUEST", "El servidor no aceptó los datos del reporte"],
+    ["INVALID_REQUEST", "registra el intento desde la orden en Despacho"],
     ["IDEMPOTENCY_CONFLICT", "ya se había enviado con otros datos"],
     ["ORDER_STATE_NOT_ALLOWED", "La orden ya no está en entrega"],
     ["EVIDENCE_NOT_AVAILABLE", "La foto del reporte no quedó disponible"],

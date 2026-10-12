@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  DriverDatabaseBlockedError,
   DriverDatabaseVersion,
   DriverOfflineOperationsStoreName,
   DriverProofBlobsStoreName,
@@ -134,7 +135,9 @@ describe("offline queue with a failed-delivery report", () => {
   it("drops the photo with the progress once the proof exists, and moves it on a rebuild", async () => {
     const { operation, proof } = await report(uuid(0x101), photo(3));
     await queue.enqueue(partition, operation, proof);
-    const rebuilt = { ...(await report(uuid(0x102), photo(3))).operation, failedDelivery: operation.failedDelivery };
+    // The queue moves the photo of any rebuilt action (a report itself is never
+    // rebuilt by the app, and a record naming another report's incident key is refused).
+    const rebuilt = (await report(uuid(0x102), photo(3))).operation;
 
     await queue.rebuildOperation(partition, operation.id, rebuilt);
 
@@ -231,5 +234,34 @@ describe("IndexedDB version 4", () => {
       open.onerror = () => resolve(open.error);
     });
     expect(error?.name).toBe("VersionError");
+  });
+
+  it("when another tab blocks the upgrade, fails with its own error and closes the connection that opens later", async () => {
+    await new Promise<void>((resolve, reject) => {
+      const open = idb.open(DriverStopsDatabaseName, 3);
+      open.onupgradeneeded = () => undefined;
+      open.onsuccess = () => {
+        open.result!.close();
+        resolve();
+      };
+      open.onerror = () => reject(open.error);
+    });
+    const letGo = idb.holdOpenElsewhere();
+
+    await expect(openDriverDatabase()).rejects.toBeInstanceOf(DriverDatabaseBlockedError);
+    expect(idb.version(DriverStopsDatabaseName)).toBe(3);
+
+    letGo();
+    // The browser finishes the upgrade once the other tab lets go; nobody
+    // waits for that connection any more, so it is closed at once.
+    await vi.waitFor(() => expect(idb.version(DriverStopsDatabaseName)).toBe(4));
+    await vi.waitFor(() => expect(idb.connections.at(-1)?.closed).toBe(true));
+  });
+
+  it("closes its own connection when a newer version asks for the database", async () => {
+    const database = await openDriverDatabase();
+    expect(typeof database.onversionchange).toBe("function");
+    database.onversionchange?.call(database, new Event("versionchange") as IDBVersionChangeEvent);
+    expect((database as unknown as { closed: boolean }).closed).toBe(true);
   });
 });

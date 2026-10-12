@@ -18,11 +18,13 @@ import {
   type DriverFailedDeliveryReason,
 } from "../contracts/failed-delivery";
 import {
+  driverDispatchRoleReportMessage,
   driverFailedDeliveryAvailability,
   type DriverFailedDeliveryAvailability,
 } from "../offline/failed-delivery-policy";
 import type { DriverOfflineOperation } from "../offline/operation-contract";
 import type { ProjectedDriverStop } from "../offline/operation-projection";
+import type { DriverFailedDeliveryEnqueueResult } from "../state/driver-operations-controller";
 import {
   DriverProofPreview,
   driverProofPreviewProblemMessage,
@@ -58,6 +60,7 @@ export const failedDeliveryCopy = Object.freeze({
   codRecorded:
     "El cobro ya está registrado. Si no puedes entregar, llama a despacho: ellos deciden y coordinan la devolución del cobro.",
   discardCollection: "Descartar cobro guardado",
+  dispatchRole: driverDispatchRoleReportMessage,
 });
 
 /**
@@ -90,6 +93,7 @@ export function chosenFailedDeliveryReason(
 export function DriverFailedDelivery({
   stop,
   operations,
+  alsoDispatch,
   disabled,
   onReport,
   onDiscardCollection,
@@ -97,14 +101,20 @@ export function DriverFailedDelivery({
   stop: ProjectedDriverStop;
   /** The projected operations of the stop's order. */
   operations: readonly DriverOfflineOperation[];
+  /** The person also holds DISPATCHER or PLATFORM_ADMIN here (DriverSession.alsoDispatch). */
+  alsoDispatch: boolean;
   disabled: boolean;
   onReport: (
     reason: DriverFailedDeliveryReason,
     photo: Blob,
-  ) => Promise<boolean>;
+  ) => Promise<DriverFailedDeliveryEnqueueResult>;
   onDiscardCollection: (operationId: string) => void;
 }>) {
-  const availability = driverFailedDeliveryAvailability(stop, operations);
+  const availability = driverFailedDeliveryAvailability(
+    stop,
+    operations,
+    alsoDispatch,
+  );
   return (
     <FailedDeliverySection
       availability={availability}
@@ -130,7 +140,7 @@ export function FailedDeliverySection({
   onReport: (
     reason: DriverFailedDeliveryReason,
     photo: Blob,
-  ) => Promise<boolean>;
+  ) => Promise<DriverFailedDeliveryEnqueueResult>;
   onDiscardCollection: (operationId: string) => void;
 }>) {
   switch (availability.kind) {
@@ -169,6 +179,13 @@ export function FailedDeliverySection({
       return (
         <section className={styles.failedDelivery} aria-label={failedDeliveryCopy.open}>
           <p className={styles.failedDeliveryNote}>{failedDeliveryCopy.codRecorded}</p>
+        </section>
+      );
+    case "dispatch-role":
+      // Owner answer "Registrar desde Despacho (Recommended)" (2026-10-12).
+      return (
+        <section className={styles.failedDelivery} aria-label={failedDeliveryCopy.open}>
+          <p className={styles.failedDeliveryNote}>{failedDeliveryCopy.dispatchRole}</p>
         </section>
       );
     case "offered":
@@ -235,7 +252,7 @@ function FailedDeliveryReport({
   onReport: (
     reason: DriverFailedDeliveryReason,
     photo: Blob,
-  ) => Promise<boolean>;
+  ) => Promise<DriverFailedDeliveryEnqueueResult>;
 }>) {
   const [open, setOpen] = useState(false);
   const [primary, setPrimary] = useState<FailedDeliveryPrimaryChoice>(null);
@@ -267,15 +284,17 @@ function FailedDeliveryReport({
     if (reason === null || photo === null || sending) return;
     setSending(true);
     setProblem(null);
-    let stored = false;
+    let result: DriverFailedDeliveryEnqueueResult;
     try {
-      stored = await onReport(reason, photo);
+      result = await onReport(reason, photo);
     } catch {
-      stored = false;
+      result = { stored: false, message: failedDeliveryCopy.notSaved };
     }
     setSending(false);
-    if (stored) reset();
-    else setProblem(failedDeliveryCopy.notSaved);
+    // A refusal says why (for example the cash is already recorded); "try
+    // again" only when saving itself failed.
+    if (result.stored) reset();
+    else setProblem(result.message);
   };
 
   if (!open) {

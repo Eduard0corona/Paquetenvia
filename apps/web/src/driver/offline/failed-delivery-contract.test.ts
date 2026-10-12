@@ -59,6 +59,7 @@ describe("failed-delivery operation contract", () => {
       failedDelivery: {
         reasonCode: "PACKAGE_DAMAGED",
         incidentIdempotencyKey: `drv2-${reportId}-incident`,
+        incidentRequested: false,
         incidentId: null,
       },
     });
@@ -77,6 +78,7 @@ describe("failed-delivery operation contract", () => {
         failedDelivery: {
           reasonCode: "RECIPIENT_ABSENT",
           incidentIdempotencyKey: `drv2-${reportId}-incident`,
+          incidentRequested: true,
           incidentId: uuid(0x701),
         },
       }),
@@ -102,10 +104,22 @@ describe("failed-delivery operation contract", () => {
       { uploadSessionId: uuid(0x501), uploadSessionExpiresAt: "2026-10-12T19:30:00.000Z", uploadAccepted: true },
       { uploadSessionId: uuid(0x501), uploadAccepted: true, proofId: uuid(0x601) },
       {
+        // openIncident went out; its answer may have been lost.
         proofId: uuid(0x601),
         failedDelivery: {
           reasonCode: "RECIPIENT_ABSENT",
           incidentIdempotencyKey: `drv2-${reportId}-incident`,
+          incidentRequested: true,
+          incidentId: null,
+        },
+        status: "RETRY_WAIT",
+      },
+      {
+        proofId: uuid(0x601),
+        failedDelivery: {
+          reasonCode: "RECIPIENT_ABSENT",
+          incidentIdempotencyKey: `drv2-${reportId}-incident`,
+          incidentRequested: true,
           incidentId: uuid(0x701),
         },
         status: "AWAITING_REST_CONFIRMATION",
@@ -168,8 +182,13 @@ describe("failed-delivery operation contract", () => {
     ["a severity in the report", (value) => ({ ...value, failedDelivery: { ...(value.failedDelivery as object), severity: "HIGH" } })],
     ["a malformed incident key", (value) => ({ ...value, failedDelivery: { ...(value.failedDelivery as object), incidentIdempotencyKey: "drv2-x-incident" } })],
     ["an upper-case incident key", (value) => ({ ...value, failedDelivery: { ...(value.failedDelivery as object), incidentIdempotencyKey: `drv2-${reportId.toUpperCase()}-incident` } })],
-    ["a non-canonical incident id", (value) => ({ ...value, proofId: uuid(0x601), failedDelivery: { ...(value.failedDelivery as object), incidentId: "not-a-uuid" } })],
-    ["an incident without the finalized photo", (value) => ({ ...value, failedDelivery: { ...(value.failedDelivery as object), incidentId: uuid(0x701) } })],
+    ["the incident key of another operation", (value) => ({ ...value, failedDelivery: { ...(value.failedDelivery as object), incidentIdempotencyKey: `drv2-${uuid(0x999)}-incident` } })],
+    ["a non-canonical incident id", (value) => ({ ...value, proofId: uuid(0x601), failedDelivery: { ...(value.failedDelivery as object), incidentRequested: true, incidentId: "not-a-uuid" } })],
+    ["an incident without the finalized photo", (value) => ({ ...value, failedDelivery: { ...(value.failedDelivery as object), incidentRequested: true, incidentId: uuid(0x701) } })],
+    ["an incident requested without the finalized photo", (value) => ({ ...value, failedDelivery: { ...(value.failedDelivery as object), incidentRequested: true } })],
+    ["an incident id that was never requested", (value) => ({ ...value, proofId: uuid(0x601), failedDelivery: { ...(value.failedDelivery as object), incidentId: uuid(0x701) } })],
+    ["a non-boolean incident request", (value) => ({ ...value, proofId: uuid(0x601), failedDelivery: { ...(value.failedDelivery as object), incidentRequested: "yes" } })],
+    ["a missing incident request", (value) => { const report = { ...(value.failedDelivery as Record<string, unknown>) }; delete report.incidentRequested; return { ...value, failedDelivery: report }; }],
     ["no report member", (value) => ({ ...value, failedDelivery: null })],
     ["a missing report member", (value) => { const copy = { ...value }; delete copy.failedDelivery; return copy; }],
     ["no photo", (value) => ({ ...value, proofType: null, contentType: null, sizeBytes: null, sha256: null, capturedAt: null, sessionIdempotencyKey: null, finalizeIdempotencyKey: null })],
@@ -202,8 +221,8 @@ describe("failed-delivery operation contract", () => {
     }
   });
 
-  it("accepts the incident key of the report a rebuilt operation replaced", () => {
-    const rebuilt = {
+  it("never accepts the incident key of another report: a report is never rebuilt", () => {
+    const other = {
       ...createDriverOfflineOperation({
         partitionKey: partition.key,
         orderId,
@@ -216,12 +235,11 @@ describe("failed-delivery operation contract", () => {
       failedDelivery: {
         reasonCode: "RECIPIENT_ABSENT" as const,
         incidentIdempotencyKey: `drv2-${reportId}-incident`,
+        incidentRequested: false,
         incidentId: null,
       },
     };
-    expect(parseDriverOfflineOperation(rebuilt, partition.key).failedDelivery).toEqual(
-      rebuilt.failedDelivery,
-    );
+    expect(() => parseDriverOfflineOperation(other, partition.key)).toThrow();
   });
 
   it("is never produced by the migration: older records get no report", () => {

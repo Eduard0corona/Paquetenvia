@@ -12,7 +12,12 @@
   "Solo si hay cobro (Recommended)" (""No pagó el cobro" aparece solo cuando la parada tiene un cobro COD; en las demás
   se ven los otros motivos y "Otro…".") y "No, llama a despacho (Recommended)" ("Con un cobro guardado en el teléfono o
   ya registrado, "No se pudo entregar" no aparece. Si fue un error, descarta el cobro guardado; si ya se registró, la
-  app le pide llamar a despacho, que decide y coordina la devolución del dinero.").
+  app le pide llamar a despacho, que decide y coordina la devolución del dinero."); y, tras la revisión del PR,
+  "Registrar desde Despacho (Recommended)" ("La app no le ofrece "No se pudo entregar" y le explica que registre el
+  intento desde la orden en Despacho, donde elige motivo y siguiente paso. Sin cambiar el servidor.") y "Después, con
+  ADR (Recommended)" ("Lo registro como riesgo y pendiente (un tipo de foto propio para intento fallido, o que la
+  entrega cite su foto). En el uso normal de la app la entrega siempre sube su propia foto, así que no bloquea el
+  piloto.").
 - AI-07 `/driver/stops/:id` agrega la decisión y `screen_contracts.driver_stop.failed_delivery`: en una parada de
   entrega en DELIVERING (confirmado o por sincronizar), "No se pudo entregar" abre "¿Qué pasó?" (renglones de 44 px;
   "No pagó el cobro" solo si `DriverStop.cod` no es null; "Otro…" muestra "Acceso restringido", "Paquete dañado" y
@@ -28,11 +33,28 @@
   conexión."); confirmado se ve "Intento fallido · El despacho decide".
 - Cobro: con un cobro guardado en el teléfono el reporte no aparece y la parada pide descartarlo primero (con la
   confirmación de siempre); con el cobro registrado pide llamar a despacho, sin mostrar teléfono. La sincronización
-  retiene el reporte si aparece un cobro de la orden (antes de la incidencia y antes de la transición) y nunca registra
-  un cobro fuera de la puerta: nunca se mandan los dos. Solo en la PWA: el servidor sigue aceptando el reporte del
-  despacho con cobro, a propósito, porque despacho decide.
+  retiene el reporte si aparece un cobro de la orden (antes de la sesión de carga, antes de la incidencia y antes de la
+  transición) y nunca registra un cobro fuera de la puerta: la incidencia nunca se pide con un cobro guardado o
+  registrado; si el cobro se registra después de abrirla, la transición no se manda y la incidencia queda para
+  despacho. Solo en la PWA: el servidor sigue aceptando el reporte del despacho con cobro, a propósito, porque despacho
+  decide.
+- Revisión del PR: antes de su incidencia, un reporte solo se manda si REST muestra la parada en DELIVERING en la
+  versión exacta en que se hizo (antes de la sesión y antes de la incidencia); un intento fallido que registró despacho
+  nunca lo confirma ("Despacho ya registró el intento fallido de esta entrega, así que tu reporte no se envió.
+  Descártalo."); REST confirma un reporte solo por su transición aceptada (cualquier versión posterior) o por su propia
+  incidencia; sin la parada en la respuesta de REST no se manda ni reporte ni cobro, y lo aceptado que REST nunca
+  muestra sale a las 72 horas; un reporte nunca se rehace para otra versión; lo que queda de una parada que despacho
+  movió siempre se puede descartar; un reporte con incidencia abierta (o posiblemente abierta) lo dice y nunca invita a
+  reportarlo de nuevo, también al vencer; "Enviar reporte" muestra el motivo real de un rechazo; quien también es
+  despacho ve el aviso de registrar desde Despacho y el 409 `INVALID_REQUEST` de la incidencia ya no habla del reloj;
+  una actualización de la base que bloquea otra pestaña pide cerrarla y cierra la conexión tardía.
+- Riesgos residuales: la "Foto del lugar" que queda sin incidencia podría contar para DELIVERED (pendiente de servidor
+  con ADR); `DriverStop.cod.recorded` es falso con un cobro DISPUTED o REVERSED; un cobro registrado entre la última
+  revisión y una petición no se puede impedir desde el teléfono.
 - Sin cambios en AI-04, AI-05, AI-06, AI-18, servidor, roles, permisos ni migraciones, y sin un flujo atómico nuevo.
-  Un rollback debe conservar la versión 4 o superior de IndexedDB.
+  Rollback: no es un revert simple (la app anterior abre IndexedDB 3 y el teléfono actualizado la rechaza); es una
+  versión que deja de ofrecer "No se pudo entregar" con IndexedDB 4, o una con IndexedDB 5 que reescribe la cola al
+  esquema 2 y descarta los reportes en cola (ver la nota de desarrollo).
 
 ## Rutas: errores por motivo con "Verificar identidad", fechas legibles, todas las páginas, "Agregar entrega" por guía y detalle sin IDs (UI-PHASE3-ROUTES-NO-IDS-2026-10-12) — 2026-10-12
 

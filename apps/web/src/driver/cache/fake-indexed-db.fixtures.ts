@@ -318,12 +318,37 @@ class FakeDatabase {
 /** One fake browser profile: its databases survive "reloads" (new opens). */
 export class FakeIndexedDb {
   private readonly databases = new Map<string, DatabaseState>();
+  private heldElsewhere = 0;
+  private waitingUpgrades: (() => void)[] = [];
   public opens = 0;
+  /** Every connection handed to an onsuccess, in order. */
+  public readonly connections: FakeDatabase[] = [];
+
+  /**
+   * Simulates another tab that keeps the database open and ignores
+   * versionchange: an open that needs an upgrade fires `blocked` and waits.
+   * The returned function lets go; the waiting upgrades then run.
+   */
+  public holdOpenElsewhere(): () => void {
+    this.heldElsewhere += 1;
+    return () => {
+      this.heldElsewhere -= 1;
+      if (this.heldElsewhere > 0) return;
+      const waiting = this.waitingUpgrades;
+      this.waitingUpgrades = [];
+      for (const proceed of waiting) setTimeout(proceed, 0);
+    };
+  }
 
   public open(name: string, version?: number): FakeRequest<FakeDatabase> {
     const request = new FakeRequest<FakeDatabase>();
     this.opens += 1;
-    setTimeout(() => {
+    const succeed = (database: FakeDatabase) => {
+      this.connections.push(database);
+      request.result = database;
+      request.onsuccess?.({ target: request });
+    };
+    const attempt = () => {
       let state = this.databases.get(name);
       const oldVersion = state?.version ?? 0;
       const target = version ?? (oldVersion || 1);
@@ -338,8 +363,12 @@ export class FakeIndexedDb {
       }
       const database = new FakeDatabase(state);
       if (target === oldVersion) {
-        request.result = database;
-        request.onsuccess?.({ target: request });
+        succeed(database);
+        return;
+      }
+      if (this.heldElsewhere > 0) {
+        request.onblocked?.();
+        this.waitingUpgrades.push(attempt);
         return;
       }
       const upgradeState = state;
@@ -349,8 +378,7 @@ export class FakeIndexedDb {
       const upgrade = new FakeTransaction(upgradeState, [], true, (committed) => {
         if (committed) {
           request.transaction = null;
-          request.result = database;
-          request.onsuccess?.({ target: request });
+          succeed(database);
           return;
         }
         upgradeState.version = oldVersion;
@@ -365,7 +393,8 @@ export class FakeIndexedDb {
       request.transaction = upgrade;
       request.onupgradeneeded?.({ oldVersion });
       upgrade.maybeCommit();
-    }, 0);
+    };
+    setTimeout(attempt, 0);
     return request;
   }
 

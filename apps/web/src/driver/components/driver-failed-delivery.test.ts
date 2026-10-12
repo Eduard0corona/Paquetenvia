@@ -32,7 +32,7 @@ function section(availability: DriverFailedDeliveryAvailability): string {
       availability,
       orderId,
       disabled: false,
-      onReport: () => Promise.resolve(true),
+      onReport: () => Promise.resolve({ stored: true as const }),
       onDiscardCollection: noop,
     }),
   );
@@ -127,6 +127,18 @@ describe("\"No se pudo entregar\" on the stop", () => {
     expect(html).not.toContain("tel:");
     expect(html).not.toMatch(/\d{7,}/);
   });
+
+  it("tells a person who is also dispatch to register the attempt from the order in Despacho, with no form", () => {
+    const html = section({ kind: "dispatch-role" });
+    expect(text(html)).toBe(
+      "También eres despacho en esta organización, así que el intento fallido no se reporta desde el teléfono: " +
+        "regístralo desde la orden en Despacho, donde eliges el motivo y el siguiente paso.",
+    );
+    expect(html).not.toContain("<button");
+    expect(html).not.toContain("<input");
+    // The flag comes from the session, kept in memory only.
+    expect(experience).toContain("alsoDispatch={session.alsoDispatch === true}");
+  });
 });
 
 describe("¿Qué pasó?", () => {
@@ -214,6 +226,17 @@ describe("Foto del lugar (obligatoria)", () => {
     expect(send).toContain("await onReport(reason, photo)");
     expect(send).not.toContain("confirm(");
   });
+
+  it("shows why a report was refused instead of \"Vuelve a intentarlo\" (MINOR 9)", () => {
+    const send = component.slice(component.indexOf("const send = async () => {"), component.indexOf("if (!open) {"));
+    expect(send).toContain("else setProblem(result.message);");
+    // "Vuelve a intentarlo" only when the call itself failed.
+    expect(send).toContain("result = { stored: false, message: failedDeliveryCopy.notSaved };");
+    const refused = "El cobro ya está registrado. Llama a despacho: ellos deciden y coordinan la devolución del cobro.";
+    const html = form({ primary: "RECIPIENT_ABSENT", photoChosen: true, problem: refused });
+    expect(text(html)).toContain(refused);
+    expect(text(html)).not.toContain("Vuelve a intentarlo");
+  });
 });
 
 describe("44 px targets", () => {
@@ -261,9 +284,22 @@ describe("AI-07 record", () => {
       '"No, llama a despacho (Recommended)"',
       "no phone number is shown",
       "a report made by dispatch is not blocked",
+      // Review of the PR: the attempt it describes, REST confirmation, the
+      // owner answers "Registrar desde Despacho" and "Después, con ADR".
+      "until its incident exists, a report is sent only while REST shows its stop DELIVERING at exactly the version it was built on",
+      "A failed attempt dispatch registered on its own never confirms a report that was not sent",
+      "a report is never rebuilt for another version",
+      '"Registrar desde Despacho (Recommended)"',
+      "DISPATCHER or PLATFORM_ADMIN",
+      "409 INVALID_REQUEST of openIncident points to registering the attempt in Despacho",
+      'never says "not sent" nor invites reporting it again',
+      "the report and the cash can then both exist on the server",
+      '"Después, con ADR (Recommended)"',
+      "a pending server follow-up",
     ]) {
       expect(plain, expected).toContain(expected);
     }
+    expect(plain).not.toContain("the report and the cash are never both sent");
     const cash = screen.slice(screen.indexOf("    cod_collection:\n"), screen.indexOf("    failed_delivery:\n"));
     expect(cash.replace(/\s+/g, " ")).toContain(
       '"No pagó el cobro" is a reason of "No se pudo entregar" (failed_delivery,',
@@ -277,13 +313,23 @@ describe("stop wiring", () => {
   it("puts the report last on the delivery screen and sends DriverStop.cod with it", () => {
     const action = experience.indexOf("<StopAction");
     const call = experience.indexOf("<RecipientCall");
-    const failed = experience.indexOf("<DriverFailedDelivery");
+    const failed = experience.indexOf("<DriverFailedDelivery\n");
     const conflict = experience.indexOf("<ConflictResolution\n          stop={stop}");
     expect(failed).toBeGreaterThan(call);
     expect(failed).toBeGreaterThan(action);
     expect(conflict).toBeGreaterThan(failed);
     expect(experience).toContain("operationsControllerRef.current.enqueueFailedDelivery(");
     expect(experience).toContain("cod: stop.cod,");
+  });
+
+  it("never offers a rebuild for a report, retries it only where it still applies, and explains it (MAJOR 3 and 4)", () => {
+    const conflict = experience.slice(experience.indexOf("function ConflictResolution("));
+    expect(conflict).toContain("driverOperationDefinitions[attention.kind].transition && !report;");
+    expect(conflict).toMatch(
+      /cashHold !== "recorded" &&\s*confirmedOperationalStatus !== null &&\s*driverOperationApplies\(/,
+    );
+    expect(conflict).toContain("driverFailedReportAttentionMessage(attention, stop, operations)");
+    expect(conflict).toContain("{offerRebuild ? (");
   });
 
   it("shows the confirmed status as the server has it", () => {

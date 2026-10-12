@@ -68,6 +68,19 @@ export class DriverStopsCacheError extends Error {
   }
 }
 
+/**
+ * The upgrade to {@link DriverDatabaseVersion} waits for another tab that
+ * still holds the database open (typically one of an older version). The
+ * request fails now; the screen asks the driver to close the other
+ * Paquetenvia tabs and reload.
+ */
+export class DriverDatabaseBlockedError extends DriverStopsCacheError {
+  public constructor() {
+    super();
+    this.name = "DriverDatabaseBlockedError";
+  }
+}
+
 export async function createDriverCachePartition(
   session: DriverSession,
 ): Promise<DriverCachePartition> {
@@ -207,20 +220,43 @@ export async function forgetDriverStopDetails(): Promise<void> {
   }
 }
 
+/**
+ * Opens the database at {@link DriverDatabaseVersion}. Every connection closes
+ * itself when a newer version asks for the database, so this tab never blocks
+ * a later upgrade. When the upgrade is blocked by another tab the request
+ * fails with DriverDatabaseBlockedError; the browser may still open the
+ * database later, once that tab lets go, and that late connection is closed
+ * at once instead of being left open by a request nobody waits for.
+ */
 export function openDriverDatabase(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
+    let settled = false;
+    const fail = (error: DriverStopsCacheError) => {
+      if (settled) return;
+      settled = true;
+      reject(error);
+    };
     const open = indexedDB.open(DriverStopsDatabaseName, DriverDatabaseVersion);
     open.onupgradeneeded = (event) => {
       const transaction = open.transaction;
       if (!transaction) {
-        reject(new DriverStopsCacheError());
+        fail(new DriverStopsCacheError());
         return;
       }
       upgradeDriverDatabase(open.result, transaction, event.oldVersion);
     };
-    open.onsuccess = () => resolve(open.result);
-    open.onerror = () => reject(new DriverStopsCacheError());
-    open.onblocked = () => reject(new DriverStopsCacheError());
+    open.onsuccess = () => {
+      const database = open.result;
+      if (settled) {
+        database.close();
+        return;
+      }
+      settled = true;
+      database.onversionchange = () => database.close();
+      resolve(database);
+    };
+    open.onerror = () => fail(new DriverStopsCacheError());
+    open.onblocked = () => fail(new DriverDatabaseBlockedError());
   });
 }
 

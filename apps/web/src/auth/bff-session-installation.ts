@@ -10,11 +10,22 @@ import type { SessionAccount } from "./session-account";
 
 export type BffSessionInstallation =
   | {
-      readonly kind: "operations" | "driver";
+      readonly kind: "operations";
       readonly organizationId: string;
       readonly displayName: string;
       /** Where "Continuar" sends the person after login; see {@link landingPathForRole}. */
       readonly landingPath: string;
+    }
+  | {
+      readonly kind: "driver";
+      readonly organizationId: string;
+      readonly displayName: string;
+      readonly landingPath: string;
+      /**
+       * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: the same person also holds
+       * DISPATCHER or PLATFORM_ADMIN in this organization (see DriverSession).
+       */
+      readonly alsoDispatch: boolean;
     }
   | { readonly kind: "none" };
 
@@ -54,11 +65,20 @@ export function selectSessionInstallation(
   if (selected === undefined) {
     return { kind: "none" };
   }
-  return {
-    kind: selected.role === "DRIVER" ? "driver" : "operations",
+  const base = {
     organizationId: selected.organization_id,
     displayName: selected.display_name,
     landingPath: landingPathForRole(selected.role),
+  };
+  if (selected.role !== "DRIVER") return { kind: "operations", ...base };
+  return {
+    kind: "driver",
+    ...base,
+    alsoDispatch: contexts.some(
+      (context) =>
+        context.organization_id === selected.organization_id &&
+        (context.role === "DISPATCHER" || context.role === "PLATFORM_ADMIN"),
+    ),
   };
 }
 
@@ -94,6 +114,7 @@ export function installBffSession(
       organizationId: installation.organizationId,
       cacheNamespace: sessionNamespace,
       ...credentials,
+      ...(installation.alsoDispatch ? { alsoDispatch: true } : {}),
     };
     host.dispatchEvent(new Event(driverSessionChangedEvent));
     return;

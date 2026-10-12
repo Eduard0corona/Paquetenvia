@@ -112,9 +112,17 @@ const codMessages: Readonly<Record<DriverCodRejectionCode, string>> = {
     "El estado de la orden ya no permite registrar el cobro. Revisa la parada.",
 };
 
+/**
+ * openIncident refused the report with a rule code: the incident was not
+ * opened. INVALID_REQUEST is what the server answers to the phone's short
+ * report from a person it treats as dispatch (also DISPATCHER or
+ * PLATFORM_ADMIN in the organization, owner answer "Registrar desde Despacho
+ * (Recommended)"); its message never blames the phone's clock.
+ */
 const incidentMessages: Readonly<Record<DriverIncidentRejectionCode, string>> = {
   INVALID_REQUEST:
-    "El servidor no aceptó los datos del reporte. Revisa la fecha y hora del teléfono, descarta esta acción y vuelve a reportar.",
+    "El servidor no aceptó este reporte desde el teléfono. Si también eres despacho en esta organización, " +
+    "registra el intento desde la orden en Despacho; si no, avisa a despacho. Después descarta esta acción.",
   IDEMPOTENCY_CONFLICT:
     "Este reporte ya se había enviado con otros datos. Descarta esta acción y avisa a despacho.",
   ORDER_STATE_NOT_ALLOWED:
@@ -129,11 +137,12 @@ const incidentMessages: Readonly<Record<DriverIncidentRejectionCode, string>> = 
 
 /**
  * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 (owner answer "No, llama a
- * despacho"): why a failed-delivery report was held instead of sent. With the
- * cash recorded on the server the driver calls dispatch, who decides and
- * coordinates returning the cash; with a collection still saved on the phone
- * the driver discards it first if it was a mistake. The app has no dispatch
- * phone number, so none is shown.
+ * despacho"): why a failed-delivery report was held before its incident was
+ * requested. With the cash recorded on the server the driver calls dispatch,
+ * who decides and coordinates returning the cash; with a collection still
+ * saved on the phone the driver discards it first if it was a mistake. The app
+ * has no dispatch phone number, so none is shown. A report whose incident is
+ * (or may be) open uses driverFailedReportAttentionMessage instead.
  */
 export const driverCashRecordedReportMessage =
   "El cobro de esta entrega ya está registrado, así que el reporte no se envió. " +

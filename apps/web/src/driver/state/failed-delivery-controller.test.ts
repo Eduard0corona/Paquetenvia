@@ -1,5 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
-import { createDriverCachePartition } from "../cache/driver-stops-cache";
+import {
+  createDriverCachePartition,
+  DriverDatabaseBlockedError,
+} from "../cache/driver-stops-cache";
 import { stopList } from "../contracts/driver-stop.fixtures";
 import type { DriverStopCod } from "../contracts/driver-stop";
 import type { DriverFailedDeliveryReason } from "../contracts/failed-delivery";
@@ -18,8 +21,13 @@ import type {
   DriverOfflineOperation,
   DriverOperationalStatus,
 } from "../offline/operation-contract";
+import { driverDispatchRoleReportMessage } from "../offline/failed-delivery-policy";
 import type { DriverSession } from "../session/driver-session";
-import { DriverOperationsController } from "./driver-operations-controller";
+import {
+  DriverOperationsController,
+  driverDatabaseBlockedMessage,
+  driverOperationExpiredMessage,
+} from "./driver-operations-controller";
 
 /**
  * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: "Enviar reporte" queues one
@@ -43,7 +51,10 @@ function placePhoto(type = "image/png", size = 3): Blob {
   return new Blob([new Uint8Array(size).fill(9)], { type });
 }
 
-async function harness(initial: readonly DriverOfflineOperation[] = []) {
+async function harness(
+  initial: readonly DriverOfflineOperation[] = [],
+  options: { readonly alsoDispatch?: boolean } = {},
+) {
   const key = (await createDriverCachePartition(session)).key;
   const queue = new MemoryQueue(initial.map((operation) => ({ ...operation, partitionKey: key })));
   const scheduler = {
@@ -54,7 +65,7 @@ async function harness(initial: readonly DriverOfflineOperation[] = []) {
     resume: vi.fn(),
   };
   const controller = new DriverOperationsController({
-    session,
+    session: options.alsoDispatch ? { ...session, alsoDispatch: true } : session,
     queue,
     api: {} as DriverSyncApi,
     refreshStops: async () => stopList([]),
@@ -80,11 +91,16 @@ function report(
   };
 }
 
+const stored = { stored: true };
+const refused = (message: string) => ({ stored: false, message });
+
 describe("Enviar reporte", () => {
   it("queues one report with its photo, and says it will be sent with a connection", async () => {
     const { controller, queue, scheduler, key } = await harness();
 
-    await expect(controller.enqueueFailedDelivery(report("ADDRESS_NOT_FOUND"), placePhoto())).resolves.toBe(true);
+    await expect(
+      controller.enqueueFailedDelivery(report("ADDRESS_NOT_FOUND"), placePhoto()),
+    ).resolves.toEqual(stored);
 
     const queued = queue.only();
     expect(queued).toMatchObject({
@@ -97,14 +113,17 @@ describe("Enviar reporte", () => {
       failedDelivery: {
         reasonCode: "ADDRESS_NOT_FOUND",
         incidentIdempotencyKey: `drv2-${newId}-incident`,
+        incidentRequested: false,
         incidentId: null,
       },
     });
     expect(queue.proofs.get(newId)?.sha256).toBe(queued.sha256);
     expect(controller.current.message).toBe("Reporte guardado. Se enviará cuando haya conexión.");
     expect(scheduler.requestSync).toHaveBeenCalledWith(false);
-    // At most one report per order.
-    await expect(controller.enqueueFailedDelivery(report(), placePhoto())).resolves.toBe(false);
+    // At most one report per order, and the form says so (MINOR 9).
+    await expect(controller.enqueueFailedDelivery(report(), placePhoto())).resolves.toEqual(
+      refused("Ya hay un reporte guardado en el teléfono para esta entrega."),
+    );
     expect(queue.operations).toHaveLength(1);
     await controller.dispose();
   });
@@ -113,52 +132,64 @@ describe("Enviar reporte", () => {
     const without = await harness();
     await expect(
       without.controller.enqueueFailedDelivery(report("PAYMENT_UNAVAILABLE"), placePhoto()),
-    ).resolves.toBe(false);
+    ).resolves.toEqual(refused("Elige un motivo de la lista."));
     expect(without.queue.operations).toEqual([]);
     expect(without.controller.current.message).toBe("Elige un motivo de la lista.");
 
     const withCash = await harness();
     await expect(
       withCash.controller.enqueueFailedDelivery(report("PAYMENT_UNAVAILABLE", cashPending), placePhoto()),
-    ).resolves.toBe(true);
+    ).resolves.toEqual(stored);
     expect(withCash.queue.only().failedDelivery?.reasonCode).toBe("PAYMENT_UNAVAILABLE");
   });
 
-  it.each<[string, Partial<ReturnType<typeof report>>]>([
-    ["off the door", { projectedStatus: "IN_TRANSIT" }],
-    ["after a failed attempt", { projectedStatus: "FAILED_ATTEMPT" }],
-    ["with a reason outside the list", { reasonCode: "OTHER" as DriverFailedDeliveryReason }],
-  ])("refuses a report %s and stores nothing", async (_name, patch) => {
+  it.each<[string, Partial<ReturnType<typeof report>>, string]>([
+    ["off the door", { projectedStatus: "IN_TRANSIT" }, "Actualiza la parada antes de reportar."],
+    ["after a failed attempt", { projectedStatus: "FAILED_ATTEMPT" }, "Actualiza la parada antes de reportar."],
+    ["with a reason outside the list", { reasonCode: "OTHER" as DriverFailedDeliveryReason }, "Elige un motivo de la lista."],
+  ])("refuses a report %s, says why and stores nothing", async (_name, patch, message) => {
     const { controller, queue } = await harness();
-    await expect(controller.enqueueFailedDelivery({ ...report(), ...patch }, placePhoto())).resolves.toBe(false);
+    await expect(
+      controller.enqueueFailedDelivery({ ...report(), ...patch }, placePhoto()),
+    ).resolves.toEqual(refused(message));
     expect(queue.operations).toEqual([]);
     expect(queue.proofs.size).toBe(0);
   });
 
   it("asks to call dispatch when the cash is recorded and to discard a saved collection first", async () => {
+    const callDispatch = refused(
+      "El cobro ya está registrado. Llama a despacho: ellos deciden y coordinan la devolución del cobro.",
+    );
     const recorded = await harness();
     await expect(
       recorded.controller.enqueueFailedDelivery(
         report("RECIPIENT_REFUSED", { ...cashPending, recorded: true }),
         placePhoto(),
       ),
-    ).resolves.toBe(false);
+    ).resolves.toEqual(callDispatch);
     expect(recorded.controller.current.message).toContain("Llama a despacho");
 
     const accepted = await harness([collectionOperation({ status: "AWAITING_REST_CONFIRMATION" })]);
     await expect(
       accepted.controller.enqueueFailedDelivery(report("RECIPIENT_REFUSED", cashPending), placePhoto()),
-    ).resolves.toBe(false);
-    expect(accepted.controller.current.message).toContain("Llama a despacho");
+    ).resolves.toEqual(callDispatch);
 
     const saved = await harness([collectionOperation()]);
     await expect(
       saved.controller.enqueueFailedDelivery(report("RECIPIENT_REFUSED", cashPending), placePhoto()),
-    ).resolves.toBe(false);
-    expect(saved.controller.current.message).toBe(
-      "Hay un cobro guardado en el teléfono. Si fue un error, descártalo antes de reportar.",
+    ).resolves.toEqual(
+      refused("Hay un cobro guardado en el teléfono. Si fue un error, descártalo antes de reportar."),
     );
     expect(saved.queue.operations).toHaveLength(1);
+  });
+
+  it("refuses a report from a person who is also dispatch (owner answer \"Registrar desde Despacho\")", async () => {
+    const { controller, queue } = await harness([], { alsoDispatch: true });
+    await expect(controller.enqueueFailedDelivery(report(), placePhoto())).resolves.toEqual(
+      refused(driverDispatchRoleReportMessage),
+    );
+    expect(queue.operations).toEqual([]);
+    expect(queue.proofs.size).toBe(0);
   });
 
   it.each<[string, Blob | undefined]>([
@@ -168,68 +199,95 @@ describe("Enviar reporte", () => {
     ["a photo over 10 MiB", placePhoto("image/jpeg", 10 * 1024 * 1024 + 1)],
   ])("refuses %s and keeps the form", async (_name, blob) => {
     const { controller, queue } = await harness();
-    await expect(controller.enqueueFailedDelivery(report(), blob)).resolves.toBe(false);
+    const message = "No fue posible guardar el reporte. Verifica tipo, tamaño y espacio disponible.";
+    await expect(controller.enqueueFailedDelivery(report(), blob)).resolves.toEqual(refused(message));
     expect(queue.operations).toEqual([]);
-    expect(controller.current).toMatchObject({
-      mutating: false,
-      message: "No fue posible guardar el reporte. Verifica tipo, tamaño y espacio disponible.",
-    });
+    expect(controller.current).toMatchObject({ mutating: false, message });
   });
 });
 
 describe("a held report", () => {
-  it("is rebuilt for the current version with the same incident, photo proof and capture instant", async () => {
+  it.each<[string, Partial<DriverOfflineOperation>]>([
+    ["before its incident (the attempt moved on: report again with a new reason and photo)", {}],
+    [
+      "after its incident (it belongs to that attempt, and may already justify a failed attempt)",
+      {
+        uploadSessionId: uuid(0x500),
+        uploadAccepted: true,
+        proofId: uuid(0x600),
+        failedDelivery: {
+          reasonCode: "SECURITY_RISK",
+          incidentIdempotencyKey: `drv2-${reportId}-incident`,
+          incidentRequested: true,
+          incidentId: uuid(0x700),
+        },
+      },
+    ],
+  ])("is never rebuilt for another version %s", async (_name, patch) => {
     const held = failedDeliveryOperation({
       status: "NEEDS_ATTENTION",
       safeError: "VERSION_CONFLICT",
       rejectionCode: "VERSION_CONFLICT",
-      uploadSessionId: uuid(0x500),
-      uploadAccepted: true,
-      proofId: uuid(0x600),
-      failedDelivery: {
-        reasonCode: "SECURITY_RISK",
-        incidentIdempotencyKey: `drv2-${reportId}-incident`,
-        incidentId: uuid(0x700),
-      },
+      ...patch,
     });
-    const { controller, queue } = await harness([held]);
+    const { controller, queue, scheduler } = await harness([held]);
 
     await controller.rebuildForCurrentVersion(held.id, "DELIVERING", 10);
 
-    expect(queue.only()).toMatchObject({
-      id: newId,
-      status: "PENDING",
-      expectedVersion: 10,
-      transitionIdempotencyKey: `drv2-${newId}-transition`,
-      clientOccurredAt: held.clientOccurredAt,
-      capturedAt: held.capturedAt,
-      proofId: uuid(0x600),
-      failedDelivery: held.failedDelivery,
-    });
+    expect(queue.only()).toEqual({ ...held, partitionKey: queue.only().partitionKey });
+    expect(controller.current.message).toBe("Este reporte no se puede rehacer para otra versión.");
+    expect(scheduler.requestSync).not.toHaveBeenCalledWith(false);
   });
 
-  it("keeps the incident key and the photo when rebuilt before its proof existed", async () => {
-    const held = failedDeliveryOperation({ status: "NEEDS_ATTENTION", safeError: "VERSION_CONFLICT" });
-    const { controller, queue, key } = await harness([held]);
-    queue.proofs.set(held.id, {
-      schemaVersion: 1,
-      partitionKey: key,
-      operationId: held.id,
-      blob: placePhoto(),
-      contentType: "image/png",
-      sizeBytes: 3,
-      sha256: held.sha256!,
-    });
+  it("lets the driver discard what is left of an order dispatch moved on (MAJOR 5)", async () => {
+    // Offline: "Recibí" and "Confirmar entrega"; dispatch then marked the
+    // failed attempt, the sync held the collection and blocked the delivery.
+    const collection = collectionOperation({ status: "NEEDS_ATTENTION", safeError: "VERSION_CONFLICT" });
+    const delivery = {
+      ...failedDeliveryOperation(),
+      id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      kind: "DELIVERY_PROOF" as const,
+      targetStatus: "DELIVERED" as const,
+      reason: "DRIVER_DELIVERY_CONFIRMED",
+      transitionIdempotencyKey: "drv2-eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee-transition",
+      sessionIdempotencyKey: "drv2-eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee-session-1",
+      finalizeIdempotencyKey: "drv2-eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee-finalize-1",
+      failedDelivery: null,
+      status: "BLOCKED" as const,
+    };
+    const { controller, queue } = await harness([collection, delivery]);
 
-    await controller.rebuildForCurrentVersion(held.id, "DELIVERING", 10);
+    // FAILED_ATTEMPT is no step the phone acts on: the stop passes no status.
+    await controller.discard(collection.id, null, 9);
 
     expect(queue.only()).toMatchObject({
-      id: newId,
-      sessionIdempotencyKey: `drv2-${newId}-session-1`,
-      failedDelivery: { incidentIdempotencyKey: `drv2-${reportId}-incident`, incidentId: null },
+      id: delivery.id,
+      status: "NEEDS_ATTENTION",
+      safeError: "VERSION_CONFLICT",
     });
-    expect(queue.proofs.has(newId)).toBe(true);
-    expect(queue.proofs.has(held.id)).toBe(false);
+    await controller.discard(delivery.id, null, 9);
+    expect(queue.operations).toEqual([]);
+  });
+
+  it("releases the actions blocked behind one retried as it is", async () => {
+    const collection = collectionOperation({ status: "NEEDS_ATTENTION", safeError: "VERSION_CONFLICT" });
+    const delivery = {
+      ...failedDeliveryOperation(),
+      id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+      kind: "DELIVERY_PROOF" as const,
+      targetStatus: "DELIVERED" as const,
+      reason: "DRIVER_DELIVERY_CONFIRMED",
+      failedDelivery: null,
+      status: "BLOCKED" as const,
+    };
+    const { controller, queue } = await harness([collection, delivery]);
+
+    await controller.retrySame(collection.id, "DELIVERING", 8);
+
+    expect(queue.operations.map((operation) => [operation.kind, operation.status])).toEqual([
+      ["COD_COLLECTION", "PENDING"],
+      ["DELIVERY_PROOF", "PENDING"],
+    ]);
   });
 
   it("is sent again once the collection that held it is discarded, with the sync paused meanwhile", async () => {
@@ -249,5 +307,52 @@ describe("a held report", () => {
     expect(order).toEqual(["pause", "resume"]);
     expect(queue.only()).toMatchObject({ kind: "FAILED_DELIVERY", status: "PENDING", safeError: null });
     expect(scheduler.requestSync).toHaveBeenCalledWith(false);
+  });
+});
+
+describe("a database another tab keeps open", () => {
+  it("asks to close the other Paquetenvia tabs instead of a bare \"not available\"", async () => {
+    const queue = new MemoryQueue([]);
+    queue.listOperations = async () => {
+      throw new DriverDatabaseBlockedError();
+    };
+    const controller = new DriverOperationsController({
+      session,
+      queue,
+      api: {} as DriverSyncApi,
+      refreshStops: async () => stopList([]),
+      onAccessRevoked: vi.fn(),
+    });
+
+    await controller.start();
+
+    expect(controller.current.message).toBe(driverDatabaseBlockedMessage);
+    expect(driverDatabaseBlockedMessage).toContain("Ciérrala y vuelve a cargar esta página");
+    await controller.dispose();
+  });
+});
+
+describe("an expired report (MINOR 8)", () => {
+  it("is never presented as unsent nor to register again once its incident is or may be open", () => {
+    const open = driverOperationExpiredMessage([{ kind: "FAILED_DELIVERY", incident: "open" }]);
+    expect(open).toContain("ya quedó abierto como incidencia");
+    expect(open).toContain("despacho decide");
+    expect(open).not.toMatch(/ya no se enviará|Vuelve a registrar/);
+
+    const maybe = driverOperationExpiredMessage([{ kind: "FAILED_DELIVERY", incident: "maybe" }]);
+    expect(maybe).toContain("puede que ya haya quedado abierto como incidencia");
+    expect(maybe).not.toMatch(/Vuelve a registrar/);
+
+    // An unsent report and the other actions keep the OPS-003 notice.
+    expect(driverOperationExpiredMessage([{ kind: "FAILED_DELIVERY", incident: "none" }])).toContain(
+      "ya no se enviará. Vuelve a registrarla",
+    );
+    expect(driverOperationExpiredMessage(["CHECK_IN"])).toContain("«Llegué a recolección» venció");
+    const mixed = driverOperationExpiredMessage([
+      { kind: "CHECK_IN", incident: "none" },
+      { kind: "FAILED_DELIVERY", incident: "open" },
+    ]);
+    expect(mixed).toContain("«Llegué a recolección» venció");
+    expect(mixed).toContain("ya quedó abierto como incidencia");
   });
 });

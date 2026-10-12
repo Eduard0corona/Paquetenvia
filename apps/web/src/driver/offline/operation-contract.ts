@@ -178,13 +178,21 @@ export const MaximumCodReferenceLength = 200;
 /**
  * What a FAILED_DELIVERY reports and how far it got: the reason from the
  * closed list, the Idempotency-Key of its openIncident (one per report, reused
- * on every retry and kept when the operation is rebuilt, so a lost 201 is
- * replayed and a second incident is never opened) and the incident id once
- * the server returned it. No text, name or address.
+ * on every retry, so a lost 201 is replayed and a second incident is never
+ * opened; a report is never rebuilt with another key), whether that request
+ * may already have reached the server, and the incident id once the server
+ * returned it. No text, name or address.
  */
 export interface DriverFailedDeliveryReport {
   readonly reasonCode: DriverFailedDeliveryReason;
   readonly incidentIdempotencyKey: string;
+  /**
+   * Set right before openIncident is first sent and never cleared. With
+   * `incidentId` still null the incident may exist (its answer was lost): the
+   * next pass replays the same key, and a report held meanwhile says that the
+   * incident may already be open instead of "not sent".
+   */
+  readonly incidentRequested: boolean;
   readonly incidentId: string | null;
 }
 
@@ -363,6 +371,7 @@ export function createDriverOfflineOperation(input: {
       ? Object.freeze({
           reasonCode: readFailedDeliveryReason(input.failedDelivery.reasonCode),
           incidentIdempotencyKey: incidentIdempotencyKey(id),
+          incidentRequested: false,
           incidentId: null,
         })
       : null,
@@ -471,13 +480,15 @@ export function parseDriverOfflineOperation(
   if ((kind === "COD_COLLECTION") !== (cod !== null)) {
     throw new DriverOfflineContractError();
   }
-  const failedDelivery = readFailedDelivery(record.failedDelivery);
+  const failedDelivery = readFailedDelivery(record.failedDelivery, id);
   if (
     (kind === "FAILED_DELIVERY") !== (failedDelivery !== null) ||
-    // The incident cites the finalized photo, so it never exists without it.
+    // The incident cites the finalized photo, so it is never requested
+    // without it, and an incident id comes only from a request.
     (failedDelivery !== null &&
-      failedDelivery.incidentId !== null &&
-      record.proofId === null)
+      ((failedDelivery.incidentRequested && record.proofId === null) ||
+        (failedDelivery.incidentId !== null &&
+          !failedDelivery.incidentRequested)))
   ) {
     throw new DriverOfflineContractError();
   }
@@ -610,8 +621,8 @@ export function codIdempotencyKey(operationId: string): string {
 
 /**
  * One openIncident key per failed-delivery report, reused on every retry and
- * after a reload. A rebuilt operation keeps the key of the report it replaces
- * (DriverFailedDeliveryReport), so the key names the operation that created it.
+ * after a reload. A report is never rebuilt for another version, so the key
+ * always names its own operation.
  */
 export function incidentIdempotencyKey(operationId: string): string {
   return validateIdempotencyKey(`drv2-${asUuid(operationId)}-incident`);
@@ -736,29 +747,32 @@ function readFailedDeliveryReason(value: unknown): DriverFailedDeliveryReason {
   return value;
 }
 
-const incidentKeyPattern = /^drv2-(.{36})-incident$/;
-
 /**
- * The exact `failedDelivery` member: a closed-list reason, an openIncident key
- * of the form drv2-<canonical UUID>-incident and a canonical incident id or
- * null. The key is not tied to this operation's id, because a rebuilt report
- * keeps the key of the one it replaced.
+ * The exact `failedDelivery` member: a closed-list reason, the openIncident
+ * key of this very operation (drv2-<operation id>-incident), whether that
+ * request may have been sent, and a canonical incident id or null.
  */
-function readFailedDelivery(value: unknown): DriverFailedDeliveryReport | null {
+function readFailedDelivery(
+  value: unknown,
+  operationId: string,
+): DriverFailedDeliveryReport | null {
   if (value === null) return null;
   const record = readExactRecord(
     value,
-    new Set(["reasonCode", "incidentIdempotencyKey", "incidentId"]),
+    new Set([
+      "reasonCode",
+      "incidentIdempotencyKey",
+      "incidentRequested",
+      "incidentId",
+    ]),
   );
-  const key = record.incidentIdempotencyKey;
-  if (typeof key !== "string") throw new DriverOfflineContractError();
-  const match = incidentKeyPattern.exec(key);
-  if (match === null || key !== incidentIdempotencyKey(readUuid(match[1]))) {
+  if (record.incidentIdempotencyKey !== incidentIdempotencyKey(operationId)) {
     throw new DriverOfflineContractError();
   }
   return Object.freeze({
     reasonCode: readFailedDeliveryReason(record.reasonCode),
-    incidentIdempotencyKey: key,
+    incidentIdempotencyKey: record.incidentIdempotencyKey,
+    incidentRequested: readBoolean(record.incidentRequested),
     incidentId: readNullableUuid(record.incidentId),
   });
 }

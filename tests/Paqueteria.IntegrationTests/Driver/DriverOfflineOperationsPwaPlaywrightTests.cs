@@ -835,6 +835,102 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         await page.GetByRole(AriaRole.Button, new() { Name = "Descartar", Exact = true }).WaitForAsync();
     }
 
+    /// <summary>
+    /// UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: a report saved offline is never taken as confirmed by a failed
+    /// attempt that dispatch registered on its own. It is held unsent (no photo upload, no incident, no transition),
+    /// says so, keeps its photo until the driver discards it, and offers no rebuild for the new version.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Report_saved_offline_is_held_unsent_when_dispatch_registered_the_failed_attempt()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-drv-failed-dispatch-first");
+        var backend = new SyntheticOfflineBackend();
+        backend.SetOrderState("DELIVERING", 8);
+        await backend.RouteAsync(page);
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await page.GetByRole(AriaRole.Button, new() { Name = "No se pudo entregar" }).WaitForAsync();
+        await context.SetOfflineAsync(true);
+        try
+        {
+            await OpenFailedDeliveryAsync(page);
+            await page.GetByRole(AriaRole.Radio, new() { Name = "No había nadie" }).CheckAsync();
+            await ChooseFailedDeliveryPhotoAsync(page);
+            await page.GetByRole(AriaRole.Button, new() { Name = "Enviar reporte" }).ClickAsync();
+            await WaitForOperationCountAsync(page, 1);
+            await WaitForProofCountAsync(page, 1);
+        }
+        finally
+        {
+            // Meanwhile dispatch registered the failed attempt with its own incident.
+            backend.SetOrderState("FAILED_ATTEMPT", 9);
+            await context.SetOfflineAsync(false);
+        }
+
+        await page.GetByRole(AriaRole.Button, new() { Name = "Sincronizar ahora" }).ClickAsync();
+        await WaitForOperationStatusAsync(page, "NEEDS_ATTENTION");
+        await ExpectTextAsync(
+            page,
+            "Despacho ya registró el intento fallido de esta entrega, así que tu reporte no se envió. Descártalo.");
+        Assert.Empty(backend.Calls);
+        Assert.Empty(backend.SessionAttempts);
+        Assert.Equal(0, backend.UploadCount);
+        Assert.Empty(backend.IncidentRequests);
+        await WaitForProofCountAsync(page, 1);
+        Assert.Equal(
+            0,
+            await page.GetByRole(AriaRole.Button, new() { Name = "Crear acción para versión actual" }).CountAsync());
+        Assert.Equal(
+            0,
+            await page.GetByRole(AriaRole.Button, new() { Name = "Reintentar la misma acción" }).CountAsync());
+
+        await page.GetByRole(AriaRole.Button, new() { Name = "Descartar", Exact = true }).ClickAsync();
+        var dialog = page.GetByRole(AriaRole.Dialog, new() { Name = "Confirma la acción" });
+        await dialog.WaitForAsync();
+        await dialog.GetByRole(AriaRole.Button, new() { Name = "Confirmar", Exact = true }).ClickAsync();
+        await WaitForOperationCountAsync(page, 0);
+        await WaitForProofCountAsync(page, 0);
+        await ExpectTextAsync(page, "Intento fallido · El despacho decide");
+        Assert.Empty(backend.Calls);
+    }
+
+    /// <summary>
+    /// UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 (owner answer "Registrar desde Despacho (Recommended)"): a person
+    /// who is also DISPATCHER or PLATFORM_ADMIN in the organization is not offered "No se pudo entregar"; the stop
+    /// says to register the attempt from the order in Despacho.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task A_driver_who_is_also_dispatch_is_told_to_register_the_attempt_in_Despacho()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-drv-failed-also-dispatch", alsoDispatch: true);
+        var backend = new SyntheticOfflineBackend();
+        backend.SetOrderState("DELIVERING", 8);
+        await backend.RouteAsync(page);
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(
+            page,
+            "También eres despacho en esta organización, así que el intento fallido no se reporta desde el teléfono: regístralo desde la orden en Despacho, donde eliges el motivo y el siguiente paso.");
+        Assert.Equal(
+            0,
+            await page.GetByRole(AriaRole.Button, new() { Name = "No se pudo entregar" }).CountAsync());
+        Assert.Empty(backend.Calls);
+    }
+
     [Fact]
     [Trait("Category", "DriverOfflineOperationsPwa")]
     public async Task Five_actions_two_proofs_survive_offline_reload_and_sync_once()
@@ -1685,7 +1781,8 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
 
     private static async Task InstallSessionAsync(
         IPage page,
-        string cacheNamespace)
+        string cacheNamespace,
+        bool alsoDispatch = false)
     {
         await page.RouteAsync("**/hubs/driver/negotiate**", route => route.AbortAsync());
         var configuration = JsonSerializer.Serialize(new
@@ -1693,6 +1790,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             organizationId = OrganizationId,
             cacheNamespace,
             token = "synthetic-driver-token",
+            alsoDispatch,
         });
         await page.AddInitScriptAsync(
             $$"""
@@ -1702,6 +1800,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
                 organizationId: value.organizationId,
                 cacheNamespace: value.cacheNamespace,
                 getAccessToken: () => value.token,
+                ...(value.alsoDispatch ? { alsoDispatch: true } : {}),
               };
             })();
             """);

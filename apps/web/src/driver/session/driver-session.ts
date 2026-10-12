@@ -7,6 +7,15 @@ import { asUuid } from "../../realtime/envelope";
 export type DriverSession = SessionCredentials & {
   readonly organizationId: string;
   readonly cacheNamespace: string;
+  /**
+   * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 (owner answer "Registrar desde
+   * Despacho (Recommended)"): the person also holds DISPATCHER or
+   * PLATFORM_ADMIN in this organization, read from the organization contexts
+   * at sign-in and kept in memory only. The server then treats a report from
+   * the phone as dispatch's, so "No se pudo entregar" is not offered. Only
+   * `true` counts; absent means a driver only.
+   */
+  readonly alsoDispatch?: boolean;
 };
 
 declare global {

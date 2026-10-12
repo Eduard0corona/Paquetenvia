@@ -15,9 +15,14 @@ cinco acciones operativas autorizadas:
 | `COD_COLLECTION` | `DELIVERING` | (sin transición) | `recordCodCollection`, UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 |
 | `FAILED_DELIVERY` | `DELIVERING` | `FAILED_ATTEMPT` | `DRIVER_DELIVERY_FAILED_REPORTED`, con prueba, incidencia y `metadata.incident_id` (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12) |
 
-Los únicos proof types son `PICKUP_PHOTO` y `DELIVERY_PHOTO` (la foto del lugar
-de "No se pudo entregar" es una `DELIVERY_PHOTO` que queda como evidencia de la
-incidencia y nunca cuenta para `DELIVERED`). No se agregan
+Los únicos proof types son `PICKUP_PHOTO` y `DELIVERY_PHOTO`. La foto del lugar
+de "No se pudo entregar" es una `DELIVERY_PHOTO`; deja de contar para
+`DELIVERED` solo cuando la incidencia la cita como evidencia. Si el reporte se
+detiene después de finalizar la foto y antes de abrir la incidencia, la foto
+queda sin incidencia y el servidor podría contarla para `DELIVERED` en ese
+intento: riesgo residual con pendiente de servidor (respuesta del owner
+"Después, con ADR (Recommended)", ver
+`ui-001-phase3-driver-failed-delivery.md`). No se agregan
 endpoints, migraciones, paquetes, dependencias ni cambios productivos al
 backend. La implementación consume los contratos existentes de ORD-002,
 POD-001, FIN-001 e INC-001.
@@ -64,7 +69,17 @@ versión `4` y las operaciones al esquema `3` (agregan `failedDelivery` y el tip
 en cola de esquema 1 o 2 se migran en el mismo lugar y las instantáneas de
 esquema 2 se conservan. Una app de una versión anterior no puede abrir la base.
 El shell del Service Worker sube a `paquetenvia-driver-shell-v7`. Descartar una
-operación pausa la sincronización. Ver `ui-001-phase3-driver-failed-delivery.md`.
+operación pausa la sincronización. Para todas las acciones: una acción que el
+servidor ya aceptó (`AWAITING_REST_CONFIRMATION`) nunca vuelve a quedar
+bloqueada ni pendiente de mandar, y si REST nunca la muestra sale de la cola a
+las 72 horas sin aviso; al descartar una acción en una parada que despacho movió
+(sin estado operativo), la primera que queda de la orden pasa a atención, y una
+acción bloqueada sin nada retenido antes se muestra como retenida, así que
+siempre se puede descartar; reintentar la misma acción libera las que quedaron
+bloqueadas detrás. Cada conexión a la base se cierra sola cuando una versión más
+nueva la pide; si otra pestaña bloquea la subida, la pantalla pide cerrarla y
+recargar, y la conexión tardía se cierra. Ver
+`ui-001-phase3-driver-failed-delivery.md`.
 
 La base conserva el nombre `paquetenvia-driver-stops-v1` y sube su versión de
 base de datos a `2`. El snapshot DRV-001 conserva `schemaVersion: 1`. La

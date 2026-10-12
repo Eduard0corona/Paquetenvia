@@ -135,7 +135,11 @@ export class FailedDeliveryServer {
   public readonly proofs = new Map<string, string>();
   public readonly incidents = new Map<string, string>();
   public transitionsApplied = 0;
+  /** The stored answer of each applied transition, replayed for its key like the API does. */
+  public readonly transitionReplies = new Map<string, { status: "FAILED_ATTEMPT"; version: number }>();
   public stopsReads = 0;
+  /** When true the stops answer leaves this stop out for breaking the contract. */
+  public dropped = false;
   public failures: ScriptedFailure[] = [];
   /** Called on every read of the stops, before it answers (to change the server meanwhile). */
   public onStopsRead: (() => void) | null = null;
@@ -152,8 +156,16 @@ export class FailedDeliveryServer {
   public readonly refreshStops = async (): Promise<DriverStopList> => {
     this.stopsReads += 1;
     this.onStopsRead?.();
-    return stopList([this.stop()]);
+    return this.dropped
+      ? { ...stopList([]), droppedCount: 1 }
+      : stopList([this.stop()]);
   };
+
+  /** Dispatch moves the order on by itself (a failed attempt, "Reintentar hoy"…). */
+  public dispatchMoves(status: DriverStop["status"]): void {
+    this.status = status;
+    this.version += 1;
+  }
 
   public api(): DriverSyncApi {
     return {
@@ -198,14 +210,18 @@ export class FailedDeliveryServer {
       }),
       transitionOrder: vi.fn(async (operation: DriverOfflineOperation) =>
         this.step("transition", operation.transitionIdempotencyKey, () => {
-          if (this.status === "DELIVERING" && this.version === operation.expectedVersion) {
-            this.status = "FAILED_ATTEMPT";
-            this.version += 1;
-            this.transitionsApplied += 1;
-          } else if (this.status !== "FAILED_ATTEMPT") {
+          const key = operation.transitionIdempotencyKey;
+          const stored = this.transitionReplies.get(key);
+          if (stored) return { id: operation.orderId, ...stored };
+          if (this.status !== "DELIVERING" || this.version !== operation.expectedVersion) {
             throw new DriverSyncApiError("conflict", "VERSION_CONFLICT");
           }
-          return { id: operation.orderId, status: "FAILED_ATTEMPT" as const, version: this.version };
+          this.status = "FAILED_ATTEMPT";
+          this.version += 1;
+          this.transitionsApplied += 1;
+          const reply = { status: "FAILED_ATTEMPT" as const, version: this.version };
+          this.transitionReplies.set(key, reply);
+          return { id: operation.orderId, ...reply };
         }),
       ),
       recordCodCollection: vi.fn(async (operation: DriverOfflineOperation) => {

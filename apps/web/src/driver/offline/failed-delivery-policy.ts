@@ -4,6 +4,8 @@ import type { ProjectedDriverStop } from "./operation-projection";
 import {
   driverCashRecordedReportMessage,
   driverCashSavedReportMessage,
+  driverIncidentRejectionCodes,
+  driverRejectionMessage,
 } from "./rejection-codes";
 
 /**
@@ -23,12 +25,18 @@ import {
  *   held for the driver's attention.
  * - `dispatch-decides`: REST confirms FAILED_ATTEMPT ("Intento fallido · El
  *   despacho decide").
+ * - `dispatch-role`: the report would be offered, but the person also holds
+ *   DISPATCHER or PLATFORM_ADMIN in this organization, so the server treats a
+ *   report from the phone as dispatch's and refuses the short one (owner
+ *   answer "Registrar desde Despacho (Recommended)", 2026-10-12): the stop
+ *   says to register the attempt from the order in Despacho.
  * - `hidden`: anything else (not a delivery, not at the door, another action
  *   of the stop needs attention first, or a delivery is already saved).
  */
 export type DriverFailedDeliveryAvailability =
   | { readonly kind: "hidden" }
   | { readonly kind: "offered"; readonly paymentReason: boolean }
+  | { readonly kind: "dispatch-role" }
   | {
       readonly kind: "cod-saved";
       /** The saved collection, when the stop itself may discard it (not held in the attention notice). */
@@ -45,9 +53,22 @@ export type DriverFailedDeliveryAvailability =
 
 /**
  * `operations` are the projected operations of the stop's order (the queue as
- * the projection shows it, with derived statuses).
+ * the projection shows it, with derived statuses). `alsoDispatch` is whether
+ * the session's person also holds DISPATCHER or PLATFORM_ADMIN in the active
+ * organization (kept in memory only).
  */
 export function driverFailedDeliveryAvailability(
+  stop: ProjectedDriverStop,
+  operations: readonly DriverOfflineOperation[],
+  alsoDispatch = false,
+): DriverFailedDeliveryAvailability {
+  const availability = availabilityForDriver(stop, operations);
+  return alsoDispatch && availability.kind === "offered"
+    ? dispatchRole
+    : availability;
+}
+
+function availabilityForDriver(
   stop: ProjectedDriverStop,
   operations: readonly DriverOfflineOperation[],
 ): DriverFailedDeliveryAvailability {
@@ -101,6 +122,20 @@ export function driverFailedDeliveryAvailability(
 const hidden: DriverFailedDeliveryAvailability = Object.freeze({
   kind: "hidden",
 });
+
+const dispatchRole: DriverFailedDeliveryAvailability = Object.freeze({
+  kind: "dispatch-role",
+});
+
+/**
+ * Owner answer "Registrar desde Despacho (Recommended)" (2026-10-12): shown in
+ * place of "No se pudo entregar" to a person who is also dispatch in the
+ * organization. No server change: the server keeps treating that person's
+ * report as dispatch's.
+ */
+export const driverDispatchRoleReportMessage =
+  "También eres despacho en esta organización, así que el intento fallido no se reporta desde el teléfono: " +
+  "regístralo desde la orden en Despacho, donde eliges el motivo y el siguiente paso.";
 
 export type DriverFailedReportCashHold = "recorded" | "saved" | null;
 
@@ -157,17 +192,119 @@ export function driverFailedReportHoldState(
   return collection ? "saved" : "gone";
 }
 
-/** The Spanish message of a failed-delivery report held for the cash. */
-export function driverFailedReportHoldMessage(
-  stop: Pick<ProjectedDriverStop, "order_id" | "cod">,
+/**
+ * Whether the report's incident exists on the server: "open" when the phone
+ * holds its id; "maybe" when openIncident was sent but its answer never came
+ * back (and the server did not refuse it with a rule code); "none" otherwise.
+ */
+export function driverFailedReportIncident(
+  report: DriverOfflineOperation,
+): "open" | "maybe" | "none" {
+  const failedDelivery = report.failedDelivery;
+  if (failedDelivery === null) return "none";
+  if (failedDelivery.incidentId !== null) return "open";
+  return failedDelivery.incidentRequested &&
+    !(driverIncidentRejectionCodes as readonly (string | null)[]).includes(
+      report.rejectionCode,
+    )
+    ? "maybe"
+    : "none";
+}
+
+/** Before any request: dispatch already registered the failed attempt itself. */
+export const driverDispatchReportedFailedAttemptMessage =
+  "Despacho ya registró el intento fallido de esta entrega, así que tu reporte no se envió. Descártalo.";
+
+/** Before any request: the stop changed since the report was saved. */
+export const driverStaleReportMessage =
+  "La entrega cambió desde que guardaste el reporte (por ejemplo, despacho pidió reintentarla), así que el " +
+  "reporte no se envió. Descártalo y, si de nuevo no puedes entregar, vuelve a reportar con una foto nueva.";
+
+/** MINOR 8: once the incident exists it is never presented as "not sent". */
+export const driverIncidentOpenReportMessage =
+  "Tu reporte ya quedó abierto como incidencia y despacho decide qué sigue. No lo vuelvas a reportar: descarta esta acción.";
+
+export const driverIncidentMaybeOpenReportMessage =
+  "Puede que tu reporte ya haya quedado abierto como incidencia, pero el teléfono no lo pudo confirmar. " +
+  "Despacho decide qué sigue: avísales, no lo vuelvas a reportar y descarta esta acción.";
+
+const incidentLead: Readonly<Record<"open" | "maybe", string>> = {
+  open: "Tu reporte ya quedó abierto como incidencia",
+  maybe: "Puede que tu reporte ya haya quedado abierto como incidencia",
+};
+
+/**
+ * The Spanish message of a "No se pudo entregar" report held for the driver's
+ * attention, so the stop never says "not sent" for a report whose incident is
+ * (or may be) open and never invites reporting it again:
+ *
+ * - incident open or maybe open: that first, then the cash that holds the
+ *   transition, if any (recorded: call dispatch; saved: discard it if it was a
+ *   mistake; gone: retry the same action to finish);
+ * - incident refused by the server (a rule code of openIncident): its message;
+ * - held for the cash before any incident: the cash messages;
+ * - held before any request because the attempt moved on: dispatch already
+ *   registered the failed attempt, or the stop changed since the report;
+ * - anything else: the rule message of its code, or the generic one.
+ */
+export function driverFailedReportAttentionMessage(
+  report: DriverOfflineOperation,
+  stop: Pick<
+    ProjectedDriverStop,
+    "order_id" | "cod" | "confirmedStatus" | "confirmedVersion"
+  >,
   operations: readonly DriverOfflineOperation[],
 ): string {
-  switch (driverFailedReportHoldState(stop, operations)) {
+  const incident = driverFailedReportIncident(report);
+  const cash =
+    report.safeError === "COD_COLLECTED"
+      ? driverFailedReportHoldState(stop, operations)
+      : null;
+  if (incident !== "none") {
+    const lead = incidentLead[incident];
+    switch (cash) {
+      case "recorded":
+        return (
+          `${lead}, pero el cobro de esta entrega también quedó registrado, así que el intento fallido ` +
+          "no se envió. Llama a despacho: ellos deciden y coordinan la devolución del cobro. No lo " +
+          "vuelvas a reportar: descarta esta acción."
+        );
+      case "saved":
+        return (
+          `${lead}, pero hay un cobro guardado en el teléfono, así que el intento fallido no se envió. ` +
+          "Si el cobro fue un error, descártalo y el reporte terminará de enviarse; si no, llama a despacho."
+        );
+      case "gone":
+        return `${lead}. Ya no hay un cobro guardado: reintenta la misma acción para terminar de enviarlo.`;
+      case null:
+        return incident === "open"
+          ? driverIncidentOpenReportMessage
+          : driverIncidentMaybeOpenReportMessage;
+    }
+  }
+  if (report.rejectionCode !== null) {
+    return driverRejectionMessage(report.kind, report.rejectionCode);
+  }
+  switch (cash) {
     case "recorded":
       return driverCashRecordedReportMessage;
     case "saved":
       return driverCashSavedReportMessage;
     case "gone":
       return driverCashGoneReportMessage;
+    case null:
+      break;
   }
+  if (report.safeError === "VERSION_CONFLICT") {
+    if (stop.confirmedStatus === "FAILED_ATTEMPT") {
+      return driverDispatchReportedFailedAttemptMessage;
+    }
+    if (
+      stop.confirmedStatus !== "DELIVERING" ||
+      stop.confirmedVersion !== report.expectedVersion
+    ) {
+      return driverStaleReportMessage;
+    }
+  }
+  return driverRejectionMessage(report.kind, null);
 }

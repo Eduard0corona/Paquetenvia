@@ -24,10 +24,11 @@ import {
   DriverSyncApiError,
 } from "../offline/driver-sync-api";
 import {
-  driverFailedReportHoldMessage,
+  driverFailedReportAttentionMessage,
   driverFailedReportHoldState,
 } from "../offline/failed-delivery-policy";
 import {
+  driverOperationApplies,
   nextDriverOperationKind,
   projectDriverOperations,
   type ProjectedDriverStop,
@@ -53,6 +54,7 @@ import {
 } from "../session/driver-session";
 import {
   DriverOperationsController,
+  type DriverFailedDeliveryEnqueueResult,
   type DriverOperationsState,
 } from "../state/driver-operations-controller";
 import {
@@ -102,6 +104,11 @@ const unavailableExternalOffersState: ExternalOffersState = Object.freeze({
   pendingOfferId: null,
   message: null,
 });
+const stopUnavailableForReport: DriverFailedDeliveryEnqueueResult =
+  Object.freeze({
+    stored: false,
+    message: "La parada no está disponible. Vuelve a abrirla desde tus paradas.",
+  });
 
 export function DriverStopsExperience() {
   const [session, setSession] = useState<DriverSession | null>(null);
@@ -361,6 +368,7 @@ export function DriverStopsExperience() {
           operations={projection.operations.filter(
             (operation) => operation.orderId === route.orderId,
           )}
+          alsoDispatch={session.alsoDispatch === true}
           mutating={operationsState.mutating}
           onEnqueue={(kind, blob) =>
             stop && operationsControllerRef.current
@@ -398,7 +406,7 @@ export function DriverStopsExperience() {
                   },
                   photo,
                 )
-              : Promise.resolve(false)
+              : Promise.resolve(stopUnavailableForReport)
           }
           onDiscard={(id, status, version) =>
             void operationsControllerRef.current?.discard(id, status, version)
@@ -443,10 +451,11 @@ export function DriverStopsExperience() {
           offline={dataIsOffline}
           voiceApi={null}
           operations={[]}
+          alsoDispatch={false}
           mutating={operationsState.mutating}
           onEnqueue={() => Promise.resolve(false)}
           onCollectCod={() => Promise.resolve(false)}
-          onReportFailedDelivery={() => Promise.resolve(false)}
+          onReportFailedDelivery={() => Promise.resolve(stopUnavailableForReport)}
           onDiscard={() => undefined}
           onNewSession={() => undefined}
           onRetrySame={() => undefined}
@@ -700,6 +709,7 @@ function StopDetail({
   offline,
   voiceApi,
   operations,
+  alsoDispatch,
   mutating,
   onEnqueue,
   onCollectCod,
@@ -716,13 +726,15 @@ function StopDetail({
   offline: boolean;
   voiceApi: DriverVoiceApi | null;
   operations: readonly DriverOfflineOperation[];
+  /** DriverSession.alsoDispatch (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12). */
+  alsoDispatch: boolean;
   mutating: boolean;
   onEnqueue: (kind: DriverOperationKind, blob?: Blob) => Promise<boolean>;
   onCollectCod: () => Promise<boolean>;
   onReportFailedDelivery: (
     reason: DriverFailedDeliveryReason,
     photo: Blob,
-  ) => Promise<boolean>;
+  ) => Promise<DriverFailedDeliveryEnqueueResult>;
   onDiscard: (
     operationId: string,
     status: DriverOperationalStatus | null,
@@ -818,6 +830,7 @@ function StopDetail({
           key={stop.order_id}
           stop={stop}
           operations={operations}
+          alsoDispatch={alsoDispatch}
           disabled={mutating}
           onReport={onReportFailedDelivery}
           onDiscardCollection={(operationId) =>
@@ -987,15 +1000,28 @@ function ConflictResolution({
     (operation) => operation.status === "BLOCKED",
   ).length;
   const confirmedOperationalStatus = toOperationalStatus(stop.confirmedStatus);
-  // UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: a report held for the cash
-  // explains the cash as it is now; with the cash recorded only discarding
-  // it remains (the driver calls dispatch), and a held report is never
-  // rebuilt (its version did not change).
+  // UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: a "No se pudo entregar"
+  // report explains itself (its incident, the cash as it is now, or the
+  // attempt that moved on), is never rebuilt for another version (a new
+  // attempt is reported again from the stop; an open incident stays with
+  // dispatch) and is retried only where it still applies and the cash is not
+  // recorded (then the driver calls dispatch).
+  const report = attention.kind === "FAILED_DELIVERY";
   const cashHold =
-    attention.kind === "FAILED_DELIVERY" &&
-    attention.safeError === "COD_COLLECTED"
+    report && attention.safeError === "COD_COLLECTED"
       ? driverFailedReportHoldState(stop, operations)
       : null;
+  const offerRetry =
+    !report ||
+    (cashHold !== "recorded" &&
+      confirmedOperationalStatus !== null &&
+      driverOperationApplies(
+        attention,
+        confirmedOperationalStatus,
+        stop.confirmedVersion,
+      ));
+  const offerRebuild =
+    driverOperationDefinitions[attention.kind].transition && !report;
   const closeConfirmation = () => {
     confirmationDialogRef.current?.close();
     setConfirmation(null);
@@ -1033,8 +1059,8 @@ function ConflictResolution({
     <section className={styles.conflict} aria-labelledby="conflict-heading">
       <h3 id="conflict-heading">Acción que requiere atención</h3>
       <p>
-        {cashHold !== null
-          ? driverFailedReportHoldMessage(stop, operations)
+        {report
+          ? driverFailedReportAttentionMessage(attention, stop, operations)
           : driverRejectionMessage(attention.kind, attention.rejectionCode)}
       </p>
       <dl>
@@ -1071,7 +1097,7 @@ function ConflictResolution({
             Crear nueva sesión
           </button>
         ) : null}
-        {cashHold === "recorded" ? null : (
+        {offerRetry ? (
           <button
             type="button"
             disabled={disabled || confirmedOperationalStatus === null}
@@ -1087,9 +1113,8 @@ function ConflictResolution({
           >
             Reintentar la misma acción
           </button>
-        )}
-        {driverOperationDefinitions[attention.kind].transition &&
-        cashHold === null ? (
+        ) : null}
+        {offerRebuild ? (
           <button
             type="button"
             disabled={disabled || confirmedOperationalStatus === null}

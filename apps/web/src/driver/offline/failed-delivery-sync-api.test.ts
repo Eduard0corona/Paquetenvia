@@ -28,6 +28,7 @@ const withIncident = failedDeliveryOperation({
   failedDelivery: {
     reasonCode: "SECURITY_RISK",
     incidentIdempotencyKey: `drv2-${reportId}-incident`,
+    incidentRequested: true,
     incidentId,
   },
 });

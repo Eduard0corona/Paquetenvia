@@ -7,14 +7,36 @@ import {
   amountCents,
   collectionOperation,
   failedDeliveryOperation,
+  orderId,
   photoRecord,
   reportId,
   reportedAt,
   uuid,
   type ReportStep,
 } from "./failed-delivery.fixtures";
+import {
+  driverDispatchReportedFailedAttemptMessage,
+  driverFailedReportAttentionMessage,
+  driverIncidentMaybeOpenReportMessage,
+  driverIncidentOpenReportMessage,
+  driverStaleReportMessage,
+} from "./failed-delivery-policy";
 import type { DriverOfflineOperation } from "./operation-contract";
+import type { ProjectedDriverStop } from "./operation-projection";
 import { driverRejectionMessage } from "./rejection-codes";
+
+/** The stop as the attention notice reads it. */
+function attentionStop(
+  patch: Partial<Pick<ProjectedDriverStop, "cod" | "confirmedStatus" | "confirmedVersion">> = {},
+) {
+  return {
+    order_id: orderId,
+    cod: null,
+    confirmedStatus: "DELIVERING" as const,
+    confirmedVersion: 8,
+    ...patch,
+  };
+}
 
 /**
  * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: the queue sends "No se pudo
@@ -121,6 +143,22 @@ describe("failed-delivery sync", () => {
       ["incident", "transition"],
     ],
     [
+      "the incident was requested but its answer never came back",
+      {
+        uploadSessionId: uuid(0x500),
+        uploadAccepted: true,
+        proofId: uuid(0x600),
+        failedDelivery: {
+          reasonCode: "RECIPIENT_ABSENT",
+          incidentIdempotencyKey: `drv2-${reportId}-incident`,
+          incidentRequested: true,
+          incidentId: null,
+        },
+      },
+      (server) => server.incidents.set(`drv2-${reportId}-incident`, uuid(0x700)),
+      ["incident", "transition"],
+    ],
+    [
       "the incident was opened",
       {
         uploadSessionId: uuid(0x500),
@@ -129,6 +167,7 @@ describe("failed-delivery sync", () => {
         failedDelivery: {
           reasonCode: "RECIPIENT_ABSENT",
           incidentIdempotencyKey: `drv2-${reportId}-incident`,
+          incidentRequested: true,
           incidentId: uuid(0x700),
         },
       },
@@ -167,12 +206,15 @@ describe("failed-delivery sync", () => {
       safeError: "VERSION_CONFLICT",
       rejectionCode: "INVALID_REQUEST",
       proofId: server.proofs.get(`drv2-${reportId}-finalize-1`),
-      failedDelivery: { incidentId: null },
+      failedDelivery: { incidentRequested: true, incidentId: null },
     });
     expect(server.calls).not.toContain("transition");
-    expect(driverRejectionMessage(held.kind, held.rejectionCode)).toContain(
-      "El servidor no aceptó los datos del reporte",
-    );
+    // What the server answers to a person it treats as dispatch: never the
+    // phone's clock (owner answer "Registrar desde Despacho").
+    const message = driverRejectionMessage(held.kind, held.rejectionCode);
+    expect(message).toContain("registra el intento desde la orden en Despacho");
+    expect(message).not.toMatch(/fecha|hora|reloj/);
+    expect(driverFailedReportAttentionMessage(held, attentionStop(), [held])).toBe(message);
     await scheduler.dispose();
   });
 
@@ -220,7 +262,7 @@ describe("failed-delivery sync", () => {
     await scheduler.dispose();
   });
 
-  it("holds the report on a version conflict and keeps its incident for a rebuild", async () => {
+  it("holds the report on a version conflict after its incident opened, and says the incident is open", async () => {
     const queue = queuedReport();
     const server = new FailedDeliveryServer();
     server.failures = [
@@ -230,13 +272,18 @@ describe("failed-delivery sync", () => {
 
     await scheduler.requestSync(true);
 
-    expect(queue.only()).toMatchObject({
+    const held = queue.only();
+    expect(held).toMatchObject({
       status: "NEEDS_ATTENTION",
       safeError: "VERSION_CONFLICT",
       rejectionCode: "VERSION_CONFLICT",
       failedDelivery: { incidentId: uuid(0x700) },
     });
     expect(server.incidents.size).toBe(1);
+    // MINOR 8: never "not sent" and never an invitation to report it again.
+    expect(driverFailedReportAttentionMessage(held, attentionStop(), [held])).toBe(
+      driverIncidentOpenReportMessage,
+    );
     await scheduler.dispose();
   });
 
@@ -315,6 +362,296 @@ describe("failed-delivery sync", () => {
 
     expect(queue.only()).toMatchObject({ status: "NEEDS_ATTENTION", failedDelivery: { incidentId: null } });
     expect(api.transitionOrder).not.toHaveBeenCalled();
+    await scheduler.dispose();
+  });
+});
+
+describe("a report and the attempt it describes", () => {
+  const withIncident = (patch: Partial<DriverOfflineOperation> = {}) =>
+    failedDeliveryOperation({
+      uploadSessionId: uuid(0x500),
+      uploadAccepted: true,
+      proofId: uuid(0x600),
+      failedDelivery: {
+        reasonCode: "RECIPIENT_ABSENT",
+        incidentIdempotencyKey: `drv2-${reportId}-incident`,
+        incidentRequested: true,
+        incidentId: uuid(0x700),
+      },
+      ...patch,
+    });
+
+  it("never takes dispatch's own failed attempt as this report: it is held, unsent, with its photo (BLOCKER 1)", async () => {
+    const queue = queuedReport();
+    const server = new FailedDeliveryServer();
+    server.dispatchMoves("FAILED_ATTEMPT");
+    const scheduler = server.scheduler(queue);
+
+    await scheduler.requestSync(true);
+
+    expect(server.calls).toEqual([]);
+    const held = queue.only();
+    expect(held).toMatchObject({
+      status: "NEEDS_ATTENTION",
+      safeError: "VERSION_CONFLICT",
+      rejectionCode: null,
+      failedDelivery: { incidentRequested: false, incidentId: null },
+    });
+    expect(queue.proofs.has(reportId)).toBe(true);
+    expect(
+      driverFailedReportAttentionMessage(
+        held,
+        attentionStop({ confirmedStatus: "FAILED_ATTEMPT", confirmedVersion: 9 }),
+        [held],
+      ),
+    ).toBe(driverDispatchReportedFailedAttemptMessage);
+    await scheduler.dispose();
+  });
+
+  it("is confirmed by a failed attempt once its own incident exists", async () => {
+    const queue = new MemoryQueue([withIncident({ status: "RETRY_WAIT" })]);
+    const server = new FailedDeliveryServer();
+    server.dispatchMoves("FAILED_ATTEMPT");
+    const scheduler = server.scheduler(queue);
+
+    await scheduler.requestSync(true);
+
+    expect(server.calls).toEqual([]);
+    expect(queue.operations).toEqual([]);
+    await scheduler.dispose();
+  });
+
+  it("sends nothing for an attempt dispatch already moved on: no photo, no incident (MAJOR 4)", async () => {
+    const queue = queuedReport();
+    const server = new FailedDeliveryServer();
+    server.dispatchMoves("FAILED_ATTEMPT");
+    server.dispatchMoves("DELIVERING"); // "Reintentar hoy": a new attempt at version 10.
+    const scheduler = server.scheduler(queue);
+
+    await scheduler.requestSync(true);
+
+    expect(server.calls).toEqual([]);
+    const held = queue.only();
+    expect(held).toMatchObject({ status: "NEEDS_ATTENTION", safeError: "VERSION_CONFLICT" });
+    expect(
+      driverFailedReportAttentionMessage(held, attentionStop({ confirmedVersion: 10 }), [held]),
+    ).toBe(driverStaleReportMessage);
+    await scheduler.dispose();
+  });
+
+  it("reads the stop again after the photo and opens no incident once the attempt moved on", async () => {
+    const queue = queuedReport();
+    const server = new FailedDeliveryServer();
+    server.onStopsRead = () => {
+      if (server.stopsReads === 2) {
+        server.dispatchMoves("FAILED_ATTEMPT");
+        server.dispatchMoves("DELIVERING");
+      }
+    };
+    const scheduler = server.scheduler(queue);
+
+    await scheduler.requestSync(true);
+
+    expect(server.calls).toEqual(["session", "upload", "finalize"]);
+    expect(queue.only()).toMatchObject({
+      status: "NEEDS_ATTENTION",
+      safeError: "VERSION_CONFLICT",
+      failedDelivery: { incidentRequested: false, incidentId: null },
+    });
+    await scheduler.dispose();
+  });
+
+  it("confirms an applied report whose answer was lost, even after dispatch moved the order on (MAJOR 3)", async () => {
+    const queue = queuedReport();
+    const server = new FailedDeliveryServer();
+    server.failures = [
+      { step: "transition", when: "after", error: new DriverSyncApiError("recoverable") },
+    ];
+    const scheduler = server.scheduler(queue);
+
+    await scheduler.requestSync(true);
+    expect(queue.only()).toMatchObject({ status: "RETRY_WAIT" });
+    server.dispatchMoves("DELIVERING"); // "Reintentar hoy" before the phone read REST.
+    await scheduler.requestSync(true);
+
+    // The replayed key returns the stored answer; any later version confirms it.
+    const key = `drv2-${reportId}-transition`;
+    expect(server.keys.transition).toEqual([key, key]);
+    expect(server.transitionsApplied).toBe(1);
+    expect(server.incidents.size).toBe(1);
+    expect(queue.operations).toEqual([]);
+    await scheduler.dispose();
+  });
+
+  it.each(["DELIVERING", "RETURNING", "RESCHEDULED"] as const)(
+    "confirms an accepted report by any later version (dispatch then chose %s)",
+    async (decision) => {
+      const queue = new MemoryQueue([withIncident({ status: "AWAITING_REST_CONFIRMATION" })]);
+      const server = new FailedDeliveryServer();
+      server.dispatchMoves("FAILED_ATTEMPT");
+      server.dispatchMoves(decision);
+      const scheduler = server.scheduler(queue);
+
+      await scheduler.requestSync(true);
+
+      expect(server.calls).toEqual([]);
+      expect(queue.operations).toEqual([]);
+      await scheduler.dispose();
+    },
+  );
+
+  it("marks the incident requested before sending it, and a report held after a lost answer says it may be open", async () => {
+    const queue = queuedReport();
+    const server = new FailedDeliveryServer();
+    server.failures = [
+      { step: "incident", when: "after", error: new DriverSyncApiError("recoverable") },
+    ];
+    const api = server.api();
+    const open = vi.mocked(api.openFailedDeliveryIncident).getMockImplementation()!;
+    const requestedWhenSent: boolean[] = [];
+    vi.mocked(api.openFailedDeliveryIncident).mockImplementation(async (operation, signal) => {
+      requestedWhenSent.push(queue.only().failedDelivery?.incidentRequested === true);
+      return open(operation, signal);
+    });
+    const scheduler = server.scheduler(queue, { api });
+
+    await scheduler.requestSync(true);
+    expect(requestedWhenSent).toEqual([true]);
+    expect(queue.only()).toMatchObject({
+      status: "RETRY_WAIT",
+      failedDelivery: { incidentRequested: true, incidentId: null },
+    });
+    const cod = { expected: { currency: "MXN" as const, amount_cents: amountCents }, recorded: true };
+    server.cod = cod;
+    await scheduler.requestSync(true);
+
+    const held = queue.only();
+    expect(held).toMatchObject({ status: "NEEDS_ATTENTION", safeError: "COD_COLLECTED" });
+    expect(server.keys.incident).toHaveLength(1);
+    const message = driverFailedReportAttentionMessage(held, attentionStop({ cod }), [held]);
+    expect(message).toContain("Puede que tu reporte ya haya quedado abierto como incidencia");
+    expect(message).toContain("Llama a despacho");
+    expect(message).not.toContain("el reporte no se envió");
+    expect(
+      driverFailedReportAttentionMessage(
+        { ...held, safeError: "VERSION_CONFLICT" },
+        attentionStop({ confirmedVersion: 10 }),
+        [held],
+      ),
+    ).toBe(driverIncidentMaybeOpenReportMessage);
+    await scheduler.dispose();
+  });
+});
+
+describe("a stop REST leaves out (BLOCKER 2)", () => {
+  it("never sends a report while REST cannot show its stop, and applies the cash rule once it can", async () => {
+    const queue = queuedReport();
+    const server = new FailedDeliveryServer();
+    server.dropped = true;
+    server.cod = { expected: { currency: "MXN", amount_cents: amountCents }, recorded: true };
+    const scheduler = server.scheduler(queue);
+
+    await scheduler.requestSync(true);
+
+    expect(server.calls).toEqual([]);
+    expect(queue.only()).toMatchObject({
+      status: "RETRY_WAIT",
+      safeError: "RESOURCE_UNAVAILABLE",
+      attemptCount: 1,
+    });
+    server.dropped = false;
+    await scheduler.requestSync(true);
+    expect(server.calls).toEqual([]);
+    expect(queue.only()).toMatchObject({ status: "NEEDS_ATTENTION", safeError: "COD_COLLECTED" });
+    await scheduler.dispose();
+  });
+
+  it("never records a collection while REST cannot show its stop, and holds it once REST shows it off the door", async () => {
+    const queue = new MemoryQueue([collectionOperation()]);
+    const server = new FailedDeliveryServer();
+    server.dropped = true;
+    server.dispatchMoves("FAILED_ATTEMPT");
+    server.cod = { expected: { currency: "MXN", amount_cents: amountCents }, recorded: false };
+    const scheduler = server.scheduler(queue);
+
+    await scheduler.requestSync(true);
+
+    expect(server.calls).toEqual([]);
+    expect(queue.only()).toMatchObject({ status: "RETRY_WAIT", safeError: "RESOURCE_UNAVAILABLE" });
+    server.dropped = false;
+    await scheduler.requestSync(true);
+    expect(server.calls).toEqual([]);
+    expect(queue.only()).toMatchObject({ status: "NEEDS_ATTENTION", safeError: "VERSION_CONFLICT" });
+    await scheduler.dispose();
+  });
+
+  it("opens no incident when the stop drops out of the answer after the photo", async () => {
+    const queue = queuedReport();
+    const server = new FailedDeliveryServer();
+    server.onStopsRead = () => {
+      if (server.stopsReads === 2) server.dropped = true;
+    };
+    const scheduler = server.scheduler(queue);
+
+    await scheduler.requestSync(true);
+
+    expect(server.calls).toEqual(["session", "upload", "finalize"]);
+    expect(queue.only()).toMatchObject({
+      status: "RETRY_WAIT",
+      safeError: "RESOURCE_UNAVAILABLE",
+      failedDelivery: { incidentRequested: false },
+    });
+    await scheduler.dispose();
+  });
+
+  it("does not wait forever: an unsent report whose stop never comes back expires after 72 hours", async () => {
+    const queue = queuedReport();
+    const server = new FailedDeliveryServer();
+    server.dropped = true;
+    const onOperationExpired = vi.fn();
+    let now = new Date(reportedAt.getTime() + 60_000);
+    const scheduler = server.scheduler(queue, { now: () => now, onOperationExpired });
+
+    await scheduler.requestSync(true);
+    expect(queue.only().status).toBe("RETRY_WAIT");
+    now = new Date(reportedAt.getTime() + 73 * 3_600_000);
+    await scheduler.requestSync(true);
+
+    expect(queue.operations).toEqual([]);
+    expect(onOperationExpired).toHaveBeenCalledOnce();
+    expect(server.calls).toEqual([]);
+    await scheduler.dispose();
+  });
+
+  it("does not poll forever: an accepted action REST never shows leaves after 72 hours, with no expiry notice", async () => {
+    const queue = new MemoryQueue([
+      failedDeliveryOperation({
+        uploadSessionId: uuid(0x500),
+        uploadAccepted: true,
+        proofId: uuid(0x600),
+        status: "AWAITING_REST_CONFIRMATION",
+        failedDelivery: {
+          reasonCode: "RECIPIENT_ABSENT",
+          incidentIdempotencyKey: `drv2-${reportId}-incident`,
+          incidentRequested: true,
+          incidentId: uuid(0x700),
+        },
+      }),
+    ]);
+    const server = new FailedDeliveryServer();
+    server.dropped = true;
+    const onOperationExpired = vi.fn();
+    let now = new Date(reportedAt.getTime() + 60_000);
+    const scheduler = server.scheduler(queue, { now: () => now, onOperationExpired });
+
+    await scheduler.requestSync(true);
+    expect(queue.only().status).toBe("AWAITING_REST_CONFIRMATION");
+    now = new Date(reportedAt.getTime() + 73 * 3_600_000);
+    await scheduler.requestSync(true);
+
+    expect(queue.operations).toEqual([]);
+    expect(onOperationExpired).not.toHaveBeenCalled();
+    expect(server.calls).toEqual([]);
     await scheduler.dispose();
   });
 });
@@ -400,11 +737,21 @@ describe("failed-delivery report and the cash (owner answer \"No, llama a despac
 
     expect(server.calls).toEqual(["session", "upload", "finalize", "incident"]);
     expect(server.transitionsApplied).toBe(0);
-    expect(queue.only()).toMatchObject({
+    const held = queue.only();
+    expect(held).toMatchObject({
       status: "NEEDS_ATTENTION",
       safeError: "COD_COLLECTED",
       failedDelivery: { incidentId: uuid(0x700) },
     });
+    // MINOR 8: the incident is open, so the stop never says the report was not sent.
+    const message = driverFailedReportAttentionMessage(
+      held,
+      attentionStop({ cod: server.cod }),
+      [held],
+    );
+    expect(message).toContain("Tu reporte ya quedó abierto como incidencia");
+    expect(message).toContain("Llama a despacho");
+    expect(message).not.toContain("el reporte no se envió");
     await scheduler.dispose();
   });
 
@@ -424,6 +771,10 @@ describe("failed-delivery report and the cash (owner answer \"No, llama a despac
     expect(
       queue.operations.find((operation) => operation.kind === "FAILED_DELIVERY"),
     ).toMatchObject({ status: "NEEDS_ATTENTION", safeError: "COD_COLLECTED" });
+    // An action the server already accepted is never turned back into one to send.
+    expect(
+      queue.operations.find((operation) => operation.kind === "COD_COLLECTION")?.status,
+    ).toBe("AWAITING_REST_CONFIRMATION");
     await scheduler.dispose();
   });
 

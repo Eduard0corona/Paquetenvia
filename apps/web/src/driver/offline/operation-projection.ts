@@ -147,6 +147,60 @@ export function orderDriverOperations(
 }
 
 /**
+ * Whether REST shows a queued action applied, so the queue may remove it.
+ *
+ * - A cash collection: the stop reports exactly its cash as recorded (the
+ *   DELIVERED guard condition); the status never changes.
+ * - A "No se pudo entregar" report (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12):
+ *   once the server accepted its transition (AWAITING_REST_CONFIRMATION), any
+ *   later version confirms it, whatever the status: dispatch may already have
+ *   decided ("Reintentar hoy" or "Regresar") before the phone read REST. Before
+ *   that, a FAILED_ATTEMPT confirms it only when this phone's incident exists:
+ *   a failed attempt that dispatch registered on its own never confirms a
+ *   report that was not sent (it is held instead; see the scheduler).
+ * - Any other transition: REST shows its target status at a later version.
+ */
+export function driverOperationConfirmedByStop(
+  operation: DriverOfflineOperation,
+  stop: Pick<DriverStop, "status" | "aggregate_version" | "cod">,
+): boolean {
+  if (operation.kind === "COD_COLLECTION") {
+    return (
+      stop.cod?.recorded === true &&
+      stop.cod.expected.amount_cents === operation.cod?.amountCents
+    );
+  }
+  const advanced = stop.aggregate_version >= operation.expectedVersion + 1;
+  if (operation.kind === "FAILED_DELIVERY") {
+    if (operation.status === "AWAITING_REST_CONFIRMATION") return advanced;
+    return (
+      advanced &&
+      stop.status === "FAILED_ATTEMPT" &&
+      operation.failedDelivery?.incidentId != null
+    );
+  }
+  return stop.status === operation.targetStatus && advanced;
+}
+
+/**
+ * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: a report REST already confirms
+ * (its transition was accepted and the stop is at a later version, or its own
+ * incident exists and the stop shows the failed attempt) is settled: it is not
+ * projected again, never shown as a conflict, and leaves the queue on the next
+ * pass. The stop then shows what REST says, for example DELIVERING again after
+ * dispatch chose "Reintentar hoy".
+ */
+function settledByStop(
+  operation: DriverOfflineOperation,
+  stop: DriverStop,
+): boolean {
+  return (
+    operation.kind === "FAILED_DELIVERY" &&
+    driverOperationConfirmedByStop(operation, stop)
+  );
+}
+
+/**
  * UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: a delivery whose stop still has
  * cash to collect waits, unsent, while no cash collection is saved for its
  * order, because the server refuses DELIVERED without the recorded cash
@@ -176,7 +230,10 @@ export function driverDeliveryAwaitsCash(
  * Produces the optimistic view without mutating persisted data. An invalid
  * source/version chain marks the first operation for attention and blocks only
  * later operations for that order; other orders keep projecting. A delivery
- * waiting for its cash is not applied, so the stop stays DELIVERING.
+ * waiting for its cash is not applied, so the stop stays DELIVERING. A blocked
+ * action with nothing ahead of it held for attention (for example after the
+ * action that held it was discarded on a stop dispatch moved on) is shown as
+ * held itself, so the driver can always discard it.
  */
 export function projectDriverOperations(
   confirmedStops: readonly DriverStop[],
@@ -190,6 +247,7 @@ export function projectDriverOperations(
   }
 
   const projectedOperations = new Map<string, DriverOfflineOperation>();
+  const settled = new Set<string>();
   const stops = confirmedStops.map((stop): ProjectedDriverStop => {
     let status = stop.status as DriverOperationalStatus;
     let version = stop.aggregate_version;
@@ -200,6 +258,10 @@ export function projectDriverOperations(
     let codOperationStatus: DriverOperationStatus | null = null;
     let failedReport: DriverFailedReportState = "none";
     for (const operation of operationsByOrder.get(stop.order_id) ?? []) {
+      if (!chainBlocked && settledByStop(operation, stop)) {
+        settled.add(operation.id);
+        continue;
+      }
       let derivedStatus: DriverOperationStatus = operation.status;
       if (chainBlocked) {
         derivedStatus = "BLOCKED";
@@ -207,7 +269,8 @@ export function projectDriverOperations(
         operation.status === "NEEDS_ATTENTION" ||
         operation.status === "BLOCKED"
       ) {
-        derivedStatus = operation.status;
+        // A blocked action with nothing held ahead of it is the one to resolve.
+        derivedStatus = "NEEDS_ATTENTION";
         chainBlocked = true;
       } else if (!driverOperationApplies(operation, status, version)) {
         derivedStatus = "NEEDS_ATTENTION";
@@ -225,7 +288,9 @@ export function projectDriverOperations(
               status: derivedStatus,
               safeError:
                 derivedStatus === "NEEDS_ATTENTION"
-                  ? "VERSION_CONFLICT"
+                  ? operation.status === "BLOCKED" && operation.safeError !== null
+                    ? operation.safeError
+                    : "VERSION_CONFLICT"
                   : operation.safeError,
             });
       projectedOperations.set(operation.id, projected);
@@ -262,7 +327,7 @@ export function projectDriverOperations(
   // Operations for a stop that REST no longer exposes are not attached to
   // another partition or guessed resource.
   for (const operation of operations) {
-    if (!projectedOperations.has(operation.id)) {
+    if (!projectedOperations.has(operation.id) && !settled.has(operation.id)) {
       projectedOperations.set(
         operation.id,
         operation.status === "NEEDS_ATTENTION"
