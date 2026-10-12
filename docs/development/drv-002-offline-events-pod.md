@@ -108,7 +108,10 @@ La partition key sigue siendo un SHA-256 base64url del namespace opaco y la
 organización activa. Todas las lecturas y escrituras usan esa key; no se
 enumeran otras particiones. Un lease evita dos schedulers activos para la misma
 partición; se renueva con heartbeat cancelable mientras existe trabajo activo y
-una lease expirada puede recuperarse sin crear un lock global.
+una lease expirada puede recuperarse sin crear un lock global. Un sync pedido
+mientras otra página tiene la lease vigente (por ejemplo, una página que se fue
+a mitad de un pase) no se descarta: se vuelve a pedir tras una duración de
+lease (ver `driver-offline-replay-flake.md`).
 
 No se persisten bearer tokens, signed URLs, headers firmados, object keys,
 teléfono, coordenadas ni respuestas técnicas. Las URLs y headers firmados sólo
