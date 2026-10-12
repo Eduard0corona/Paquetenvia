@@ -1836,6 +1836,22 @@ a.opsInboxQueue[aria-current="page"] {
   overflow-wrap: anywhere;
 }
 
+/* UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11: "Crear ruta nueva" where the driver has no DRAFT route. */
+.opsBulkRouteCreate {
+  display: grid;
+  gap: var(--space-2);
+  justify-items: start;
+  overflow-wrap: anywhere;
+}
+
+.opsBulkRouteCreate > p {
+  margin: 0;
+}
+
+.opsBulkRouteCreate > .emptyState {
+  justify-self: stretch;
+}
+
 .opsBulkRoutePreview {
   min-width: 32rem;
 }

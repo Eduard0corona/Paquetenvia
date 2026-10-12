@@ -2,10 +2,17 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import type { BulkOrder } from "../contracts/bulk-assignment";
-import { bulkRouteGoneMessage, draftRouteChoices, routeStopConflictMessages } from "../contracts/bulk-route";
+import {
+  bulkRouteGoneMessage,
+  bulkRouteMixedCitiesMessage,
+  createRouteConflictMessages,
+  draftRouteChoices,
+  routeStopConflictMessages,
+  unconfirmedRouteText,
+} from "../contracts/bulk-route";
 import type { ManualRoute } from "../contracts/manual-route";
 import { syntheticUuid } from "../contracts/ui-001-screens.fixtures";
-import type { BulkRouteState } from "../state/bulk-route-controller";
+import type { BulkRouteCreation, BulkRouteNotice, BulkRouteState } from "../state/bulk-route-controller";
 import { BulkRouteChoices, BulkRouteFixed, BulkRoutePreview, OperationsBulkRoute } from "./operations-bulk-route";
 
 const driver = { driverId: syntheticUuid(0x601), driverReference: "DRV-0a1b2c3d" };
@@ -41,7 +48,12 @@ function route(counter: number, overrides: Partial<ManualRoute> = {}): ManualRou
 const text = (html: string) => html.replace(/<[^>]+>/g, " ").replace(/\s+/g, " ").trim();
 const noop = () => undefined;
 
-function choicesHtml(routes: BulkRouteState["routes"], selected: string | null = null): string {
+function choicesHtml(
+  routes: BulkRouteState["routes"],
+  selected: string | null = null,
+  creation: BulkRouteCreation = { kind: "none" },
+  notice: BulkRouteNotice | null = null,
+): string {
   const choices = routes.kind === "ready" ? draftRouteChoices(routes.routes) : [];
   return renderToStaticMarkup(
     createElement(BulkRouteChoices, {
@@ -50,10 +62,22 @@ function choicesHtml(routes: BulkRouteState["routes"], selected: string | null =
       choices,
       selected,
       disabled: false,
+      creation,
+      notice,
       onSelect: noop,
       onReload: noop,
+      onCreate: noop,
     }),
   );
+}
+
+const cityId = syntheticUuid(0x900);
+const offered: BulkRouteCreation = { kind: "offered", cityId, cityName: "Culiacán, SIN" };
+/** A `<button>` by its visible label; a missing button fails the test instead of passing a negative check. */
+function buttonTag(html: string, label: string): string {
+  const match = new RegExp(`<button[^>]*>${label}</button>`).exec(html);
+  if (match === null) throw new Error(`No button "${label}".`);
+  return match[0];
 }
 
 function previewHtml(
@@ -198,5 +222,106 @@ describe("bulk add to route step (UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11)"
       createElement(BulkRouteFixed, { route: fixed, choice: null, routes: { kind: "loading" }, canReload: true, onReload: noop }),
     );
     expect(text(loading)).toBe("Leyendo de nuevo la ruta…");
+  });
+});
+
+describe("Crear ruta nueva in the step (UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11)", () => {
+  it("offers it where the driver has no DRAFT route, saying what it creates, the city by name only", () => {
+    const html = choicesHtml({ kind: "ready", routes: [] }, null, offered);
+    const visible = text(html);
+    expect(visible).toContain("DRV-0a1b2c3d no tiene rutas en borrador.");
+    expect(visible).toContain(
+      "«Crear ruta nueva» crea una ruta en borrador para DRV-0a1b2c3d en Culiacán, SIN, la ciudad de las órdenes, con " +
+        "la fecha de hoy (hora de Mazatlán), y sigue a la vista previa. Ninguna orden se agrega hasta que confirmes.",
+    );
+    const button = buttonTag(html, "Crear ruta nueva");
+    expect(button).toContain('type="button"');
+    expect(button).not.toContain("disabled");
+    expect(button).toContain('aria-describedby="inbox-bulk-route-create-offer"');
+    // Rutas stays the other way, opened in another tab, and the routes can be searched again.
+    expect(visible).toContain("Las rutas también se crean en Rutas. Abrir Rutas en otra pestaña");
+    expect(html).toContain('<a target="_blank" rel="noopener noreferrer" href="/ops/routes">Abrir Rutas en otra pestaña</a>');
+    expect(buttonTag(html, "Buscar rutas de nuevo")).not.toContain("disabled");
+    expect(visible).not.toContain("Crea una para este repartidor en Rutas");
+    // No identifier, no radio and no amount.
+    expect(visible).not.toMatch(uuidText);
+    expect(html).not.toContain(cityId);
+    expect(html).not.toContain('type="radio"');
+    expect(visible).not.toMatch(/\$|MXN/);
+    // Without the city's name it says "the orders' city".
+    const unnamed = text(choicesHtml({ kind: "ready", routes: [] }, null, { ...offered, cityName: null }));
+    expect(unnamed).toContain("para DRV-0a1b2c3d en la ciudad de las órdenes, con la fecha de hoy (hora de Mazatlán)");
+  });
+
+  it("waits while the route is being created: the buttons cannot be pressed again", () => {
+    const html = choicesHtml({ kind: "ready", routes: [] }, null, { ...offered, kind: "creating" });
+    expect(buttonTag(html, "Crear ruta nueva")).toContain('disabled=""');
+    expect(buttonTag(html, "Buscar rutas de nuevo")).toContain('disabled=""');
+    expect(text(html)).toContain("Creando la ruta en borrador…");
+  });
+
+  it("says why orders in different cities get no button, keeping Rutas and the new search", () => {
+    const html = choicesHtml({ kind: "ready", routes: [] }, null, { kind: "mixed_cities" });
+    const visible = text(html);
+    expect(visible).toContain(`DRV-0a1b2c3d no tiene rutas en borrador. ${bulkRouteMixedCitiesMessage}`);
+    expect(html).not.toContain("Crear ruta nueva");
+    expect(visible).toContain("Las rutas se crean en Rutas. Abrir Rutas en otra pestaña");
+    expect(visible).toContain("Buscar rutas de nuevo");
+  });
+
+  it("offers nothing next to DRAFT routes, nor while the routes or the orders cannot be read", () => {
+    const listed = choicesHtml({ kind: "ready", routes: [route(1)] }, null, { kind: "none" });
+    expect(listed).not.toContain("Crear ruta nueva");
+    const failed = choicesHtml({ kind: "failed", message: "No fue posible cargar las rutas en borrador del repartidor. Intenta de nuevo.", stepUpHref: null });
+    expect(failed).not.toContain("Crear ruta nueva");
+    expect(text(failed)).toContain("No fue posible cargar las rutas en borrador del repartidor. Intenta de nuevo.");
+    expect(failed).not.toContain("no tiene rutas en borrador");
+  });
+
+  it("shows the created route selected with its notice, and a refusal or an unconfirmed creation as a warning", () => {
+    const created = route(9, { version: 1, stop_count: 0, scheduled_for: "2026-10-11", assignment_cost_cents_total: 0 });
+    const html = choicesHtml({ kind: "ready", routes: [created] }, created.id, { kind: "none" }, {
+      tone: "info",
+      text: "Se creó «Ruta del 11 de octubre de 2026» en borrador para DRV-0a1b2c3d. Revisa la vista previa y confirma para agregar las órdenes.",
+      stepUpHref: null,
+    });
+    expect(html).toContain(`checked="" value="${created.id}"`);
+    expect(text(html)).toContain("Ruta del 11 de octubre de 2026 · sin paradas");
+    expect(html).toContain('<p class="notice noticeInfo" role="status">Se creó «Ruta del 11 de octubre de 2026»');
+    expect(html).not.toContain("Crear ruta nueva");
+
+    const refused = choicesHtml({ kind: "ready", routes: [] }, null, offered, {
+      tone: "warn",
+      text: createRouteConflictMessages.DRIVER_INELIGIBLE ?? "",
+      stepUpHref: null,
+    });
+    expect(refused).toContain(`<p class="notice noticeWarn" role="status">${createRouteConflictMessages.DRIVER_INELIGIBLE}`);
+    expect(buttonTag(refused, "Crear ruta nueva")).not.toContain("disabled");
+
+    const mfa = choicesHtml({ kind: "ready", routes: [] }, null, offered, {
+      tone: "warn",
+      text: "No se creó la ruta: Esta acción requiere verificar tu identidad (MFA).",
+      stepUpHref: "/login?mfa=required&return_url=%2Fops%2Finbox",
+    });
+    expect(text(mfa)).toContain("No se creó la ruta: Esta acción requiere verificar tu identidad (MFA). Verificar identidad");
+    expect(mfa).toContain('href="/login?mfa=required&amp;return_url=%2Fops%2Finbox"');
+
+    const unconfirmed = choicesHtml({ kind: "ready", routes: [created] }, null, { kind: "none" }, {
+      tone: "warn",
+      text: unconfirmedRouteText("found", true, driver.driverReference),
+      stepUpHref: null,
+    });
+    expect(text(unconfirmed)).toContain(unconfirmedRouteText("found", true, driver.driverReference));
+    expect(unconfirmed.match(/checked=""/g)).toBeNull();
+    expect(text(unconfirmed)).not.toMatch(uuidText);
+  });
+
+  it("names the created route in the preview once it is selected", () => {
+    const created = route(9, { version: 1, stop_count: 0, scheduled_for: "2026-10-11" });
+    const html = previewHtml("choosing", {}, created);
+    expect(html).toContain('id="inbox-bulk-route-preview-region"');
+    expect(text(html.slice(html.indexOf("<caption"), html.indexOf("</caption>")))).toBe(
+      "Vista previa: 3 órdenes de DRV-0a1b2c3d a «Ruta del 11 de octubre de 2026». Se agregan al final de la ruta, una por una y en el orden de esta tabla.",
+    );
   });
 });

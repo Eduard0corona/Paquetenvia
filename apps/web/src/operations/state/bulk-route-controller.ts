@@ -1,14 +1,20 @@
-import type { BulkRouteApi } from "../api/bulk-route-api";
+import type { BulkRouteApi, CreateRouteBody } from "../api/bulk-route-api";
 import { TenantApiError } from "../api/tenant-request";
 import type { BulkOrder } from "../contracts/bulk-assignment";
 import {
   bulkRouteRunSummary,
+  createdRouteText,
+  createRouteConflictMessages,
+  createRouteNotFoundMessage,
   isDraftRouteOf,
   routeStopConflictMessages,
   routeStopDefaultConflictMessage,
   routeStopNotFoundMessage,
+  todayInMazatlan,
+  unconfirmedRouteText,
   type BulkRouteDriver,
 } from "../contracts/bulk-route";
+import { cityLabel } from "../contracts/locations";
 import type { ManualRoute, ManualRouteDetail } from "../contracts/manual-route";
 import { PendingSubmissions } from "./pending-submissions";
 import { describeFailure } from "./tenant-error-messages";
@@ -28,11 +34,40 @@ import { describeFailure } from "./tenant-error-messages";
  * next order is sent; otherwise the run stops the same way. The first run fixes the route for the
  * rest of the batch. Each order keeps its own result, a stop is never hidden, and the inbox reads
  * REST again after every run. Nothing is stored in the browser and nothing is logged.
+ *
+ * UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11 ("Sí, en el paso (Recommended)"): when the driver has
+ * no DRAFT route (and no run fixed one), every order of the batch is read with getOrder, one after
+ * another, for its city_id. One shared city offers "Crear ruta nueva": createRoute with the driver,
+ * that city, no service area and today's date in Mazatlán, under an Idempotency-Key kept only to
+ * resend that same request after a network or server failure. The created route is selected and
+ * the step goes on to its usual preview, confirmation and addRouteStop run. Orders in different
+ * cities get no button, and an order that cannot be read fails the read like the routes. A success
+ * is never invented: after a failure that cannot say whether the route exists, the driver's DRAFT
+ * routes are read again before the button comes back.
  */
 export type BulkRoutesLoad =
   | { readonly kind: "loading" }
   | { readonly kind: "ready"; readonly routes: readonly ManualRoute[] }
   | { readonly kind: "failed"; readonly message: string; readonly stepUpHref: string | null };
+
+/** "Crear ruta nueva", next to "the driver has no DRAFT route" only. */
+export type BulkRouteCreation =
+  /** Not offered: the routes are loading or failed, the driver has DRAFT routes, or a run fixed the route. */
+  | { readonly kind: "none" }
+  /** The orders are in different cities: a route covers one city, so routes are created in Rutas. */
+  | { readonly kind: "mixed_cities" }
+  /** A DRAFT route of the driver in the orders' city, for today; `cityName` is null when listCities failed. */
+  | { readonly kind: "offered"; readonly cityId: string; readonly cityName: string | null }
+  /** createRoute is in flight: the button waits and nothing else reads or sends. */
+  | { readonly kind: "creating"; readonly cityId: string; readonly cityName: string | null };
+
+/** The outcome of the last "Crear ruta nueva": created, refused or not confirmed. */
+export interface BulkRouteNotice {
+  readonly tone: "info" | "warn";
+  readonly text: string;
+  /** `/login?mfa=required&return_url=…` when only MFA was missing. */
+  readonly stepUpHref: string | null;
+}
 
 export type BulkRouteRowResult =
   /** Part of the run, waiting for its turn. */
@@ -59,6 +94,11 @@ export interface BulkRouteState {
   readonly stepUpHref: string | null;
   /** Some orders can be sent again: the run stopped on a network or server failure. */
   readonly canRetry: boolean;
+  /** UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11: "Crear ruta nueva". */
+  readonly creation: BulkRouteCreation;
+  readonly creationNotice: BulkRouteNotice | null;
+  /** The route "Crear ruta nueva" created; the step selects it for the preview. */
+  readonly createdRouteId: string | null;
 }
 
 export function initialBulkRouteState(orders: readonly BulkOrder[]): BulkRouteState {
@@ -71,6 +111,9 @@ export function initialBulkRouteState(orders: readonly BulkOrder[]): BulkRouteSt
     message: null,
     stepUpHref: null,
     canRetry: false,
+    creation: { kind: "none" },
+    creationNotice: null,
+    createdRouteId: null,
   };
 }
 
@@ -101,6 +144,31 @@ class RouteListIncompleteError extends Error {
     this.name = "RouteListIncompleteError";
   }
 }
+
+/** An order of the batch could not be read: whether a route can be created stays unknown. */
+class OrderCityUnreadableError extends Error {
+  public constructor() {
+    super("An order of the batch could not be read.");
+    this.name = "OrderCityUnreadableError";
+  }
+}
+
+/** The single key scope of "Crear ruta nueva": one route request per step. */
+const createRouteScope = "create-route";
+
+const none: BulkRouteCreation = { kind: "none" };
+
+/** What the orders of the batch say about their city; read once, since an order keeps its city. */
+type OrdersCity = { readonly kind: "same"; readonly cityId: string } | { readonly kind: "mixed" };
+
+type CreateFailure =
+  /** createRoute refused the route for sure: nothing was created. */
+  | { readonly kind: "refused"; readonly message: string; readonly stepUpHref: string | null }
+  /**
+   * The route may exist anyway: the DRAFT routes are read again before creation is offered again.
+   * `sameRequest`: no answer or a server failure, so the same request keeps its key to be resent.
+   */
+  | { readonly kind: "unconfirmed"; readonly sameRequest: boolean };
 
 interface SendFailure {
   readonly result: BulkRouteRowResult;
@@ -138,7 +206,12 @@ export class BulkRouteController {
   private disposed = false;
   private readonly abort = new AbortController();
   private readonly keys: PendingSubmissions;
+  private readonly createKeys: PendingSubmissions;
   private routesGeneration = 0;
+  private ordersCity: OrdersCity | null = null;
+  private cityName: string | null = null;
+  /** The last "Crear ruta nueva" could not say whether the route exists; `sameRequest` keeps its key. */
+  private unconfirmed: { readonly sameRequest: boolean } | null = null;
 
   public constructor(
     private readonly api: BulkRouteApi,
@@ -150,31 +223,104 @@ export class BulkRouteController {
     /** Where the MFA step-up returns (the inbox view). */
     private readonly returnUrl: string,
     randomUuid: () => string = () => crypto.randomUUID(),
+    /** The clock "Crear ruta nueva" takes today's Mazatlán date from. */
+    private readonly now: () => Date = () => new Date(),
   ) {
     this.state = initialBulkRouteState(orders);
     this.keys = new PendingSubmissions(() => `add-route-stop-${randomUuid()}`);
+    this.createKeys = new PendingSubmissions(() => `create-route-${randomUuid()}`);
   }
 
   public get current(): BulkRouteState {
     return this.state;
   }
 
-  /** Reads every DRAFT route of the driver, one page after another. */
+  /**
+   * Reads every DRAFT route of the driver, one page after another. When there is none and no run
+   * fixed a route, the orders' city decides whether "Crear ruta nueva" is offered.
+   */
   public async loadRoutes(): Promise<void> {
-    if (this.disposed || this.state.phase !== "choosing") return;
+    if (this.disposed || this.state.phase !== "choosing" || this.state.creation.kind === "creating") return;
     const generation = ++this.routesGeneration;
-    this.set({ ...this.state, routes: { kind: "loading" } });
+    this.set({ ...this.state, routes: { kind: "loading" }, creation: none });
     try {
       const routes = await this.readAllRoutes();
       if (this.disposed || generation !== this.routesGeneration) return;
       const fixed = this.state.route;
       // The fixed route takes the version and stops just read; a route no longer listed stays as it was.
       const route = fixed === null ? null : (routes.find((item) => item.id === fixed.id) ?? fixed);
-      this.set({ ...this.state, routes: { kind: "ready", routes }, route });
+      const creation = fixed === null && routes.length === 0 ? await this.creationOffer() : none;
+      if (this.disposed || generation !== this.routesGeneration) return;
+      this.set({
+        ...this.state,
+        routes: { kind: "ready", routes },
+        route,
+        creation,
+        creationNotice: this.unconfirmedNotice(routes.length > 0 ? "found" : "none") ?? this.state.creationNotice,
+      });
     } catch (error: unknown) {
       if (this.disposed || generation !== this.routesGeneration) return;
-      this.set({ ...this.state, routes: { kind: "failed", ...routesFailure(error, this.returnUrl) } });
+      this.set({
+        ...this.state,
+        routes: { kind: "failed", ...routesFailure(error, this.returnUrl) },
+        creation: none,
+        creationNotice: this.unconfirmedNotice("unread") ?? this.state.creationNotice,
+      });
     }
+  }
+
+  /**
+   * "Crear ruta nueva": createRoute with the batch's driver, the orders' city, no service area and
+   * today's date in Mazatlán. The created route is selected and the step stays on its preview; a
+   * refusal keeps the button with its es-MX reason; a failure that cannot say whether the route
+   * exists reads the DRAFT routes again before the button comes back.
+   */
+  public async createRoute(): Promise<void> {
+    const creation = this.state.creation;
+    if (this.disposed || this.state.phase !== "choosing" || this.state.route !== null) return;
+    if (creation.kind !== "offered" || this.state.routes.kind !== "ready" || this.state.routes.routes.length > 0) return;
+    const body: CreateRouteBody = {
+      driverId: this.driver.driverId,
+      cityId: creation.cityId,
+      scheduledFor: todayInMazatlan(this.now()),
+    };
+    // The same request keeps its key until a definitive answer; another day or city is another request.
+    const prepared = this.createKeys.prepare(createRouteScope, `${body.driverId}|${body.cityId}|${body.scheduledFor}`, () => body);
+    this.unconfirmed = null;
+    this.set({ ...this.state, creation: { ...creation, kind: "creating" }, creationNotice: null });
+    let route: ManualRoute;
+    try {
+      route = await this.api.createRoute(prepared.payload, prepared.key, this.abort.signal);
+    } catch (error: unknown) {
+      if (this.disposed) return;
+      const failure = createFailure(error, this.returnUrl);
+      if (failure.kind === "refused") {
+        this.createKeys.settle(createRouteScope);
+        this.set({
+          ...this.state,
+          creation: { ...creation, kind: "offered" },
+          creationNotice: { tone: "warn", text: failure.message, stepUpHref: failure.stepUpHref },
+        });
+        return;
+      }
+      // Only no answer or a server failure keeps the key, to resend this same request.
+      if (!failure.sameRequest) this.createKeys.settle(createRouteScope);
+      // Never a success by guess: a route created anyway must be found, not created twice.
+      this.unconfirmed = { sameRequest: failure.sameRequest };
+      this.set({ ...this.state, creation: { ...creation, kind: "offered" } });
+      await this.loadRoutes();
+      return;
+    }
+    if (this.disposed) return;
+    this.createKeys.settle(createRouteScope);
+    // Straight to the preview: the created route is the driver's only DRAFT route, and it is selected.
+    this.set({
+      ...this.state,
+      routes: { kind: "ready", routes: [route] },
+      creation: none,
+      createdRouteId: route.id,
+      creationNotice: { tone: "info", text: createdRouteText(route, this.driver.driverReference), stepUpHref: null },
+    });
   }
 
   /**
@@ -190,7 +336,19 @@ export class BulkRouteController {
     if (orderIds.length === 0) return;
     const results = { ...this.state.results };
     for (const orderId of orderIds) results[orderId] = { kind: "pending" };
-    this.set({ ...this.state, phase: "running", route, results, message: null, stepUpHref: null, canRetry: false });
+    // A run fixes the route: "Crear ruta nueva" and its notices are over.
+    this.unconfirmed = null;
+    this.set({
+      ...this.state,
+      phase: "running",
+      route,
+      results,
+      message: null,
+      stepUpHref: null,
+      canRetry: false,
+      creation: none,
+      creationNotice: null,
+    });
     await this.send(orderIds);
   }
 
@@ -211,6 +369,54 @@ export class BulkRouteController {
     this.disposed = true;
     this.abort.abort();
     this.keys.clear();
+    this.createKeys.clear();
+  }
+
+  /**
+   * Whether "Crear ruta nueva" is offered once the driver has no DRAFT route: every order of the
+   * batch is read with getOrder, one after another (cancelled with the step), for its city_id. One
+   * shared city offers it, named by listCities when that read works; different cities never do. An
+   * order that cannot be read fails the whole read, so the button is never offered on a guess.
+   */
+  private async creationOffer(): Promise<BulkRouteCreation> {
+    if (this.ordersCity === null) {
+      const cities = new Set<string>();
+      for (const order of this.state.orders) {
+        // A closed step reads nothing more.
+        if (this.disposed) return none;
+        try {
+          cities.add((await this.api.getOrder(order.orderId, this.abort.signal)).city_id);
+        } catch {
+          throw new OrderCityUnreadableError();
+        }
+      }
+      const [cityId] = cities;
+      this.ordersCity = cities.size === 1 && cityId !== undefined ? { kind: "same", cityId } : { kind: "mixed" };
+    }
+    if (this.ordersCity.kind === "mixed") return { kind: "mixed_cities" };
+    const cityId = this.ordersCity.cityId;
+    if (this.cityName === null) this.cityName = await this.readCityName(cityId);
+    return { kind: "offered", cityId, cityName: this.cityName };
+  }
+
+  /** The city's name and state from listCities; null (the name is left out) when it cannot be read. */
+  private async readCityName(cityId: string): Promise<string | null> {
+    try {
+      const city = (await this.api.listCities(this.abort.signal)).find((item) => item.id === cityId);
+      return city === undefined ? null : cityLabel(city);
+    } catch {
+      return null;
+    }
+  }
+
+  /** The notice of a creation left unconfirmed, once the DRAFT routes were read again (or not). */
+  private unconfirmedNotice(outcome: "found" | "none" | "unread"): BulkRouteNotice | null {
+    if (this.unconfirmed === null) return null;
+    return {
+      tone: "warn",
+      text: unconfirmedRouteText(outcome, this.unconfirmed.sameRequest, this.driver.driverReference),
+      stepUpHref: null,
+    };
   }
 
   private async send(orderIds: readonly string[]): Promise<void> {
@@ -405,7 +611,31 @@ function routesFailure(
   returnUrl: string,
 ): { readonly message: string; readonly stepUpHref: string | null } {
   if (error instanceof RouteListIncompleteError) return { message: bulkRoutesTooManyMessage, stepUpHref: null };
+  // An order of the batch that cannot be read leaves the step as unavailable as an unreadable route list.
+  if (error instanceof OrderCityUnreadableError) return { message: bulkRoutesUnavailableMessage, stepUpHref: null };
   if (error instanceof TenantApiError && (error.retryable || error.category === "invalid"))
     return { message: bulkRoutesUnavailableMessage, stepUpHref: null };
   return describeFailure(error, returnUrl);
+}
+
+/**
+ * What a createRoute failure means. Session, role and MFA (with the step-up back to the inbox),
+ * the uniform 404, DRIVER_INELIGIBLE and INVALID_REQUEST refuse the route for sure. No answer or a
+ * server failure keeps the key to resend the same request; neither it, an unexpected answer nor a
+ * generic CONFLICT (the server also answers it when its store fails) can say whether the route
+ * exists, so the DRAFT routes are read again first.
+ */
+function createFailure(error: unknown, returnUrl: string): CreateFailure {
+  if (!(error instanceof TenantApiError)) return { kind: "unconfirmed", sameRequest: false };
+  if (error.retryable) return { kind: "unconfirmed", sameRequest: true };
+  if (error.category === "not_found") return { kind: "refused", message: createRouteNotFoundMessage, stepUpHref: null };
+  if (error.category === "conflict") {
+    const refusal = error.code === null ? undefined : createRouteConflictMessages[error.code];
+    return refusal === undefined
+      ? { kind: "unconfirmed", sameRequest: false }
+      : { kind: "refused", message: refusal, stepUpHref: null };
+  }
+  if (error.category === "invalid") return { kind: "unconfirmed", sameRequest: false };
+  const view = describeFailure(error, returnUrl);
+  return { kind: "refused", message: `No se creó la ruta: ${view.message}`, stepUpHref: view.stepUpHref };
 }

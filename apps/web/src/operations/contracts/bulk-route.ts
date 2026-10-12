@@ -1,3 +1,4 @@
+import { instantToMazatlanWallTime } from "../../lib/mazatlan-time";
 import type { BulkOrder } from "./bulk-assignment";
 import type { ManualRoute } from "./manual-route";
 
@@ -199,4 +200,73 @@ export function bulkRouteRunSummary(added: number, total: number): string {
     return total === 1 ? "Se agregó la orden a la ruta." : `Se agregaron las ${total} órdenes a la ruta.`;
   if (added === 0) return "No se agregó ninguna orden a la ruta. Revisa el motivo en cada fila.";
   return `${added === 1 ? "Se agregó" : "Se agregaron"} ${added} de ${total} órdenes a la ruta. Revisa el motivo de las demás en su fila.`;
+}
+
+/*
+ * UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11 ("Sí, en el paso (Recommended)": "Crea la ruta en borrador para ese
+ * repartidor, con la ciudad de las órdenes y la fecha de hoy (hora de Mazatlán), y sigue a la vista previa."). Only
+ * where the step says the driver has no DRAFT route, and only when every order of the batch is in one city, "Crear
+ * ruta nueva" creates that route (createRoute, no service area) and the step goes on to its preview.
+ */
+
+/** Today's calendar date in America/Mazatlan (`YYYY-MM-DD`): never the device's date nor the UTC date. */
+export function todayInMazatlan(now: Date): string {
+  const wall = instantToMazatlanWallTime(now);
+  if (wall === "") throw new RangeError("A valid instant is required.");
+  return wall.slice(0, 10);
+}
+
+/** What "Crear ruta nueva" creates, said before it is pressed: the driver, the orders' city and today's date. */
+export function createRouteOfferText(driverReference: string, cityName: string | null): string {
+  const city = cityName === null ? "la ciudad de las órdenes" : `${cityName}, la ciudad de las órdenes`;
+  return (
+    `«Crear ruta nueva» crea una ruta en borrador para ${driverReference} en ${city}, con la fecha de hoy (hora de ` +
+    "Mazatlán), y sigue a la vista previa. Ninguna orden se agrega hasta que confirmes."
+  );
+}
+
+/** Orders of the batch in different cities: no route is created in the step. */
+export const bulkRouteMixedCitiesMessage =
+  "Las órdenes de este lote están en ciudades distintas y una ruta cubre una sola ciudad, así que aquí no se crea " +
+  "ninguna. Las rutas se crean en Rutas.";
+
+/** Shown once the route exists: the step is already on its preview. */
+export function createdRouteText(route: ManualRoute, driverReference: string): string {
+  const [choice] = draftRouteChoices([route]);
+  const name = choice?.name ?? "La ruta";
+  return `Se creó «${name}» en borrador para ${driverReference}. Revisa la vista previa y confirma para agregar las órdenes.`;
+}
+
+/** es-MX text of each createRoute 409 code that refuses the route for sure (AI-05 RoutingConflict); never the code. */
+export const createRouteConflictMessages: Readonly<Record<string, string>> = {
+  DRIVER_INELIGIBLE:
+    "No se creó la ruta: el repartidor no puede tomar rutas en la ciudad de estas órdenes. Puede que su ciudad sea " +
+    "otra o que hoy no esté habilitado (su estado o sus documentos).",
+  INVALID_REQUEST: "No se creó la ruta: el servidor no aceptó la solicitud. Actualiza la bandeja e intenta de nuevo.",
+};
+
+/** The uniform 404 of createRoute: it never says which one is missing. */
+export const createRouteNotFoundMessage = "No se creó la ruta: el repartidor o la ciudad ya no están disponibles.";
+
+/**
+ * After a failure that cannot say whether the route exists (no answer, a server failure, an unexpected answer or a
+ * generic conflict), the driver's DRAFT routes are read again before "Crear ruta nueva" is offered again: `found`
+ * when that read lists routes, `none` when it lists none, `unread` when it failed.
+ */
+export function unconfirmedRouteText(
+  outcome: "found" | "none" | "unread",
+  sameRequest: boolean,
+  driverReference: string,
+): string {
+  if (outcome === "unread")
+    return "No se pudo confirmar si la ruta se creó. Busca las rutas de nuevo antes de intentarlo otra vez.";
+  if (outcome === "found")
+    return (
+      `No se pudo confirmar si la ruta se creó. Se buscaron de nuevo las rutas en borrador de ${driverReference}: ` +
+      "si la nueva ya aparece, elígela."
+    );
+  return (
+    `No se pudo confirmar si la ruta se creó y no aparece entre las rutas en borrador de ${driverReference}. ` +
+    (sameRequest ? "Puedes intentarlo de nuevo: se reenvía la misma solicitud sin duplicarla." : "Puedes intentarlo de nuevo.")
+  );
 }
