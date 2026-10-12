@@ -10,6 +10,7 @@ import {
   routeFormAreasFailedMessage,
   routeDriverText,
   routeDriverUnavailableText,
+  routeListDriverText,
   routeFormCitiesFailedMessage,
   routeFormDriversFailedMessage,
   type CreateRouteFormApi,
@@ -343,5 +344,56 @@ describe("the driver of the route detail (UI-PHASE3-ROUTES-NO-IDS-2026-10-12)", 
       expect(text).not.toMatch(/[0-9a-f]{8}-/);
     controller.stop();
     expect(controller.getSnapshot().driverReferences.size).toBe(0);
+  });
+});
+
+describe("the driver of each row of the route list (UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12)", () => {
+  it("is the bare DRV- reference from the same read, any status, and nothing while that read is in flight", async () => {
+    const { controller, api } = setup();
+    expect(routeListDriverText(controller.getSnapshot(), active.driver_id)).toBeNull();
+    const slow = deferred<OrganizationDriverPage>();
+    api.driverPages = { "": () => slow.promise };
+    const starting = controller.start();
+    expect(controller.getSnapshot().drivers).toEqual({ kind: "loading" });
+    expect(routeListDriverText(controller.getSnapshot(), active.driver_id)).toBeNull();
+    slow.resolve({ items: [active, suspended, otherActive, pending], next_cursor: null });
+    await starting;
+    const state = controller.getSnapshot();
+    expect(routeListDriverText(state, active.driver_id)).toBe("DRV-cccccccc");
+    expect(routeListDriverText(state, suspended.driver_id)).toBe("DRV-bbbbbbbb");
+    expect(routeListDriverText(state, pending.driver_id)).toBe("DRV-dddddddd");
+    // One read for the form, the detail and the list.
+    expect(api.calls.filter((call) => call.startsWith("drivers"))).toEqual(["drivers"]);
+    // Reading the drivers again leaves the rows without a driver until the answer arrives.
+    const again = deferred<OrganizationDriverPage>();
+    api.driverPages = { "": () => again.promise };
+    const reloading = controller.loadDrivers();
+    expect(routeListDriverText(controller.getSnapshot(), active.driver_id)).toBeNull();
+    again.resolve({ items: [active], next_cursor: null });
+    await reloading;
+    expect(routeListDriverText(controller.getSnapshot(), active.driver_id)).toBe("DRV-cccccccc");
+  });
+
+  it("says Repartidor no disponible, never the id, for a driver the read did not return or a failed read", async () => {
+    const { controller, api } = setup();
+    await controller.start();
+    const missing = syntheticUuid(0x6ff);
+    expect(routeListDriverText(controller.getSnapshot(), missing)).toBe(routeDriverUnavailableText);
+    api.driverPages = { "": () => Promise.reject(new TenantApiError("unavailable")) };
+    await controller.loadDrivers();
+    const failed = controller.getSnapshot();
+    expect(failed.drivers.kind).toBe("failed");
+    for (const driverId of [active.driver_id, missing]) {
+      const text = routeListDriverText(failed, driverId);
+      expect(text).toBe("Repartidor no disponible");
+      expect(text).not.toMatch(/[0-9a-f]{8}-|[0-9a-f]{8}$/);
+      expect(text).not.toContain(driverId.slice(0, 8));
+    }
+  });
+
+  it("without a session, names no driver", async () => {
+    const { controller } = setup(new FakeApi(), null);
+    await controller.start();
+    expect(routeListDriverText(controller.getSnapshot(), active.driver_id)).toBe(routeDriverUnavailableText);
   });
 });
