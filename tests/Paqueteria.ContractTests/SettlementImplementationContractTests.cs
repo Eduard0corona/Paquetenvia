@@ -19,8 +19,9 @@ using YamlDotNet.RepresentationModel;
 namespace Paqueteria.ContractTests;
 
 /// <summary>
-/// SET-001 Slice 2 plus AI05-LIST-SETTLEMENTS: the eight settlement operations as the real endpoint code maps
-/// them, against their AI-05 publication. A drift on either side fails here instead of reaching a client.
+/// SET-001 Slice 2 plus AI05-LIST-SETTLEMENTS: the eight settlement operations, and the payee list of
+/// UI-PHASE3-DRIVERS-2026-10-11, as the real endpoint code maps them, against their AI-05 publication. A drift on
+/// either side fails here instead of reaching a client.
 /// </summary>
 public sealed class SettlementImplementationContractTests
 {
@@ -36,7 +37,16 @@ public sealed class SettlementImplementationContractTests
         ("POST", "/settlements/{settlementId}/pay", "markSettlementPaid"),
         ("POST", "/settlements/{settlementId}/void", "voidSettlement"),
         ("GET", "/settlements/{settlementId}/export.csv", "exportSettlementCsv"),
+        ("GET", "/settlement-payees", "listSettlementPayees"),
     ];
+
+    /// <summary>The two lists: no single resource to miss (no 404) and only their own query parameters.</summary>
+    private static readonly IReadOnlyDictionary<string, (Type Page, IReadOnlyList<string> Query)> Lists =
+        new Dictionary<string, (Type, IReadOnlyList<string>)>(StringComparer.Ordinal)
+        {
+            ["listSettlements"] = (typeof(SettlementPageResponse), SettlementEndpoints.ListQueryParameters),
+            ["listSettlementPayees"] = (typeof(SettlementPayeePageResponse), ["cursor"]),
+        };
 
     private static readonly IReadOnlyDictionary<string, string> ProblemResponses = new Dictionary<string, string>
     {
@@ -48,7 +58,7 @@ public sealed class SettlementImplementationContractTests
     };
 
     [Fact]
-    public void AI05_publishes_exactly_the_eight_settlement_operations_including_the_list()
+    public void AI05_publishes_exactly_the_eight_settlement_operations_and_the_payee_list()
     {
         var paths = OpenApi().Mapping("paths");
         var published = paths.Children
@@ -71,6 +81,8 @@ public sealed class SettlementImplementationContractTests
         // AI05-LIST-SETTLEMENTS: the collection path creates and lists, and nothing else.
         Assert.Equal(["post", "get"], Keys(paths.Mapping("/settlements")));
         Assert.Single(published, operation => operation.OperationId == "listSettlements");
+        // UI-PHASE3-DRIVERS-2026-10-11: the payee list is a read of its own path, never a settlement sub-resource.
+        Assert.Equal(["get"], Keys(paths.Mapping("/settlement-payees")));
     }
 
     [Fact]
@@ -97,7 +109,7 @@ public sealed class SettlementImplementationContractTests
                 .Cast<YamlMappingNode>()
                 .Select(parameter => Resolve(root, parameter))
                 .ToArray();
-            var isList = EndpointName(endpoint) == "listSettlements";
+            var isList = Lists.TryGetValue(EndpointName(endpoint), out var list);
             Assert.All(
                 parameters.Where(parameter => parameter.Scalar("in") != "query"),
                 parameter => Assert.Equal("true", parameter.Scalar("required")));
@@ -109,7 +121,7 @@ public sealed class SettlementImplementationContractTests
                     .Append("header:X-Organization-Id")
                     .Concat(method == "POST" ? ["header:Idempotency-Key"] : Array.Empty<string>())
                     .Concat(isList
-                        ? SettlementEndpoints.ListQueryParameters.Select(name => $"query:{name}")
+                        ? list.Query.Select(name => $"query:{name}")
                         : Array.Empty<string>())
                     .Order(StringComparer.Ordinal),
                 parameters.Select(parameter => $"{parameter.Scalar("in")}:{parameter.Scalar("name")}")
@@ -161,7 +173,7 @@ public sealed class SettlementImplementationContractTests
             }
 
             Assert.Equal(["application/json"], Keys(content));
-            Assert.Equal(isList ? typeof(SettlementPageResponse) : typeof(SettlementResponse), success.Type);
+            Assert.Equal(isList ? list.Page : typeof(SettlementResponse), success.Type);
             AssertSchemaDescribes(root, content.Mapping("application/json").Mapping("schema").Scalar("$ref"), success.Type!);
         }
     }
@@ -186,6 +198,7 @@ public sealed class SettlementImplementationContractTests
                 ["markSettlementPaid"] = 200,
                 ["voidSettlement"] = 200,
                 ["exportSettlementCsv"] = 200,
+                ["listSettlementPayees"] = 200,
             },
             statuses);
     }
@@ -388,6 +401,79 @@ public sealed class SettlementImplementationContractTests
         Assert.Equal(50, SettlementListPolicy.PageSize);
     }
 
+    /// <summary>
+    /// UI-PHASE3-DRIVERS-2026-10-11 (listSettlementPayees): one cursor parameter, the driver-profile state behind
+    /// the capability, a payee carrying only id, DRV- reference and vehicle, and a query that reads exactly the rows
+    /// createSettlement accepts as payee - the selected organization's driver profiles, whatever their type or
+    /// status - and only their id and vehicle.
+    /// </summary>
+    [Fact]
+    public void List_settlement_payees_query_and_page_match_AI05_and_createSettlement()
+    {
+        var root = OpenApi();
+        var payees = root.Mapping("paths").Mapping("/settlement-payees").Mapping("get");
+        Assert.Contains("UI-PHASE3-DRIVERS-2026-10-11", payees.Scalar("description"), StringComparison.Ordinal);
+        Assert.Equal(["driver_profile"], Scalars(payees.Sequence("x-capability-protected-state")));
+        Assert.Equal("invalid-request-without-productive-transaction", payees.Scalar("x-shape-validation"));
+        var cursor = Assert.Single(
+            payees.Sequence("parameters").Children.Cast<YamlMappingNode>()
+                .Select(parameter => Resolve(root, parameter)),
+            parameter => parameter.Scalar("in") == "query");
+        Assert.Equal(("cursor", "128"), (cursor.Scalar("name"), cursor.Mapping("schema").Scalar("maxLength")));
+        Assert.True(SettlementEndpoints.TryReadPayeeQuery(Query(), out var none));
+        Assert.Null(none);
+        var issued = Guid.NewGuid();
+        Assert.True(SettlementEndpoints.TryReadPayeeQuery(
+            Query(("cursor", SettlementPayeeCursorCodec.Encode(issued))), out var after));
+        Assert.Equal(issued, after);
+        foreach (var refused in new[]
+                 {
+                     Query(("limit", "10")),
+                     Query(("payee_id", Guid.NewGuid().ToString("D"))),
+                     Query(("cursor", "abc")),
+                     Query(("cursor", Dispatch.Application.Fleet.OrganizationDriverCursorCodec.Encode(issued))),
+                     Query(("cursor", SettlementCursorCodec.Encode(new SettlementCursor(DateTimeOffset.UnixEpoch, issued)))),
+                 })
+        {
+            Assert.False(SettlementEndpoints.TryReadPayeeQuery(refused, out _));
+        }
+
+        var schemas = root.Mapping("components").Mapping("schemas");
+        var payee = schemas.Mapping("SettlementPayee");
+        Assert.Equal(["driver_id", "driver_reference", "vehicle_type"], Scalars(payee.Sequence("required")));
+        var properties = payee.Mapping("properties");
+        Assert.Equal("^DRV-[0-9a-f]{8}$", properties.Mapping("driver_reference").Scalar("pattern"));
+        Assert.Equal(SettlementPayeePolicy.VehicleTypes, Scalars(properties.Mapping("vehicle_type").Sequence("enum")));
+        Assert.Equal(
+            Dispatch.Application.Assignments.AssignableDriverPolicy.VehicleTypes.ToArray(),
+            SettlementPayeePolicy.VehicleTypes);
+        Assert.Equal(100, SettlementPayeePolicy.PageSize);
+
+        var query = Read(
+            "src", "Modules", "Finance", "Finance.Infrastructure", "Settlements",
+            "PostgreSqlSettlementService.Payees.cs");
+        var persistence = Read(
+            "src", "Modules", "Finance", "Finance.Infrastructure", "Settlements",
+            "PostgreSqlSettlementService.Persistence.cs");
+        Assert.Contains("SELECT p.id,p.vehicle_type\n        FROM drivers.driver_profiles p\n        WHERE p.org_id=@organization\n", query.ReplaceLineEndings("\n"), StringComparison.Ordinal);
+        Assert.Contains("FROM drivers.driver_profiles WHERE id=@driver AND org_id=@organization", persistence, StringComparison.Ordinal);
+        Assert.Contains("await AuthorizeAsync(", query, StringComparison.Ordinal);
+        foreach (var forbidden in new[]
+                 {
+                     "driver_type", "p.status", "identity.users", "email", "phone", "driver_positions",
+                     "dispatch.assignments", "FOR UPDATE", "INSERT INTO", "DELETE FROM",
+                 })
+        {
+            Assert.DoesNotContain(forbidden, query, StringComparison.OrdinalIgnoreCase);
+        }
+    }
+
+    private static QueryCollection Query(params (string Key, string Value)[] values) =>
+        new(values.ToDictionary(
+            pair => pair.Key,
+            pair => new Microsoft.Extensions.Primitives.StringValues(pair.Value),
+            StringComparer.Ordinal));
+
     /// <summary>AI05-EXPORT-NO-STORE: declared on the 200 response and emitted by the endpoint.</summary>
     [Fact]
     public void Settlement_export_declares_and_emits_cache_control_no_store()
@@ -408,8 +494,8 @@ public sealed class SettlementImplementationContractTests
         var program = Read("src", "Paqueteria.Api", "Program.cs");
         Assert.Contains("app.MapSettlementEndpoints();", program, StringComparison.Ordinal);
         var endpoints = Read("src", "Modules", "Finance", "Finance.Endpoints", "SettlementEndpoints.cs");
-        Assert.Equal(8, Count(endpoints, ".RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)"));
-        Assert.Equal(8, Count(endpoints, ".RequireTenantContext(StatusCodes.Status403Forbidden)"));
+        Assert.Equal(9, Count(endpoints, ".RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)"));
+        Assert.Equal(9, Count(endpoints, ".RequireTenantContext(StatusCodes.Status403Forbidden)"));
         Assert.DoesNotContain("MapPut(", endpoints, StringComparison.Ordinal);
         Assert.DoesNotContain("MapPatch(", endpoints, StringComparison.Ordinal);
         Assert.DoesNotContain("MapDelete(", endpoints, StringComparison.Ordinal);
@@ -421,6 +507,7 @@ public sealed class SettlementImplementationContractTests
         builder.Services.AddScoped<IOrganizationRequestSession>(_ => throw new NotSupportedException());
         builder.Services.AddScoped<ITenantContext>(_ => throw new NotSupportedException());
         builder.Services.AddScoped<ISettlementService>(_ => throw new NotSupportedException());
+        builder.Services.AddScoped<ISettlementPayeeQuery>(_ => throw new NotSupportedException());
         using var app = builder.Build();
         app.MapSettlementEndpoints();
         return

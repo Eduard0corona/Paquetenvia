@@ -65,10 +65,14 @@ describe("confirmation before risky money and destructive actions", () => {
     expect(cod).toContain("returnFocus: trigger");
 
     const settlements = read("src/finance/components/settlements-shell.tsx");
-    // Calcular liquidación: validated first, then the dialog names driver and period.
+    // Calcular liquidación: validated first, then the dialog names the picked driver (DRV- reference and vehicle,
+    // UI-PHASE3-DRIVERS-2026-10-11) and the period.
     expect(settlements).toContain("const body = controller.prepareCreate({");
     expect(settlements.indexOf("if (body === null) return;")).toBeLessThan(
-      settlements.indexOf("settlementCreationConfirmation(body)"),
+      settlements.indexOf("settlementCreationConfirmation(body, payee)"),
+    );
+    expect(settlements.indexOf("const payee = controller.payee(body.driver_id);")).toBeLessThan(
+      settlements.indexOf("settlementCreationConfirmation(body, payee)"),
     );
     // Exportar CSV needs no confirmation, but the screen says the export is audited (D7-SETTLEMENT-RULES).
     expect(settlements).toContain('aria-describedby="settlement-export-note"');

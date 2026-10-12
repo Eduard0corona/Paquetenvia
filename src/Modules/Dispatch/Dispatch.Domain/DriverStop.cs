@@ -17,6 +17,16 @@ public sealed record DriverStopProjection(
 
 public static class DriverStopPolicy
 {
+    /// <summary>
+    /// The order statuses in which an ACCEPTED or ACTIVE assignment is a stop of its driver: exactly the statuses
+    /// <see cref="Project"/> includes, whatever the custody. listMyStops shows the driver these stops and
+    /// listOrganizationDrivers (UI-PHASE3-DRIVERS-2026-10-11) counts them.
+    /// </summary>
+    public static readonly IReadOnlyList<string> OrderStatuses =
+    [
+        "ASSIGNED", "AT_PICKUP", "PICKED_UP", "IN_TRANSIT", "DELIVERING", "FAILED_ATTEMPT", "RESCHEDULED", "RETURNING",
+    ];
+
     public static DriverStopProjection Project(string status, bool custodyAcquired) => status switch
     {
         "ASSIGNED" or "AT_PICKUP" => Pickup(),

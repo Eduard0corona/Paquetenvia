@@ -1,6 +1,7 @@
 using System.Collections.Concurrent;
 using Dispatch.Application.Assignments;
 using Dispatch.Application.ExternalOffers;
+using Dispatch.Application.Fleet;
 using Dispatch.Application.Stops;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
@@ -40,10 +41,23 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
     internal static readonly Guid ConflictOrderId =
         Guid.Parse("d2000000-0000-0000-0000-000000000007");
 
+    /// <summary>The actor whose organization driver list fails inside the store (503).</summary>
+    internal static readonly Guid UnavailableFleetActorId =
+        Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa20");
+
+    /// <summary>
+    /// A DISPATCHER that also holds PLATFORM_ADMIN without MFA: the session admits it, the in-transaction read decides
+    /// on PLATFORM_ADMIN and refuses it, which the endpoint reports as the generic 403.
+    /// </summary>
+    internal static readonly Guid DispatcherAdminNoMfaId =
+        Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa32");
+
     internal void SetStops(IReadOnlyList<DriverStopResult> stops) => service.Stops = stops;
     internal void SetStopDetailsUnavailable(bool unavailable) => service.StopDetailsUnavailable = unavailable;
     internal int AssignableDriverReads => service.AssignableDriverReads;
     internal ListAssignableDriversQuery? LastAssignableDriversQuery => service.LastAssignableDriversQuery;
+    internal int OrganizationDriverReads => service.OrganizationDriverReads;
+    internal ListOrganizationDriversQuery? LastOrganizationDriversQuery => service.LastOrganizationDriversQuery;
     internal int Effects => service.Effects;
     internal int Invocations => service.Invocations;
 
@@ -79,7 +93,9 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
             services.RemoveAll<IDriverStopsQuery>();
             services.RemoveAll<IExternalOfferService>();
             services.RemoveAll<IAssignableDriversQuery>();
+            services.RemoveAll<IOrganizationDriversQuery>();
             services.AddSingleton<IAssignableDriversQuery>(service);
+            services.AddSingleton<IOrganizationDriversQuery>(service);
             services.AddSingleton<IAssignmentService>(service);
             services.AddSingleton<IDriverStopsQuery>(service);
             services.AddSingleton<IExternalOfferService>(service);
@@ -87,12 +103,52 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
     }
 
     private sealed class StubDispatchService :
-        IAssignmentService, IDriverStopsQuery, IExternalOfferService, IAssignableDriversQuery
+        IAssignmentService, IDriverStopsQuery, IExternalOfferService, IAssignableDriversQuery, IOrganizationDriversQuery
     {
         private int assignableDriverReads;
+        private int organizationDriverReads;
 
         public int AssignableDriverReads => Volatile.Read(ref assignableDriverReads);
         public ListAssignableDriversQuery? LastAssignableDriversQuery { get; private set; }
+        public int OrganizationDriverReads => Volatile.Read(ref organizationDriverReads);
+        public ListOrganizationDriversQuery? LastOrganizationDriversQuery { get; private set; }
+
+        /// <summary>
+        /// Two drivers on the first page (one with a position, one without) and one more behind the cursor; the
+        /// actors outside the picker roles are refused, as the PostgreSQL query refuses them.
+        /// </summary>
+        public Task<OrganizationDriverPage> ListAsync(
+            ListOrganizationDriversQuery query,
+            CancellationToken cancellationToken)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref organizationDriverReads);
+            LastOrganizationDriversQuery = query;
+            if (query.ActorId == UnavailableFleetActorId)
+            {
+                throw new AssignmentInfrastructureException("The organization driver list is unavailable.");
+            }
+
+            if (query.ActorId != DispatcherId && query.ActorId != AdminMfaId)
+            {
+                throw new AssignmentForbiddenException();
+            }
+
+            var first = Guid.Parse("d2000000-0000-0000-0000-0000000000f1");
+            var second = Guid.Parse("d2000000-0000-0000-0000-0000000000f2");
+            var third = Guid.Parse("d2000000-0000-0000-0000-0000000000f3");
+            return Task.FromResult(query.AfterDriverId is null
+                ? new OrganizationDriverPage(
+                    [
+                        OrganizationDriverPolicy.ToResult(
+                            first, "MOTORCYCLE", "ACTIVE", 2, new DateTimeOffset(2026, 10, 11, 15, 4, 5, TimeSpan.Zero)),
+                        OrganizationDriverPolicy.ToResult(second, "CAR", "SUSPENDED", 0, null),
+                    ],
+                    OrganizationDriverCursorCodec.Encode(second))
+                : new OrganizationDriverPage(
+                    [OrganizationDriverPolicy.ToResult(third, "VAN", "PENDING", 0, null)],
+                    null));
+        }
 
         public Task<AssignableDriverPage> ListAsync(
             ListAssignableDriversQuery query,

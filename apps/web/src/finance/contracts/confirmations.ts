@@ -1,7 +1,10 @@
+import { vehicleLabel } from "../../operations/contracts/assignable-driver";
 import { formatMxnCentsWithCurrency, parseMxnToCents } from "../../operations/contracts/money";
 import { shortId } from "../../lib/short-id";
 import type { CodTransaction, PendingCodOrder } from "./cod";
 import type { CreateSettlementBody, Settlement } from "./settlement";
+import { formatPeriodRange } from "./settlement-period";
+import type { SettlementPayee } from "./settlement-payee";
 
 /** Texts for the confirmation shown before a risky finance action; amounts stay integer cents. */
 export interface ConfirmationText {
@@ -10,26 +13,30 @@ export interface ConfirmationText {
   readonly confirmLabel: string;
 }
 
-function settlementTarget(settlement: Settlement): string {
-  return `del repartidor ${shortId(settlement.payee_id)} (${settlement.period_from} a ${settlement.period_to})`;
+/**
+ * UI-PHASE3-DRIVERS-2026-10-11: the payee by the screen's label (its DRV- reference, never the internal id) and the
+ * period in readable dates.
+ */
+function settlementTarget(settlement: Settlement, payee: string): string {
+  return `del repartidor ${payee} (${formatPeriodRange(settlement.period_from, settlement.period_to)})`;
 }
 
-export function settlementApprovalConfirmation(settlement: Settlement): ConfirmationText {
+export function settlementApprovalConfirmation(settlement: Settlement, payee: string): ConfirmationText {
   return {
     title: "¿Aprobar liquidación?",
     description:
-      `Se aprobará la liquidación ${settlementTarget(settlement)} por un total de ` +
+      `Se aprobará la liquidación ${settlementTarget(settlement, payee)} por un total de ` +
       `${formatMxnCentsWithCurrency(settlement.total_cents)}. Después ya no se podrán agregar ajustes.`,
     confirmLabel: "Aprobar",
   };
 }
 
-export function settlementPaymentConfirmation(settlement: Settlement): ConfirmationText {
+export function settlementPaymentConfirmation(settlement: Settlement, payee: string): ConfirmationText {
   return {
     title: "¿Marcar liquidación como pagada?",
     description:
       `Confirma que ya se pagaron ${formatMxnCentsWithCurrency(settlement.total_cents)} ` +
-      `en la liquidación ${settlementTarget(settlement)}.`,
+      `en la liquidación ${settlementTarget(settlement, payee)}.`,
     confirmLabel: "Marcar pagada",
   };
 }
@@ -41,6 +48,7 @@ export function settlementPaymentConfirmation(settlement: Settlement): Confirmat
 export function settlementAdjustmentConfirmation(
   settlement: Settlement,
   amountText: string,
+  payee: string,
 ): ConfirmationText | null {
   const cents = parseMxnToCents(amountText, { allowNegative: true, allowZero: false });
   if (cents === null) return null;
@@ -49,7 +57,7 @@ export function settlementAdjustmentConfirmation(
   return {
     title: "¿Agregar ajuste?",
     description:
-      `Se ${verb} ${formatMxnCentsWithCurrency(absolute)} a la liquidación ${settlementTarget(settlement)}.`,
+      `Se ${verb} ${formatMxnCentsWithCurrency(absolute)} a la liquidación ${settlementTarget(settlement, payee)}.`,
     confirmLabel: "Agregar ajuste",
   };
 }
@@ -69,8 +77,11 @@ function formatOperatingDay(value: string): string {
   return operatingDayFormatter.format(new Date(Date.UTC(year, month - 1, day)));
 }
 
-/** "Calcular liquidación", for a request validateCreateSettlement already accepted. */
-export function settlementCreationConfirmation(body: CreateSettlementBody): ConfirmationText {
+/**
+ * "Calcular liquidación", for a request validateCreateSettlement already accepted, naming the payee picked from the
+ * list by its DRV- reference and vehicle (UI-PHASE3-DRIVERS-2026-10-11).
+ */
+export function settlementCreationConfirmation(body: CreateSettlementBody, payee: SettlementPayee): ConfirmationText {
   const period =
     body.period_from === body.period_to
       ? `del ${formatOperatingDay(body.period_from)} (día completo, hora de Mazatlán)`
@@ -78,16 +89,18 @@ export function settlementCreationConfirmation(body: CreateSettlementBody): Conf
         "(días completos, hora de Mazatlán)";
   return {
     title: "¿Calcular liquidación?",
-    description: `Se calculará la liquidación del repartidor ${shortId(body.driver_id)} ${period}.`,
+    description:
+      `Se calculará la liquidación del repartidor ${payee.driver_reference} ` +
+      `(${vehicleLabel(payee.vehicle_type).toLowerCase()}) ${period}.`,
     confirmLabel: "Calcular",
   };
 }
 
-export function settlementVoidConfirmation(settlement: Settlement): ConfirmationText {
+export function settlementVoidConfirmation(settlement: Settlement, payee: string): ConfirmationText {
   return {
     title: "¿Anular liquidación?",
     description:
-      `Se anulará la liquidación ${settlementTarget(settlement)} por ` +
+      `Se anulará la liquidación ${settlementTarget(settlement, payee)} por ` +
       `${formatMxnCentsWithCurrency(settlement.total_cents)}. Esta acción no se puede deshacer.`,
     confirmLabel: "Anular",
   };

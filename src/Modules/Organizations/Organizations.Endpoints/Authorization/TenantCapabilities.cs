@@ -77,6 +77,14 @@ public static class TenantCapabilities
     public static readonly TenantCapability ListAssignableDrivers =
         Create("listAssignableDrivers", Dispatcher, PlatformAdminMfa);
 
+    // x-capability-matrix driver_list_operations (UI-PHASE3-DRIVERS-2026-10-11): the dispatcher's read-only driver
+    // list admits the roles of the driver picker it extends; the settlement payee list admits exactly the
+    // createSettlement roles it serves (FINANCE, and PLATFORM_ADMIN with MFA). A VIEWER, a DRIVER and every other
+    // role never; FINANCE never reads the dispatcher's list and DISPATCHER never reads the payee list.
+    public static readonly TenantCapability ListOrganizationDrivers =
+        Create("listOrganizationDrivers", Dispatcher, PlatformAdminMfa);
+    public static readonly TenantCapability ListSettlementPayees = Settlement("listSettlementPayees");
+
     // x-capability-matrix operations_queue_operations (UI-PHASE2-QUEUE-COUNTS-2026-10-05): the work-queue counts admit
     // exactly the roles of the operations dashboard they feed (OperationsRolePolicy): DISPATCHER, and PLATFORM_ADMIN
     // with MFA; a VIEWER, a DRIVER, FINANCE and every other role never.

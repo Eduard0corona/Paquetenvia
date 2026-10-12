@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import { useConfirmDialog, type ConfirmRequest } from "../../components/confirm-dialog";
 import { DateTime } from "../../components/ui/date-time";
 import { EmptyState } from "../../components/ui/empty-state";
@@ -20,7 +21,18 @@ import {
   settlementStatusLabels,
   type Settlement,
 } from "../contracts/settlement";
+import { settlementPayeeOption } from "../contracts/settlement-payee";
 import {
+  formatPeriodRange,
+  presetPeriod,
+  settlementPeriodPresetLabels,
+  settlementPeriodPresets,
+  type SettlementPeriodPreset,
+} from "../contracts/settlement-period";
+import {
+  payeeLabel,
+  payeeListFailedMessage,
+  payeeListTruncatedMessage,
   settlementMfaHint,
   visibleSettlementActions,
   type SettlementsController,
@@ -39,7 +51,7 @@ export function SettlementsShell() {
         description="Calcula, revisa, aprueba y paga las liquidaciones de tus repartidores."
         actions={
           <button className="btn btnSecondary" type="button" disabled={state.phase !== "ready" || state.loading}
-            onClick={() => void controller.refresh()}>Actualizar</button>
+            onClick={() => void controller.reload()}>Actualizar</button>
         }
       />
 
@@ -49,9 +61,12 @@ export function SettlementsShell() {
       {state.phase === "ready" && (
         <section className="opsRouteLayout">
           <aside className="panel opsRoutePanel">
-            <Filters key={`filters-${state.formKey}`} controller={controller} disabled={state.loading} />
+            {state.payeesStatus === "failed" && <p className="notice noticeWarn" role="status">{payeeListFailedMessage}</p>}
+            {state.payeesTruncated && <p className="notice noticeWarn" role="status">{payeeListTruncatedMessage}</p>}
+            <Filters key={`filters-${state.formKey}`} controller={controller} state={state} disabled={state.loading} />
             {state.canCreate && (
-              <CreateForm key={`create-${state.formKey}`} controller={controller} disabled={state.busy} confirm={confirm} />
+              <CreateForm key={`create-${state.formKey}`} controller={controller} state={state} disabled={state.busy}
+                confirm={confirm} />
             )}
             <h2>Liquidaciones</h2>
             {state.items.length === 0 && !state.loading && <EmptyState>Sin liquidaciones para estos filtros.</EmptyState>}
@@ -60,9 +75,9 @@ export function SettlementsShell() {
                 <li key={item.id}>
                   <button type="button" aria-current={state.selected?.id === item.id}
                     onClick={() => void controller.select(item.id)}>
-                    <strong>{item.period_from} a {item.period_to}</strong>
+                    <strong>{formatPeriodRange(item.period_from, item.period_to)}</strong>
                     <span>{settlementStatusLabels[item.status]} · <Money cents={item.total_cents} /></span>
-                    <span>Repartidor {shortId(item.payee_id)} · {item.lines.length} línea(s)</span>
+                    <span>Repartidor {payeeLabel(state, item.payee_id)} · {item.lines.length} línea(s)</span>
                   </button>
                 </li>
               ))}
@@ -87,7 +102,26 @@ export function SettlementsShell() {
   );
 }
 
-function Filters({ controller, disabled }: { readonly controller: SettlementsController; readonly disabled: boolean }) {
+/** The payees by DRV- reference and vehicle; the value sent is the id createSettlement and the filter take. */
+function PayeeOptions({ state }: { readonly state: SettlementsState }) {
+  return (
+    <>
+      {state.payees.map((payee) => (
+        <option key={payee.driver_id} value={payee.driver_id}>{settlementPayeeOption(payee)}</option>
+      ))}
+    </>
+  );
+}
+
+function Filters({
+  controller,
+  state,
+  disabled,
+}: {
+  readonly controller: SettlementsController;
+  readonly state: SettlementsState;
+  readonly disabled: boolean;
+}) {
   return (
     <form className="opsForm" autoComplete="off" onSubmit={(event) => {
       event.preventDefault();
@@ -107,8 +141,12 @@ function Filters({ controller, disabled }: { readonly controller: SettlementsCon
           {settlementStatuses.map((status) => <option key={status} value={status}>{settlementStatusLabels[status]}</option>)}
         </select>
       </label>
-      <label>ID del repartidor (opcional)<input name="payee_id" aria-describedby="settlement-filter-payee-help" /></label>
-      <p id="settlement-filter-payee-help" className="fieldHint">Pega el ID completo del repartidor; déjalo vacío para ver todos.</p>
+      <label>Repartidor
+        <select name="payee_id" defaultValue="">
+          <option value="">Todos</option>
+          <PayeeOptions state={state} />
+        </select>
+      </label>
       <label>Periodo desde<input name="period_from" type="date" /></label>
       <label>Periodo hasta<input name="period_to" type="date" /></label>
       <button className="btn btnSecondary" type="submit" disabled={disabled}>Aplicar filtros</button>
@@ -116,38 +154,83 @@ function Filters({ controller, disabled }: { readonly controller: SettlementsCon
   );
 }
 
+/**
+ * UI-PHASE3-DRIVERS-2026-10-11: "Calcular liquidación" picks the payee from the list (DRV- reference and vehicle)
+ * and a period - last week, last half month or typed dates - whose dates the form spells out before anything is
+ * sent. The confirmation names the payee and the exact period sent.
+ */
 function CreateForm({
   controller,
+  state,
   disabled,
   confirm,
 }: {
   readonly controller: SettlementsController;
+  readonly state: SettlementsState;
   readonly disabled: boolean;
   readonly confirm: (request: ConfirmRequest) => void;
 }) {
+  const [preset, setPreset] = useState<SettlementPeriodPreset>("last_week");
+  // Today in Mazatlán decides both presets; it is read again when the form is sent.
+  const now = new Date();
+  const unavailable = state.payeesStatus !== "ready" || state.payees.length === 0;
   return (
     <form className="opsForm" autoComplete="off" onSubmit={(event) => {
       event.preventDefault();
       const data = new FormData(event.currentTarget);
+      const period = presetPeriod(preset, new Date());
       // Validated first; the dialog names the driver and the period before anything is sent.
       const body = controller.prepareCreate({
-        driver_id: String(data.get("driver_id") ?? "").trim(),
-        period_from: String(data.get("period_from") ?? ""),
-        period_to: String(data.get("period_to") ?? ""),
+        driver_id: String(data.get("driver_id") ?? ""),
+        period_from: period?.period_from ?? String(data.get("period_from") ?? ""),
+        period_to: period?.period_to ?? String(data.get("period_to") ?? ""),
       });
       if (body === null) return;
+      const payee = controller.payee(body.driver_id);
+      if (payee === null) return;
       confirm({
-        ...settlementCreationConfirmation(body),
+        ...settlementCreationConfirmation(body, payee),
         onConfirm: () => void controller.create(body),
       });
     }}>
       <h2>Calcular liquidación</h2>
       <p>Solo periodos ya cerrados (días operativos completos, hora de Mazatlán).</p>
-      <label>ID del repartidor<input name="driver_id" required aria-describedby="settlement-create-driver-help" /></label>
-      <p id="settlement-create-driver-help" className="fieldHint">Pega el ID completo del repartidor.</p>
-      <label>Periodo desde<input name="period_from" type="date" required /></label>
-      <label>Periodo hasta<input name="period_to" type="date" required /></label>
-      <button className="btn btnPrimary" type="submit" disabled={disabled}>Calcular</button>
+      <label>Repartidor
+        <select name="driver_id" required defaultValue="" aria-describedby="settlement-create-driver-help">
+          <option value="" disabled>Elige un repartidor</option>
+          <PayeeOptions state={state} />
+        </select>
+      </label>
+      <p id="settlement-create-driver-help" className="fieldHint">
+        {state.payeesStatus === "loading"
+          ? "Cargando repartidores…"
+          : state.payeesStatus === "ready" && state.payees.length === 0
+            ? "Tu organización no tiene repartidores registrados."
+            : "Los repartidores se muestran por su referencia y su vehículo."}
+      </p>
+      <fieldset>
+        <legend>Periodo</legend>
+        {settlementPeriodPresets.map((id) => {
+          const period = presetPeriod(id, now);
+          return (
+            <label key={id} className="opsCheckbox">
+              <input type="radio" name="period" value={id} checked={preset === id} onChange={() => setPreset(id)} />
+              <span>
+                {settlementPeriodPresetLabels[id]}
+                {period !== null && <>: <strong>{formatPeriodRange(period.period_from, period.period_to)}</strong></>}
+                {id === "last_week" && " (lunes a domingo)"}
+              </span>
+            </label>
+          );
+        })}
+        {preset === "manual" && (
+          <>
+            <label>Periodo desde<input name="period_from" type="date" required /></label>
+            <label>Periodo hasta<input name="period_to" type="date" required /></label>
+          </>
+        )}
+      </fieldset>
+      <button className="btn btnPrimary" type="submit" disabled={disabled || unavailable}>Calcular</button>
     </form>
   );
 }
@@ -165,6 +248,7 @@ function SettlementDetail({
 }) {
   const actions = visibleSettlementActions(state.role, settlement.status);
   const mfaHint = settlementMfaHint(state.role, actions);
+  const payee = payeeLabel(state, settlement.payee_id);
   // While another settlement is loading, no action may target the one still shown.
   const locked = state.busy || state.selecting !== null;
   return (
@@ -172,8 +256,9 @@ function SettlementDetail({
       <header>
         <h2>Liquidación {shortId(settlement.id)}</h2>
         <p>
-          {settlementStatusLabels[settlement.status]} · Repartidor {shortId(settlement.payee_id)} ·
-          {" "}{settlement.period_from} a {settlement.period_to} · creada <DateTime value={settlement.created_at} />
+          {settlementStatusLabels[settlement.status]} · Repartidor {payee} ·
+          {" "}{formatPeriodRange(settlement.period_from, settlement.period_to)} · creada{" "}
+          <DateTime value={settlement.created_at} />
         </p>
         <strong>Total <Money cents={settlement.total_cents} /></strong>
       </header>
@@ -201,14 +286,14 @@ function SettlementDetail({
         {actions.includes("approve") && (
           <button type="button" className="btn btnPrimary" disabled={locked}
             onClick={() => confirm({
-              ...settlementApprovalConfirmation(settlement),
+              ...settlementApprovalConfirmation(settlement, payee),
               onConfirm: () => void controller.approve(),
             })}>Aprobar</button>
         )}
         {actions.includes("pay") && (
           <button type="button" className="btn btnPrimary" disabled={locked}
             onClick={() => confirm({
-              ...settlementPaymentConfirmation(settlement),
+              ...settlementPaymentConfirmation(settlement, payee),
               onConfirm: () => void controller.markPaid(),
             })}>Marcar pagada</button>
         )}
@@ -231,7 +316,7 @@ function SettlementDetail({
           const data = new FormData(event.currentTarget);
           const amount = String(data.get("amount") ?? "");
           const reason = String(data.get("reason") ?? "");
-          const text = settlementAdjustmentConfirmation(settlement, amount);
+          const text = settlementAdjustmentConfirmation(settlement, amount, payee);
           if (text === null) {
             void controller.addAdjustment(amount, reason);
             return;
@@ -252,7 +337,7 @@ function SettlementDetail({
           event.preventDefault();
           const reason = String(new FormData(event.currentTarget).get("reason") ?? "");
           confirm({
-            ...settlementVoidConfirmation(settlement),
+            ...settlementVoidConfirmation(settlement, payee),
             onConfirm: () => void controller.voidSettlement(reason),
           });
         }}>
