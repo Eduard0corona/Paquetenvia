@@ -90,8 +90,8 @@ describe("app shell navigation by role", () => {
       expect(items.indexOf("orders"), role).toBe(items.indexOf("inbox") + 1);
     }
     expect(keys("VIEWER")[0]).toBe("orders");
-    // FINANCE lists only COD-pending orders (FIN-PENDING-COD-LIST-FINANCE-2026-10-02); its approved
-    // "Órdenes (lectura)" item is an open question, so it is not offered the screen.
+    // FINANCE lists only COD-pending orders (FIN-PENDING-COD-LIST-FINANCE-2026-10-02); for its approved
+    // "Órdenes (lectura)" item the owner answered "No por ahora", so it is not offered the screen.
     for (const role of ["FINANCE", "DRIVER", "BUSINESS_ADMIN", "ALLY_ADMIN", "UNKNOWN"])
       expect(keys(role), role).not.toContain("orders");
     expect(navItemsForRole("VIEWER")[0]).toEqual({ key: "orders", href: "/ops/orders", label: "Órdenes" });

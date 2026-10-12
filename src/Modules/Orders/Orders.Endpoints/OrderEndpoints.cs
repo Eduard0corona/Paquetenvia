@@ -144,19 +144,12 @@ public static class OrderEndpoints
             return Forbidden();
         }
 
-        // ORD-LIST-DATE-FILTER-2026-10-12: the creation window and the cursor are request shape. A malformed or
-        // repeated created_from/created_to, a window outside OrderListCreatedRange or a cursor this operation did not
-        // issue for this organization and these filters is 409 INVALID_REQUEST, decided before the capability check
-        // and before any order is read.
-        if (!OrderListRequestShape.TryReadCreatedRange(httpContext.Request.Query, out var createdRange) ||
-            !OrderListRequestShape.IsIssuedCursor(
-                cursor,
-                tenantContext.OrganizationId,
-                status,
-                owner_org_id,
-                cod_pending_reconciliation,
-                public_id,
-                createdRange))
+        // ORD-LIST-DATE-FILTER-2026-10-12: the creation window is request shape. A malformed or repeated
+        // created_from/created_to or a window outside OrderListCreatedRange is 409 INVALID_REQUEST, decided before the
+        // capability check and before any order is read; only clients that know the new parameters send them. The
+        // cursor keeps its place after the capability: the service refuses (409) only a bound cursor issued for other
+        // filters, and reads every other cursor exactly as before.
+        if (!OrderListRequestShape.TryReadCreatedRange(httpContext.Request.Query, out var createdRange))
         {
             return InvalidRequest();
         }
@@ -676,9 +669,9 @@ public static class OrderListCodFilter
 
 /// <summary>
 /// ORD-LIST-DATE-FILTER-2026-10-12: the listOrders request shape that is refused with 409 INVALID_REQUEST before the
-/// capability check. Only the new creation window and the cursor are shape; an unknown status, a malformed public_id,
-/// another owner_org_id or a cod_pending_reconciliation value other than true or false keep answering the empty page,
-/// as before.
+/// capability check. Only the new creation window is shape; the cursor, an unknown status, a malformed public_id,
+/// another owner_org_id or a cod_pending_reconciliation value other than true or false keep their place and answer
+/// after the capability check, as before.
 /// </summary>
 public static class OrderListRequestShape
 {
@@ -686,8 +679,8 @@ public static class OrderListRequestShape
     public const string CreatedTo = "created_to";
 
     /// <summary>
-    /// Each bound at most once, an RFC3339 UTC instant ending in Z (the dashboard's rule), and the pair inside
-    /// <see cref="OrderListCreatedRange"/>; an absent bound is no bound.
+    /// Each bound at most once, a strict RFC3339 UTC instant ending in Z (<see cref="OrderListCreatedRange.TryParseInstant"/>),
+    /// and the pair inside <see cref="OrderListCreatedRange"/>; an absent bound is no bound.
     /// </summary>
     public static bool TryReadCreatedRange(IQueryCollection query, out OrderListCreatedRange createdRange)
     {
@@ -699,32 +692,6 @@ public static class OrderListRequestShape
 
         createdRange = new OrderListCreatedRange(from, to);
         return createdRange.IsValid;
-    }
-
-    /// <summary>
-    /// True without a cursor, or for a cursor this operation issued for exactly this organization and these filters.
-    /// A cod_pending_reconciliation value other than true or false never receives a cursor, so none matches it.
-    /// </summary>
-    public static bool IsIssuedCursor(
-        string? cursor,
-        Guid organizationId,
-        string? status,
-        Guid? ownerOrganizationId,
-        string? codPendingReconciliation,
-        string? publicId,
-        OrderListCreatedRange createdRange)
-    {
-        if (cursor is null)
-        {
-            return true;
-        }
-
-        return OrderListCodFilter.TryParse(codPendingReconciliation, out var codPending) &&
-            OrderCursorCodec.TryDecode(
-                cursor,
-                OrderCursorCodec.Binding(organizationId, status, ownerOrganizationId, codPending, publicId, createdRange),
-                out _,
-                out _);
     }
 
     private static bool TryReadInstant(IQueryCollection query, string name, out DateTimeOffset? value)

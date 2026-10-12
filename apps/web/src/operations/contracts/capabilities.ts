@@ -218,7 +218,8 @@ export function canOpenOrderDetail(role: string | null): boolean {
 /**
  * UI-PHASE3-ORDERS-LIST-2026-10-12: "Órdenes" is offered to the listOrders roles (DISPATCHER, PLATFORM_ADMIN and
  * VIEWER). FINANCE only lists COD-pending orders (FIN-PENDING-COD-LIST-FINANCE-2026-10-02), so it is not offered the
- * screen; its approved "Órdenes (lectura)" item stays an open owner question.
+ * screen: the owner kept it that way ("No por ahora", 2026-10-12); widening its read access is a permission change
+ * that needs an ADR.
  */
 export function canOpenOrderList(role: string | null): boolean {
   return canPerform(role, "listOrders");

@@ -27,6 +27,9 @@ describe("orders list page policy (UI-PHASE3-ORDERS-LIST-2026-10-12)", () => {
     expect(aiSeven).not.toContain("Órdenes menu item of the approved menu - no screen yet");
     expect(statSync("src/app/ops/orders/page.tsx").isFile()).toBe(true);
     expect(read("src/app/ops/layout.tsx")).toContain("<AppShell>");
+    // VIEWER, which lists orders but has no inbox, lands here after login and after an organization switch.
+    expect(aiSeven).toContain("VIEWER lands on /ops/orders");
+    expect(read("src/auth/bff-session-installation.ts")).toContain('if (canOpenOrderList(role)) return "/ops/orders";');
   });
 
   it("keeps the list, the typed guía and the filters in memory or the URL only and never logs them", () => {
@@ -64,6 +67,19 @@ describe("orders list page policy (UI-PHASE3-ORDERS-LIST-2026-10-12)", () => {
     expect(source).toContain("orderNotFoundMessage");
     // The only actions: search, filters, Actualizar, Cargar más; no order is changed here.
     expect(source).not.toMatch(/type="checkbox"|Asignar|Cancelar orden|transitionOrder|Idempotency/);
+  });
+
+  it("keeps typed dates as drafts and never drops the focus to the page body", () => {
+    const source = shell();
+    // F1: a date is applied only through readDateFilterEntry; the field has a lower bound of 2000-01-01.
+    expect(source).toContain("readDateFilterEntry(input.value, input.validity.badInput)");
+    expect(source).toContain("min={minimumOrderListDate}");
+    expect(source).toContain("{orderListDateInvalidMessage}");
+    // F4: no remount by key, the field takes the focus back, the summary receives it after the last page.
+    expect(source).not.toMatch(/key=\{state\.guide/);
+    expect(source).toContain("inputRef.current?.focus();");
+    expect(source).toContain("summaryRef.current?.focus();");
+    expect(source).toContain("tabIndex={-1}");
   });
 
   it("shows loading, empty, error, period, access and MFA states and refreshes on visibility and focus", () => {

@@ -19,6 +19,11 @@ export interface OrderListItem {
   readonly status: OrderStatus;
   /** Order.total in integer MXN cents, IVA included. */
   readonly total_cents: number;
+  /**
+   * Order.created_at once the API sends it (owner, "En dos pasos (Recommended)"), a strict UTC instant; null while it
+   * is absent, and then the screen shows no "Creada" column.
+   */
+  readonly created_at: string | null;
 }
 
 export interface OrderListPage {
@@ -28,7 +33,10 @@ export interface OrderListPage {
 
 /** The server page size is 50 (OrdersOptions.PageSize); anything far larger is not this contract. */
 const maximumPageItems = 200;
-/** AI-05 listOrders cursor maxLength. */
+/**
+ * The longest next_cursor listOrders issues (a bound o2 cursor is at most 128 characters, OrderCursorCodec); a longer
+ * one is not this contract. AI-05 itself sets no maxLength, so earlier cursors stay readable.
+ */
 export const maximumOrderListCursorLength = 128;
 const cursorPattern = /^[A-Za-z0-9_-]+$/;
 
@@ -45,7 +53,13 @@ export function parseOrderListItem(value: unknown): OrderListItem {
     public_id: order.public_id,
     status: oneOf(order.status, orderStatuses),
     total_cents: order.total.amount_cents,
+    created_at: order.created_at,
   };
+}
+
+/** The "Creada" column is shown only when the API sends Order.created_at (UI-PHASE3-ORDERS-LIST-2026-10-12). */
+export function orderListShowsCreatedAt(rows: readonly OrderListItem[]): boolean {
+  return rows.some((row) => row.created_at !== null);
 }
 
 /** The listOrders page; the same order twice in one page breaks the contract. */
@@ -129,6 +143,24 @@ const dayMilliseconds = 86_400_000;
 
 export const orderListRangeOrderMessage = "La fecha «Desde» no puede ser posterior a la fecha «Hasta».";
 export const orderListRangeTooLongMessage = `Elige un periodo de ${maximumOrderListRangeDays} días o menos.`;
+/** A typed date that is not a whole calendar day from 2000 on, or that cannot be read in Mazatlán time. */
+export const orderListDateInvalidMessage = "Escribe una fecha completa (día, mes y año, desde 2000).";
+/** The earliest date the filters take; a typed year is applied only once it has four digits and reaches it. */
+export const minimumOrderListDate = "2000-01-01";
+
+/**
+ * What one change of a date field does. A whole calendar date from 2000 on is applied, and so is a cleared field. A
+ * date still being typed is never applied: the browser reports it empty with `badInput` while a part is missing, and a
+ * year typed digit by digit reads 0002, 0020, 0202 before it has four digits; both stay in the field as a draft.
+ */
+export type DateFilterEntry =
+  | { readonly apply: true; readonly value: string | null }
+  | { readonly apply: false; readonly incomplete: boolean };
+
+export function readDateFilterEntry(value: string, badInput: boolean): DateFilterEntry {
+  if (value === "") return badInput ? { apply: false, incomplete: true } : { apply: true, value: null };
+  return isCalendarDate(value) ? { apply: true, value } : { apply: false, incomplete: false };
+}
 
 /** The first instant of a Mazatlán calendar day. */
 function mazatlanDayStart(date: string): Date | null {
@@ -156,10 +188,12 @@ export type OrderListRange =
   | { readonly ok: false; readonly message: string };
 
 export function orderListRange(view: Pick<OrderListView, "from" | "to">): OrderListRange {
+  if ((view.from !== null && !isCalendarDate(view.from)) || (view.to !== null && !isCalendarDate(view.to)))
+    return { ok: false, message: orderListDateInvalidMessage };
   const start = view.from === null ? null : mazatlanDayStart(view.from);
   const end = view.to === null ? null : mazatlanDayStart(nextCalendarDate(view.to));
   if ((view.from !== null && start === null) || (view.to !== null && end === null))
-    return { ok: false, message: orderListRangeOrderMessage };
+    return { ok: false, message: orderListDateInvalidMessage };
   if (start !== null && end !== null) {
     if (end.getTime() <= start.getTime()) return { ok: false, message: orderListRangeOrderMessage };
     if (end.getTime() - start.getTime() > maximumOrderListRangeDays * dayMilliseconds)

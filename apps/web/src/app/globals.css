@@ -1327,6 +1327,12 @@ ul.notice {
   margin: 0;
 }
 
+/* "Órdenes": "Buscar guía" and "Cargar más" stay focusable while a request runs (aria-disabled). */
+.opsOrderSearch [aria-disabled="true"],
+.opsOrdersMore[aria-disabled="true"] {
+  cursor: progress;
+}
+
 .opsToggle {
   display: flex;
   flex-wrap: wrap;

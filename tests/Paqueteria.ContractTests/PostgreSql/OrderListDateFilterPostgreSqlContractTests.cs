@@ -126,12 +126,12 @@ public sealed class OrderListDateFilterPostgreSqlContractTests(PostgreSqlContrac
 
         var first = await ListAsync(scope.Service, owner, window, status: "DELIVERED");
         var issued = Assert.IsType<string>(first.NextCursor);
-        Assert.True(issued.Length <= OrderCursorCodec.MaximumLength);
+        Assert.True(issued.Length <= OrderCursorCodec.MaximumBoundLength);
         Assert.Equal(
             [second.Id, owner.OrderId],
             (await ListAsync(scope.Service, owner, window, status: "DELIVERED", cursor: issued)).Items.Select(order => order.Id));
 
-        // The same position under any other filter, window or organization is refused, never paged.
+        // A bound position under any other filter, window or organization is refused, never paged.
         await using var stranger = new SyntheticOrderScenario(fixture);
         await stranger.InitializeAsync(createOrder: false);
         foreach (var call in new Func<Task<OrderPageResult>>[]
@@ -141,12 +141,29 @@ public sealed class OrderListDateFilterPostgreSqlContractTests(PostgreSqlContrac
                      () => ListAsync(scope.Service, owner, default, status: "DELIVERED", cursor: issued),
                      () => ListAsync(scope.Service, owner, window with { To = null }, status: "DELIVERED", cursor: issued),
                      () => ListAsync(scope.Service, owner, window, status: "DELIVERED", publicId: second.PublicId, cursor: issued),
-                     () => ListAsync(scope.Service, owner, window, status: "DELIVERED", cursor: issued + "A"),
                      () => ListAsync(scope.Service, stranger, window, status: "DELIVERED", cursor: issued),
                  })
         {
             var refused = await Assert.ThrowsAsync<OrderConflictException>(call);
             Assert.Equal(OrderConflictCode.InvalidRequest, refused.Code);
+        }
+
+        // Additive: the unbound cursor of the earlier format pages exactly as before, with any filters, and any other
+        // text is still the empty page.
+        var legacy = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(
+                $"{second.CreatedAt.UtcTicks}:{second.Id:D}"))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+        Assert.Equal(
+            [owner.OrderId],
+            (await ListAsync(scope.Service, owner, window, status: "DELIVERED", cursor: legacy)).Items.Select(order => order.Id));
+        Assert.Equal(
+            [owner.OrderId],
+            (await ListAsync(scope.Service, owner, default, cursor: legacy)).Items.Select(order => order.Id));
+        foreach (var unreadable in new[] { issued + "A", "invalid", string.Empty, new string('A', 300) })
+        {
+            var page = await ListAsync(scope.Service, owner, window, status: "DELIVERED", cursor: unreadable);
+            Assert.Empty(page.Items);
+            Assert.Null(page.NextCursor);
         }
     }
 
@@ -230,7 +247,7 @@ public sealed class OrderListDateFilterPostgreSqlContractTests(PostgreSqlContrac
             SyntheticOrderScenario.P("order", orderId));
 
     /// <summary>Another order of the scenario's organization, from a copy of its quote, created at the given instant.</summary>
-    private static async Task<(Guid Id, string PublicId)> AddOrderAsync(
+    private static async Task<(Guid Id, string PublicId, DateTimeOffset CreatedAt)> AddOrderAsync(
         SyntheticOrderScenario scenario,
         DateTimeOffset createdAt,
         string status)
@@ -265,7 +282,7 @@ public sealed class OrderListDateFilterPostgreSqlContractTests(PostgreSqlContrac
             SyntheticOrderScenario.P("public_id", publicId),
             SyntheticOrderScenario.P("status", status),
             SyntheticOrderScenario.P("created_at", createdAt));
-        return (orderId, publicId);
+        return (orderId, publicId, createdAt);
     }
 
     private RuntimeScope CreateScope(int pageSize)

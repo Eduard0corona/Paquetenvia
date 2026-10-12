@@ -212,7 +212,7 @@ describe("BFF session installation", () => {
     expect(selectSessionInstallation([])).toEqual({ kind: "none" });
   });
 
-  it("lands DISPATCHER and PLATFORM_ADMIN on the work inbox, FINANCE on COD, DRIVER on stops and the rest on the dashboard", () => {
+  it("lands DISPATCHER and PLATFORM_ADMIN on the work inbox, FINANCE on COD, DRIVER on stops, VIEWER on Órdenes and the rest on the dashboard", () => {
     expect(
       selectSessionInstallation([
         { organization_id: organizationA, display_name: "A", role: "FINANCE", is_default: true },
@@ -227,8 +227,15 @@ describe("BFF session installation", () => {
     expect(landingPathForRole("DRIVER")).toBe("/driver/stops");
     // UI-PHASE3-INBOX-2026-10-10: the roles of the dashboard and the queue counts land on the inbox.
     for (const role of ["DISPATCHER", "PLATFORM_ADMIN"]) expect(landingPathForRole(role), role).toBe("/ops/inbox");
-    // VIEWER and every other role keep the dashboard, exactly as before.
-    for (const role of ["BUSINESS_ADMIN", "ALLY_ADMIN", "VIEWER", "UNKNOWN"])
+    // UI-PHASE3-ORDERS-LIST-2026-10-12: VIEWER lists orders but has no inbox, so it lands on "Órdenes".
+    expect(landingPathForRole("VIEWER")).toBe("/ops/orders");
+    expect(
+      selectSessionInstallation([
+        { organization_id: organizationA, display_name: "A", role: "VIEWER", is_default: true },
+      ]),
+    ).toMatchObject({ kind: "operations", landingPath: "/ops/orders" });
+    // Every other role keeps the dashboard, exactly as before.
+    for (const role of ["BUSINESS_ADMIN", "ALLY_ADMIN", "UNKNOWN", ""])
       expect(landingPathForRole(role), role).toBe("/ops/dashboard");
   });
 

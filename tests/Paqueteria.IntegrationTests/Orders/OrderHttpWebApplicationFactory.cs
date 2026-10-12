@@ -385,18 +385,32 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
                 return Task.FromResult(new OrderPageResult([], null));
             }
 
-            // ORD-LIST-DATE-FILTER-2026-10-12: like the PostgreSQL service, a window outside the policy or a cursor
-            // not issued for this organization and these filters is refused before any order is read.
+            // ORD-LIST-DATE-FILTER-2026-10-12: like the PostgreSQL service, a window outside the policy or a bound cursor
+            // issued for another organization or other filters is refused before any order is read; an unbound cursor
+            // of the earlier format still pages and any other text is still the empty page.
             Volatile.Write(ref lastListCreatedRange, new StrongBox<OrderListCreatedRange>(createdRange));
-            if (!createdRange.IsValid ||
-                (cursor is not null && !OrderCursorCodec.TryDecode(
+            if (!createdRange.IsValid)
+            {
+                throw new OrderConflictException(OrderConflictCode.InvalidRequest);
+            }
+
+            if (cursor is not null)
+            {
+                var reading = OrderCursorCodec.Read(
                     cursor,
                     OrderCursorCodec.Binding(
                         organizationId, status, ownerOrganizationId, codPendingReconciliation, publicId, createdRange),
                     out _,
-                    out _)))
-            {
-                throw new OrderConflictException(OrderConflictCode.InvalidRequest);
+                    out _);
+                if (reading == OrderCursorReading.BoundToOtherFilters)
+                {
+                    throw new OrderConflictException(OrderConflictCode.InvalidRequest);
+                }
+
+                if (reading == OrderCursorReading.Unreadable)
+                {
+                    return Task.FromResult(new OrderPageResult([], null));
+                }
             }
 
             // UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: like the PostgreSQL service, a malformed tracking number

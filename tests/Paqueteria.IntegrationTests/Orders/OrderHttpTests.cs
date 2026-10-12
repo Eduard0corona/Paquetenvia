@@ -414,10 +414,13 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
             $"/api/v1/orders?owner_org_id={MockIdentityProfiles.ForeignOrganizationId:D}");
         Assert.Equal("{\"items\":[],\"next_cursor\":null}", await foreignOwner.Content.ReadAsStringAsync());
 
-        // ORD-LIST-DATE-FILTER-2026-10-12: a cursor this operation did not issue is refused, no longer an empty page.
         using var invalidCursor = await SendAuthenticatedAsync(HttpMethod.Get, "/api/v1/orders?cursor=invalid");
-        await AssertInvalidRequestAsync(invalidCursor);
+        Assert.Equal("{\"items\":[],\"next_cursor\":null}", await invalidCursor.Content.ReadAsStringAsync());
 
+        // ORD-LIST-DATE-FILTER-2026-10-12, additive: the cursor of the earlier format still pages, and so does a bound
+        // one with the filters it was issued for.
+        using var legacyCursor = await SendAuthenticatedAsync(HttpMethod.Get, $"/api/v1/orders?cursor={LegacyCursor()}");
+        Assert.Equal(HttpStatusCode.OK, legacyCursor.StatusCode);
         var cursor = IssuedCursor();
         using var validCursor = await SendAuthenticatedAsync(HttpMethod.Get, $"/api/v1/orders?cursor={cursor}");
         Assert.Equal(HttpStatusCode.OK, validCursor.StatusCode);
@@ -470,6 +473,12 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
                      "created_to=ayer",
                      "created_to=",
                      "created_from=2026-13-01T00:00:00Z",
+                     // Strict RFC3339 UTC: no date alone with Z, no spaces, no culture formats, at most 7 fraction digits.
+                     "created_from=2026-10-12Z",
+                     "created_from=%202026-10-01T07:00:00Z",
+                     "created_from=2026-10-01T07:00:00.12345678Z",
+                     "created_to=Thu%2C%2001%20Oct%202026%2007%3A00%3A00%20GMT",
+                     "created_to=10%2F01%2F2026%2007%3A00%3A00Z",
                      "created_from=2026-10-01T07:00:00Z&created_from=2026-10-02T07:00:00Z",
                      "created_to=2026-10-01T07:00:00Z&created_to=2026-10-02T07:00:00Z",
                      "created_from=2026-10-08T07:00:00Z&created_to=2026-10-01T07:00:00Z",
@@ -501,12 +510,13 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
     }
 
     /// <summary>
-    /// ORD-LIST-DATE-FILTER-2026-10-12: a cursor is accepted only with the organization and the filters it was issued
-    /// for; the same position under another status, owner, COD filter, public_id, window or organization, the unbound
-    /// cursor of the earlier version and a cursor of another operation are 409 INVALID_REQUEST before the capability.
+    /// ORD-LIST-DATE-FILTER-2026-10-12, additive: a bound cursor is accepted only with the organization and the filters
+    /// it was issued for; under another status, owner, COD filter, public_id, window or organization it is 409
+    /// INVALID_REQUEST, decided after the capability check as every cursor was before. The unbound cursor of the earlier
+    /// format still pages, and unreadable, empty or repeated cursors and an unknown COD value keep the empty page.
     /// </summary>
     [Fact]
-    public async Task GET_list_accepts_a_cursor_only_for_the_filters_it_was_issued_for()
+    public async Task GET_list_accepts_a_bound_cursor_only_for_its_filters_and_keeps_every_earlier_answer()
     {
         var organization = MockIdentityProfiles.ViewerOrganizationId;
         var range = new OrderListCreatedRange(
@@ -518,41 +528,67 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
             Guid.NewGuid(),
             OrderCursorCodec.Binding(organization, "DELIVERED", null, false, null, range));
 
-        using (var issued = await SendAuthenticatedAsync(
-                   HttpMethod.Get, $"/api/v1/orders?status=DELIVERED&{window}&cursor={cursor}"))
+        foreach (var query in new[]
+                 {
+                     $"status=DELIVERED&{window}&cursor={cursor}",
+                     // cod_pending_reconciliation=false is the same filter as its absence.
+                     $"status=DELIVERED&cod_pending_reconciliation=false&{window}&cursor={cursor}",
+                     // The earlier unbound format pages with any filters, as before.
+                     $"cursor={LegacyCursor()}",
+                     $"status=CLOSED&{window}&cursor={LegacyCursor()}",
+                 })
         {
-            Assert.Equal(HttpStatusCode.OK, issued.StatusCode);
+            using var response = await SendAuthenticatedAsync(HttpMethod.Get, $"/api/v1/orders?{query}");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         }
 
-        // cod_pending_reconciliation=false is the same filter as its absence.
-        using (var sameFilter = await SendAuthenticatedAsync(
-                   HttpMethod.Get, $"/api/v1/orders?status=DELIVERED&cod_pending_reconciliation=false&{window}&cursor={cursor}"))
-        {
-            Assert.Equal(HttpStatusCode.OK, sameFilter.StatusCode);
-        }
-
-        var legacy = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(
-                $"{range.From!.Value.UtcTicks}:{Guid.NewGuid():D}"))
-            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
         foreach (var query in new[]
                  {
                      $"{window}&cursor={cursor}",
                      $"status=CLOSED&{window}&cursor={cursor}",
                      $"status=DELIVERED&owner_org_id={organization:D}&{window}&cursor={cursor}",
                      $"status=DELIVERED&cod_pending_reconciliation=true&{window}&cursor={cursor}",
-                     $"status=DELIVERED&cod_pending_reconciliation=maybe&{window}&cursor={cursor}",
                      $"status=DELIVERED&public_id=ORD_AAAAAAAAAAAAAAAAAAAAAA&{window}&cursor={cursor}",
                      $"status=DELIVERED&cursor={cursor}",
                      $"status=DELIVERED&created_from=2026-10-01T07:00:00Z&cursor={cursor}",
                      $"status=DELIVERED&created_from=2026-10-02T07:00:00Z&created_to=2026-10-08T07:00:00Z&cursor={cursor}",
-                     $"status=DELIVERED&{window}&cursor={legacy}",
-                     $"status=DELIVERED&{window}&cursor={cursor}&cursor={cursor}",
+                 })
+        {
+            using var response = await SendAuthenticatedAsync(HttpMethod.Get, $"/api/v1/orders?{query}");
+            await AssertInvalidRequestAsync(response);
+        }
+
+        // Every earlier empty-page answer is unchanged.
+        foreach (var query in new[]
+                 {
+                     $"status=DELIVERED&{window}&cursor=invalid",
                      $"status=DELIVERED&{window}&cursor=",
+                     $"status=DELIVERED&{window}&cursor={cursor}&cursor={cursor}",
+                     $"status=DELIVERED&{window}&cursor={new string('A', 300)}",
+                     $"status=DELIVERED&cod_pending_reconciliation=maybe&{window}&cursor={cursor}",
+                 })
+        {
+            using var response = await SendAuthenticatedAsync(HttpMethod.Get, $"/api/v1/orders?{query}");
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal("{\"items\":[],\"next_cursor\":null}", await response.Content.ReadAsStringAsync());
+        }
+
+        // The capability is still decided before the cursor: callers without listOrders keep their 403.
+        foreach (var (profile, query, mfaRequired) in new[]
+                 {
+                     (MockIdentityProfiles.ActiveDriver, $"status=CLOSED&{window}&cursor={cursor}", false),
+                     (MockIdentityProfiles.ActiveFinanceMfa, $"status=CLOSED&{window}&cursor={cursor}", false),
+                     (MockIdentityProfiles.ActiveFinance, $"cod_pending_reconciliation=true&{window}&cursor={cursor}", true),
                  })
         {
             var before = factory.ListCallCount;
-            using var response = await SendAuthenticatedAsync(HttpMethod.Get, $"/api/v1/orders?{query}");
-            await AssertInvalidRequestAsync(response);
+            using var request = new HttpRequestMessage(HttpMethod.Get, $"/api/v1/orders?{query}");
+            request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", profile);
+            request.Headers.Add("X-Organization-Id", organization.ToString("D"));
+            using var response = await client.SendAsync(request);
+            Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+            using var json = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(mfaRequired, json.RootElement.TryGetProperty("code", out var code) && code.GetString() == "MFA_REQUIRED");
             Assert.Equal(before, factory.ListCallCount);
         }
 
@@ -580,6 +616,12 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
             }
         }
     }
+
+    /// <summary>The unbound cursor the API issued before ORD-LIST-DATE-FILTER-2026-10-12 ("ticks:id" in Base64URL).</summary>
+    private static string LegacyCursor() =>
+        Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(
+                $"{DateTimeOffset.UtcNow.UtcTicks}:{Guid.NewGuid():D}"))
+            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
     private static string IssuedCursor() => OrderCursorCodec.Encode(
         DateTimeOffset.UtcNow,

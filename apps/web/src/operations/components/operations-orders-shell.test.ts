@@ -22,6 +22,7 @@ const row: OrderListItem = {
   public_id: "ORD_AbCdEfGhIjKlMnOpQrSt_-",
   status: "FAILED_ATTEMPT",
   total_cents: 123_456,
+  created_at: null,
 };
 
 function state(overrides: Partial<OrderListState> = {}): OrderListState {
@@ -96,9 +97,34 @@ describe("Órdenes screen", () => {
     expect(html).toContain('<option value="DELIVERED" selected="">Entregada</option>');
     expect(text(html)).toContain("Creada desde (hora de Mazatlán)");
     expect(text(html)).toContain("Creada hasta (hora de Mazatlán)");
-    expect(html).toContain('type="date" value="2026-10-01"');
-    expect(html).toContain('type="date" value="2026-10-07"');
+    expect(html).toContain('type="date" min="2000-01-01" value="2026-10-01"');
+    expect(html).toContain('type="date" min="2000-01-01" value="2026-10-07"');
+    expect(html).not.toContain("aria-invalid");
     expect(html).toContain(">Limpiar filtros</button>");
+  });
+
+  // UI-PHASE3-ORDERS-LIST-2026-10-12 (owner, "En dos pasos (Recommended)"): "Creada" only once the API sends it.
+  it("adds the Creada column in Mazatlán time only when the API sends created_at", () => {
+    const without = render(state({ rows: [row] }));
+    expect(without).not.toContain(">Creada</th>");
+    expect(without.slice(without.indexOf("<table"))).not.toContain("<time");
+    expect(text(without)).not.toContain("Sin dato");
+    const dated = { ...row, id: "0a1b2c3d-1111-4222-8333-944445555667", created_at: "2026-10-12T17:04:05.1234567Z" };
+    const html = render(state({ rows: [dated, row] }));
+    expect(html).toContain('<th scope="col">Estado</th><th scope="col">Creada</th><th scope="col" class="opsAmount">');
+    expect(html).toContain('<time dateTime="2026-10-12T17:04:05.1234567Z">12 oct 2026, 10:04</time>');
+    // An order without the field in the same page reads "Sin dato".
+    expect(text(html)).toContain("Sin dato");
+  });
+
+  it("keeps the focus on the page: no remount of the guía search, a focusable summary and Cargar más", () => {
+    const searched = render(state({ guide: row.public_id, rows: [row], nextCursor: "c1" }));
+    expect(searched).toContain('<button type="button" class="btnLink">Quitar búsqueda</button>');
+    expect(searched).toContain('<p class="opsSummaryNote" tabindex="-1">');
+    expect(searched).toContain('aria-disabled="false">Cargar más</button>');
+    const paging = render(state({ rows: [row], nextCursor: "c1", loadingMore: true }));
+    expect(paging).toContain('aria-disabled="true">Cargando…</button>');
+    expect(paging).not.toMatch(/<button[^>]*disabled=""[^>]*>Cargando…/);
   });
 
   it.each([

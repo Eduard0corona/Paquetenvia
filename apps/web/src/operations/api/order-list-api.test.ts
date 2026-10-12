@@ -64,7 +64,7 @@ describe("order list api", () => {
     expect(init).toMatchObject({ method: "GET", cache: "no-store", referrerPolicy: "no-referrer" });
     expect((init.headers as Record<string, string>)["X-Organization-Id"]).toBe(organizationId);
     expect(page).toEqual({
-      items: [{ id: order.id, public_id: guide, status: "IN_TRANSIT", total_cents: 11_600 }],
+      items: [{ id: order.id, public_id: guide, status: "IN_TRANSIT", total_cents: 11_600, created_at: null }],
       next_cursor: "bzI6NjM5",
     });
 

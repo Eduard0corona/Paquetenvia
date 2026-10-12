@@ -209,16 +209,25 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             return Task.FromResult(new OrderPageResult([], null));
         }
 
-        // ORD-LIST-DATE-FILTER-2026-10-12: the cursor must be a position issued for this organization and these
-        // filters; any other value is refused instead of paging another list.
+        // ORD-LIST-DATE-FILTER-2026-10-12, additive: a bound cursor issued for another organization or other filters
+        // is refused instead of paging another list; an unbound cursor of the earlier format pages as before and any
+        // other text is still the empty page.
         var binding = OrderCursorCodec.Binding(
             organizationId, status, ownerOrganizationId, codPendingReconciliation, publicId, createdRange);
         DateTimeOffset cursorCreatedAt = default;
         Guid cursorId = default;
         var hasCursor = cursor is not null;
-        if (hasCursor && !OrderCursorCodec.TryDecode(cursor, binding, out cursorCreatedAt, out cursorId))
+        if (hasCursor)
         {
-            throw new OrderConflictException(OrderConflictCode.InvalidRequest);
+            switch (OrderCursorCodec.Read(cursor, binding, out cursorCreatedAt, out cursorId))
+            {
+                case OrderCursorReading.BoundToOtherFilters:
+                    throw new OrderConflictException(OrderConflictCode.InvalidRequest);
+                case OrderCursorReading.Unreadable:
+                    return Task.FromResult(new OrderPageResult([], null));
+                case OrderCursorReading.Position:
+                    break;
+            }
         }
 
         return transactionContext.ExecuteAsync(

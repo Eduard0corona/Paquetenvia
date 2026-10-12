@@ -30,6 +30,7 @@ function row(id: number, status: OrderListItem["status"] = "DELIVERED"): OrderLi
     public_id: `ORD_${String(id).padStart(22, "0")}`,
     status,
     total_cents: 1_000 * id,
+    created_at: null,
   };
 }
 

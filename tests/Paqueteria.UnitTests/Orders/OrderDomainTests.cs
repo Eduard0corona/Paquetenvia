@@ -196,28 +196,30 @@ public sealed class OrderDomainTests
         var id = Guid.NewGuid();
         var binding = OrderCursorCodec.Binding(OrganizationId, null, null, false, null, default);
         var cursor = OrderCursorCodec.Encode(createdAt, id, binding);
-        Assert.True(OrderCursorCodec.TryDecode(cursor, binding, out var decodedAt, out var decodedId));
+        Assert.Equal(OrderCursorReading.Position, OrderCursorCodec.Read(cursor, binding, out var decodedAt, out var decodedId));
         Assert.Equal(createdAt, decodedAt);
         Assert.Equal(id, decodedId);
-        Assert.False(OrderCursorCodec.TryDecode("not/a/cursor", binding, out _, out _));
+        Assert.Equal(OrderCursorReading.Unreadable, OrderCursorCodec.Read("not/a/cursor", binding, out _, out _));
         Assert.DoesNotContain("2026", cursor, StringComparison.Ordinal);
-        Assert.True(cursor.Length <= OrderCursorCodec.MaximumLength);
+        Assert.True(cursor.Length <= OrderCursorCodec.MaximumBoundLength);
     }
 
     /// <summary>
-    /// ORD-LIST-DATE-FILTER-2026-10-12: a cursor decodes only for the organization and the filters it was issued
-    /// for; another value of any filter, another organization, an earlier unbound cursor, a non-canonical spelling
-    /// or an oversized value never decodes.
+    /// ORD-LIST-DATE-FILTER-2026-10-12, additive: a bound cursor decodes only for the organization and the filters it
+    /// was issued for, and is refused for any other; the unbound cursor of the earlier format decodes exactly as before
+    /// with any filters, and every other text (empty, oversized, tampered) is still no position.
     /// </summary>
     [Fact]
-    public void Cursor_is_bound_to_the_organization_and_every_filter()
+    public void Cursor_is_bound_to_the_organization_and_every_filter_and_reads_the_earlier_format()
     {
         var from = new DateTimeOffset(2026, 10, 1, 7, 0, 0, TimeSpan.Zero);
         var to = new DateTimeOffset(2026, 10, 8, 6, 59, 59, TimeSpan.Zero).AddTicks(9_999_990);
         var range = new OrderListCreatedRange(from, to);
         var binding = OrderCursorCodec.Binding(OrganizationId, "DELIVERED", OrganizationId, true, null, range);
         var cursor = OrderCursorCodec.Encode(from.AddDays(2), OrderId, binding);
-        Assert.True(OrderCursorCodec.TryDecode(cursor, binding, out _, out _));
+        Assert.Equal(OrderCursorReading.Position, OrderCursorCodec.Read(cursor, binding, out var at, out var id));
+        Assert.Equal(from.AddDays(2), at);
+        Assert.Equal(OrderId, id);
 
         // The same binding is computed for the same values, whatever offset an instant was written with.
         Assert.Equal(
@@ -249,37 +251,57 @@ public sealed class OrderDomainTests
                  })
         {
             Assert.NotEqual(binding, other);
-            Assert.False(OrderCursorCodec.TryDecode(cursor, other, out _, out _));
+            Assert.Equal(OrderCursorReading.BoundToOtherFilters, OrderCursorCodec.Read(cursor, other, out _, out _));
         }
 
-        // The unbound cursor of the earlier version ("ticks:id") and non-canonical spellings never decode.
-        var legacy = Convert.ToBase64String(Encoding.UTF8.GetBytes($"{from.UtcTicks}:{OrderId:D}"))
-            .TrimEnd('=').Replace('+', '-').Replace('/', '_');
-        Assert.False(OrderCursorCodec.TryDecode(legacy, binding, out _, out _));
-        Assert.False(OrderCursorCodec.TryDecode(cursor + "=", binding, out _, out _));
-        Assert.False(OrderCursorCodec.TryDecode(cursor + "A", binding, out _, out _));
-        Assert.False(OrderCursorCodec.TryDecode(string.Empty, binding, out _, out _));
-        Assert.False(OrderCursorCodec.TryDecode(
-            new string('A', OrderCursorCodec.MaximumLength + 4), binding, out _, out _));
-        var empty = OrderCursorCodec.Encode(from, Guid.Empty, binding);
-        Assert.False(OrderCursorCodec.TryDecode(empty, binding, out _, out _));
+        // The cursor of the earlier format ("ticks:id", unbound) is a position for any binding, as before.
+        var legacyAt = from.AddTicks(1_234_567);
+        var legacy = Base64Url($"{legacyAt.UtcTicks}:{OrderId:D}");
+        foreach (var any in new[] { binding, OrderCursorCodec.Binding(QuoteId, null, null, false, null, default) })
+        {
+            Assert.Equal(OrderCursorReading.Position, OrderCursorCodec.Read(legacy, any, out var legacyDecodedAt, out var legacyId));
+            Assert.Equal(legacyAt, legacyDecodedAt);
+            Assert.Equal(OrderId, legacyId);
+        }
+
+        // Leading zeros were accepted before and still are; a long earlier-format cursor is not a bound one.
+        Assert.Equal(
+            OrderCursorReading.Position,
+            OrderCursorCodec.Read(Base64Url($"{new string('0', 100)}{legacyAt.UtcTicks}:{OrderId:D}"), binding, out _, out _));
+
+        // Anything else is still no position: empty, blank, tampered, oversized or a bound cursor with an empty id.
+        foreach (var unreadable in new[]
+                 {
+                     string.Empty, " ", "invalid", cursor + "=", cursor + "A", new string('A', OrderCursorCodec.MaximumBoundLength + 4),
+                     OrderCursorCodec.Encode(from, Guid.Empty, binding), Base64Url($"o2:{from.UtcTicks}:{OrderId:D}"),
+                 })
+        {
+            Assert.Equal(OrderCursorReading.Unreadable, OrderCursorCodec.Read(unreadable, binding, out _, out _));
+        }
     }
 
     /// <summary>
-    /// ORD-LIST-DATE-FILTER-2026-10-12: created_from and created_to follow the dashboard's rule, an RFC3339 UTC
-    /// instant ending in Z, inclusive bounds, created_from not after created_to and at most 31 days between them.
+    /// ORD-LIST-DATE-FILTER-2026-10-12: created_from and created_to are strict RFC3339 UTC instants ending in Z (0 to 7
+    /// fractional digits), inclusive bounds, created_from not after created_to and at most 31 days between them.
     /// </summary>
     [Fact]
-    public void Created_range_parses_utc_instants_and_bounds_the_window()
+    public void Created_range_parses_strict_utc_instants_and_bounds_the_window()
     {
         Assert.True(OrderListCreatedRange.TryParseInstant("2026-10-01T07:00:00Z", out var from));
         Assert.Equal(new DateTimeOffset(2026, 10, 1, 7, 0, 0, TimeSpan.Zero), from);
         Assert.True(OrderListCreatedRange.TryParseInstant("2026-11-01T06:59:59.999999Z", out var to));
         Assert.Equal(new DateTimeOffset(2026, 11, 1, 6, 59, 59, TimeSpan.Zero).AddTicks(9_999_990), to);
+        Assert.True(OrderListCreatedRange.TryParseInstant("2026-10-01T07:00:00.000Z", out var millis));
+        Assert.Equal(from, millis);
+        Assert.True(OrderListCreatedRange.TryParseInstant("2026-10-01T07:00:00.1234567Z", out var ticks));
+        Assert.Equal(from.AddTicks(1_234_567), ticks);
         foreach (var invalid in new[]
                  {
-                     null, string.Empty, "2026-10-01", "2026-10-01T07:00:00", "2026-10-01T00:00:00-07:00",
-                     "2026-10-01T07:00:00+00:00", "ayer", "2026-13-01T00:00:00Z", "Z",
+                     null, string.Empty, "Z", "ayer", "2026-10-01", "2026-10-12Z", "2026-10-01T07:00Z", "2026-10-01T07:00:00",
+                     "2026-10-01T00:00:00-07:00", "2026-10-01T07:00:00+00:00", "2026-10-01t07:00:00z", "2026-10-01 07:00:00Z",
+                     " 2026-10-01T07:00:00Z", "2026-10-01T07:00:00Z ", "2026-10-01T07:00:00.Z", "2026-10-01T07:00:00.12345678Z",
+                     "2026-13-01T00:00:00Z", "2026-02-30T00:00:00Z", "2026-10-01T24:00:00Z", "10/01/2026 07:00:00Z",
+                     "Thu, 01 Oct 2026 07:00:00 GMT", "Thu, 01 Oct 2026 07:00:00Z", "+2026-10-01T07:00:00Z",
                  })
         {
             Assert.False(OrderListCreatedRange.TryParseInstant(invalid, out _), invalid);
@@ -289,13 +311,16 @@ public sealed class OrderDomainTests
         Assert.True(new OrderListCreatedRange(from, null).IsValid);
         Assert.True(new OrderListCreatedRange(null, to).IsValid);
         Assert.True(new OrderListCreatedRange(from, from).IsValid);
-        // 31 Mazatlán days (October) is the longest window; one more microsecond is not.
+        // 31 Mazatlán days (October) is the longest window; one more tick is not.
         Assert.True(new OrderListCreatedRange(from, to).IsValid);
         Assert.True(new OrderListCreatedRange(from, from + OrderListCreatedRange.MaximumSpan).IsValid);
         Assert.False(new OrderListCreatedRange(from, from + OrderListCreatedRange.MaximumSpan + TimeSpan.FromTicks(10)).IsValid);
         Assert.False(new OrderListCreatedRange(to, from).IsValid);
         Assert.Equal(TimeSpan.FromDays(31), OrderListCreatedRange.MaximumSpan);
     }
+
+    private static string Base64Url(string text) =>
+        Convert.ToBase64String(Encoding.UTF8.GetBytes(text)).TrimEnd('=').Replace('+', '-').Replace('/', '_');
 
     [Fact]
     public void Result_collections_are_immutable_snapshots()

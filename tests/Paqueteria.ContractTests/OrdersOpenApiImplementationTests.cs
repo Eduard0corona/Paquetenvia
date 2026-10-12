@@ -504,9 +504,10 @@ public sealed class OrdersOpenApiImplementationTests
     }
 
     /// <summary>
-    /// ORD-LIST-DATE-FILTER-2026-10-12: AI-05 publishes created_from and created_to exactly as the server reads them
-    /// (UTC date-time, inclusive, at most 31 days), the cursor bound to the filters with its length, the 409 the
-    /// shape refusal answers before the capability, and the delta entry; the endpoint, the policy and the SQL agree.
+    /// ORD-LIST-DATE-FILTER-2026-10-12, purely additive: AI-05 publishes created_from and created_to exactly as the
+    /// server reads them (strict UTC date-time, inclusive, at most 31 days, refused before the capability), the bound
+    /// cursor refused after the capability while every earlier cursor keeps its answer, the 409 and the delta entry; the
+    /// endpoint, the policy and the SQL agree.
     /// </summary>
     [Fact]
     public void The_listOrders_creation_window_and_bound_cursor_match_AI05()
@@ -519,7 +520,10 @@ public sealed class OrdersOpenApiImplementationTests
         Assert.Contains("ORD-LIST-DATE-FILTER-2026-10-12", description, StringComparison.Ordinal);
         Assert.Contains("created_from <= created_at <= created_to", description, StringComparison.Ordinal);
         Assert.Contains("at most 31 days", description, StringComparison.Ordinal);
+        Assert.Contains("purely additive", description, StringComparison.Ordinal);
         Assert.Contains("409 INVALID_REQUEST, decided before the capability", description, StringComparison.Ordinal);
+        Assert.Contains("after the capability check and before any order is read", description, StringComparison.Ordinal);
+        Assert.Contains("earlier unbound format still pages exactly as before", description, StringComparison.Ordinal);
         Assert.Contains("keep answering the empty page", description, StringComparison.Ordinal);
 
         var parameters = list.Sequence("parameters").Children.OfType<YamlMappingNode>()
@@ -534,13 +538,14 @@ public sealed class OrdersOpenApiImplementationTests
             Assert.Equal("date-time", parameter.Mapping("schema").Scalar("format"));
             Assert.Contains(comparison, parameter.Scalar("description"), StringComparison.Ordinal);
             Assert.Contains("America/Mazatlan", parameter.Scalar("description"), StringComparison.Ordinal);
+            Assert.Contains("0 to 7 fractional digits and Z", parameter.Scalar("description"), StringComparison.Ordinal);
         }
 
+        // The cursor schema is unchanged (no new length limit); only its description grows.
         var cursor = parameters["cursor"];
-        Assert.Equal(
-            OrderCursorCodec.MaximumLength.ToString(System.Globalization.CultureInfo.InvariantCulture),
-            cursor.Mapping("schema").Scalar("maxLength"));
+        Assert.Equal(["type"], cursor.Mapping("schema").Children.Keys.Select(key => ((YamlScalarNode)key).Value!));
         Assert.Contains("bound to the selected organization", cursor.Scalar("description"), StringComparison.Ordinal);
+        Assert.Contains("earlier unbound format still pages", cursor.Scalar("description"), StringComparison.Ordinal);
         Assert.Equal("#/components/responses/Conflict", list.Mapping("responses").Mapping("409").Scalar("$ref"));
         Assert.Equal(TimeSpan.FromDays(31), OrderListCreatedRange.MaximumSpan);
 
@@ -557,10 +562,11 @@ public sealed class OrdersOpenApiImplementationTests
         Assert.Contains("public const string CreatedFrom = \"created_from\";", source, StringComparison.Ordinal);
         Assert.Contains("public const string CreatedTo = \"created_to\";", source, StringComparison.Ordinal);
         Assert.Contains("[\"code\"] = \"INVALID_REQUEST\"", source, StringComparison.Ordinal);
-        // The shape refusal comes before the capability gate of listOrders.
+        // The window refusal comes before the capability gate of listOrders; the cursor is not read there.
         var list409 = source.IndexOf("OrderListRequestShape.TryReadCreatedRange(", StringComparison.Ordinal);
         var gate = source.IndexOf("TenantCapabilities.ListOrders) is { } denied", StringComparison.Ordinal);
         Assert.True(list409 > 0 && gate > list409);
+        Assert.DoesNotContain("OrderCursorCodec", source, StringComparison.Ordinal);
 
         var coordinator = ReadRepositoryFile(
             "src", "Modules", "Orders", "Orders.Infrastructure", "Orders", "QuoteSnapshotToOrderCoordinator.cs");
@@ -568,6 +574,9 @@ public sealed class OrdersOpenApiImplementationTests
         Assert.Contains("AND (@created_to::timestamptz IS NULL OR created_at<=@created_to)", coordinator, StringComparison.Ordinal);
         Assert.Contains("ORDER BY created_at DESC,id DESC", coordinator, StringComparison.Ordinal);
         Assert.Contains("OrderCursorCodec.Encode(rows[^1].CreatedAt, rows[^1].Result.Id, binding)", coordinator, StringComparison.Ordinal);
+        Assert.Contains("case OrderCursorReading.BoundToOtherFilters:", coordinator, StringComparison.Ordinal);
+        Assert.Contains("case OrderCursorReading.Unreadable:", coordinator, StringComparison.Ordinal);
+        Assert.Contains("purely additive", delta.Scalar("delta"), StringComparison.Ordinal);
     }
 
     /// <summary>

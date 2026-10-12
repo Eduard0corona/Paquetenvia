@@ -75,7 +75,7 @@ AUD-001 registra `ORDER_CREATED` con actor, organización, order/quote IDs, paye
 - `GET /api/v1/orders`: `status`, `owner_org_id`, `cod_pending_reconciliation`, `public_id`, `created_from`, `created_to` (ORD-LIST-DATE-FILTER-2026-10-12) y `cursor`; page size fijo y `created_at DESC, id DESC`.
 - `GET /api/v1/orders/{orderId}`: `OrderDetail`; timeline expone solo `event_type` y `occurred_at`; 404 uniforme.
 
-El cursor Base64URL es opaco, sin PII. Owner extranjero produce página vacía. Desde ORD-LIST-DATE-FILTER-2026-10-12 el cursor está ligado a la organización y a los filtros que lo emitieron: un cursor inválido, de otros filtros o de la versión anterior es `409 INVALID_REQUEST` antes de la capacidad (ver `ui-001-phase3-orders-list.md`). No hay parámetro `limit`.
+El cursor Base64URL es opaco, sin PII. Owner extranjero produce página vacía. Desde ORD-LIST-DATE-FILTER-2026-10-12 (cambio aditivo) cada `next_cursor` nuevo está ligado a la organización y a los filtros que lo emitieron: usado con otros filtros es `409 INVALID_REQUEST` después de la capacidad; un cursor del formato anterior sigue paginando y uno ilegible sigue dando la página vacía (ver `ui-001-phase3-orders-list.md`). No hay parámetro `limit`.
 
 ## RLS, append-only y migración
 

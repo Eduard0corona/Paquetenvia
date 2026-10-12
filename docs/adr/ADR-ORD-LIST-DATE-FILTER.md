@@ -22,28 +22,38 @@ RFC3339 en UTC que terminan en `Z` (`TryUtc`), ambos inclusivos, cada uno opcion
 ellos. El cursor de `listOrders` era solo la posición (`created_at`, `id`) en Base64URL, sin relación con los filtros:
 una posición pedida con otro estado paginaba otra lista sin decirlo, y un cursor ilegible devolvía la página vacía.
 
+El owner pidió un cambio aditivo, así que todo lo que `listOrders` respondía antes se sigue respondiendo igual: las
+reglas nuevas solo alcanzan a los parámetros nuevos y a los cursores que se emiten a partir de este cambio.
+
 ## Decisión
 
-1. `listOrders` acepta `created_from` y `created_to`, con las reglas del tablero: texto RFC3339 en UTC que termina en
-   `Z`, a lo más una vez cada uno, ambos inclusivos (`created_from <= orders.created_at <= created_to`), cada uno
-   usable solo; con los dos, `created_from` no es posterior a `created_to` y entre ellos hay a lo más 31 días
-   (`OrderListCreatedRange.MaximumSpan`). Se mantiene el máximo del tablero: el rango no cambia el costo de una página
-   (ver índices) pero un límite común evita dos reglas para el mismo filtro; quien necesite más deja una cota abierta.
+1. `listOrders` acepta `created_from` y `created_to`, con las cotas del tablero y un formato estricto: exactamente
+   `yyyy-MM-ddTHH:mm:ss`, de 0 a 7 decimales y `Z`, sin nada alrededor (`OrderListCreatedRange.TryParseInstant`, un
+   `TryParseExact` con cultura invariante), a lo más una vez cada uno, ambos inclusivos
+   (`created_from <= orders.created_at <= created_to`), cada uno usable solo; con los dos, `created_from` no es
+   posterior a `created_to` y entre ellos hay a lo más 31 días (`OrderListCreatedRange.MaximumSpan`). Se mantiene el
+   máximo del tablero: el rango no cambia el costo de una página (ver índices) pero un límite común evita dos reglas
+   para el mismo filtro; quien necesite más deja una cota abierta. El lector del tablero (`TryUtc`) no cambia aquí.
 2. "Hora de Mazatlán" la resuelve la web: "Desde" es el primer instante de ese día en America/Mazatlan y "Hasta" el
    último microsegundo de ese día (`…:59.999999Z`), convertidos con `src/lib/mazatlan-time.ts`; así los dos días
    elegidos quedan incluidos con las cotas inclusivas del servidor, sin depender de la zona del dispositivo. El
    servidor no conoce zonas: recibe instantes.
-3. El cursor queda ligado a la organización seleccionada y a todos los filtros de la solicitud que lo recibió
-   (`status`, `owner_org_id`, `cod_pending_reconciliation` leído como booleano, `public_id`, `created_from`,
-   `created_to`): `OrderCursorCodec` agrega una versión (`o2`) y los primeros 16 bytes del SHA-256 de esos valores en
-   JSON canónico; se decodifica solo si la ligadura coincide y el texto es canónico, con 128 caracteres como máximo
-   (`maxLength` publicado). La ligadura evita mezclar páginas; no autentica nada: RLS sigue acotando cada lectura.
-4. Forma de la solicitud antes de la capacidad: un `created_from` o `created_to` mal formado o repetido, un rango fuera
-   de las reglas y un cursor que esta operación no emitió para esta organización y estos filtros (otro filtro, otra
-   organización, el cursor sin ligadura de la versión anterior o cualquier otro texto) son `409` con `code`
-   `INVALID_REQUEST`, decididos antes de la capacidad y sin abrir la transacción ni leer órdenes (AI-05
-   `x-authorization-precedence: shape-validation-then-capability-before-persisted-state`), como `listIncidents`,
-   `listSettlements` y `listOrganizationDrivers`. El servicio repite ambas comprobaciones antes de leer.
+3. Cada `next_cursor` emitido desde este cambio queda ligado a la organización seleccionada y a todos los filtros de
+   la solicitud que lo recibió (`status`, `owner_org_id`, `cod_pending_reconciliation` leído como booleano,
+   `public_id`, `created_from`, `created_to`): `OrderCursorCodec` agrega una versión (`o2`) y los primeros 16 bytes
+   del SHA-256 de esos valores en JSON canónico, con 128 caracteres como máximo. `OrderCursorCodec.Read` reconoce un
+   cursor `o2` canónico; si su ligadura no coincide con la solicitud la respuesta es `409` con `code`
+   `INVALID_REQUEST`. Cualquier otro texto se lee exactamente como antes: un cursor del formato anterior (posición sin
+   ligadura) sigue paginando, y un texto ilegible, vacío o demasiado largo sigue dando la página vacía. AI-05 no
+   publica `maxLength` en `cursor`, para no cambiar la respuesta a ningún texto. La ligadura evita mezclar páginas; no
+   autentica nada: RLS sigue acotando cada lectura.
+4. Orden de las comprobaciones. Un `created_from` o `created_to` mal formado o repetido y un rango fuera de las reglas
+   son forma de la solicitud: `409 INVALID_REQUEST` antes de la capacidad y sin abrir la transacción ni leer órdenes
+   (AI-05 `x-authorization-precedence: shape-validation-then-capability-before-persisted-state`), como
+   `listIncidents`, `listSettlements` y `listOrganizationDrivers`; solo los clientes que conocen los parámetros nuevos
+   los mandan. El cursor se sigue leyendo donde siempre, en el servicio, después de la capacidad y antes de leer
+   órdenes: un rol sin capacidad recibe el mismo `403` de antes con cualquier cursor. El servicio repite la
+   comprobación del rango.
 5. Lo demás no cambia: un estado desconocido, un `public_id` mal formado, otra `owner_org_id` y un
    `cod_pending_reconciliation` distinto de `true`/`false` siguen devolviendo la página vacía después de la capacidad;
    la capacidad (DISPATCHER, PLATFORM_ADMIN y VIEWER; FINANCE con MFA solo con `cod_pending_reconciliation=true`), la
@@ -76,18 +86,20 @@ DESC)`) no se justifica para el piloto y queda como mejora si el volumen por org
 
 ## Consecuencias
 
-- Solo hay un efecto que no es aditivo: un cursor que esta operación no emitió para los mismos filtros, incluidos los
-  cursores sin ligadura emitidos antes de este cambio y un texto cualquiera, ya no devuelve la página vacía sino `409
-  INVALID_REQUEST`. Ningún cliente legítimo cambia filtros con un cursor; la web solo reenvía `next_cursor` con la misma
-  consulta. Una pestaña abierta durante el despliegue que pida "Cargar más" en "Cobro contra entrega" con un cursor
-  anterior ve un error una vez y lo resuelve con "Actualizar".
-- AI-05: parámetros `created_from` y `created_to`, `maxLength: 128` y descripción del cursor, respuesta `409`
+- El cambio es aditivo: toda solicitud válida antes recibe la misma respuesta. El único `409` nuevo sin parámetros
+  nuevos es el de un cursor `o2`, que solo existe desde este cambio, enviado con filtros u organización distintos de
+  los que lo emitieron; ningún cliente legítimo lo hace (la web reenvía `next_cursor` con la misma consulta). Una
+  pestaña abierta durante el despliegue con un cursor anterior sigue paginando.
+- AI-05: parámetros `created_from` y `created_to`, descripción del cursor (sin `maxLength`), respuesta `409`
   (`Conflict`) y la entrada `ORD-LIST-DATE-FILTER` de `x-pilot-contract-deltas`; los conteos de rutas y esquemas no
   cambian y las referencias internas pasan de 645 a 646.
 - Sin tabla, columna, índice, rol, permiso, función ni migración; AI-04, AI-06 y AI-18 sin cambios; ningún flujo
   atómico nuevo de AI-13 §4.
 - Despliegue: el API antes que la web, o los dos juntos. La web anterior funciona con el API nuevo (nunca manda fechas
   y reenvía cada cursor con su misma consulta). La web nueva con el API anterior mostraría la lista sin filtro de fecha,
-  porque el API anterior ignora parámetros que no conoce, y terminaría la paginación al no decodificar el cursor nuevo.
-- Rollback: revertir el commit, la web junto con el API o antes que él, por la misma razón; no hay datos ni esquema que
-  deshacer.
+  porque el API anterior ignora parámetros que no conoce.
+- Rollback: revertir el commit, la web junto con el API o antes que él, por la misma razón; un cursor `o2` que una
+  pestaña tenga al revertir el API da la página vacía en el API anterior (su lectura de siempre) y "Actualizar" lo
+  resuelve. No hay datos ni esquema que deshacer.
+- Seguimiento: el lector `TryUtc` del tablero acepta formatos más amplios que el de `listOrders`; alinearlo es un
+  cambio aparte (ver `docs/development/ui-001-phase3-orders-list.md`).
