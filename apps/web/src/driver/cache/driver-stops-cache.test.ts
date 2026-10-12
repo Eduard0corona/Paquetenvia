@@ -9,6 +9,7 @@ import {
 import {
   createDriverCachePartition,
   DriverDatabaseVersion,
+  DriverDispatchContactStoreName,
   DriverOfflineOperationsStoreName,
   DriverProofBlobsStoreName,
   DriverStopsCacheError,
@@ -54,7 +55,7 @@ describe("driver stop cache partition", () => {
     expect(partition.key).toMatch(/^[A-Za-z0-9_-]{43}$/);
   });
 
-  it("upgrades the existing database to v4 with snapshot schema 2", () => {
+  it("upgrades the existing database to v5 with snapshot schema 2", () => {
     const source = readFileSync(
       resolve(process.cwd(), "src/driver/cache/driver-stops-cache.ts"),
       "utf8",
@@ -62,7 +63,8 @@ describe("driver stop cache partition", () => {
     expect(DriverStopsDatabaseName).toBe("paquetenvia-driver-stops-v1");
     expect(DriverStopsStoreName).toBe("snapshots");
     expect(DriverStopsSchemaVersion).toBe(2);
-    expect(DriverDatabaseVersion).toBe(4);
+    expect(DriverDatabaseVersion).toBe(5);
+    expect(DriverDispatchContactStoreName).toBe("dispatch_contacts");
     expect(DriverOfflineOperationsStoreName).toBe("operations");
     expect(DriverProofBlobsStoreName).toBe("proof_blobs");
     expect(DriverSyncLeasesStoreName).toBe("sync_leases");

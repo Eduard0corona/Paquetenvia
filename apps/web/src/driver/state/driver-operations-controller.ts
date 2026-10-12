@@ -145,6 +145,21 @@ export const driverDatabaseBlockedMessage =
   "para usar las acciones guardadas en el teléfono.";
 
 /**
+ * UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 (owner answer "No, llama a
+ * despacho (Recommended)"): why "Enviar reporte" stored nothing when the
+ * order's cash is already recorded. Wherever it is shown (the form and the
+ * sync summary), "Llamar a despacho" goes next to it when the organization's
+ * dispatch number is known (DRV-DISPATCH-CONTACT-2026-10-12).
+ */
+export const driverCashRecordedRefusalMessage =
+  "El cobro ya está registrado. Llama a despacho: ellos deciden y coordinan la devolución del cobro.";
+
+/** Whether a message of this controller asks the driver to call dispatch (DRV-DISPATCH-CONTACT-2026-10-12). */
+export function driverMessageCallsDispatch(message: string | null | undefined): boolean {
+  return message === driverCashRecordedRefusalMessage;
+}
+
+/**
  * Why "Enviar reporte" stored nothing, in the words the form shows
  * (UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12).
  */
@@ -458,9 +473,7 @@ export class DriverOperationsController {
           candidate.status === "AWAITING_REST_CONFIRMATION",
       )
     ) {
-      return refuse(
-        "El cobro ya está registrado. Llama a despacho: ellos deciden y coordinan la devolución del cobro.",
-      );
+      return refuse(driverCashRecordedRefusalMessage);
     }
     if (sameOrder.some((candidate) => candidate.kind === "COD_COLLECTION")) {
       return refuse(

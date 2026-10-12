@@ -24,6 +24,55 @@
   ejecutor también de `paqueteria_realtime` y precisa la aserción 37; AI-24 lista los pasos en el orden del código
   (`BEGIN`, `SET LOCAL ROLE`, `set_config`).
 
+## Repartidor: "Llamar a despacho" con el teléfono de despacho de la empresa (DRV-DISPATCH-CONTACT-2026-10-12) — 2026-10-12
+
+- Pregunta y respuesta literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR
+  del contrato de la API (AI-01 §7): "En la app del repartidor, "Llama a despacho" (cuando ya registró un cobro y no
+  puede entregar) no muestra ningún número porque la app no tiene uno. ¿Agregamos un teléfono de despacho?" → "Sí,
+  configurable (Recommended)" ("Un número de despacho por empresa en la configuración del piloto; la app lo muestra
+  como botón "Llamar a despacho". Tú me das el número cuando lo tengas."); no elegida: "No, ya lo saben" ("Los
+  repartidores ya tienen el número de despacho; la app solo dice que llamen."). El owner todavía no da el número: no
+  hay ninguno configurado y las pruebas usan solo números sintéticos.
+- AI-05: nueva operación `getMyDispatchContact` (`GET /driver/me/dispatch-contact`, etiqueta Driver, con
+  `X-Organization-Id`) y esquema `DriverDispatchContact`: el objeto cerrado `{"phone_e164": "+52…"}` o
+  `{"phone_e164": null}` cuando la organización elegida no tiene número; 200, 401, 403 y 503, como
+  `getMyDriverPhone`; `Cache-Control: no-store`. `x-capability-matrix` agrega `dispatch_contact_operations` (solo
+  DRIVER, sin MFA, como `listMyStops`) y `x-pilot-contract-deltas` la entrada `DRV-DISPATCH-CONTACT`.
+- Servidor: `Drivers:DispatchContacts` (lista de `{OrganizationId, PhoneE164}`), vacía por omisión. Al arrancar se
+  valida (falla y no arranca): `OrganizationId` como UUID canónico en minúsculas y nunca el nulo; `PhoneE164` como
+  número mexicano E.164 (`+52` y diez dígitos ASCII, el primero de 2 a 9, los que llama `VoicePhoneNumber`; se eligió
+  México y no E.164 general porque el piloto y todas las reglas de teléfono del sistema son mexicanas); cada
+  organización una sola vez (un mismo número puede servir a varias). El mensaje de error no lleva valores y
+  `ToString` oculta el número. `DriverDispatchContactEndpoints` revisa la sesión, el contexto tenant (403) y la
+  capacidad antes de leer; lee solo la configuración (sin base de datos, sin transacción tenant, sin escribir, sin
+  logs) y nunca contesta el número de otra organización. Sin PII, secreto, tabla, índice, rol, permiso, migración ni
+  flujo atómico nuevo; AI-04, AI-06 y AI-18 sin cambios.
+- Piloto: el número es un valor de negocio del owner en `deploy/azure/pilot/apps.settings.json` (`businessSettings`,
+  que `apps.bicep` agrega a los ajustes de la API y del Worker): `Drivers__DispatchContacts__0__OrganizationId` y
+  `Drivers__DispatchContacts__0__PhoneE164`. Hoy no hay ninguna entrada. `env001_pilot_guards.py settings-check`
+  (guarda P17) aplica las mismas reglas antes de desplegar y nunca repite un número.
+- PWA del repartidor: `DriverDispatchContactController` pide el número al instalar la sesión del repartidor y en
+  cada sesión nueva (otro inicio de sesión u otra organización); usa al instante la respuesta guardada para la
+  partición, la reemplaza con cada respuesta correcta (número o null), la borra ante 401 o 403 y la conserva ante
+  cualquier otra falla, preguntando de nuevo como la lectura de roles (al volver la conexión o la app, hasta 5 veces
+  por sesión). Se guarda en el IndexedDB particionado de siempre, store nuevo `dispatch_contacts` (esquema 1: llave
+  de partición, esquema y número o null), que necesita la versión 5 porque la 4 ya llegó a main; la subida desde la
+  4 solo crea el store (acciones en cola, fotos, leases, instantáneas y roles guardados quedan igual) y el shell del
+  Service Worker sube a `paquetenvia-driver-shell-v8`. Sale del teléfono con la partición ante 401 o 403 y con todas
+  las instantáneas al cerrar sesión.
+- "Llamar a despacho" es un enlace `tel:` de al menos 44 px que aparece solo junto a los textos que piden llamar a
+  despacho por el cobro: el de la parada con el cobro registrado, el rechazo de "Enviar reporte" con el cobro
+  registrado (formulario y resumen de sincronización), el reporte retenido antes de su incidencia por el cobro
+  registrado y el reporte con incidencia abierta (o posiblemente abierta) retenido por el cobro registrado o todavía
+  guardado. Sin número conocido los textos quedan exactamente igual y no se muestra nada; el número nunca se escribe
+  en pantalla.
+- AI-07 `driver_stop`: nuevo `dispatch_contact`; `failed_delivery.cash` y `offline` lo citan; `offline_cache` y
+  `details.retention` agregan la respuesta guardada.
+- Despliegue: no hace falta ningún orden (la web anterior nunca llama la lectura; esta web con una API anterior
+  recibe 404 y no muestra el enlace). Rollback: la parte del API se revierte sola; la de la web no es un revert
+  simple, porque una compilación de la versión 4 no abre una base en la versión 5: es una versión que conserva
+  IndexedDB 5 con el store y deja de mostrar el enlace.
+
 ## Despacho: "Órdenes" y filtro por fecha de creación en `listOrders` (UI-PHASE3-ORDERS-LIST-2026-10-12, ORD-LIST-DATE-FILTER-2026-10-12) — 2026-10-12
 
 - Preguntas y respuestas literales del project owner (2026-10-12), registradas en `decision-log.md` como dos cambios

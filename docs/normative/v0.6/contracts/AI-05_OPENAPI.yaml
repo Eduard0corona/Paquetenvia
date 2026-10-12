@@ -1655,6 +1655,37 @@ paths:
           $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /driver/me/dispatch-contact:
+    get:
+      tags:
+      - Driver
+      operationId: getMyDispatchContact
+      description: >-
+        DRV-DISPATCH-CONTACT-2026-10-12 (project owner, 2026-10-12, "Sí, configurable (Recommended)") - the dispatch
+        phone number configured for the organization selected with X-Organization-Id (server setting
+        Drivers:DispatchContacts, at most one number per organization), or phone_e164 null when that organization has
+        none. The driver app shows it as "Llamar a despacho" only next to its texts that ask the driver to call
+        dispatch after a recorded cash collection. DRIVER members only (x-capability-matrix
+        dispatch_contact_operations), without MFA like listMyStops; every other role, and a missing, malformed or
+        foreign X-Organization-Id, receives the uniform 403 before anything is read. It reads the server
+        configuration only - no tenant data and no database access - and never answers another organization's
+        number. The number is a business contact, never logged. Cache-Control no-store.
+      x-authorization-precedence: capability-before-persisted-state
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      responses:
+        '200':
+          description: The dispatch number of the selected organization, or null
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DriverDispatchContact'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /voice/twilio/call-status:
     post:
       tags:
@@ -5326,6 +5357,23 @@ components:
         consent_version:
           type: string
           const: VOICE-001-CONSENT-V1
+    DriverDispatchContact:
+      type: object
+      additionalProperties: false
+      required:
+      - phone_e164
+      description: >-
+        DRV-DISPATCH-CONTACT-2026-10-12 - the dispatch number of the selected organization, a business contact; null
+        while none is configured for it.
+      properties:
+        phone_e164:
+          type:
+          - string
+          - 'null'
+          pattern: '^\+52[2-9][0-9]{9}$'
+          description: >-
+            +52 followed by the ten Mexican national digits, the first one 2-9 (E.164 without spaces); the driver app
+            dials it with a tel: link.
     RecipientCallAvailability:
       type: object
       additionalProperties: false
@@ -7852,6 +7900,12 @@ x-capability-matrix:
   own_membership_operations:
     getMyOrganizationRoles: [PLATFORM_ADMIN, DISPATCHER, FINANCE, ALLY_ADMIN, ALLY_OPERATOR, BUSINESS_ADMIN,
       BUSINESS_OPERATOR, DRIVER, VIEWER]
+  dispatch_contact_operations_decision: DRV-DISPATCH-CONTACT-2026-10-12 (project owner, 2026-10-12, "Sí, configurable
+    (Recommended)") - getMyDispatchContact answers only the dispatch number configured for the organization selected
+    with X-Organization-Id, to its DRIVER members, without MFA like listMyStops; every other role receives the uniform
+    403 before anything is read
+  dispatch_contact_operations:
+    getMyDispatchContact: [DRIVER]
 x-pilot-contract-deltas:
   purpose: Contract deltas recorded for the pilot. The HTTP surface above is unchanged until the implementing task publishes
     each delta together with code and tests. Every entry is an owner decision (DECIDED).
@@ -8039,3 +8093,20 @@ x-pilot-contract-deltas:
       sent with other filters is 409 INVALID_REQUEST after the capability check; cursors of the earlier format page
       as before and unreadable ones keep the empty page (the response gains 409 Conflict); the capability, the Order
       shape, RLS and every other filter are unchanged; no table, index, role, grant or migration change
+  - id: DRV-DISPATCH-CONTACT
+    status: DECIDED
+    decision: DRV-DISPATCH-CONTACT-2026-10-12 (project owner, 2026-10-12)
+    literal: '"En la app del repartidor, "Llama a despacho" (cuando ya registró un cobro y no puede entregar) no muestra ningún número porque la app no tiene uno. ¿Agregamos un teléfono de despacho?" - Sí, configurable (Recommended)'
+    option: 'Un número de despacho por empresa en la configuración del piloto; la app lo muestra como botón "Llamar a
+      despacho". Tú me das el número cuando lo tengas.'
+    not_chosen: 'No, ya lo saben ("Los repartidores ya tienen el número de despacho; la app solo dice que llamen.")'
+    implementation: shipped by feat/driver-dispatch-phone together with its code and tests - getMyDispatchContact,
+      DriverDispatchContactResponse, Drivers:DispatchContacts with its startup validation,
+      ConfiguredDriverDispatchContactDirectory, the dispatch_contact_operations capability and the driver app's
+      dispatch contact client, phone cache and "Llamar a despacho" link
+    delta: a new read-only operation getMyDispatchContact (GET /driver/me/dispatch-contact, schema
+      DriverDispatchContact) answers {"phone_e164":"+52..."} or {"phone_e164":null} - the number the server
+      configuration (Drivers:DispatchContacts, empty by default) holds for the organization selected with
+      X-Organization-Id; DRIVER members only, without MFA; the uniform 403 for every other role; Cache-Control
+      no-store; configuration only, no tenant data, no PII, no schema, role, grant or migration change; no client
+      depends on it, so every deployment order keeps working
