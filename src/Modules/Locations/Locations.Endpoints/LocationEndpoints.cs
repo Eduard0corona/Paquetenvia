@@ -12,6 +12,12 @@ namespace Locations.Endpoints;
 
 public static class LocationEndpoints
 {
+    /// <summary>
+    /// SEC-004: <c>createLocation</c> (each one may call the paid geocoding provider),
+    /// <c>RateLimits:LocationCreate</c> (30 per minute) per user. The host registers it with every other policy.
+    /// </summary>
+    public const string CreateRateLimitPolicy = "Locations.Create";
+
     public static IEndpointRouteBuilder MapLocationEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapGet("/api/v1/cities", ListCitiesAsync)
@@ -65,6 +71,7 @@ public static class LocationEndpoints
         endpoints.MapPost("/api/v1/locations", CreateLocationAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
             .RequireTenantContext()
+            .RequireRateLimiting(LocationEndpoints.CreateRateLimitPolicy)
             .WithName("createLocation")
             .WithTags("Locations")
             .Accepts<CreateLocationRequest>("application/json")
@@ -73,6 +80,7 @@ public static class LocationEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
+            .ProducesProblem(StatusCodes.Status429TooManyRequests)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         return endpoints;

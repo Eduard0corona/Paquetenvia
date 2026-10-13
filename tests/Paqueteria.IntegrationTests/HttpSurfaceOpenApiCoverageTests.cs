@@ -29,15 +29,18 @@ public sealed class HttpSurfaceOpenApiCoverageTests(WebApplicationFactory<Progra
     };
 
     /// <summary>
-    /// Operations served today that AI-05 does not contract. The reporting dashboard predates this
-    /// test and is declared additive by OPS-002; closing that gap is a normative change of its own,
-    /// so it is named here rather than waived silently. Nothing may be added to this list without
-    /// the same kind of decision.
+    /// Operations served today that AI-05 does not contract, each with the ADR that records it. The
+    /// reporting dashboard predates this test and is declared additive by OPS-002 and ADR-OBS-001;
+    /// closing that gap is a normative change of its own, so it is named here rather than waived
+    /// silently. Its error statuses are declared in its ADR instead (owner answer of 2026-10-12,
+    /// "Enmendar ADR-OBS-001 (Recommended)", OBS-001-DASHBOARD-429-2026-10-12), and the error test
+    /// checks them there. Nothing may be added to this list without the same kind of decision.
     /// </summary>
-    private static readonly string[] KnownUndeclaredOperations =
-    [
-        "GET /operations/dashboard",
-    ];
+    private static readonly IReadOnlyDictionary<string, string> KnownUndeclaredOperations =
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["GET /operations/dashboard"] = "docs/adr/ADR-OBS-001-OPERATIONS-READ-MODEL.md",
+        };
 
     [Fact]
     public void Every_routed_v1_operation_is_declared_in_AI05()
@@ -54,10 +57,10 @@ public sealed class HttpSurfaceOpenApiCoverageTests(WebApplicationFactory<Progra
         var undeclared = served.Except(contracted.Operations, StringComparer.Ordinal)
             .Order(StringComparer.Ordinal)
             .ToArray();
-        Assert.Equal(KnownUndeclaredOperations, undeclared);
+        Assert.Equal(KnownUndeclaredOperations.Keys.Order(StringComparer.Ordinal), undeclared);
 
         // The waivers are waivers, not a way to drop an operation off the served surface entirely.
-        Assert.All(KnownUndeclaredOperations, operation => Assert.Contains(operation, served));
+        Assert.All(KnownUndeclaredOperations.Keys, operation => Assert.Contains(operation, served));
     }
 
     /// <summary>
@@ -74,15 +77,22 @@ public sealed class HttpSurfaceOpenApiCoverageTests(WebApplicationFactory<Progra
         var declared = ReadDeclaredResponses();
         var missing = new List<string>();
         var checkedOperations = 0;
+        var checkedThroughAdr = 0;
         var rateLimited = 0;
         foreach (var (operation, endpoint) in ReadServedEndpoints())
         {
-            if (KnownUndeclaredOperations.Contains(operation, StringComparer.Ordinal))
+            HashSet<string>? statuses;
+            if (KnownUndeclaredOperations.TryGetValue(operation, out var adr))
             {
-                continue;
+                // Not in AI-05: its error statuses are the ones its ADR declares (OBS-001-DASHBOARD-429-2026-10-12).
+                statuses = ReadAdrDeclaredResponses(adr, operation);
+                checkedThroughAdr++;
+            }
+            else
+            {
+                Assert.True(declared.TryGetValue(operation, out statuses), $"{operation} is not declared in AI-05.");
             }
 
-            Assert.True(declared.TryGetValue(operation, out var statuses), $"{operation} is not declared in AI-05.");
             checkedOperations++;
             var emitted = new SortedSet<int>(endpoint.Metadata
                 .GetOrderedMetadata<IProducesResponseTypeMetadata>()
@@ -113,14 +123,41 @@ public sealed class HttpSurfaceOpenApiCoverageTests(WebApplicationFactory<Progra
         }
 
         Assert.True(checkedOperations >= 40, $"Only {checkedOperations} operations were checked.");
-        // publicTracking and publishDriverLocation; the hubs are not versioned operations (AI-12, not AI-05).
-        Assert.True(rateLimited >= 2, $"Only {rateLimited} rate-limited operations were seen.");
+        // PR 2: publicTracking and publishDriverLocation; the hubs are not versioned operations (AI-12, not AI-05).
+        // PR 3: the eleven versioned operations of the decided list (sign-in is outside /api/v1).
+        Assert.True(rateLimited >= 13, $"Only {rateLimited} rate-limited operations were seen.");
+        Assert.Equal(KnownUndeclaredOperations.Count, checkedThroughAdr);
         Assert.Empty(missing);
 
         // The two anonymous or specially limited cases are pinned by name.
         Assert.Superset(new HashSet<string>(["404", "429", "503"]), new HashSet<string>(declared["GET /tracking/{}"]));
         Assert.Contains("400", declared["GET /locations"]);
         Assert.Contains("400", declared["POST /locations"]);
+        // The dashboard's 429 is declared through ADR-OBS-001, not waived.
+        Assert.Contains(
+            "429",
+            ReadAdrDeclaredResponses(KnownUndeclaredOperations["GET /operations/dashboard"], "GET /operations/dashboard"));
+    }
+
+    /// <summary>
+    /// The error statuses an ADR declares for an operation AI-05 does not contract: the codes on its line
+    /// "Respuestas de error de `METHOD /api/v1/path`", which must appear exactly once.
+    /// </summary>
+    private static HashSet<string> ReadAdrDeclaredResponses(string adr, string operation)
+    {
+        var separator = operation.IndexOf(' ', StringComparison.Ordinal);
+        var marker = $"Respuestas de error de `{operation[..separator]} {VersionedPrefix}{operation[(separator + 1)..]}`";
+        var text = File.ReadAllText(Path.Combine(RepositoryRoot(), adr));
+        var start = text.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(start >= 0, $"{adr} declares no error responses for {operation}.");
+        Assert.Equal(start, text.LastIndexOf(marker, StringComparison.Ordinal));
+        var end = text.IndexOf("\n\n", start, StringComparison.Ordinal);
+        var line = text[start..(end < 0 ? text.Length : end)];
+        var statuses = System.Text.RegularExpressions.Regex.Matches(line, "`([1-5][0-9]{2})`")
+            .Select(match => match.Groups[1].Value)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.NotEmpty(statuses);
+        return statuses;
     }
 
     /// <summary>"METHOD /path" to the status keys of its AI-05 responses mapping.</summary>
@@ -329,7 +366,10 @@ public sealed class HttpSurfaceOpenApiCoverageTests(WebApplicationFactory<Progra
         return normalized.ToString();
     }
 
-    private static string ContractPath()
+    private static string ContractPath() =>
+        Path.Combine(RepositoryRoot(), "docs", "normative", "v0.6", "contracts", "AI-05_OPENAPI.yaml");
+
+    private static string RepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
         while (directory is not null)
@@ -338,7 +378,7 @@ public sealed class HttpSurfaceOpenApiCoverageTests(WebApplicationFactory<Progra
                 directory.FullName, "docs", "normative", "v0.6", "contracts", "AI-05_OPENAPI.yaml");
             if (File.Exists(candidate))
             {
-                return candidate;
+                return directory.FullName;
             }
 
             directory = directory.Parent;

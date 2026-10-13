@@ -21,6 +21,11 @@ routes:
     # (GET /auth/login?mfa=required) to a signed-in session without MFA
     # (AUTH-001-MFA-STEP-UP). Logout navigates to the AuthCenter end-session URL, which
     # returns here (AUTH-001-RP-INITIATED-LOGOUT).
+    # SEC-004-HEAVY-ENDPOINT-MAPPING-2026-10-12 (Q5 "Solo /auth/login (Recommended)", Q6
+    # "Mensaje común con espera (Recommended)"): past 20 sign-in starts per minute from one
+    # client network, the browser that navigated to GET /auth/login sees the API's simple page
+    # "Demasiados intentos de inicio de sesión desde esta red. Espera un minuto e intenta de
+    # nuevo." (nothing else: no link, branding or script); the callback is not limited.
     decisions:
     - GATE-002-BFF-001
     - AUTH-OPEN-REGISTRATION
@@ -28,6 +33,7 @@ routes:
     - AUTH-001-RP-INITIATED-LOGOUT
     - AUTH-001-MFA-STEP-UP
     - AUTH-001-ACCESS-DENIED-MESSAGE
+    - SEC-004-HEAVY-ENDPOINT-MAPPING-2026-10-12
   /onboarding:
     roles:
     - authenticated_without_organization
@@ -939,6 +945,16 @@ screen_contracts:
         depend on the key service and never wipe the saved details; a stop that comes without details gets one full
         read; a confirmation that cannot answer (logout, aborted pass) never answers an empty list and the queued
         action stays; a stop absent from an answer that left out a stop is never taken for gone
+    # SEC-004-HEAVY-ENDPOINT-MAPPING-2026-10-12 (project owner, 2026-10-12): Q2 "60 cada paso (Recommended)" ("Si se
+    # pasa, la app espera lo que indique el servidor y sigue sola.") and Q6 "Mensaje común con espera (Recommended)"
+    # ("En la app del repartidor, la cola espera lo que indique el servidor y reintenta sin mensaje.").
+    rate_limit:
+      decision: SEC-004-HEAVY-ENDPOINT-MAPPING-2026-10-12
+      limits: createProofUploadSession and finalizeProof, 60 per minute each per driver
+      behavior: a 429 on either photo step is neither rejected evidence nor a conflict - the queued action keeps its
+        keys and its progress (a granted upload session, an uploaded photo), nothing of the queue is sent until the
+        Retry-After the server sent has passed (the bounded backoff when it sent none), not even from "Sincronizar
+        ahora", and the queue then resumes by itself; the driver sees no message
     # UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (project owner, 2026-10-11, "Google Maps (Recommended)": "Funciona
     # igual en Android y iPhone. Si no tiene la app, abre la página web de Google Maps."); GATE-003 scope: the system
     # never calculates routes.

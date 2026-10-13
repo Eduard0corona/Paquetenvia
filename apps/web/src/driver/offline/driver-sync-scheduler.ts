@@ -109,6 +109,15 @@ export class DriverSyncScheduler {
   /** Pauses in force (see pause); no pass runs while it is above zero. */
   private pauseCount = 0;
   /**
+   * SEC-004 (owner answer Q6, "la cola espera lo que indique el servidor y
+   * reintenta sin mensaje"): until when, in epoch milliseconds, the server
+   * asked the queue to wait after a 429 (its Retry-After). The limits are per
+   * driver, so no action is sent before then, not even on "Sincronizar
+   * ahora"; the queue then resumes by itself. Memory only: after a reload the
+   * limited action still waits its own nextAttemptAt.
+   */
+  private rateLimitedUntil = 0;
+  /**
    * Orders whose delivery waits for its cash in the current pass
    * (driverDeliveryAwaitsCash): it is not tried again until a collection for
    * the order runs or the next pass starts.
@@ -263,6 +272,12 @@ export class DriverSyncScheduler {
           );
           this.telemetry.conflictRaised("rest-confirmation-expired");
           continue;
+        }
+        // SEC-004: while the server's wait lasts nothing is sent; the timer
+        // resumes the queue when it ends.
+        if (this.now().getTime() < this.rateLimitedUntil) {
+          this.scheduleNext(operations);
+          return;
         }
         const operation = selectRunnableOperation(
           operations,
@@ -721,6 +736,10 @@ export class DriverSyncScheduler {
       this.telemetry.conflictRaised("resource-unavailable");
       return;
     }
+    if (error.category === "rate-limited") {
+      await this.waitForRateLimit(operation, error.retryAfterMilliseconds);
+      return;
+    }
     if (error.category === "recoverable") {
       await this.defer(operation, "RETRY_WAIT");
       this.telemetry.syncDeferred("network");
@@ -946,6 +965,34 @@ export class DriverSyncScheduler {
     });
   }
 
+  /**
+   * SEC-004 (owner answer Q6): a 429. Nothing was applied, so the action keeps
+   * its keys and its progress (an upload session already granted, a photo
+   * already uploaded) and is sent again once the server's wait ends; the whole
+   * queue waits that long, and the driver sees no message. Without a usable
+   * Retry-After it waits the bounded backoff instead.
+   */
+  private async waitForRateLimit(
+    operation: DriverOfflineOperation,
+    retryAfterMilliseconds: number | null,
+  ): Promise<void> {
+    const attemptCount = operation.attemptCount + 1;
+    const wait =
+      retryAfterMilliseconds ??
+      DriverSyncBackoffMilliseconds[
+        Math.min(attemptCount - 1, DriverSyncBackoffMilliseconds.length - 1)
+      ];
+    const until = this.now().getTime() + wait;
+    this.rateLimitedUntil = Math.max(this.rateLimitedUntil, until);
+    await this.persist(operation, {
+      status: "RETRY_WAIT",
+      attemptCount,
+      nextAttemptAt: new Date(until).toISOString(),
+      safeError: null,
+    });
+    this.telemetry.syncDeferred("rate-limited");
+  }
+
   private async deferRestConfirmation(
     operation: DriverOfflineOperation,
   ): Promise<DriverOfflineOperation> {
@@ -987,8 +1034,16 @@ export class DriverSyncScheduler {
       )
       .map((operation) => Date.parse(operation.nextAttemptAt))
       .filter(Number.isFinite);
+    const rateLimited = this.rateLimitedUntil > this.now().getTime();
+    // SEC-004: while the server's wait lasts, any queued action resumes when it
+    // ends, and no timer fires before it.
+    if (rateLimited && operations.length > 0) timestamps.push(this.rateLimitedUntil);
     if (timestamps.length === 0) return;
-    const delay = Math.max(0, Math.min(...timestamps) - this.now().getTime());
+    const next = Math.max(
+      Math.min(...timestamps),
+      rateLimited ? this.rateLimitedUntil : 0,
+    );
+    const delay = Math.max(0, next - this.now().getTime());
     this.timer = setTimeout(() => {
       this.timer = null;
       void this.requestSync(false);

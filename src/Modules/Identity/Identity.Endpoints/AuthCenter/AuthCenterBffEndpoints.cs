@@ -11,11 +11,15 @@ using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Paqueteria.Application.Security;
 
 namespace Identity.Endpoints.AuthCenter;
 
 public static class AuthCenterBffEndpoints
 {
+    /// <summary>SEC-004 (owner answer Q6): the 429 page of a sign-in start the browser navigated to.</summary>
+    private static readonly RateLimitRejectionPage SignInRateLimitPage = new(AuthCenterDefaults.SignInRateLimitMessage);
+
     /// <summary>
     /// Maps the BFF contract (login, session, logout, back-channel logout) when
     /// <c>Authentication:Provider=AuthCenter</c>.
@@ -34,6 +38,9 @@ public static class AuthCenterBffEndpoints
 
         endpoints.MapGet(AuthCenterDefaults.LoginPath, LoginAsync)
             .AllowAnonymous()
+            // SEC-004: 20 sign-in starts per minute per client network; a browser navigation sees a simple page.
+            .RequireRateLimiting(AuthCenterDefaults.SignInRateLimitPolicy)
+            .WithMetadata(SignInRateLimitPage)
             .ExcludeFromDescription();
         endpoints.MapGet(AuthCenterDefaults.SessionPath, Session)
             .RequireAuthorization(IdentityPolicies.Authenticated)

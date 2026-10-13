@@ -23,6 +23,9 @@ public sealed class LocationHttpWebApplicationFactory : WebApplicationFactory<Pr
             {
                 ["Authentication:Provider"] = "Mock",
                 ["IdentityBootstrap:Provider"] = "Mock",
+                // SEC-004: these classes exercise createLocation, not its limit (Sec004HeavyEndpointLimitsTests
+                // does); one mock user here creates more locations in a minute than the 30 the pilot allows.
+                ["RateLimits:LocationCreate:PermitLimit"] = "10000",
             }));
         builder.ConfigureTestServices(services =>
         {

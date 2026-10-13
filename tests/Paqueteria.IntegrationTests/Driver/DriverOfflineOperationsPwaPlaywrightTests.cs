@@ -1519,6 +1519,44 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         Assert.Equal([capturedAt], backend.TransitionClientOccurredAt);
     }
 
+    /// <summary>
+    /// SEC-004 (owner answers Q2, "Si se pasa, la app espera lo que indique el servidor y sigue sola", and Q6, "la
+    /// cola espera lo que indique el servidor y reintenta sin mensaje"): a 429 on the photo is neither rejected
+    /// evidence nor a message; the queue waits the Retry-After and syncs the same photo, with the same key, by itself.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Photo_429_waits_the_server_and_syncs_by_itself_without_a_message()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        var page = await browser.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-sec004-photo-429");
+        var backend = new SyntheticOfflineBackend { RateLimitFirstSessionSeconds = 2 };
+        backend.SetOrderState("AT_PICKUP", 4);
+        await backend.RouteAsync(page);
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await EnqueueProofAsync(page, "Confirmar recolección", "rate-limited.png");
+        await WaitForOperationStatusAsync(page, "RETRY_WAIT");
+
+        // While it waits: no attention notice, no rejected evidence.
+        Assert.Equal(0, await page.GetByText("Acción que requiere atención").CountAsync());
+        Assert.Equal(0, await page.GetByText("requiere atención").CountAsync());
+
+        // No "Sincronizar ahora": the queue resumes by itself once the 2 s have passed.
+        await WaitForOperationCountAsync(page, 0);
+        await WaitForProofCountAsync(page, 0);
+
+        var limitedKey = Assert.Single(backend.RateLimitedSessionKeys);
+        Assert.Equal(limitedKey, Assert.Single(backend.SessionAttempts.Select(attempt => attempt.Key).Distinct(StringComparer.Ordinal)));
+        Assert.Single(backend.FinalizedProofs);
+        Assert.Single(backend.TransitionTargets);
+        Assert.Equal(1, backend.UploadCount);
+    }
+
     [Fact]
     [Trait("Category", "DriverOfflineOperationsPwa")]
     public async Task Lost_proof_201_replays_the_same_finalize_key_without_duplicates()
@@ -2277,6 +2315,13 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         internal bool AbortFirstTransition { get; init; }
         internal bool AbortFirstUpload { get; init; }
         internal bool AbortFirstFinalize { get; init; }
+
+        /// <summary>
+        /// SEC-004: answers the first upload session request with the API's 429 (TooManyRequests, Retry-After in
+        /// seconds) and records nothing for it, as the rate limiter rejects before the endpoint runs.
+        /// </summary>
+        internal int? RateLimitFirstSessionSeconds { get; init; }
+        internal List<string> RateLimitedSessionKeys { get; } = [];
         internal bool ConflictFirstTransition { get; init; }
         internal bool ExpireTransitions { get; init; }
 
@@ -2525,6 +2570,31 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             var request = JsonDocument.Parse(route.Request.PostData ?? "{}").RootElement;
             var proofType = request.GetProperty("proof_type").GetString()!;
             var key = await route.Request.HeaderValueAsync("Idempotency-Key") ?? string.Empty;
+            int? rateLimited = null;
+            lock (gate)
+            {
+                if (RateLimitFirstSessionSeconds is int seconds && RateLimitedSessionKeys.Count == 0)
+                {
+                    RateLimitedSessionKeys.Add(key);
+                    rateLimited = seconds;
+                }
+            }
+            if (rateLimited is int retryAfter)
+            {
+                await route.FulfillAsync(new RouteFulfillOptions
+                {
+                    Status = 429,
+                    ContentType = "application/problem+json",
+                    Headers = new Dictionary<string, string>
+                    {
+                        ["Retry-After"] = retryAfter.ToString(System.Globalization.CultureInfo.InvariantCulture),
+                        ["Cache-Control"] = "no-store",
+                    },
+                    Body = """{"type":"about:blank","title":"Too Many Requests","status":429,"traceId":"0123456789abcdef0123456789abcdef"}""",
+                });
+                return;
+            }
+
             string sessionId;
             lock (gate)
             {

@@ -225,6 +225,60 @@ describe("driver sync API", () => {
     });
   });
 
+  it("classifies a 429 on either photo step as rate-limited with the server's wait (SEC-004)", async () => {
+    const tooManyRequests = (retryAfter: string | null) =>
+      new Response(
+        JSON.stringify({
+          type: "about:blank",
+          title: "Too Many Requests",
+          status: 429,
+          traceId: "0123456789abcdef0123456789abcdef",
+        }),
+        {
+          status: 429,
+          headers: {
+            "Content-Type": "application/problem+json",
+            ...(retryAfter === null ? {} : { "Retry-After": retryAfter }),
+          },
+        },
+      );
+    for (const [retryAfter, milliseconds] of [
+      ["60", 60_000],
+      ["1", 1_000],
+      ["7200", 3_600_000],
+      [null, null],
+      ["0", null],
+      ["1.5", null],
+      ["Wed, 21 Oct 2026 07:28:00 GMT", null],
+    ] as const) {
+      const fetch = vi
+        .fn<typeof globalThis.fetch>()
+        .mockImplementation(async () => tooManyRequests(retryAfter));
+      const api = createDriverSyncApi({
+        baseUrl: "https://api.synthetic.test",
+        session,
+        fetch,
+      });
+      await expect(
+        api.createProofUploadSession(operation, {
+          contentType: "image/png",
+          sizeBytes: 8,
+          sha256: hash,
+        }),
+      ).rejects.toMatchObject({
+        category: "rate-limited",
+        publicCode: null,
+        retryAfterMilliseconds: milliseconds,
+      });
+      await expect(
+        api.finalizeProof(operation, "44444444-4444-4444-8444-444444444444", hash),
+      ).rejects.toMatchObject({
+        category: "rate-limited",
+        retryAfterMilliseconds: milliseconds,
+      });
+    }
+  });
+
   it("rejects drift in transition receipts and Problem Details", async () => {
     const invalidTransition = vi
       .fn<typeof globalThis.fetch>()

@@ -147,7 +147,7 @@ public.
 | **Container Apps rule-based routing** | 0 (part of the environment ingress) | **Chosen**: native path routing, Envoy with WebSocket upgrade, managed certificate on the apex, no extra hop |
 | Azure Front Door Standard | ~35 USD base + requests/egress | Would take a third of the budget on its own |
 | Application Gateway v2 | ~180+ USD | Out of budget |
-| Next.js rewrites (`PAQUETENVIA_API_PROXY_ORIGIN`) | 0 | Adds a Node hop to every API call, makes Web a dependency of the API, and puts WebSocket proxying in Node. Kept as the documented fallback: set the variable on Web and route only `/` to Web. |
+| Next.js rewrites (`PAQUETENVIA_API_PROXY_ORIGIN`) | 0 | Adds a Node hop to every API call, makes Web a dependency of the API, and puts WebSocket proxying in Node. Kept as the documented fallback: set the variable on Web, route only `/` to Web, and set `Http__ForwardedHeaders__ForwardLimit=2` on the API (see *Forwarded headers* below). |
 
 - **WebSockets (`/hubs`):** API and Web ingresses use `transport: auto`, which supports the HTTP/1.1
   upgrade. SignalR still falls back to SSE or long-polling if an upgrade fails. The WebSocket check
@@ -157,6 +157,12 @@ public.
   POST through the route and requires the API's `{"error":"invalid_request"}`.
 - **Forwarded headers:** the API trusts `X-Forwarded-For`/`X-Forwarded-Proto` only from the
   Container Apps subnet (`Http__ForwardedHeaders__KnownNetworks__0=10.60.0.0/23`, `ForwardLimit=1`).
+  With the chosen routing (one Envoy hop) this gives the API the real client address, which the SEC-004
+  sign-in limit (20 per minute per client network) depends on. The Next.js rewrites fallback adds a
+  hop: Web reaches the API through the API's internal ingress, which adds Web's address. With
+  `ForwardLimit=1` every sign-in would then share one bucket, so the fallback needs
+  `Http__ForwardedHeaders__ForwardLimit=2`. The middleware stops at the first address outside
+  `KnownNetworks`, so a client still cannot pass a forged address. §6.1 step 10 checks the result.
 
 ## 4. Configuration, identities and secrets
 
@@ -439,6 +445,13 @@ Two further caveats:
     - `/ops/orders/new` allows confirming an order (the terms and privacy versions are set).
     - `http://paquetenvia.com` redirects to HTTPS or is refused. HTTP-to-HTTPS on a route custom domain
       is not verified yet.
+    - The API sees the client's address, not one inside `10.60.0.0/23` (SEC-004 sign-in limit, §3
+      *Forwarded headers*). Use two networks nobody else is signing in from, for example a laptop
+      tethered to a phone and another connection. From the first, run
+      `for i in $(seq 21); do curl -s -o /dev/null -w '%{http_code} ' 'https://paquetenvia.com/auth/login?return_url=%2Fops%2Fdashboard'; done`:
+      twenty redirects, then `429`. Within the same minute, from the second network, one such request
+      must still redirect. A `429` there means every client shares one bucket: check `ForwardLimit` and
+      `KnownNetworks`. Repeat after any routing change, and after switching to the Next.js fallback.
 11. Run the restore drill (§6.4) and keep its `EVIDENCE` line. The ENV-001 criterion "restore drill
     evidence is current before pilot start" requires it.
 

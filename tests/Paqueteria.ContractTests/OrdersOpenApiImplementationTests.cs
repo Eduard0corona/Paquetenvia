@@ -287,9 +287,9 @@ public sealed class OrdersOpenApiImplementationTests
         Assert.True(root.Mapping("components").Mapping("parameters")
             .Mapping("IdempotencyKey").Scalar("required") == "true");
 
-        // Exactly the statuses the two handlers can return, and no others.
-        Assert.Equal(["200", "401", "403", "409", "503"], ResponseCodes(preview));
-        Assert.Equal(["200", "401", "403", "409", "422", "503"], ResponseCodes(commit));
+        // Exactly the statuses the two handlers and their rate limit (SEC-004, 429) can return, and no others.
+        Assert.Equal(["200", "401", "403", "409", "429", "503"], ResponseCodes(preview));
+        Assert.Equal(["200", "401", "403", "409", "422", "429", "503"], ResponseCodes(commit));
 
         AssertJsonProperties<CsvImportRowErrorResponse>("code", "column");
         AssertJsonProperties<CsvImportRowPreviewResponse>(

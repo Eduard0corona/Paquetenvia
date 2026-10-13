@@ -5,6 +5,7 @@ using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.DependencyInjection;
 using Paqueteria.Application.Security;
+using Paqueteria.Infrastructure.Observability;
 
 namespace Paqueteria.Infrastructure.Security.RateLimiting;
 
@@ -26,10 +27,13 @@ public enum RateLimitPartitionKind
 public readonly record struct FixedWindowLimit(int PermitLimit, TimeSpan Window);
 
 /// <summary>
-/// One named rate-limit policy. <see cref="Limit"/> reads the numbers from the owning module's validated options on
-/// every request, as each module did before SEC-004; a partition keeps the numbers it was created with.
+/// One named rate-limit policy. <see cref="Limit"/> reads the numbers from validated options on every request (the
+/// owning module's, or the host's <c>RateLimits</c> section); a partition keeps the numbers it was created with.
 /// </summary>
-/// <param name="Name">The name endpoints pass to <c>RequireRateLimiting</c>; also the only metric dimension.</param>
+/// <param name="Name">
+/// The name endpoints pass to <c>RequireRateLimiting</c>; also the only metric tag and the only value of the OBS-002
+/// <c>Policy</c> log dimension.
+/// </param>
 public sealed record RateLimitPolicy(
     string Name,
     RateLimitPartitionKind Partition,
@@ -40,15 +44,32 @@ public sealed record RateLimitPolicy(
     /// only, never the request, so it cannot read the user, the address or the path.
     /// </summary>
     public Action<IServiceProvider>? CountRejection { get; init; }
+
+    /// <summary>
+    /// SEC-004 PR 3: the registered policy whose fixed window this one spends instead of a window of its own, so
+    /// endpoints under two policies share one budget per partition (CSV preview and commit, owner answer Q1). The
+    /// owner must have its own window, the same partition kind and the same <see cref="Limit"/> delegate. A rejection
+    /// by the shared window is counted under the owner's name.
+    /// </summary>
+    public string? SharesWindowOf { get; init; }
+
+    /// <summary>
+    /// SEC-004 PR 3: at most this many requests of this policy in flight at once per partition ("1 importación a la
+    /// vez", owner answer Q1). A request over it is rejected under this policy's name, with this policy's window as
+    /// <c>Retry-After</c>, and spends nothing from the window. Null: no in-flight rule.
+    /// </summary>
+    public int? InFlightLimit { get; init; }
 }
 
 /// <summary>
 /// SEC-004 (phase 4 PR 2): the one registry of the API's rate-limit policies. It holds the named policies and their
-/// partition keys, and its single rejection writer (<see cref="RateLimitRejectionWriter"/>) answers every 429.
+/// partition keys, and its single rejection writer (<see cref="RateLimitRejectionWriter"/>) answers every 429. Since
+/// PR 3 it also holds the windows two policies share and the in-flight rules (<see cref="RateLimitBudgets"/>).
 /// </summary>
 public sealed class RateLimitPolicyRegistry
 {
     private readonly FrozenDictionary<string, RateLimitPolicy> _policies;
+    private readonly FrozenSet<string> _windowOwners;
 
     public RateLimitPolicyRegistry(IEnumerable<RateLimitPolicy> policies)
     {
@@ -64,6 +85,14 @@ public sealed class RateLimitPolicyRegistry
                 throw new ArgumentOutOfRangeException(nameof(policies), policy.Partition, "Unknown partition kind.");
             }
 
+            if (policy.InFlightLimit is < 1)
+            {
+                throw new ArgumentOutOfRangeException(
+                    nameof(policies),
+                    policy.InFlightLimit,
+                    $"Rate-limit policy {policy.Name} needs an in-flight limit of at least 1.");
+            }
+
             if (!byName.TryAdd(policy.Name, policy))
             {
                 throw new ArgumentException($"Rate-limit policy {policy.Name} is registered twice.", nameof(policies));
@@ -75,10 +104,45 @@ public sealed class RateLimitPolicyRegistry
             throw new ArgumentException("At least one rate-limit policy is required.", nameof(policies));
         }
 
+        foreach (var policy in byName.Values.Where(policy => policy.SharesWindowOf is not null))
+        {
+            if (!byName.TryGetValue(policy.SharesWindowOf!, out var owner) || ReferenceEquals(owner, policy))
+            {
+                throw new ArgumentException(
+                    $"Rate-limit policy {policy.Name} shares the window of itself or of an unregistered policy.",
+                    nameof(policies));
+            }
+
+            if (owner.SharesWindowOf is not null ||
+                owner.Partition != policy.Partition ||
+                !ReferenceEquals(owner.Limit, policy.Limit))
+            {
+                throw new ArgumentException(
+                    $"Rate-limit policy {policy.Name} must share the window of a policy with its own window, the same partition kind and the same limit.",
+                    nameof(policies));
+            }
+        }
+
         _policies = byName.ToFrozenDictionary(StringComparer.Ordinal);
+        _windowOwners = byName.Values
+            .Where(policy => policy.SharesWindowOf is not null)
+            .Select(policy => policy.SharesWindowOf!)
+            .ToFrozenSet(StringComparer.Ordinal);
     }
 
     public IReadOnlyCollection<RateLimitPolicy> Policies => _policies.Values;
+
+    /// <summary>
+    /// Whether the policy's state lives in the registry's <see cref="RateLimitBudgets"/> (it shares a window, owns a
+    /// shared window or has an in-flight rule) instead of the framework's own fixed window partition.
+    /// </summary>
+    public bool UsesBudgets(RateLimitPolicy policy)
+    {
+        ArgumentNullException.ThrowIfNull(policy);
+        return policy.SharesWindowOf is not null ||
+            policy.InFlightLimit is not null ||
+            _windowOwners.Contains(policy.Name);
+    }
 
     public RateLimitPolicy? Find(string? name) =>
         name is not null && _policies.TryGetValue(name, out var policy) ? policy : null;
@@ -129,32 +193,46 @@ public static class RateLimitingServiceCollectionExtensions
 
         var registry = new RateLimitPolicyRegistry(policies);
         services.AddSingleton(registry);
+        services.AddSingleton(_ => new RateLimitBudgets(registry));
         services.AddMetrics();
         services.AddSingleton<RateLimitTelemetry>();
+        // OBS-002 (owner answer Q8): one summary line per policy and minute with rejections; registry names only.
+        services.AddRateLimitRejectionSummary(registry.Policies.Select(policy => policy.Name));
         services.AddRateLimiter(options =>
         {
             options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
             options.OnRejected = RateLimitRejectionWriter.WriteAsync;
             foreach (var policy in registry.Policies)
             {
-                options.AddPolicy(policy.Name, context => Partition(policy, context));
+                options.AddPolicy(policy.Name, context => Partition(registry, policy, context));
             }
         });
         return services;
     }
 
-    private static RateLimitPartition<string> Partition(RateLimitPolicy policy, HttpContext context)
+    private static RateLimitPartition<string> Partition(
+        RateLimitPolicyRegistry registry,
+        RateLimitPolicy policy,
+        HttpContext context)
     {
         var limit = policy.Limit(context.RequestServices);
-        return RateLimitPartition.GetFixedWindowLimiter(
-            RateLimitPartitionKeys.For(policy.Partition, context),
-            _ => new FixedWindowRateLimiterOptions
-            {
-                PermitLimit = limit.PermitLimit,
-                Window = limit.Window,
-                QueueLimit = 0,
-                QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                AutoReplenishment = true,
-            });
+        var key = RateLimitPartitionKeys.For(policy.Partition, context);
+        if (registry.UsesBudgets(policy))
+        {
+            var budgets = context.RequestServices.GetRequiredService<RateLimitBudgets>();
+            return RateLimitPartition.Get(key, partition => budgets.Limiter(policy, partition, limit));
+        }
+
+        return RateLimitPartition.GetFixedWindowLimiter(key, _ => FixedWindow(limit));
     }
+
+    /// <summary>Every window of the registry: a fixed window without a queue, replenished automatically.</summary>
+    internal static FixedWindowRateLimiterOptions FixedWindow(FixedWindowLimit limit) => new()
+    {
+        PermitLimit = limit.PermitLimit,
+        Window = limit.Window,
+        QueueLimit = 0,
+        QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
+        AutoReplenishment = true,
+    };
 }

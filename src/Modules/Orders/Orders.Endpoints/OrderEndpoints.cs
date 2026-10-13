@@ -12,6 +12,12 @@ namespace Orders.Endpoints;
 
 public static class OrderEndpoints
 {
+    /// <summary>
+    /// SEC-004: <c>listOrders</c>, <c>RateLimits:OrderList</c> (120 per minute) per user. The host registers it with
+    /// every other policy.
+    /// </summary>
+    public const string ListRateLimitPolicy = "Orders.List";
+
     public static IEndpointRouteBuilder MapOrderEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost("/api/v1/orders", CreateAsync)
@@ -29,12 +35,14 @@ public static class OrderEndpoints
         endpoints.MapGet("/api/v1/orders", ListAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
             .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .RequireRateLimiting(OrderEndpoints.ListRateLimitPolicy)
             .WithName("listOrders")
             .WithTags("Orders")
             .Produces<OrderPageResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status429TooManyRequests)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/orders/{orderId:guid}", GetAsync)

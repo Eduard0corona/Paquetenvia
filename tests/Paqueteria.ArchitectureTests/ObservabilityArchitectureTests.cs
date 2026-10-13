@@ -121,6 +121,28 @@ public sealed partial class ObservabilityArchitectureTests
         Assert.Equal(4601, TelemetryEvents.OutboxLaneSummary.Id);
         Assert.Equal(4602, TelemetryEvents.ScheduledJobCycle.Id);
         Assert.Equal(4603, TelemetryEvents.HttpStatusSummary.Id);
+        Assert.Equal(4604, TelemetryEvents.RateLimitSummary.Id);
+        Assert.Equal("RateLimitSummary", TelemetryEvents.RateLimitSummary.Name);
+    }
+
+    /// <summary>
+    /// SEC-004 (owner answer Q8): <c>Policy</c> and <c>Rejected</c> are dimensions of the rate-limit summary only (4604),
+    /// and no pilot alert or workbook reads them or that event until a later owner decision asks for it.
+    /// </summary>
+    [Fact]
+    public void The_rate_limit_summary_dimensions_reach_no_alert_or_workbook()
+    {
+        Assert.Contains("Policy", TelemetryDimensions.Allowed);
+        Assert.Contains("Rejected", TelemetryDimensions.Allowed);
+        Assert.DoesNotContain("PolicyName", TelemetryDimensions.Allowed);
+        // The forbidden-fragment rule is why the dimension is Policy: PolicyName contains "name".
+        Assert.ThrowsAny<Exception>(() => AssertNotSensitive("PolicyName"));
+
+        var template = File.ReadAllText(TestRepository.GetPath("deploy/azure/pilot/observability.bicep"));
+        var properties = StatePropertyPattern().Matches(template).Select(match => match.Groups["name"].Value).ToHashSet(StringComparer.Ordinal);
+        Assert.DoesNotContain("Policy", properties);
+        Assert.DoesNotContain("Rejected", properties);
+        Assert.DoesNotContain("4604", template, StringComparison.Ordinal);
     }
 
     [Fact]

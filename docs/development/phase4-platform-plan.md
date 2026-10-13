@@ -95,7 +95,13 @@ repartidores asignables 60/min; inicio de sesión 20/min por red".
 - Los números son configuración validada al arrancar. "Se ajusta tras 2 semanas con métricas": una decisión posterior
   del owner los fija con los rechazos por política que se vean en el piloto.
 
-Antes de este PR el owner debe confirmar tres puntos:
+El owner decidió los tres puntos el 2026-10-12 (preguntas Q1 a Q6, literales en `decision-log.md`:
+`SEC-004-HEAVY-ENDPOINT-MAPPING-2026-10-12` y `OBS-001-DASHBOARD-429-2026-10-12`; también
+`SEC-004-RETRY-AFTER-2026-10-13` y `SEC-004-REJECTION-SUMMARY-2026-10-13`). Lo aplicado está en
+`docs/development/sec-004-heavy-endpoint-limits.md`. El PR 3 sale en dos partes: primero servidor, contratos y el
+resumen de rechazos en los logs; después los textos y el comportamiento de la web (AI-07).
+
+Los tres puntos que el owner tenía que confirmar:
 
 1. El mapeo operación por operación (tabla siguiente).
 2. Cómo registra su 429 el tablero. `GET /operations/dashboard` no está en AI-05: lo cubren ADR-OBS-001 y la
@@ -105,7 +111,8 @@ Antes de este PR el owner debe confirmar tres puntos:
 3. El texto en español y el comportamiento de cada pantalla ante un 429 (AI-07). Incluye qué ve el navegador si
    `/auth/login` responde 429, porque es una navegación y no una llamada `fetch`.
 
-Mapeo propuesto (por confirmar):
+Mapeo propuesto (confirmado con las respuestas Q1, Q2, Q3 y Q5: CSV compartido y una confirmación a la vez, 60 cada
+paso de fotos, un presupuesto para el tablero y otro para los conteos, solo `/auth/login`):
 
 | Texto decidido | Operaciones propuestas | Punto abierto |
 | --- | --- | --- |
@@ -255,9 +262,6 @@ la de la petición que lo originó. Si el owner elige esa opción, el PR 7 revis
 
 | Decisión | Bloquea | Dónde está registrada |
 | --- | --- | --- |
-| Mapeo operación por operación de la lista de límites | PR 3 | AI-08 SEC-004 |
-| Cómo registra su 429 `GET /operations/dashboard` (AI-05 o enmienda de ADR-OBS-001) | PR 3 | AI-08 SEC-004 |
-| Texto y comportamiento de cada pantalla ante un 429 (AI-07), incluido `/auth/login` | PR 3 | AI-08 SEC-004 |
 | Lista exacta de paquetes (admisión explícita por paquete) | PR 4 | AI-08 OBS-003, `OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12` |
 | Correo de alertas (`alertEmailAddress`) | despliegue de las alertas (ya pendiente desde OBS-002) | AI-08 OBS-003 y SCL-007 |
 | Contexto de traza a través del outbox: columna, payload o ninguno | PR 7 | AI-08 OBS-003 |
