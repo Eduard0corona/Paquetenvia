@@ -38,6 +38,7 @@ public sealed class TenantSelectionPipelineTests : IClassFixture<SecurityWebAppl
         using var response = await client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await AssertProblemAsync(response, """{"type":"about:blank","title":"Invalid organization context.","status":400}""");
     }
 
     [Fact]
@@ -49,6 +50,7 @@ public sealed class TenantSelectionPipelineTests : IClassFixture<SecurityWebAppl
         using var response = await client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        await AssertProblemAsync(response, """{"type":"about:blank","title":"Forbidden.","status":403}""");
     }
 
     [Fact]
@@ -86,6 +88,15 @@ public sealed class TenantSelectionPipelineTests : IClassFixture<SecurityWebAppl
         using var response = await client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+    }
+
+    /// <summary>
+    /// The tenant context problem goes out as exactly <c>application/problem+json</c> (AI-05), with its body unchanged.
+    /// </summary>
+    private static async Task AssertProblemAsync(HttpResponseMessage response, string body)
+    {
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.ToString());
+        Assert.Equal(body, await response.Content.ReadAsStringAsync());
     }
 
     private static HttpRequestMessage Authenticated(string path, string profile)
