@@ -8,6 +8,7 @@ using Organizations.Application.Session;
 using Organizations.Endpoints.Authorization;
 using Organizations.Endpoints.Tenancy;
 using Paqueteria.Application.Idempotency;
+using Paqueteria.Application.Security;
 using Paqueteria.Application.Tenancy;
 using static Drivers.Endpoints.VoiceEndpointResults;
 
@@ -173,9 +174,13 @@ public static class RecipientCallEndpoints
         }
         catch (RecipientCallRateLimitedException exception)
         {
-            httpContext.Response.Headers.RetryAfter = Math.Max(1, (long)Math.Ceiling(exception.RetryAfter.TotalSeconds))
+            // SEC-004: the API's one 429 shape (AI-05 TooManyRequests, with traceId), Retry-After in whole seconds.
+            httpContext.Response.Headers.RetryAfter = TooManyRequestsProblem.RetryAfterSeconds(exception.RetryAfter)
                 .ToString(CultureInfo.InvariantCulture);
-            return Results.Problem(statusCode: StatusCodes.Status429TooManyRequests, title: "Too many requests.");
+            return Results.Problem(
+                statusCode: TooManyRequestsProblem.Status,
+                title: TooManyRequestsProblem.Title,
+                type: TooManyRequestsProblem.Type);
         }
         catch (RecipientCallUnavailableException)
         {

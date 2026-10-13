@@ -1,11 +1,7 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Cors.Infrastructure;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,7 +10,6 @@ using Paqueteria.Application.Security;
 using Realtime.Application.Configuration;
 using Realtime.Endpoints.Connection;
 using Realtime.Endpoints.Hubs;
-using System.Threading.RateLimiting;
 
 namespace Realtime.Endpoints;
 
@@ -31,26 +26,8 @@ public static class DependencyInjection
                 cors.AddPolicy(
                     RealtimeEndpointDefaults.CorsPolicy,
                     policy => ConfigureCors(policy, realtime.Value.AllowedOrigins)));
-        services.AddRateLimiter(rateLimiter =>
-        {
-            rateLimiter.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-            rateLimiter.AddPolicy(
-                RealtimeEndpointDefaults.RateLimitPolicy,
-                context =>
-                {
-                    var options = context.RequestServices.GetRequiredService<IOptions<RealtimeOptions>>().Value;
-                    return RateLimitPartition.GetFixedWindowLimiter(
-                        GetPartitionKey(context),
-                        _ => new FixedWindowRateLimiterOptions
-                        {
-                            PermitLimit = options.ConnectionPermitLimit,
-                            Window = TimeSpan.FromSeconds(options.ConnectionWindowSeconds),
-                            QueueLimit = 0,
-                            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                            AutoReplenishment = true,
-                        });
-                });
-        });
+        // SEC-004: the Realtime.Connections limiter (negotiate and connection requests of the three hubs together) is
+        // registered with every other policy by the host (Paqueteria.Api.Http.ApiRateLimitPolicies).
         services.AddSignalR()
             .AddJsonProtocol(protocol =>
             {
@@ -80,7 +57,9 @@ public static class DependencyInjection
         endpoints.MapHub<TrackingHub>(RealtimeEndpointDefaults.TrackingPath)
             .AllowAnonymous()
             .RequireCors(RealtimeEndpointDefaults.CorsPolicy)
-            .RequireRateLimiting(RealtimeEndpointDefaults.RateLimitPolicy);
+            .RequireRateLimiting(RealtimeEndpointDefaults.RateLimitPolicy)
+            // SEC-004: the tracking hub's 429 is the public tracking uniform body, without traceId (Invariant 5).
+            .WithMetadata(PublicTrackingRateLimitRejection.Instance);
         return endpoints;
     }
 
@@ -101,14 +80,5 @@ public static class DependencyInjection
                 "X-Requested-With",
                 "X-SignalR-User-Agent")
             .AllowCredentials();
-    }
-
-    private static string GetPartitionKey(HttpContext context)
-    {
-        var identity = context.User.FindFirst("sub")?.Value;
-        var source = !string.IsNullOrEmpty(identity)
-            ? $"identity:{identity}"
-            : ClientNetworkPartition.Describe(context.Connection.RemoteIpAddress);
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(source)));
     }
 }

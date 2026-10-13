@@ -186,6 +186,16 @@ public sealed class DriverVoiceHttpTests : IClassFixture<DriverVoiceHttpWebAppli
         {
             Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
             Assert.Equal("62", Assert.Single(response.Headers.GetValues("Retry-After")));
+            // SEC-004: the API's one 429 shape, AI-05 TooManyRequests with the request's traceId.
+            Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.ToString());
+            using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+            Assert.Equal(
+                ["status", "title", "traceId", "type"],
+                problem.RootElement.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
+            Assert.Equal("about:blank", problem.RootElement.GetProperty("type").GetString());
+            Assert.Equal("Too Many Requests", problem.RootElement.GetProperty("title").GetString());
+            Assert.Equal(429, problem.RootElement.GetProperty("status").GetInt32());
+            Assert.True(TraceCorrelation.IsTraceId(problem.RootElement.GetProperty("traceId").GetString()));
         }
 
         factory.Calls.Failure = new RecipientCallUnavailableException();

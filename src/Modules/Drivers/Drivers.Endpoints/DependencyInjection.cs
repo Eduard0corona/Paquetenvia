@@ -1,12 +1,6 @@
-using System.Security.Cryptography;
-using System.Text;
-using Microsoft.AspNetCore.Builder;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
-using Paqueteria.Application.Security;
-using System.Threading.RateLimiting;
+using Microsoft.Extensions.Options;
 
 namespace Drivers.Endpoints;
 
@@ -16,6 +10,8 @@ public static class DependencyInjection
         this IServiceCollection services,
         IConfiguration configuration)
     {
+        // SEC-004: the Drivers.LocationIngestion limiter is registered with every other policy by the host
+        // (Paqueteria.Api.Http.ApiRateLimitPolicies), which reads these validated options through RateLimit.
         services.AddOptions<DriverLocationEndpointOptions>()
             .Bind(configuration.GetSection(DriverLocationEndpointOptions.SectionName))
             .Validate(
@@ -24,38 +20,7 @@ public static class DependencyInjection
                     value.MaximumRequestBodyBytes is >= 4096 and <= 1_048_576,
                 "Drivers:LocationIngestion is invalid.")
             .ValidateOnStart();
-        services.AddRateLimiter(options =>
-        {
-            options.RejectionStatusCode = StatusCodes.Status429TooManyRequests;
-            options.AddPolicy(
-                DriverLocationEndpointOptions.RateLimitPolicy,
-                context =>
-                {
-                    var configured = context.RequestServices
-                        .GetRequiredService<Microsoft.Extensions.Options.IOptions<DriverLocationEndpointOptions>>()
-                        .Value;
-                    return RateLimitPartition.GetFixedWindowLimiter(
-                        PartitionKey(context),
-                        _ => new FixedWindowRateLimiterOptions
-                        {
-                            PermitLimit = configured.BatchPermitLimit,
-                            Window = TimeSpan.FromSeconds(configured.WindowSeconds),
-                            QueueLimit = 0,
-                            QueueProcessingOrder = QueueProcessingOrder.OldestFirst,
-                            AutoReplenishment = true,
-                        });
-                });
-        });
         return services;
-    }
-
-    private static string PartitionKey(HttpContext context)
-    {
-        var subject = context.User.FindFirst("sub")?.Value;
-        var material = !string.IsNullOrWhiteSpace(subject)
-            ? $"identity:{subject}"
-            : ClientNetworkPartition.Describe(context.Connection.RemoteIpAddress);
-        return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(material)));
     }
 }
 
@@ -67,4 +32,14 @@ public sealed class DriverLocationEndpointOptions
     public int BatchPermitLimit { get; set; } = 30;
     public int WindowSeconds { get; set; } = 60;
     public long MaximumRequestBodyBytes { get; set; } = 32_768;
+
+    /// <summary>
+    /// SEC-004: the <see cref="RateLimitPolicy"/> window, <see cref="BatchPermitLimit"/> per <see cref="WindowSeconds"/>
+    /// (validated at start). The host registers the policy with every other one.
+    /// </summary>
+    public static (int PermitLimit, TimeSpan Window) RateLimit(IServiceProvider services)
+    {
+        var options = services.GetRequiredService<IOptions<DriverLocationEndpointOptions>>().Value;
+        return (options.BatchPermitLimit, TimeSpan.FromSeconds(options.WindowSeconds));
+    }
 }

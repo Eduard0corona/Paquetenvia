@@ -2,7 +2,10 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Options;
 using Orders.Application.Tracking;
+using Paqueteria.Application.Security;
 
 namespace Orders.Endpoints;
 
@@ -16,6 +19,20 @@ public static class PublicTrackingEndpointDefaults
     // Case-insensitive like routing: every path routing can send to the lookup gets the privacy headers.
     public static bool IsLookupPath(PathString path) =>
         path.StartsWithSegments(PathPrefix, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// SEC-004: the <see cref="RateLimitPolicy"/> window, <c>PublicTracking:LookupPermitLimit</c> per
+    /// <c>LookupWindowSeconds</c> (validated at start). The host registers the policy with every other one.
+    /// </summary>
+    public static (int PermitLimit, TimeSpan Window) RateLimit(IServiceProvider services)
+    {
+        var options = services.GetRequiredService<IOptions<PublicTrackingOptions>>().Value;
+        return (options.LookupPermitLimit, TimeSpan.FromSeconds(options.LookupWindowSeconds));
+    }
+
+    /// <summary>SEC-004: a public tracking rejection still counts in <c>public_tracking.rate_limit.rejected</c>.</summary>
+    public static void CountRateLimitRejection(HttpContext context) =>
+        context.RequestServices.GetRequiredService<IPublicTrackingTelemetry>().RateLimitRejected();
 }
 
 public static class PublicTrackingEndpoints
@@ -31,6 +48,8 @@ public static class PublicTrackingEndpoints
             .AllowAnonymous()
             .RequireCors(PublicTrackingEndpointDefaults.CorsPolicy)
             .RequireRateLimiting(PublicTrackingEndpointDefaults.RateLimitPolicy)
+            // SEC-004: the 429 stays the uniform body, without traceId (Invariant 5).
+            .WithMetadata(PublicTrackingRateLimitRejection.Instance)
             .WithName("publicTracking")
             .WithTags("Tracking")
             .Produces<PublicTrackingResponse>(StatusCodes.Status200OK)
