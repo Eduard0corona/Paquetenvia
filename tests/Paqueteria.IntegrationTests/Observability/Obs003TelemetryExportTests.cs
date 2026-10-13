@@ -57,6 +57,9 @@ public sealed class Obs003TelemetryExportTests
 
     private static readonly TraceIdRatioBasedSampler Ratio = new(TelemetryExportPolicy.TraceSamplingRatio);
 
+    /// <summary>Starts the process-wide recorder of real HTTP requests before the first host of this class exists.</summary>
+    public Obs003TelemetryExportTests() => _ = RealHttpRequests.Instance;
+
     [Fact]
     public async Task The_export_is_off_by_default_registers_nothing_and_sends_nothing()
     {
@@ -265,7 +268,29 @@ public sealed class Obs003TelemetryExportTests
         Assert.True(api.Services.GetRequiredService<MeterProvider>().ForceFlush(10_000));
 
         Assert.Equal("true", Environment.GetEnvironmentVariable(AzureMonitorTelemetryExport.StatsbeatDisabledVariable));
+        Assert.Equal("true", Environment.GetEnvironmentVariable(AzureMonitorTelemetryExport.SdkStatsDisabledVariable));
         Assert.Equal("false", Environment.GetEnvironmentVariable(AzureMonitorTelemetryExport.ResourceMetricVariable));
+
+        // The recorder sees real requests (here a refused loopback connection), so what it lacks below was not sent.
+        var check = new Uri($"http://127.0.0.1:1/obs003-recorder-{Guid.NewGuid():N}");
+        using (var probe = new HttpClient(new SocketsHttpHandler { UseProxy = false, ConnectTimeout = TimeSpan.FromSeconds(2) }))
+        {
+            try
+            {
+                (await probe.GetAsync(check)).Dispose();
+            }
+            catch (HttpRequestException)
+            {
+                // Refused, as expected; the request was still started.
+            }
+        }
+
+        Assert.Contains(check, RealHttpRequests.Instance.Uris);
+        // The only destination is the ingestion endpoint (in memory here): since the first test of this class, every real
+        // request of this process went to loopback (these tests' own servers), never to the instance metadata endpoint
+        // (169.254.169.254, customer SDK stats), Statsbeat or Live Metrics.
+        await Task.Delay(TimeSpan.FromSeconds(1));
+        Assert.All(RealHttpRequests.Instance.Uris, uri => Assert.True(uri.IsLoopback, $"a real request left the process: {uri.GetLeftPart(UriPartial.Authority)}"));
         // The exporter's own transmitter for this connection string (pinned exporter 1.10.0 internals, test only).
         var transmitter = Transmitter(capture.ConnectionString);
         Assert.Null(Field(transmitter, "_statsbeat"));
@@ -587,6 +612,59 @@ public sealed class Obs003TelemetryExportTests
     }
 
     private sealed record CapturedIngestion(HttpMethod Method, Uri Uri, IReadOnlySet<string> HeaderNames, string Body, IReadOnlyList<JsonElement> Items);
+
+    /// <summary>
+    /// Every request a real HTTP handler (<see cref="SocketsHttpHandler"/>, through its diagnostics handler) starts in this
+    /// process, from the first test of this class on. The in-memory ingestion transport is not a real handler, so the
+    /// exporter's ingestion never shows here; anything else it sent (Statsbeat, Live Metrics, the instance metadata
+    /// endpoint) would. Only the request event is enabled, so no activity is created and no header is injected.
+    /// </summary>
+    private sealed class RealHttpRequests : IObserver<DiagnosticListener>, IObserver<KeyValuePair<string, object?>>
+    {
+        private const string ListenerName = "HttpHandlerDiagnosticListener";
+        private const string RequestEvent = "System.Net.Http.Request";
+        private readonly ConcurrentQueue<Uri> _uris = new();
+        private readonly ConcurrentBag<IDisposable> _subscriptions = [];
+
+        private RealHttpRequests() => _subscriptions.Add(DiagnosticListener.AllListeners.Subscribe(this));
+
+        internal static RealHttpRequests Instance { get; } = new();
+
+        internal IReadOnlyList<Uri> Uris => _uris.ToArray();
+
+        void IObserver<DiagnosticListener>.OnNext(DiagnosticListener value)
+        {
+            if (value.Name == ListenerName)
+            {
+                _subscriptions.Add(value.Subscribe(this, name => name == RequestEvent));
+            }
+        }
+
+        void IObserver<KeyValuePair<string, object?>>.OnNext(KeyValuePair<string, object?> value)
+        {
+            if (value.Key == RequestEvent &&
+                value.Value?.GetType().GetProperty("Request")?.GetValue(value.Value) is HttpRequestMessage { RequestUri: { } uri })
+            {
+                _uris.Enqueue(uri);
+            }
+        }
+
+        void IObserver<DiagnosticListener>.OnCompleted()
+        {
+        }
+
+        void IObserver<DiagnosticListener>.OnError(Exception error)
+        {
+        }
+
+        void IObserver<KeyValuePair<string, object?>>.OnCompleted()
+        {
+        }
+
+        void IObserver<KeyValuePair<string, object?>>.OnError(Exception error)
+        {
+        }
+    }
 
     private sealed record ExportedSpan(string Source, string Operation, string TraceId, string[] Tags);
 

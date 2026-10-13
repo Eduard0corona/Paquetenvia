@@ -9,8 +9,10 @@ namespace Paqueteria.Infrastructure.Observability;
 /// </summary>
 /// <remarks>
 /// The section fails closed when the host starts: an unknown key, a value that is not a boolean, an export turned on
-/// without a connection string, or a connection string that is not an Application Insights one stops the host. The
-/// sampling ratio is not configurable: it is <see cref="TelemetryExportPolicy.TraceSamplingRatio"/> (10 %).
+/// without a connection string, or an export turned on with a connection string that is not an Application Insights
+/// one stops the host. With the export off the connection string is neither checked nor kept, so a key Azure adds to
+/// the component's string can never stop a host that exports nothing. The sampling ratio is not configurable: it is
+/// <see cref="TelemetryExportPolicy.TraceSamplingRatio"/> (10 %).
 /// </remarks>
 public sealed class TelemetryExportSettings
 {
@@ -36,7 +38,9 @@ public sealed class TelemetryExportSettings
     /// <summary>True only when configuration turns the export on.</summary>
     public bool Enabled { get; }
 
-    /// <summary>The Application Insights connection string (instrumentation key ingestion, Q-PR6-2).</summary>
+    /// <summary>
+    /// The Application Insights connection string (instrumentation key ingestion, Q-PR6-2); null while the export is off.
+    /// </summary>
     public string? ConnectionString { get; }
 
     /// <summary>Reads and validates the section; throws <see cref="TelemetryExportConfigurationException"/>.</summary>
@@ -56,21 +60,30 @@ public sealed class TelemetryExportSettings
                 "TelemetryExport accepts only Enabled (true or false) and ConnectionString.");
         }
 
+        if (!bound.Enabled)
+        {
+            // Off: nothing reads the connection string, so it is not checked (an unexpected key in the string Azure
+            // writes must not stop a host that exports nothing) and not kept.
+            return new TelemetryExportSettings(enabled: false, connectionString: null);
+        }
+
         var connectionString = string.IsNullOrWhiteSpace(bound.ConnectionString) ? null : bound.ConnectionString;
-        if (bound.Enabled && connectionString is null)
+        if (connectionString is null)
         {
             throw new TelemetryExportConfigurationException(
                 "TelemetryExport:Enabled is true but TelemetryExport:ConnectionString is missing.");
         }
 
-        if (connectionString is not null && !IsIngestionConnectionString(connectionString))
+        // On: only the keys this file knows. An unknown key (EndpointSuffix, Authorization, AADAudience...) can change
+        // where or how the exporter sends, so the export refuses to start instead of ignoring it.
+        if (!IsIngestionConnectionString(connectionString))
         {
             throw new TelemetryExportConfigurationException(
                 "TelemetryExport:ConnectionString must be an Application Insights connection string: an " +
                 "InstrumentationKey GUID and an https IngestionEndpoint on " + IngestionHostSuffix + ".");
         }
 
-        return new TelemetryExportSettings(bound.Enabled, connectionString);
+        return new TelemetryExportSettings(enabled: true, connectionString);
     }
 
     /// <summary>

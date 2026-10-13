@@ -51,11 +51,19 @@ public sealed partial class PilotApiStartupConfigurationTests
     public void Pilot_api_keeps_the_telemetry_export_off_and_maps_the_pseudonym_key()
     {
         var settings = PilotApiSettings.Load();
+        var resolved = settings.Resolved();
         var export = Paqueteria.Infrastructure.Observability.TelemetryExportSettings.Read(
-            new ConfigurationBuilder().AddInMemoryCollection(settings.Resolved()).Build());
+            new ConfigurationBuilder().AddInMemoryCollection(resolved).Build());
 
         Assert.False(export.Enabled);
-        Assert.NotNull(export.ConnectionString);
+        Assert.Null(export.ConnectionString);
+
+        // The reviewed PR that flips the literal turns it on with the component's connection string as it is.
+        var flipped = new Dictionary<string, string?>(resolved) { ["TelemetryExport:Enabled"] = "true" };
+        var on = Paqueteria.Infrastructure.Observability.TelemetryExportSettings.Read(
+            new ConfigurationBuilder().AddInMemoryCollection(flipped).Build());
+        Assert.True(on.Enabled);
+        Assert.Equal(resolved["TelemetryExport:ConnectionString"], on.ConnectionString);
         Assert.Equal("1", settings.Configuration["TelemetryPseudonym:CurrentKeyVersion"]);
         Assert.Equal("paquetenvia-telemetry-pseudonym-key-1", settings.Mappings["TelemetryPseudonym:Keys:1"]);
     }

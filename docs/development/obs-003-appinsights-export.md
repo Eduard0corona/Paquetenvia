@@ -23,7 +23,7 @@ exists, so only the built-in `System.Diagnostics` sources and meters are exporte
 | Span attributes | An allowlist enforced when each span ends (`TelemetryExportPolicy.PrepareForExport`). Anything else is removed. A span with events, links or baggage is not exported at all. |
 | Metrics | The application meters (`Paquetenvia.*`, `Paqueteria.*`) and every built-in ASP.NET Core meter (`Microsoft.AspNetCore.*`), `aspnetcore.rate_limiting.requests` included. A view keeps only the OBS-002 metric allowlist. |
 | Organization pseudonym | An HMAC of the organization id under a Key Vault key, `v{key version}-<32 hex>`. It goes with the actor role kind on the log lines and the request span of a request that has an organization context. It is never a metric tag, an OBS-002 dimension, or an alert or workbook dimension. The API and the Worker refuse to start without the key outside Development and Testing. |
-| Propagation | Still a no-op. The OpenTelemetry default propagator is set to one that extracts and injects nothing. The process propagator, the propagator hosting uses and the Azure transport wrapper of PR 1 are unchanged. |
+| Propagation | Still a no-op. With the export off the OpenTelemetry SDK is never loaded, so its default propagator stays the API's no-op one; with it on, it is set to one that extracts and injects nothing. The process propagator, the propagator hosting uses and the Azure transport wrapper of PR 1 are unchanged. |
 | Bicep | `appi-pv-pilot-<suffix>` (workspace-based, pilot region, pilot workspace) in `platform.bicep`. The connection string, `TelemetryExport__Enabled='false'` and the pseudonym secret mapping go to the API and the Worker in `apps.bicep`. |
 | Alerts | None added. `alertEmailAddress` is still pending from the owner, and every new alert needs its own decision. |
 
@@ -41,9 +41,12 @@ The host refuses to start in four cases:
 - an unknown key, for example a `SamplingRatio` (the 10 % is fixed in code);
 - a value that is not a boolean;
 - `Enabled` without a connection string;
-- a connection string of any other shape.
+- `Enabled` with a connection string of any other shape, including one with a key outside the four above
+  (`EndpointSuffix`, `Authorization` or `AADAudience` would change where or how the exporter sends).
 
-The error message names the setting, never its value.
+With the export off, the connection string is neither checked nor kept: nothing reads it, and a key Azure may add to
+the component's string must not stop a host that exports nothing. The error message names the setting, never its
+value.
 
 `TelemetryPseudonym` (`TelemetryPseudonymOptions`, validated on start):
 
@@ -73,8 +76,11 @@ they compose, so in a `WebApplicationFactory` test pass it with `UseSetting`.
   links the same file (`Paqueteria.Worker.csproj`), because only the two hosts reference the packages.
 - `AddAzureMonitorTelemetryExport(profile)`:
   1. reads and validates `TelemetryExport`;
-  2. sets the OpenTelemetry default propagator to an empty composite, whatever the setting;
-  3. when the export is on, registers `AddOpenTelemetry()` with `WithTracing` and `WithMetrics`.
+  2. with the export off, returns: the OpenTelemetry SDK is never loaded (no SDK self-diagnostics, no change to
+     `Activity` defaults), and PR 1's no-op propagators already cover the process;
+  3. with the export on, sets the OpenTelemetry default propagator to an empty composite (loading the SDK would
+     otherwise make it W3C trace context and baggage) and registers `AddOpenTelemetry()` with `WithTracing` and
+     `WithMetrics`.
 
   `TelemetryExportProfile.Api` listens to `Microsoft.AspNetCore`, `System.Net.Http` and `Paqueteria`.
   `TelemetryExportProfile.Worker` does not listen to the hosting source, because its only requests are the probes.
@@ -93,15 +99,19 @@ they compose, so in a `WebApplicationFactory` test pass it with `UseSetting`.
 
   The options go through `AzureClientTracing.WithoutDistributedTracing()`, so the exporter's own ingestion requests
   carry no trace headers either.
-- Two exporter features are switched off through the documented environment switches, set in code before the first
+- Three exporter features are switched off through the documented environment switches, set in code before the first
   exporter exists:
   - Statsbeat (`APPLICATIONINSIGHTS_STATSBEAT_DISABLED=true`), the exporter's own telemetry to a Microsoft-owned
     resource;
+  - customer SDK stats (`APPLICATIONINSIGHTS_SDKSTATS_DISABLED=true`), on by default since exporter 1.8.3: counts of
+    the exporter's own items, whose first transmission also asks the Azure instance metadata endpoint
+    (`http://169.254.169.254/metadata/instance/compute`) for the compute type;
   - the resource metric (`OTEL_DOTNET_AZURE_MONITOR_ENABLE_RESOURCE_METRICS=false`), one extra `_OTELRESOURCE_` item
     per trace batch.
 
-  The only destination is the configured Application Insights, and it receives only the spans and metrics described
-  here.
+  The only destination is the configured Application Insights ingestion endpoint, and it receives only the spans and
+  metrics described here. The integration test records every request a real HTTP handler starts in the test process
+  and fails on any that leaves loopback; without the SDK stats switch it catches the metadata request.
 - `RequestSpanEnrichment.UseRequestSpanEnrichment()` is the second API middleware, right after `UseTraceCorrelation`.
   For a sampled request it writes the allowlisted request attributes, which ASP.NET Core 10 hosting does not write
   itself. A `/health/*` probe is taken out of the export together with its children.
@@ -231,10 +241,18 @@ No metric tag carries the organization pseudonym, the actor role type, a subject
   Requests without a selected organization carry neither: public tracking, sign-in and the probes. Neither do the
   Worker's lines, because its cycles span many organizations; PR 7 decides per-message traces. The Worker still
   validates the key at start.
-- **Where it never goes:** a metric tag, an OBS-002 event (4601–4604) or `TelemetryDimensions.Allowed`, an alert, a
-  workbook. Each is checked by a test:
-  - `ObservabilityArchitectureTests.The_pseudonym_and_role_kind_never_reach_metrics_obs002_events_or_alert_queries`;
-  - guard P21 checks the queries.
+- **Where it never goes:** a metric tag, an OBS-002 event or `TelemetryDimensions.Allowed`, an alert, a
+  workbook.
+  - The log enrichment skips every event an alert or the workbook reads or may read
+    (`TelemetryEvents.IsObservabilityEvent`): the reserved block 4600–4699, where every OBS-002 event takes its id,
+    and the OPS-004 retention result 4004. So an OBS-002 event written inside a request with an organization keeps
+    only its dimensions (and its trace id, which is not one).
+  - Each rule is checked by a test:
+    - `ObservabilityArchitectureTests.The_pseudonym_and_role_kind_never_reach_metrics_obs002_events_or_alert_queries`;
+    - `Obs002_events_carry_exactly_the_telemetry_dimensions` (every `TelemetryEvents` id is in the block);
+    - `Pilot_alerts_query_only_obs002_events_and_dimensions` (every event a query reads is skipped);
+    - the unit test `Observability_events_never_carry_the_pseudonym_or_role_kind`;
+    - guard P21 checks the queries.
 - **The key:**
   - Development and Testing use a synthetic key when none is configured: SHA-256 of a public constant, version 0, so
     `v0-` marks synthetic pseudonyms.
@@ -243,9 +261,18 @@ No metric tag carries the organization pseudonym, the actor role type, a subject
   - Integration tests that run a host as Production, Staging or DevSynthetic get a key derived at run time
     (`TelemetryPseudonymTestKey`); no key-like value is in the repository.
 - **Versioning and rotation:** every pseudonym carries the key version. To rotate:
-  1. the owner creates `paquetenvia-telemetry-pseudonym-key-2`;
-  2. a reviewed PR maps it to `TelemetryPseudonym:Keys:2` (P06 table, `apiSecretNames`, `workerSecretNames`), sets
-     `TelemetryPseudonym__CurrentKeyVersion='2'` and removes version 1. Exactly one key is configured.
+  1. the owner creates `paquetenvia-telemetry-pseudonym-key-2` (README §6.6 command, with the new name);
+  2. one reviewed PR changes, together:
+     - `deploy/azure/pilot/apps.bicep`: the secret name in `apiSecretNames` and `workerSecretNames`, the two
+       `KeyVaultSecrets__Mappings` entries (to `TelemetryPseudonym:Keys:2`) and `TelemetryPseudonym__CurrentKeyVersion='2'`;
+     - `tools/azr-001/env001_pilot_guards.py`: `TELEMETRY_PSEUDONYM_KEY_VERSION = "2"`. The P06 mappings, the P21
+       version check and the P23 exemption derive from it;
+     - `.github/workflows/deploy-azure-pilot.yml`: the `has_secret paquetenvia-telemetry-pseudonym-key-2` check in
+       window 2, which P21 requires by name;
+     - the tests that name version 1: `tools/azr-001/test_env001_pilot_guards.py` and
+       `PilotApiStartupConfigurationTests`.
+
+     Version 1 is removed in the same PR. Exactly one key is configured.
 
   Pseudonyms written before and after the rotation do not match, which is the point of rotating: a leaked key stops
   linking new telemetry to old. Keep the old secret until the logs that carry its version are past retention (30
@@ -307,11 +334,18 @@ weeks after the export is turned on. If metrics crowd the cap, a later decision 
 - **Proof validation is a poll.** It now starts `TraceCorrelation.StartPollCycle` (`Paqueteria.PollCycle`) instead of
   `StartJobCycle`, so the sampler can tell it from an ADR-034 job at the root (Q-PR6-1). The PR 1 guard lists it
   under the new call.
-- **Exporter extras off.** Live Metrics would send unsampled documents to a second endpoint. Statsbeat goes to a
-  Microsoft-owned resource. Standard metrics and performance counters are outside the decided meters. The resource
-  metric adds an item per batch. Local retry storage writes telemetry to disk. All six are off.
-- **The OpenTelemetry default propagator** is set to an empty composite even with the export off. Nothing uses it
-  today, but an instrumentation library would.
+- **Exporter extras off.** Customer SDK stats would send the exporter's own counts and, on the first transmission,
+  call the Azure instance metadata endpoint. Live Metrics would send unsampled documents to a second endpoint.
+  Statsbeat goes to a Microsoft-owned resource. Standard metrics and performance counters are outside the decided
+  meters. The resource metric adds an item per batch. Local retry storage writes telemetry to disk. All seven are off.
+- **The OpenTelemetry default propagator** is set to an empty composite only when the export is on, because loading
+  the SDK makes it W3C trace context and baggage. With the export off the SDK is never loaded, so off means no
+  OpenTelemetry SDK at all, and its API default stays a no-op. Nothing uses it today, but an instrumentation library
+  would.
+- **Connection string checked only when the export is on.** Off, nothing reads it, so it is not validated: a key Azure
+  adds to the component's string cannot stop the hosts. On, unknown keys are still refused rather than ignored,
+  because keys like `EndpointSuffix`, `Authorization` or `AADAudience` change where or how the exporter sends, and the
+  reviewed PR that turns the export on is the right moment to fail.
 - **Role kind with several roles** is the sorted, comma-separated list of contract values, or `NONE` if the session
   has no role there (the tenant middleware only selects an organization the actor belongs to).
 - **Resource and role names:** `appi-pv-pilot-<suffix>`; cloud roles `paqueteria-api` and `paqueteria-worker`; the
@@ -343,7 +377,8 @@ weeks after the export is turned on. If metrics crowd the cap, a later decision 
     - Development and Testing use the synthetic version 0;
     - a configured key is used with its version;
     - invalid keys fail in every environment, and the message never contains the value;
-  - `TelemetryExport` is off by default and fails closed on nine invalid sections;
+  - `TelemetryExport` is off by default and fails closed on five invalid sections; seven connection strings of the
+    wrong shape are accepted (and not kept) while the export is off and refused when it is on;
   - the exported roots;
   - span allowlist:
     - the request span keeps only the allowlist and gets a rebuilt name and no status description;
@@ -352,7 +387,10 @@ weeks after the export is turned on. If metrics crowd the cap, a later decision 
     - a job cycle keeps nothing;
     - spans with an event, a link or baggage, database spans, dispatch cycles and polls are taken out;
   - the metric tag allowlist refuses identifiers, addresses, the pseudonym and the role;
-  - log lines inside an organization context carry the pseudonym and the role kind; lines outside do not.
+  - log lines inside an organization context carry the pseudonym and the role kind; lines outside do not;
+  - OBS-002 events (each `TelemetryEvents` id, ids of the reserved block not assigned yet, and 4004) inside an
+    organization context keep their trace id and never carry the pseudonym or the role kind; ids next to the block
+    still do.
 - `tests/Paqueteria.IntegrationTests/Observability/Obs003TelemetryExportTests.cs` (real hosts, real exporter, in-memory
   ingestion; a collection without parallelization):
   - off by default in the API and the Worker: no provider, no OpenTelemetry service, no request recorded, nothing sent;
@@ -373,7 +411,10 @@ weeks after the export is turned on. If metrics crowd the cap, a later decision 
     - the process, hosting and OpenTelemetry propagators inject nothing;
     - none of the 80 outgoing Google Maps client requests carries a trace header;
     - the sampled ones are exported as dependencies without their path;
-  - the exporter internals: no Statsbeat, no offline storage, no resource metric;
+  - the exporter internals: no Statsbeat, no offline storage, no resource metric, SDK stats switched off;
+  - the destination: a process-wide recorder of every request a real HTTP handler starts (checked with a refused
+    loopback request) shows nothing but loopback, so no request reaches the instance metadata endpoint, Statsbeat or
+    Live Metrics; without the SDK stats switch it fails on `http://169.254.169.254`;
   - pipeline:
     - out of 1,500 scheduled job cycles, exactly the sampled ones are exported, and their HTTP children follow them;
     - dispatch cycles, polls and parentless HTTP spans never are;
@@ -388,8 +429,11 @@ weeks after the export is turned on. If metrics crowd the cap, a later decision 
 - `tests/Paqueteria.ArchitectureTests`:
   - `ObservabilityArchitectureTests`:
     - the metric tag scan now reads every file that creates an instrument, the RateLimiting folder included, through
-      every way a key is written: literals, constants, target-typed pairs, tuple helpers and `TagList` initializers;
-      an unresolved key fails;
+      every way a key is written: `KeyValuePair` constructions and `KeyValuePair.Create`, target-typed pairs in a tag
+      context, tuple helpers, `TagList` initializers and `.Add`. Keys are literals of any case, constants of the file
+      or `Type.Constant`s of the repository; anything else is unresolved and fails;
+    - 24 fixtures show each form read, and 7 show what is not a tag (a meter, a database parameter, a command, a record,
+      an instrument's own `Add`, a forwarding tuple helper);
     - the export keeps exactly `MetricTags`;
     - the pseudonym and role test.
   - `TraceCorrelationArchitectureTests`:
@@ -410,7 +454,9 @@ weeks after the export is turned on. If metrics crowd the cap, a later decision 
     - ingestion sampling;
     - a second component;
     - a switch that is not a literal;
-    - a foreign connection string;
+    - a foreign connection string, another component's name, a literal name, or a suffix that differs from
+      `platform.bicep`'s;
+    - a component not named `appi-pv-pilot-<suffix>`;
     - an `OTEL_*` override;
     - a web workload with telemetry settings;
     - a query reading `AppRequests` or the pseudonym;

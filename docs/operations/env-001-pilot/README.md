@@ -571,10 +571,12 @@ because the public lookup only compares hashes. Rotation is a template change re
 
 `paquetenvia-telemetry-pseudonym-key-1` keys the organization pseudonym (OBS-003, HMAC-SHA256) that the API's log
 lines, and its request spans once the export is on, carry instead of the organization id. The API and the Worker
-refuse to start without it. Write it once. To rotate, store `paquetenvia-telemetry-pseudonym-key-2`, then a reviewed
+refuse to start without it. Write it once. To rotate, store `paquetenvia-telemetry-pseudonym-key-2`, then one reviewed
 PR maps it to `TelemetryPseudonym:Keys:2` in `apps.bicep` (API and Worker), sets
-`TelemetryPseudonym__CurrentKeyVersion='2'` and drops version 1; exactly one key is configured. Pseudonyms carry their
-key version (`v1-…`, `v2-…`) and do not match across versions. Keep the old secret until the logs carrying its
+`TelemetryPseudonym__CurrentKeyVersion='2'` and drops version 1; exactly one key is configured. The same PR sets
+`TELEMETRY_PSEUDONYM_KEY_VERSION = "2"` in `tools/azr-001/env001_pilot_guards.py` (P06, P21 and P23 follow it), changes
+the workflow's `has_secret` check in window 2 to the new name (P21 requires it), and updates the tests that name
+version 1. Pseudonyms carry their key version (`v1-…`, `v2-…`) and do not match across versions. Keep the old secret until the logs carrying its
 version are past the 30-day retention. Details: `docs/development/obs-003-appinsights-export.md`.
 
 The workflow stops before deploying while any owner secret is missing. The API reads
@@ -769,7 +771,8 @@ The 24 guards (P00–P23) run on the compiled ARM output and the workflow:
   - exactly one `Microsoft.Insights/components`, in `platform.bicep`, in the pilot region, workspace-based on the
     pilot workspace (`IngestionMode: LogAnalytics`), IP masking kept, no ingestion sampling or own retention;
   - the API and the Worker get `TelemetryExport__Enabled` as a literal `true`/`false`, the connection string only from
-    that component and `TelemetryPseudonym__CurrentKeyVersion='1'`, and no other telemetry or `OTEL_` setting; no other
+    that component (by its managed name, with the same suffix as `platform.bicep`) and
+    `TelemetryPseudonym__CurrentKeyVersion='1'`, and no other telemetry or `OTEL_` setting; no other
     workload gets telemetry settings;
   - alert and workbook queries read no Application Insights table and no pseudonym or role kind;
   - the workflow stops in window 2 while `paquetenvia-telemetry-pseudonym-key-1` is missing.

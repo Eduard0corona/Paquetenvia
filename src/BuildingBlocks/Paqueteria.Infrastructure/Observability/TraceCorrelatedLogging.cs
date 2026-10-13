@@ -10,7 +10,8 @@ namespace Paqueteria.Infrastructure.Observability;
 /// next to the message properties (<c>State.TraceId</c> in Log Analytics). Lines written outside any trace
 /// (host start, the OBS-002 lane and HTTP summaries) carry none. Inside an organization context
 /// (<see cref="TelemetryOrganizationContext"/>, OBS-003-TENANT-PSEUDONYM-2026-10-12) every line also carries
-/// <c>OrganizationPseudonym</c> and <c>ActorRoleKind</c>, also when the export is off.
+/// <c>OrganizationPseudonym</c> and <c>ActorRoleKind</c>, also when the export is off, except the events the OBS-002
+/// alerts and workbook read (<see cref="TelemetryEvents.IsObservabilityEvent"/>), which never carry them.
 /// </summary>
 /// <remarks>
 /// It decorates the host <see cref="ILoggerFactory"/>, so every provider sees the same state. The trace id is a
@@ -48,7 +49,9 @@ internal sealed class TraceCorrelatedLogger(ILogger inner) : ILogger
         Func<TState, Exception?, string> formatter)
     {
         var traceId = TraceCorrelation.CurrentTraceId();
-        var organization = TelemetryOrganizationContext.Current;
+        // An OBS-002 event keeps only its allowlisted dimensions (and the trace id, which is not one), wherever it is
+        // written: the pseudonym and the role kind never become an alert or workbook dimension.
+        var organization = TelemetryEvents.IsObservabilityEvent(eventId) ? null : TelemetryOrganizationContext.Current;
         if ((traceId is null && organization is null) || state is null || !inner.IsEnabled(logLevel))
         {
             inner.Log(logLevel, eventId, state, exception, formatter);

@@ -53,6 +53,13 @@ DOTNET_WORKLOADS = {API_APP, WORKER_APP, MIGRATE_JOB, LOGINS_JOB, VERIFY_JOB}
 API_PREFIXES = ("/api", "/hubs", "/auth")
 API_EXACT_PATHS = ("/signin-authcenter",)
 
+# OBS-003-TENANT-PSEUDONYM-2026-10-12: the one configured version of the organization pseudonym key. Rotating it is a
+# reviewed change of this constant, of apps.bicep (secret names, mappings, TelemetryPseudonym__CurrentKeyVersion) and of
+# the has_secret check in the pilot workflow, with their tests (docs/development/obs-003-appinsights-export.md).
+TELEMETRY_PSEUDONYM_KEY_VERSION = "1"
+TELEMETRY_PSEUDONYM_SECRET = f"paquetenvia-telemetry-pseudonym-key-{TELEMETRY_PSEUDONYM_KEY_VERSION}"
+TELEMETRY_PSEUDONYM_CONFIGURATION_KEY = f"TelemetryPseudonym:Keys:{TELEMETRY_PSEUDONYM_KEY_VERSION}"
+
 # Key Vault secrets each workload may reference (least privilege, §17-style classes).
 # PILOT-KEYVAULT-PRIVATE-APP-READ: each workload reads exactly these Key Vault secrets itself (ADP-001
 # `KeyVaultSecrets__Mappings__<n>__SecretName` -> `__ConfigurationKey`), never through Container Apps.
@@ -69,12 +76,12 @@ REQUIRED_SECRET_MAPPINGS = {
         # RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the in-process realtime dispatchers' own least-privilege login.
         "ConnectionStrings:PaqueteriaRealtime": "pg-realtime-runtime-connection",
         # OBS-003-TENANT-PSEUDONYM-2026-10-12: owner-written HMAC key of the organization pseudonym (logs and traces).
-        "TelemetryPseudonym:Keys:1": "paquetenvia-telemetry-pseudonym-key-1",
+        TELEMETRY_PSEUDONYM_CONFIGURATION_KEY: TELEMETRY_PSEUDONYM_SECRET,
     },
     WORKER_APP: {
         "ConnectionStrings:PaqueteriaWorker": "pg-worker-runtime-connection",
         "ConnectionStrings:Paqueteria": "pg-worker-runtime-connection",
-        "TelemetryPseudonym:Keys:1": "paquetenvia-telemetry-pseudonym-key-1",
+        TELEMETRY_PSEUDONYM_CONFIGURATION_KEY: TELEMETRY_PSEUDONYM_SECRET,
     },
     WEB_APP: {},
     MIGRATE_JOB: {"PAQUETERIA_MIGRATION_CONNECTION": "pg-migrate-connection"},
@@ -924,7 +931,12 @@ def _alert_rules(template: dict[str, Any], resource: dict[str, Any]) -> list[dic
 # of the API and the Worker; the tables and names no alert or workbook query may read.
 APP_INSIGHTS_TYPE = "Microsoft.Insights/components"
 TELEMETRY_WORKLOADS = (API_APP, WORKER_APP)
-TELEMETRY_PSEUDONYM_SECRET = "paquetenvia-telemetry-pseudonym-key-1"
+# The managed component: platform.bicep names it, and the API and the Worker read its connection string by that name.
+APP_INSIGHTS_NAME = "format('appi-pv-pilot-{0}', variables('suffix'))"
+APP_INSIGHTS_CONNECTION_STRING = re.compile(
+    r"createObject\('name', 'TelemetryExport__ConnectionString', 'value', "
+    + re.escape(f"reference(resourceId('{APP_INSIGHTS_TYPE}', {APP_INSIGHTS_NAME}), ")
+    + r"'\d{4}-\d{2}-\d{2}(?:-preview)?'\)\.ConnectionString\)")
 TELEMETRY_ENV_PREFIXES = ("TelemetryExport__", "TelemetryPseudonym__", "APPLICATIONINSIGHTS_", "OTEL_")
 APPLICATION_INSIGHTS_TABLES = (
     "AppRequests", "AppDependencies", "AppTraces", "AppMetrics", "AppExceptions", "AppEvents", "AppPageViews",
@@ -947,6 +959,8 @@ def _observability_obs003_failures(ctx: Context) -> list[str]:
     else:
         component = components[0][1]
         properties = component.get("properties", {}) or {}
+        if component.get("name") != f"[{APP_INSIGHTS_NAME}]":
+            failures.append(f"Application Insights must be the managed appi-pv-pilot-<suffix> component, found {component.get('name')}")
         if component.get("kind") != "web" or properties.get("Application_Type") != "web":
             failures.append("Application Insights must be kind and Application_Type web")
         if component.get("location") != "[parameters('location')]":
@@ -968,12 +982,11 @@ def _observability_obs003_failures(ctx: Context) -> list[str]:
         enabled = workload.env.get("TelemetryExport__Enabled")
         if enabled is None or enabled[0] != "value" or enabled[1] not in ("true", "false"):
             failures.append(f"{workload.name} must set TelemetryExport__Enabled to the literal 'true' or 'false', found {enabled}")
-        if workload.env.get("TelemetryPseudonym__CurrentKeyVersion") != ("value", "1"):
-            failures.append(f"{workload.name} must set TelemetryPseudonym__CurrentKeyVersion to '1', the version of {TELEMETRY_PSEUDONYM_SECRET}")
+        if workload.env.get("TelemetryPseudonym__CurrentKeyVersion") != ("value", TELEMETRY_PSEUDONYM_KEY_VERSION):
+            failures.append(f"{workload.name} must set TelemetryPseudonym__CurrentKeyVersion to '{TELEMETRY_PSEUDONYM_KEY_VERSION}', the version of {TELEMETRY_PSEUDONYM_SECRET}")
         raw = json.dumps(workload.resource)
-        connection = re.search(r"createObject\('name', 'TelemetryExport__ConnectionString', 'value', ([^)]*\))", raw)
-        if connection is None or not connection.group(1).startswith("reference(resourceId('Microsoft.Insights/components'"):
-            failures.append(f"{workload.name} must take TelemetryExport__ConnectionString from the pilot Application Insights component")
+        if not APP_INSIGHTS_CONNECTION_STRING.search(raw):
+            failures.append(f"{workload.name} must take TelemetryExport__ConnectionString from the pilot Application Insights component appi-pv-pilot-<suffix>")
         unexpected = sorted(set(names) - {"TelemetryExport__Enabled", "TelemetryExport__ConnectionString", "TelemetryPseudonym__CurrentKeyVersion"})
         if unexpected:
             failures.append(f"{workload.name} sets unexpected telemetry settings {unexpected} (the sampling and exporter features are fixed in code)")
@@ -984,6 +997,9 @@ def _observability_obs003_failures(ctx: Context) -> list[str]:
     for name in PSEUDONYM_AND_ROLE_NAMES:
         if name in text:
             failures.append(f"alert and workbook queries must not read {name} (OBS-003-TENANT-PSEUDONYM-2026-10-12)")
+    apps_suffix = ctx.templates.get("apps", {}).get("variables", {}).get("suffix")
+    if apps_suffix is None or apps_suffix != ctx.templates.get("platform", {}).get("variables", {}).get("suffix"):
+        failures.append("apps.bicep must derive the component name from the same suffix as platform.bicep")
     if f"has_secret {TELEMETRY_PSEUDONYM_SECRET}" not in ctx.workflow_text:
         failures.append(f"workflow must stop before deploying when Key Vault lacks {TELEMETRY_PSEUDONYM_SECRET}")
     return failures

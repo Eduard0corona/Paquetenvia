@@ -28,6 +28,26 @@ public static class TelemetryEvents
     /// or workbook reads it until a later owner decision asks for one.
     /// </summary>
     public static readonly EventId RateLimitSummary = new(4604, "RateLimitSummary");
+
+    /// <summary>The first id of the block reserved for OBS-002 events; every event above takes its id from it.</summary>
+    public const int FirstReservedId = 4600;
+
+    /// <summary>The last id of the block reserved for OBS-002 events.</summary>
+    public const int LastReservedId = 4699;
+
+    /// <summary>
+    /// The OPS-004 outbox retention lane result (<c>OutboxRetentionLaneCompleted</c>), outside the block, which the OBS-002
+    /// job-failure alert and the workbook also read.
+    /// </summary>
+    public const int RetentionLaneResultId = 4004;
+
+    /// <summary>
+    /// True for every event an OBS-002 alert or the workbook reads or may read: the reserved block and the OPS-004
+    /// retention result. Their properties are exactly <see cref="TelemetryDimensions.Allowed"/>, so the log enrichment
+    /// never adds the organization pseudonym or the actor role kind to them (OBS-003-TENANT-PSEUDONYM-2026-10-12).
+    /// </summary>
+    public static bool IsObservabilityEvent(EventId eventId) =>
+        eventId.Id is >= FirstReservedId and <= LastReservedId or RetentionLaneResultId;
 }
 
 public static class TelemetryDimensions

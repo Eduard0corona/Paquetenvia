@@ -822,6 +822,25 @@ class TemplateGuardTests(unittest.TestCase):
             self.edit(t, "apps", "'TelemetryExport__ConnectionString', 'value', reference(", "'TelemetryExport__ConnectionString', 'value', concat('InstrumentationKey=x', reference(", count=1)
         self.assert_fails(21, self.context(foreign_destination), "TelemetryExport__ConnectionString from the pilot Application Insights")
 
+        # Another component in the resource group (created by hand, or by another template) is not the managed one.
+        def other_component(t):
+            self.edit(t, "apps", "resourceId('Microsoft.Insights/components', format('appi-pv-pilot-{0}', variables('suffix')))",
+                      "resourceId('Microsoft.Insights/components', format('appi-pv-other-{0}', variables('suffix')))")
+        self.assert_fails(21, self.context(other_component), "from the pilot Application Insights component appi-pv-pilot-<suffix>")
+
+        def literal_component(t):
+            self.edit(t, "apps", "resourceId('Microsoft.Insights/components', format('appi-pv-pilot-{0}', variables('suffix')))",
+                      "resourceId('Microsoft.Insights/components', 'appi-pv-pilot-handmade')")
+        self.assert_fails(21, self.context(literal_component), "from the pilot Application Insights component appi-pv-pilot-<suffix>")
+
+        def other_suffix(t):
+            t["apps"]["variables"]["suffix"] = "[uniqueString(resourceGroup().id)]"
+        self.assert_fails(21, self.context(other_suffix), "same suffix as platform.bicep")
+
+        def renamed_component(t):
+            component(t)["name"] = "[format('appi-other-{0}', variables('suffix'))]"
+        self.assert_fails(21, self.context(renamed_component), "managed appi-pv-pilot-<suffix> component")
+
         def sampler_override(t):
             self.edit(t, "apps", "createObject('name', 'TelemetryPseudonym__CurrentKeyVersion', 'value', '1')",
                       "createObject('name', 'TelemetryPseudonym__CurrentKeyVersion', 'value', '1'), createObject('name', 'OTEL_TRACES_SAMPLER', 'value', 'always_on')")

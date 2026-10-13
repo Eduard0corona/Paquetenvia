@@ -201,6 +201,16 @@ public sealed partial class ObservabilityArchitectureTests
         Assert.Equal(4603, TelemetryEvents.HttpStatusSummary.Id);
         Assert.Equal(4604, TelemetryEvents.RateLimitSummary.Id);
         Assert.Equal("RateLimitSummary", TelemetryEvents.RateLimitSummary.Name);
+
+        // Every OBS-002 event takes its id from the reserved block, so the log enrichment never adds the organization
+        // pseudonym or the role kind to one (TelemetryEvents.IsObservabilityEvent), also for an event added later.
+        var events = typeof(TelemetryEvents).GetFields(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Static)
+            .Where(field => field.FieldType == typeof(Microsoft.Extensions.Logging.EventId))
+            .Select(field => (Microsoft.Extensions.Logging.EventId)field.GetValue(null)!)
+            .ToArray();
+        Assert.Equal(4, events.Length);
+        Assert.All(events, eventId => Assert.InRange(eventId.Id, TelemetryEvents.FirstReservedId, TelemetryEvents.LastReservedId));
+        Assert.All(events, eventId => Assert.True(TelemetryEvents.IsObservabilityEvent(eventId)));
     }
 
     /// <summary>
@@ -227,8 +237,9 @@ public sealed partial class ObservabilityArchitectureTests
     public void Worker_and_outbox_metric_tags_are_allowlisted()
     {
         // OBS-003 PR 6: every exported meter is scanned, not only the Worker and outbox paths: every src file that
-        // creates an instrument, the rate-limiting registry included. Literal keys, constants, target-typed pairs,
-        // tuple helpers and TagList initializers are all read; an unresolved key fails.
+        // creates an instrument, the rate-limiting registry included. KeyValuePair constructions and KeyValuePair.Create,
+        // target-typed pairs, tuple helpers, TagList initializers and TagList.Add are all read, with literal or constant
+        // keys of any case; any other key comes back unresolved and fails (MetricTagKeys).
         var files = MetricSourceFiles().ToArray();
         Assert.Contains(files, file => file.Path == "src/BuildingBlocks/Paqueteria.Infrastructure/Security/RateLimiting/RateLimitRejectionWriter.cs");
         Assert.Contains(files, file => file.Path.StartsWith("src/BuildingBlocks/Paqueteria.Infrastructure/Database/Outbox", StringComparison.Ordinal));
@@ -256,14 +267,50 @@ public sealed partial class ObservabilityArchitectureTests
 
     [Theory]
     [InlineData(@"c.Add(1, new KeyValuePair<string, object?>(""organization_id"", id));", "organization_id")]
+    [InlineData(@"c.Add(1, new KeyValuePair<string, object>(""OrganizationId"", id));", "OrganizationId")]
     [InlineData(@"private const string Key = ""subject_hash""; void M() => c.Add(1, new KeyValuePair<string, object?>(Key, v));", "subject_hash")]
     [InlineData(@"static KeyValuePair<string, object?> Ip(string v) => new(""client.ip"", v);", "client.ip")]
+    [InlineData(@"static KeyValuePair<string, object?> Org(Guid id) => new(""OrganizationId"", id);", "OrganizationId")]
+    [InlineData(@"const string Key = ""Subject""; static KeyValuePair<string, object?> S(string v) => new(Key, v);", "Subject")]
+    [InlineData(@"static KeyValuePair<string, object?> S(string v) => new(SomeType.NotAConstant, v);", "<unresolved:SomeType.NotAConstant>")]
+    [InlineData(@"static KeyValuePair<string, object?> S(string v) => new($""user_{v}"", v);", @"<unresolved:$""user_{v}"">")]
+    [InlineData(@"KeyValuePair<string, object?>[] tags = [new(""lane"", l), new(""tenant_id"", t)];", "tenant_id")]
+    [InlineData(@"c.Add(1, new(""user.id"", u));", "user.id")]
+    [InlineData(@"h.Record(ms, new(""lane"", l), new(""peer.ip"", p));", "peer.ip")]
+    [InlineData(@"var tags = new TagList([new(""partition"", p)]);", "partition")]
+    [InlineData(@"c.Add(1, KeyValuePair.Create(""tenant"", (object?)t));", "tenant")]
+    [InlineData(@"const string K = ""address""; void M() => c.Add(1, KeyValuePair.Create<string, object?>(K, a));", "address")]
     [InlineData(@"c.Add(1, Tags((""partition"", p), (""lane"", l)));", "partition")]
+    [InlineData(@"const string K = ""role""; void M() => c.Add(1, Tags((K, r)));", "role")]
+    [InlineData(@"void M() => c.Add(1, Tags((name, r)));", "<unresolved:name>")]
     [InlineData(@"var tags = new TagList { { ""user.id"", u }, { ""lane"", l } };", "user.id")]
+    [InlineData(@"const string K = ""email""; void M() { var tags = new TagList { { K, e } }; }", "email")]
+    [InlineData(@"var tags = new TagList(); tags.Add(""OrganizationId"", id);", "OrganizationId")]
+    [InlineData(@"const string K = ""client_ip""; void M(ref TagList tags) => tags.Add(K, ip);", "client_ip")]
+    [InlineData(@"void M() { TagList tags = default; tags.Add(dynamicName, v); }", "<unresolved:dynamicName>")]
     [InlineData(@"c.Add(1, new KeyValuePair<string, object?>(SomeType.Unknown, v));", "<unresolved:SomeType.Unknown>")]
+    [InlineData(@"sealed class Names { public const string Lane = ""lane_name""; } void M() => c.Add(1, new KeyValuePair<string, object?>(Names.Lane, l));", "lane_name")]
     public void The_metric_tag_scan_reads_every_way_a_key_can_be_written(string code, string expected)
     {
         Assert.Contains(expected, MetricTagKeys("fixture.cs", code));
+    }
+
+    /// <summary>
+    /// Target-typed <c>new(...)</c> that builds something other than a tag (a meter, a database parameter, a command, a
+    /// record), an instrument's own <c>Add(value, tags)</c> and a tuple helper that forwards its scanned call sites'
+    /// keys are not tags, so the strict scan does not report them.
+    /// </summary>
+    [Theory]
+    [InlineData(@"private static readonly Meter Meter = new(""Paqueteria.Drivers.Voice"", ""1.0.0"");")]
+    [InlineData(@"private static NpgsqlParameter P(string name, NpgsqlDbType type) => new(name, type);")]
+    [InlineData(@"private static NpgsqlCommand C(NpgsqlConnection connection, string sql) => new(sql, connection);")]
+    [InlineData(@"public static RouteKey Unrouted { get; } = new(null, null, null, null);")]
+    [InlineData(@"Result M() { return new(false, false, null); }")]
+    [InlineData(@"void M(long value) { counter.Add(value); histogram.Record(value); parameters.Add(new(name, value)); }")]
+    [InlineData(@"private static TagList Tags(params (string Name, object? Value)[] values) { var tags = new TagList(); foreach (var (name, value) in values) { tags.Add(name, value); } return tags; }")]
+    public void The_metric_tag_scan_ignores_what_is_not_a_tag(string code)
+    {
+        Assert.Empty(MetricTagKeys("fixture.cs", code));
     }
 
     /// <summary>
@@ -369,6 +416,9 @@ public sealed partial class ObservabilityArchitectureTests
             new[] { 4004, TelemetryEvents.OutboxLaneSummary.Id, TelemetryEvents.ScheduledJobCycle.Id, TelemetryEvents.HttpStatusSummary.Id }.Order(),
             eventIds.Order());
         Assert.Contains("new(4004, \"OutboxRetentionLaneCompleted\")", retention, StringComparison.Ordinal);
+        // Every event an alert or the workbook reads is one the log enrichment keeps free of the pseudonym and role kind.
+        Assert.All(eventIds, id => Assert.True(TelemetryEvents.IsObservabilityEvent(new Microsoft.Extensions.Logging.EventId(id)), $"event {id}"));
+        Assert.Equal(4004, TelemetryEvents.RetentionLaneResultId);
 
         foreach (var lane in OutboxLanes.All)
         {
@@ -423,49 +473,280 @@ public sealed partial class ObservabilityArchitectureTests
     ];
 
     /// <summary>
-    /// The tag keys one metric file writes: literal or constant keys of <c>KeyValuePair</c>s, target-typed
-    /// <c>new("key", value)</c> pairs, the tuples of a <c>Tags((...))</c> helper call and <c>TagList</c> initializers.
-    /// A key that is neither a literal nor a constant of the file comes back as <c>&lt;unresolved:...&gt;</c>.
+    /// The tag keys one metric file writes, through every way a key can be written:
+    /// <list type="bullet">
+    /// <item><c>new KeyValuePair&lt;string, object?&gt;(key, …)</c> and <c>KeyValuePair.Create(key, …)</c>;</item>
+    /// <item>a target-typed <c>new(key, …)</c> in a tag context: a statement typed <c>KeyValuePair&lt;string, …&gt;</c> or
+    /// <c>TagList</c>, or a measurement argument of an instrument's <c>Add</c> or <c>Record</c>;</item>
+    /// <item>the tuples of a <c>Tags((key, value), …)</c> helper call and the entries of a <c>TagList</c> initializer;</item>
+    /// <item><c>.Add("key", …)</c> on any receiver, and <c>.Add(key, …)</c> on a <c>TagList</c> variable.</item>
+    /// </list>
+    /// A key is a string literal, a constant of the file or a <c>Type.Constant</c> of the repository; anything else
+    /// (a variable, an interpolated string, an expression) comes back as <c>&lt;unresolved:…&gt;</c>, which no allowlist
+    /// contains, so the scan fails on it. The only names it skips are the deconstructed tuple elements a
+    /// <c>Tags(params (string, object?)[])</c> helper forwards, whose call sites it reads.
     /// </summary>
     private static IEnumerable<string> MetricTagKeys(string path, string text)
     {
-        // A constant declared twice in the file (in two types) with different values is ambiguous: unresolved.
-        var constants = ConstantPattern().Matches(text)
-            .GroupBy(match => match.Groups["name"].Value, StringComparer.Ordinal)
-            .ToDictionary(
-                group => group.Key,
-                group => group.Select(match => match.Groups["value"].Value).Distinct(StringComparer.Ordinal).ToArray(),
-                StringComparer.Ordinal);
+        _ = path;
+        string Resolve(string key) => ResolveTagKey(key, text);
+
         foreach (Match match in KeyValuePairTagPattern().Matches(text))
         {
-            var key = match.Groups["key"].Value;
-            yield return key.StartsWith('"')
-                ? key.Trim('"')
-                : constants.TryGetValue(key, out var values) && values.Length == 1 ? values[0] : $"<unresolved:{key}>";
+            yield return Resolve(FirstArgument(text, match.Index + match.Length - 1).Argument);
         }
 
-        foreach (Match match in TargetTypedTagPattern().Matches(text))
+        foreach (Match match in KeyValuePairCreatePattern().Matches(text))
         {
-            yield return match.Groups["tag"].Value;
+            yield return Resolve(FirstArgument(text, match.Index + match.Length - 1).Argument);
         }
 
+        foreach (Match match in TargetTypedNewPattern().Matches(text))
+        {
+            var (argument, more) = FirstArgument(text, match.Index + match.Length - 1);
+            if (more && IsTagContext(text, match.Index))
+            {
+                yield return Resolve(argument);
+            }
+        }
+
+        var helperDeclarations = TupleHelperDeclarationPattern().Matches(text).Select(match => match.Index).ToHashSet();
         foreach (Match call in TagsHelperCallPattern().Matches(text))
         {
-            foreach (Match tuple in TupleTagPattern().Matches(Enclosed(text, call.Index + call.Length - 1)))
+            if (helperDeclarations.Contains(call.Index))
             {
-                yield return tuple.Groups["tag"].Value;
+                continue;
+            }
+
+            var content = Enclosed(text, call.Index + call.Length - 1);
+            foreach (var tuple in TopLevel(content, '('))
+            {
+                var (argument, more) = FirstArgument(content, tuple);
+                if (more)
+                {
+                    yield return Resolve(argument);
+                }
             }
         }
 
         foreach (Match initializer in TagListInitializerPattern().Matches(text))
         {
-            foreach (Match entry in InitializerTagPattern().Matches(Enclosed(text, initializer.Index + initializer.Length - 1)))
+            var content = Enclosed(text, initializer.Index + initializer.Length - 1);
+            foreach (var entry in TopLevel(content, '{'))
             {
-                yield return entry.Groups["tag"].Value;
+                var (argument, more) = FirstArgument(content, entry);
+                if (more)
+                {
+                    yield return Resolve(argument);
+                }
             }
         }
 
-        _ = path;
+        var tagLists = TagListVariablePattern().Matches(text).Select(match => match.Groups["name"].Value).ToHashSet(StringComparer.Ordinal);
+        var forwarded = ForwardedTupleNames(text);
+        foreach (Match add in AddCallPattern().Matches(text))
+        {
+            var (argument, more) = FirstArgument(text, add.Index + add.Length - 1);
+            if (!more)
+            {
+                continue;
+            }
+
+            if (argument.StartsWith('"') || argument.StartsWith("@\"", StringComparison.Ordinal) || argument.StartsWith('$'))
+            {
+                yield return Resolve(argument);
+            }
+            else if (tagLists.Contains(add.Groups["receiver"].Value) && !forwarded.Contains(argument))
+            {
+                yield return Resolve(argument);
+            }
+        }
+    }
+
+    /// <summary>
+    /// A target-typed <c>new(</c> builds a tag when its statement (since the last <c>;</c> or <c>}</c>) is typed
+    /// <c>KeyValuePair&lt;string, …&gt;</c> or <c>TagList</c>, or when it is a measurement argument after the value of an
+    /// instrument's <c>Add</c> or <c>Record</c>.
+    /// </summary>
+    private static bool IsTagContext(string text, int index)
+    {
+        var start = Math.Max(text.LastIndexOf(';', index - 1), text.LastIndexOf('}', index - 1)) + 1;
+        var prefix = text[start..index];
+        return prefix.Contains("KeyValuePair<string,", StringComparison.Ordinal) ||
+               prefix.Contains("TagList", StringComparison.Ordinal) ||
+               MeasurementArgumentPattern().IsMatch(prefix);
+    }
+
+    /// <summary>The names a <c>Tags(params (string Name, object? Value)[] values)</c> helper deconstructs and forwards.</summary>
+    private static HashSet<string> ForwardedTupleNames(string text)
+    {
+        var names = new HashSet<string>(StringComparer.Ordinal);
+        foreach (Match helper in TupleHelperDeclarationPattern().Matches(text))
+        {
+            var parameter = helper.Groups["parameter"].Value;
+            foreach (Match loop in TupleDeconstructionPattern().Matches(text))
+            {
+                if (loop.Groups["source"].Value == parameter)
+                {
+                    names.Add(loop.Groups["name"].Value);
+                }
+            }
+        }
+
+        return names;
+    }
+
+    /// <summary>
+    /// A string literal, a constant of the file, or a <c>Type.Constant</c> declared in the file or in exactly one
+    /// repository file that declares the type, with exactly one value; otherwise <c>&lt;unresolved:…&gt;</c>.
+    /// </summary>
+    private static string ResolveTagKey(string key, string text)
+    {
+        if (key.Length >= 2 && key[0] == '"' && key[^1] == '"')
+        {
+            return key[1..^1];
+        }
+
+        if (key.Length >= 3 && key.StartsWith("@\"", StringComparison.Ordinal) && key[^1] == '"')
+        {
+            return key[2..^1];
+        }
+
+        if (!IdentifierPattern().IsMatch(key))
+        {
+            return $"<unresolved:{key}>";
+        }
+
+        var separator = key.LastIndexOf('.');
+        if (separator < 0)
+        {
+            return Constants(text).TryGetValue(key, out var values) && values.Length == 1 ? values[0] : $"<unresolved:{key}>";
+        }
+
+        var type = key[..separator];
+        var name = key[(separator + 1)..];
+        type = type[(type.LastIndexOf('.') + 1)..];
+        var declaring = DeclaresType(text, type)
+            ? [text]
+            : AllSourceFiles().Select(file => file.Text).Where(source => DeclaresType(source, type)).ToArray();
+        var resolved = declaring
+            .SelectMany(source => Constants(source).TryGetValue(name, out var values) ? values : [])
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        return declaring.Length == 1 && resolved.Length == 1 ? resolved[0] : $"<unresolved:{key}>";
+    }
+
+    private static bool DeclaresType(string text, string type) =>
+        Regex.IsMatch(text, $@"\b(?:class|struct|record|interface)\s+{Regex.Escape(type)}\b");
+
+    /// <summary>A constant declared twice in a file (in two types) with different values is ambiguous: unresolved.</summary>
+    private static Dictionary<string, string[]> Constants(string text) =>
+        ConstantPattern().Matches(text)
+            .GroupBy(match => match.Groups["name"].Value, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(match => match.Groups["value"].Value).Distinct(StringComparer.Ordinal).ToArray(),
+                StringComparer.Ordinal);
+
+    /// <summary>
+    /// The first argument of the call whose <c>(</c> is at <paramref name="open"/>, trimmed, and whether another
+    /// argument follows. Strings (regular, verbatim, interpolated), characters and nested brackets are skipped whole.
+    /// </summary>
+    private static (string Argument, bool More) FirstArgument(string text, int open)
+    {
+        var depth = 0;
+        for (var index = open + 1; index < text.Length; index++)
+        {
+            var current = text[index];
+            if (current == '"' || (current is '@' or '$' && index + 1 < text.Length && text[index + 1] is '"' or '@' or '$'))
+            {
+                index = EndOfString(text, index);
+            }
+            else if (current == '\'' && index + 2 < text.Length)
+            {
+                index = text.IndexOf('\'', index + (text[index + 1] == '\\' ? 3 : 2));
+                if (index < 0)
+                {
+                    break;
+                }
+            }
+            else if (current is '(' or '[' or '{')
+            {
+                depth++;
+            }
+            else if (current is ')' or ']' or '}')
+            {
+                if (depth-- == 0)
+                {
+                    return (text[(open + 1)..index].Trim(), false);
+                }
+            }
+            else if (current == ',' && depth == 0)
+            {
+                return (text[(open + 1)..index].Trim(), true);
+            }
+        }
+
+        return (text[(open + 1)..].Trim(), false);
+    }
+
+    /// <summary>The indexes of the <paramref name="open"/> brackets at the top level of <paramref name="content"/>.</summary>
+    private static IEnumerable<int> TopLevel(string content, char open)
+    {
+        var depth = 0;
+        for (var index = 0; index < content.Length; index++)
+        {
+            var current = content[index];
+            if (current == '"' || (current is '@' or '$' && index + 1 < content.Length && content[index + 1] is '"' or '@' or '$'))
+            {
+                index = EndOfString(content, index);
+            }
+            else if (current is '(' or '[' or '{')
+            {
+                if (depth == 0 && current == open)
+                {
+                    yield return index;
+                }
+
+                depth++;
+            }
+            else if (current is ')' or ']' or '}')
+            {
+                depth--;
+            }
+        }
+    }
+
+    /// <summary>The index of the closing quote of the string literal that starts at <paramref name="start"/>.</summary>
+    private static int EndOfString(string text, int start)
+    {
+        var index = start;
+        var verbatim = false;
+        while (index < text.Length && text[index] != '"')
+        {
+            verbatim |= text[index] == '@';
+            index++;
+        }
+
+        for (index++; index < text.Length; index++)
+        {
+            if (text[index] == '\\' && !verbatim)
+            {
+                index++;
+            }
+            else if (text[index] == '"')
+            {
+                if (verbatim && index + 1 < text.Length && text[index + 1] == '"')
+                {
+                    index++;
+                    continue;
+                }
+
+                return index;
+            }
+        }
+
+        return text.Length - 1;
     }
 
     /// <summary>The text between the bracket at <paramref name="open"/> and its match.</summary>
@@ -522,23 +803,38 @@ public sealed partial class ObservabilityArchitectureTests
     [GeneratedRegex(@"\.Create(?:Counter|Histogram|UpDownCounter|Gauge|ObservableCounter|ObservableGauge|ObservableUpDownCounter)\s*<")]
     private static partial Regex InstrumentCreationPattern();
 
-    [GeneratedRegex(@"KeyValuePair<string,\s*object\?>\(\s*(?<key>""[^""]*""|[A-Za-z_][\w.]*)\s*,")]
+    [GeneratedRegex(@"KeyValuePair<string,\s*object\??>\(")]
     private static partial Regex KeyValuePairTagPattern();
 
-    [GeneratedRegex(@"(?<![\w.])new\(\s*""(?<tag>[a-z_.]+)""\s*,")]
-    private static partial Regex TargetTypedTagPattern();
+    [GeneratedRegex(@"\bKeyValuePair\.Create(?:<[^>()]*>)?\(")]
+    private static partial Regex KeyValuePairCreatePattern();
+
+    [GeneratedRegex(@"(?<![\w.])new\(")]
+    private static partial Regex TargetTypedNewPattern();
+
+    [GeneratedRegex(@"\.(?:Add|Record)\([^;]*,\s*$")]
+    private static partial Regex MeasurementArgumentPattern();
 
     [GeneratedRegex(@"\bTags\s*\(")]
     private static partial Regex TagsHelperCallPattern();
 
-    [GeneratedRegex(@"\(\s*""(?<tag>[^""]*)""\s*,")]
-    private static partial Regex TupleTagPattern();
+    [GeneratedRegex(@"\bTags\s*\(\s*params\s*\(\s*string\s+\w+\s*,\s*object\??\s+\w+\s*\)\[\]\s*(?<parameter>\w+)\s*\)")]
+    private static partial Regex TupleHelperDeclarationPattern();
+
+    [GeneratedRegex(@"\bforeach\s*\(\s*var\s*\(\s*(?<name>\w+)\s*,\s*\w+\s*\)\s*in\s+(?<source>\w+)\s*\)")]
+    private static partial Regex TupleDeconstructionPattern();
 
     [GeneratedRegex(@"\bnew\s+TagList\s*(?:\(\s*\))?\s*\{")]
     private static partial Regex TagListInitializerPattern();
 
-    [GeneratedRegex(@"\{\s*""(?<tag>[^""]*)""\s*,")]
-    private static partial Regex InitializerTagPattern();
+    [GeneratedRegex(@"\bTagList\s+(?<name>[A-Za-z_]\w*)\b(?!\s*\()")]
+    private static partial Regex TagListVariablePattern();
+
+    [GeneratedRegex(@"\b(?<receiver>[A-Za-z_]\w*)\s*\.\s*Add\(")]
+    private static partial Regex AddCallPattern();
+
+    [GeneratedRegex(@"^@?[A-Za-z_]\w*(?:\.[A-Za-z_]\w*)*$")]
+    private static partial Regex IdentifierPattern();
 
     [GeneratedRegex(@"\bconst\s+string\s+(?<name>[A-Za-z_]\w*)\s*=\s*""(?<value>[^""]*)""\s*;")]
     private static partial Regex ConstantPattern();

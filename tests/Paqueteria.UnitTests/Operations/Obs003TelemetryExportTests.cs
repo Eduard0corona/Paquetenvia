@@ -149,21 +149,58 @@ public sealed class Obs003TelemetryExportTests
         }));
 
         Assert.False(off.Enabled);
+        Assert.Null(off.ConnectionString);
         Assert.True(on.Enabled);
         Assert.Equal(connection, on.ConnectionString);
+    }
+
+    public static TheoryData<string> ConnectionStringsRefusedWhenOn() =>
+    [
+        ConnectionString().Replace("https://", "http://", StringComparison.Ordinal),
+        ConnectionString().Replace(".applicationinsights.azure.com", ".collector.example.invalid", StringComparison.Ordinal),
+        "IngestionEndpoint=https://mexicocentral-0.in.applicationinsights.azure.com/",
+        ConnectionString() + ";Authorization=aad",
+        ConnectionString() + ";EndpointSuffix=applicationinsights.example.invalid",
+        ConnectionString().Replace("azure.com/", "azure.com/v2.1?x=1", StringComparison.Ordinal),
+        "InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=https://mexicocentral-0.in.applicationinsights.azure.com/",
+    ];
+
+    /// <summary>
+    /// With the export off the connection string is not read, so a string the component may carry in the future (an
+    /// extra key) never stops a host that exports nothing; turned on, the same string fails closed.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(ConnectionStringsRefusedWhenOn))]
+    public void A_connection_string_is_checked_only_when_the_export_is_on(string connection)
+    {
+        foreach (var enabled in new string?[] { null, "false" })
+        {
+            var off = TelemetryExportSettings.Read(Configuration(new()
+            {
+                ["TelemetryExport:Enabled"] = enabled,
+                ["TelemetryExport:ConnectionString"] = connection,
+            }));
+            Assert.False(off.Enabled);
+            Assert.Null(off.ConnectionString);
+        }
+
+        var failure = Assert.Throws<TelemetryExportConfigurationException>(() => TelemetryExportSettings.Read(Configuration(new()
+        {
+            ["TelemetryExport:Enabled"] = "true",
+            ["TelemetryExport:ConnectionString"] = connection,
+        })));
+        Assert.Null(failure.InnerException);
+        Assert.DoesNotContain(connection, failure.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("0000000000a1", failure.Message, StringComparison.Ordinal);
     }
 
     public static TheoryData<Dictionary<string, string?>> InvalidExportSettings() => new()
     {
         new() { ["TelemetryExport:Enabled"] = "true" },
+        new() { ["TelemetryExport:Enabled"] = "true", ["TelemetryExport:ConnectionString"] = " " },
         new() { ["TelemetryExport:Enabled"] = "yes", ["TelemetryExport:ConnectionString"] = ConnectionString() },
         new() { ["TelemetryExport:SamplingRatio"] = "1" },
-        new() { ["TelemetryExport:ConnectionString"] = ConnectionString().Replace("https://", "http://", StringComparison.Ordinal) },
-        new() { ["TelemetryExport:ConnectionString"] = ConnectionString().Replace(".applicationinsights.azure.com", ".collector.example.invalid", StringComparison.Ordinal) },
-        new() { ["TelemetryExport:ConnectionString"] = "IngestionEndpoint=https://mexicocentral-0.in.applicationinsights.azure.com/" },
-        new() { ["TelemetryExport:ConnectionString"] = ConnectionString() + ";Authorization=aad" },
-        new() { ["TelemetryExport:ConnectionString"] = ConnectionString().Replace("azure.com/", "azure.com/v2.1?x=1", StringComparison.Ordinal) },
-        new() { ["TelemetryExport:ConnectionString"] = "InstrumentationKey=00000000-0000-0000-0000-000000000000;IngestionEndpoint=https://mexicocentral-0.in.applicationinsights.azure.com/" },
+        new() { ["TelemetryExport:Enabled"] = "false", ["TelemetryExport:SamplingRatio"] = "1" },
     };
 
     [Theory]
@@ -173,7 +210,7 @@ public sealed class Obs003TelemetryExportTests
         var failure = Assert.Throws<TelemetryExportConfigurationException>(() => TelemetryExportSettings.Read(Configuration(settings)));
 
         Assert.Null(failure.InnerException);
-        Assert.DoesNotContain("0f1e2d3c", failure.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("0000000000a1", failure.Message, StringComparison.Ordinal);
     }
 
     // ------------------------------------------------------------------------------------------- span allowlist
@@ -359,6 +396,56 @@ public sealed class Obs003TelemetryExportTests
         Assert.Single(explicitRole.EnumerateObject(), property => property.Name == TelemetryOrganizationContext.RoleKindLogProperty);
         Assert.Null(TelemetryOrganizationContext.Current);
         Assert.Throws<ArgumentException>(() => TelemetryOrganizationContext.Enter(Organization.ToString("D"), "VIEWER"));
+    }
+
+    public static TheoryData<int> ObservabilityEventIds() =>
+    [
+        TelemetryEvents.OutboxLaneSummary.Id,
+        TelemetryEvents.ScheduledJobCycle.Id,
+        TelemetryEvents.HttpStatusSummary.Id,
+        TelemetryEvents.RateLimitSummary.Id,
+        TelemetryEvents.FirstReservedId,
+        4650,
+        TelemetryEvents.LastReservedId,
+        TelemetryEvents.RetentionLaneResultId,
+    ];
+
+    /// <summary>
+    /// An OBS-002 event (the reserved 46xx block, including ids not assigned yet, and the OPS-004 retention result the
+    /// alerts read) written inside an organization context keeps its trace id but never gains the pseudonym or the role
+    /// kind; the ids next to the block still do.
+    /// </summary>
+    [Theory]
+    [MemberData(nameof(ObservabilityEventIds))]
+    public void Observability_events_never_carry_the_pseudonym_or_role_kind(int eventId)
+    {
+        Assert.True(TelemetryEvents.IsObservabilityEvent(new EventId(eventId)));
+        TraceCorrelation.ConfigureProcess();
+        using var lines = new JsonConsoleLines();
+        var logger = lines.Factory.CreateLogger("Obs003.Observability");
+        using (TraceCorrelation.StartRootActivity(TraceCorrelation.RequestOperation))
+        using (TelemetryOrganizationContext.Enter("v1-92d9e53b9ba938cafe99ce9cbd949926", "VIEWER"))
+        {
+            logger.Log(LogLevel.Information, new EventId(eventId, "Obs002"), "Summary {Lane} {Claimed}.", "notifications", 3);
+            logger.Log(LogLevel.Information, new EventId(4599, "Other"), "Other {Rows}.", 1);
+            logger.Log(LogLevel.Information, new EventId(4700, "Other"), "Other {Rows}.", 2);
+        }
+
+        var observability = lines.Parse(0).GetProperty("State");
+        Assert.False(observability.TryGetProperty(TelemetryOrganizationContext.PseudonymLogProperty, out _));
+        Assert.False(observability.TryGetProperty(TelemetryOrganizationContext.RoleKindLogProperty, out _));
+        Assert.True(TraceCorrelation.IsTraceId(observability.GetProperty(TraceCorrelation.LogProperty).GetString()));
+        Assert.Equal("notifications", observability.GetProperty("Lane").GetString());
+        foreach (var index in new[] { 1, 2 })
+        {
+            var other = lines.Parse(index).GetProperty("State");
+            Assert.Equal("v1-92d9e53b9ba938cafe99ce9cbd949926", other.GetProperty(TelemetryOrganizationContext.PseudonymLogProperty).GetString());
+            Assert.Equal("VIEWER", other.GetProperty(TelemetryOrganizationContext.RoleKindLogProperty).GetString());
+        }
+
+        Assert.False(TelemetryEvents.IsObservabilityEvent(new EventId(4599)));
+        Assert.False(TelemetryEvents.IsObservabilityEvent(new EventId(4700)));
+        Assert.False(TelemetryEvents.IsObservabilityEvent(default));
     }
 
     // -------------------------------------------------------------------------------------------------- helpers

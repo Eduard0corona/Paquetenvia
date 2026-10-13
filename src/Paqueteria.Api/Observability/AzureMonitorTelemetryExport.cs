@@ -21,18 +21,21 @@ namespace Paqueteria.Hosting.Observability;
 /// </summary>
 /// <remarks>
 /// <list type="bullet">
-/// <item>With <c>TelemetryExport:Enabled</c> false (the default) nothing is registered: no OpenTelemetry provider, no
-/// exporter and no network. Logs keep going to the console only; no log exporter exists.</item>
+/// <item>With <c>TelemetryExport:Enabled</c> false (the default) nothing is registered and the OpenTelemetry SDK is never
+/// loaded: no provider, no exporter, no SDK self-diagnostics and no network. Logs keep going to the console only; no log
+/// exporter exists.</item>
 /// <item>The exporter classes are used directly, not <c>AddAzureMonitorTraceExporter</c>, which would replace the sampler
-/// with its own and add standard-metrics extraction. Live Metrics, Statsbeat, standard metrics, performance counters,
-/// the resource metric and the local retry storage are off, so the only destination is the configured Application
-/// Insights and it receives only the spans and metrics below.</item>
+/// with its own and add standard-metrics extraction. Live Metrics, Statsbeat, customer SDK stats (which also probe the
+/// Azure instance metadata endpoint), standard metrics, performance counters, the resource metric and the local retry
+/// storage are off, so the only destination is the configured Application Insights and it receives only the spans and
+/// metrics below.</item>
 /// <item>Sampling: <see cref="ParentBasedSampler"/> over a root filter and <see cref="TraceIdRatioBasedSampler"/> at
 /// 10 %. The decision is made once per trace, from its trace id, and every child follows its parent. Only the roots
 /// <see cref="TelemetryExportPolicy.IsExportedRoot"/> names can be sampled; a remote parent is never trusted.</item>
-/// <item>Propagation stays a no-op: the OpenTelemetry default propagator is set to one that does nothing, and the
-/// process and DI propagators of <see cref="TraceCorrelation"/> are not touched. The PR 1 propagation-only listener
-/// stays, so the traces this sampler drops still have W3C ids.</item>
+/// <item>Propagation stays a no-op: with the export on, the OpenTelemetry default propagator is set to one that does
+/// nothing (with it off the SDK never replaces the API's no-op default), and the process and DI propagators of
+/// <see cref="TraceCorrelation"/> are not touched either way. The PR 1 propagation-only listener stays, so the traces
+/// this sampler drops still have W3C ids.</item>
 /// <item>Ingestion uses the instrumentation key of the connection string (Q-PR6-2, "Llave en la conexión
 /// (Recommended)"); the exporter's requests go through <see cref="AzureClientTracing.WithoutDistributedTracing{T}"/>.</item>
 /// </list>
@@ -52,6 +55,13 @@ public static class AzureMonitorTelemetryExport
     public const string StatsbeatDisabledVariable = "APPLICATIONINSIGHTS_STATSBEAT_DISABLED";
 
     /// <summary>
+    /// The switch that keeps customer SDK stats off (on by default since exporter 1.8.3): counts of the exporter's own
+    /// items sent to the customer's resource, whose first transmission also asks the Azure instance metadata endpoint
+    /// (<c>169.254.169.254</c>) for the compute type.
+    /// </summary>
+    public const string SdkStatsDisabledVariable = "APPLICATIONINSIGHTS_SDKSTATS_DISABLED";
+
+    /// <summary>
     /// The exporter's switch for its resource metric (<c>_OTELRESOURCE_</c>, one extra item with the resource
     /// attributes per trace batch); off, because the role name already says which host sent each item.
     /// </summary>
@@ -68,17 +78,20 @@ public static class AzureMonitorTelemetryExport
         ArgumentNullException.ThrowIfNull(builder);
         ArgumentNullException.ThrowIfNull(profile);
         var settings = TelemetryExportSettings.Read(builder.Configuration);
-
-        // Whatever the setting: the OpenTelemetry default propagator (which instrumentation libraries would use) is one
-        // that extracts and injects nothing, as the process and hosting propagators are (TraceCorrelation).
-        Sdk.SetDefaultTextMapPropagator(new CompositeTextMapPropagator([]));
         if (!settings.Enabled)
         {
+            // Off means no OpenTelemetry SDK at all; TraceCorrelation's no-op propagators already cover the process.
             return builder;
         }
 
+        // Loading the SDK sets the OpenTelemetry default propagator (which instrumentation libraries would use) to W3C
+        // trace context and baggage; replace it with one that extracts and injects nothing, as the process and hosting
+        // propagators are (TraceCorrelation).
+        Sdk.SetDefaultTextMapPropagator(new CompositeTextMapPropagator([]));
+
         // Read once by the exporter (it caches them) when the first exporter of this process is built, which is later.
         Environment.SetEnvironmentVariable(StatsbeatDisabledVariable, "true");
+        Environment.SetEnvironmentVariable(SdkStatsDisabledVariable, "true");
         Environment.SetEnvironmentVariable(ResourceMetricVariable, "false");
         builder.Services.AddOpenTelemetry()
             .ConfigureResource(resource => resource.AddService(profile.ServiceName, autoGenerateServiceInstanceId: false))
