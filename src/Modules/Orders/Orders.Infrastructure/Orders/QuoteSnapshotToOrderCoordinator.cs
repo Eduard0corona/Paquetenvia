@@ -237,6 +237,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
                 actorId,
                 organizationId,
                 status,
+                ownerOrganizationId,
                 codPendingReconciliation,
                 mfaSatisfied,
                 publicId,
@@ -520,6 +521,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         Guid actorId,
         Guid organizationId,
         string? status,
+        Guid? ownerOrganizationId,
         bool codPendingReconciliation,
         bool mfaSatisfied,
         string? publicId,
@@ -548,6 +550,9 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             }
         }
 
+        // owner_org_id arrives here absent or equal to the selected organization (any other owner is the empty page
+        // before the transaction); equal, it keeps the orders that organization owns and drops the ones it only
+        // operates, which RLS would otherwise list too.
         await using var command = CreateCommand(
             connection,
             transaction,
@@ -558,6 +563,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
                    service_window_from,service_window_to
             FROM orders.orders
             WHERE (@status IS NULL OR status=@status)
+              AND (@owner::uuid IS NULL OR owner_org_id=@owner)
               AND (@public_id IS NULL OR public_id=@public_id)
               AND (@cod_pending=false OR {OrderCodPendingReconciliationPredicate.Sql})
               AND (@created_from::timestamptz IS NULL OR created_at>=@created_from)
@@ -567,6 +573,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             LIMIT @take
             """);
         command.Parameters.Add(P("status", NpgsqlDbType.Text, status));
+        command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, ownerOrganizationId));
         command.Parameters.Add(P("public_id", NpgsqlDbType.Text, publicId));
         command.Parameters.Add(P("cod_pending", NpgsqlDbType.Boolean, codPendingReconciliation));
         command.Parameters.Add(P("created_from", NpgsqlDbType.TimestampTz, createdRange.From?.ToUniversalTime()));

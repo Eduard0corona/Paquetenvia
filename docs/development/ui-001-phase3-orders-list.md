@@ -57,9 +57,10 @@ cursores emitidos desde este cambio.
   RLS sigue decidiendo qué órdenes se leen.
 - Capacidad sin cambios: DISPATCHER, PLATFORM_ADMIN y VIEWER; FINANCE con MFA solo con
   `cod_pending_reconciliation=true`, que puede acotar con fechas (estrecha, no amplía). DRIVER y los demás, 403.
-- RLS sin cambios: la organización ve las órdenes de las que es dueña u operadora. Nota previa a este cambio, sin
-  tocar: `owner_org_id` igual a la organización activa no excluye las órdenes que solo opera (el SQL no filtra por
-  dueña; otra dueña da la página vacía).
+- RLS sin cambios: la organización ve las órdenes de las que es dueña u operadora. Defecto previo a este cambio, ya
+  corregido (`docs/development/ord-list-owner-filter.md`): `owner_org_id` igual a la organización activa no excluía
+  las órdenes que solo opera (el SQL no filtraba por dueña); ahora trae solo las de las que es dueña. Otra dueña sigue
+  dando la página vacía.
 - `created_at` en la `Order`: no cambia aquí. El PR siguiente lo agrega al API ("En dos pasos").
 
 ### Índices
