@@ -252,7 +252,19 @@ public sealed class PostgreSqlOrderTransitionService(
                     throw new OrderTransitionForbiddenException();
                 }
 
-                return replay;
+                // ORD-ORDER-CREATED-AT-2026-10-12: a response stored before Order.created_at existed lacks it; the
+                // replay reads the order's creation instant, which never changes, in this same transaction.
+                return replay.CreatedAt == default
+                    ? replay with
+                    {
+                        CreatedAt = await ReadCreatedAtAsync(
+                            connection,
+                            transaction,
+                            command.OrganizationId,
+                            replay.Id,
+                            cancellationToken),
+                    }
+                    : replay;
             }
         }
         else
@@ -722,6 +734,29 @@ public sealed class PostgreSqlOrderTransitionService(
         return after > occurredAt ? after : occurredAt;
     }
 
+    /// <summary>
+    /// ORD-ORDER-CREATED-AT-2026-10-12: the creation instant of an order of the selected (owner) organization, for the
+    /// replay of a response stored before Order.created_at existed. A row that cannot be read fails closed.
+    /// </summary>
+    private async Task<DateTimeOffset> ReadCreatedAtAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid organizationId,
+        Guid orderId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = CreateCommand(
+            connection,
+            transaction,
+            "SELECT created_at FROM orders.orders WHERE id=@id AND owner_org_id=@org");
+        command.Parameters.Add(P("id", NpgsqlDbType.Uuid, orderId));
+        command.Parameters.Add(P("org", NpgsqlDbType.Uuid, organizationId));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? reader.GetFieldValue<DateTimeOffset>(0)
+            : throw new OrderTransitionInfrastructureException("The idempotency resource is inconsistent.");
+    }
+
     private async Task<OrderRow?> ReadOrderForUpdateAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -737,7 +772,7 @@ public sealed class PostgreSqlOrderTransitionService(
                    claim_window_ends_at,finalized_at,cod_expected_cents,
                    subtotal_cents,discount_cents,tax_cents,total_cents,minimum_total_cents_snapshot,
                    financial_override IS NOT NULL,currency,origin_location_id,destination_location_id,
-                   service_type,service_area_id,pricing_tier,service_window_from,service_window_to
+                   service_type,service_area_id,pricing_tier,service_window_from,service_window_to,created_at
             FROM orders.orders
             WHERE id=@id AND owner_org_id=@org
             FOR UPDATE
@@ -778,7 +813,8 @@ public sealed class PostgreSqlOrderTransitionService(
                 reader,
                 23,
                 24,
-                () => new OrderTransitionInfrastructureException("The order service window is inconsistent.")));
+                () => new OrderTransitionInfrastructureException("The order service window is inconsistent.")),
+            reader.GetFieldValue<DateTimeOffset>(25));
     }
 
     private async Task<int> UpdateOrderAsync(
@@ -1223,6 +1259,7 @@ public sealed class PostgreSqlOrderTransitionService(
             new MoneyResult(order.Currency, order.TotalCents),
             claimWindowEndsAt,
             finalizedAt,
+            order.CreatedAt,
             order.ServiceWindow);
 
     private NpgsqlCommand CreateCommand(
@@ -1285,5 +1322,6 @@ public sealed class PostgreSqlOrderTransitionService(
         string ServiceType,
         Guid? ServiceAreaId,
         string PricingTier,
-        OrderServiceWindow? ServiceWindow);
+        OrderServiceWindow? ServiceWindow,
+        DateTimeOffset CreatedAt);
 }

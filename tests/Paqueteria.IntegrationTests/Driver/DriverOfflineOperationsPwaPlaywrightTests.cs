@@ -46,8 +46,9 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
     /// <summary>
     /// UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the upgrade from the DRV-002 layout keeps every queued DRV-002
     /// operation and drops the schema 1 snapshot, which carries no stop details; the next REST response rebuilds
-    /// it. UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: the database now reaches version 4 and the operation is
-    /// rewritten as operation schema 3.
+    /// it. UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: the database then reaches version 4 and the operation is
+    /// rewritten as operation schema 3; DRV-DISPATCH-CONTACT-2026-10-12: it now reaches version 5, which adds the
+    /// dispatch contact store.
     /// </summary>
     [Fact]
     [Trait("Category", "DriverOfflineOperationsPwa")]
@@ -211,9 +212,9 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             """);
         using var document = JsonDocument.Parse(evidence);
         var root = document.RootElement;
-        Assert.Equal(4, root.GetProperty("version").GetInt32());
+        Assert.Equal(5, root.GetProperty("version").GetInt32());
         Assert.Equal(
-            ["operations", "organization_roles", "proof_blobs", "snapshots", "sync_leases"],
+            ["dispatch_contacts", "operations", "organization_roles", "proof_blobs", "snapshots", "sync_leases"],
             root.GetProperty("stores")
                 .EnumerateArray()
                 .Select(value => value.GetString() ?? string.Empty)
@@ -233,7 +234,8 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
     /// <summary>
     /// UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12: IndexedDB version 4 rewrites a queued schema 2 operation (the
     /// version 3 layout of UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11) as operation schema 3 in place and keeps the
-    /// schema 2 stop snapshot, which the app still shows offline.
+    /// schema 2 stop snapshot, which the app still shows offline. The same upgrade continues to version 5
+    /// (DRV-DISPATCH-CONTACT-2026-10-12).
     /// </summary>
     [Fact]
     [Trait("Category", "DriverOfflineOperationsPwa")]
@@ -399,12 +401,212 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             """);
         using var document = JsonDocument.Parse(evidence);
         var root = document.RootElement;
-        Assert.Equal(4, root.GetProperty("version").GetInt32());
+        Assert.Equal(5, root.GetProperty("version").GetInt32());
         Assert.Equal(1, root.GetProperty("snapshotCount").GetInt32());
         Assert.Equal(1, root.GetProperty("operationCount").GetInt32());
         Assert.Equal(3, root.GetProperty("operationSchema").GetInt32());
         Assert.Equal("START_DELIVERY", root.GetProperty("operationKind").GetString());
         Assert.True(root.GetProperty("failedDeliveryIsNull").GetBoolean());
+    }
+
+    /// <summary>
+    /// DRV-DISPATCH-CONTACT-2026-10-12: version 4 already reached main, so the dispatch contact store comes with
+    /// IndexedDB version 5. The upgrade from the version 4 layout only adds that store: the queued schema 3 operation,
+    /// the schema 2 snapshot (still shown offline) and the saved roles answer stay exactly as they were.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task IndexedDb_v4_upgrade_only_adds_the_dispatch_contact_store()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        var page = await browser.NewPageAsync();
+        const string cacheNamespace = "opaque-drv-dispatch-upgrade";
+        const string operationId = "55555555-5555-4555-8555-555555555555";
+        await InstallSessionAsync(page, cacheNamespace);
+        await page.GotoAsync(server.BaseAddress.AbsoluteUri);
+        var seeded = await page.EvaluateAsync<string>(
+            """
+            async value => {
+              const input = new TextEncoder().encode(
+                `${value.cacheNamespace}\0${value.organizationId}`);
+              const digest = new Uint8Array(
+                await crypto.subtle.digest("SHA-256", input));
+              let binary = "";
+              for (const byte of digest) binary += String.fromCharCode(byte);
+              const partitionKey = btoa(binary)
+                .replaceAll("+", "-")
+                .replaceAll("/", "_")
+                .replaceAll("=", "");
+              const now = new Date(Date.now() - 60_000).toISOString();
+              const operation = {
+                schemaVersion: 3,
+                partitionKey,
+                id: value.operationId,
+                orderId: value.orderId,
+                kind: "START_DELIVERY",
+                sourceStatus: "IN_TRANSIT",
+                targetStatus: "DELIVERING",
+                expectedVersion: 7,
+                reason: "DRIVER_DELIVERY_STARTED",
+                clientOccurredAt: now,
+                createdAt: now,
+                transitionIdempotencyKey: `drv2-${value.operationId}-transition`,
+                sessionIdempotencyKey: null,
+                finalizeIdempotencyKey: null,
+                proofType: null,
+                contentType: null,
+                sizeBytes: null,
+                sha256: null,
+                capturedAt: null,
+                status: "PENDING",
+                attemptCount: 0,
+                nextAttemptAt: now,
+                sessionAttempt: 1,
+                uploadSessionId: null,
+                uploadSessionExpiresAt: null,
+                uploadAccepted: false,
+                proofId: null,
+                safeError: null,
+                cod: null,
+                rejectionCode: null,
+                failedDelivery: null,
+              };
+              const roles = { partitionKey, schemaVersion: 1, roles: ["DRIVER"] };
+              await new Promise((resolve, reject) => {
+                // The UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 (version 4) layout, as main has it.
+                const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
+                open.onupgradeneeded = () => {
+                  const database = open.result;
+                  database.createObjectStore("snapshots", { keyPath: "partitionKey" });
+                  const operations = database.createObjectStore(
+                    "operations",
+                    { keyPath: ["partitionKey", "id"] });
+                  operations.createIndex("by_partition", "partitionKey");
+                  operations.createIndex("by_partition_order", ["partitionKey", "orderId"]);
+                  operations.createIndex("by_partition_status", ["partitionKey", "status"]);
+                  operations.createIndex("by_partition_next_attempt", ["partitionKey", "nextAttemptAt"]);
+                  operations.createIndex("by_partition_created", ["partitionKey", "createdAt", "id"]);
+                  const blobs = database.createObjectStore(
+                    "proof_blobs",
+                    { keyPath: ["partitionKey", "operationId"] });
+                  blobs.createIndex("by_partition", "partitionKey");
+                  database.createObjectStore("sync_leases", { keyPath: "partitionKey" });
+                  database.createObjectStore("organization_roles", { keyPath: "partitionKey" });
+                };
+                open.onerror = () => reject(open.error);
+                open.onsuccess = () => {
+                  const database = open.result;
+                  const transaction = database.transaction(
+                    ["snapshots", "operations", "organization_roles"],
+                    "readwrite");
+                  transaction.objectStore("snapshots").put({
+                    partitionKey,
+                    schemaVersion: 2,
+                    synchronizedAt: now,
+                    stops: [{
+                      order_id: value.orderId,
+                      aggregate_version: 7,
+                      order_public_id: "ORD_DRV_V4_UPGRADE",
+                      stop_type: "DELIVERY",
+                      status: "IN_TRANSIT",
+                      address_summary: "Zona sintética v4",
+                      details_available: false,
+                      contact_short_name: null,
+                      contact_full_name: null,
+                      zone_name: null,
+                      service_window: null,
+                      cod: null,
+                      navigation: null,
+                    }],
+                    completedToday: 0,
+                  });
+                  transaction.objectStore("operations").put(operation);
+                  transaction.objectStore("organization_roles").put(roles);
+                  transaction.oncomplete = () => {
+                    database.close();
+                    resolve(undefined);
+                  };
+                  transaction.onerror = () => reject(transaction.error);
+                };
+              });
+              return JSON.stringify({ operation, roles });
+            }
+            """,
+            new
+            {
+                cacheNamespace,
+                organizationId = OrganizationId,
+                orderId = OrderId,
+                operationId,
+            });
+        await page.RouteAsync(
+            DriverStopsPwaPlaywrightTests.StopsRoute,
+            route => route.AbortAsync());
+        // The saved roles answer is the one in use: the read fails, so nothing replaces it.
+        await page.RouteAsync(DriverOrganizationRoles.Route, route => route.AbortAsync());
+        await page.RouteAsync(DriverDispatchContact.Route, route => route.AbortAsync());
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+
+        await ExpectTextAsync(page, "1 acción en el dispositivo");
+        await ExpectTextAsync(page, "ORD_DRV_V4_UPGRADE");
+        var evidence = await page.EvaluateAsync<string>(
+            """
+            () => new Promise((resolve, reject) => {
+              const open = indexedDB.open("paquetenvia-driver-stops-v1");
+              open.onerror = () => reject(open.error);
+              open.onsuccess = () => {
+                const database = open.result;
+                const stores = [...database.objectStoreNames].sort();
+                const transaction = database.transaction(
+                  ["snapshots", "operations", "organization_roles", "dispatch_contacts"],
+                  "readonly");
+                const snapshots = transaction.objectStore("snapshots").getAll();
+                const operations = transaction.objectStore("operations").getAll();
+                const roles = transaction.objectStore("organization_roles").getAll();
+                const contacts = transaction.objectStore("dispatch_contacts").getAll();
+                transaction.onerror = () => {
+                  database.close();
+                  reject(transaction.error);
+                };
+                transaction.oncomplete = () => {
+                  database.close();
+                  resolve(JSON.stringify({
+                    version: database.version,
+                    stores,
+                    snapshotCount: snapshots.result.length,
+                    operations: operations.result,
+                    roles: roles.result,
+                    contactCount: contacts.result.length,
+                  }));
+                };
+              };
+            })
+            """);
+        using var before = JsonDocument.Parse(seeded);
+        using var document = JsonDocument.Parse(evidence);
+        var root = document.RootElement;
+        Assert.Equal(5, root.GetProperty("version").GetInt32());
+        Assert.Equal(
+            ["dispatch_contacts", "operations", "organization_roles", "proof_blobs", "snapshots", "sync_leases"],
+            root.GetProperty("stores")
+                .EnumerateArray()
+                .Select(value => value.GetString() ?? string.Empty)
+                .ToArray());
+        Assert.Equal(1, root.GetProperty("snapshotCount").GetInt32());
+        var operation = Assert.Single(root.GetProperty("operations").EnumerateArray().ToArray());
+        Assert.Equal(operationId, operation.GetProperty("id").GetString());
+        Assert.Equal(3, operation.GetProperty("schemaVersion").GetInt32());
+        Assert.Equal("START_DELIVERY", operation.GetProperty("kind").GetString());
+        // The scheduler may already have tried once (the stops request is aborted): never lost, never sent.
+        Assert.Contains(operation.GetProperty("status").GetString(), new[] { "PENDING", "RETRY_WAIT" });
+        Assert.Equal(
+            before.RootElement.GetProperty("roles").GetRawText(),
+            Assert.Single(root.GetProperty("roles").EnumerateArray().ToArray()).GetRawText());
+        Assert.Equal(0, root.GetProperty("contactCount").GetInt32());
     }
 
     /// <summary>
@@ -692,11 +894,9 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             ["partitionKey", "roles", "schemaVersion"],
             saved.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
         Assert.Equal(["DRIVER"], saved.GetProperty("roles").EnumerateArray().Select(role => role.GetString() ?? string.Empty));
-        // A page that went away mid-pass (the navigations above) leaves its sync lease behind until it expires (15
-        // seconds), and a sync asked for meanwhile does nothing (DRV-002). Waiting until no lease is active keeps the
-        // sync after the connection returns independent of how fast the machine is. An expired lease is never
-        // removed on its own, so the store is not expected to be empty.
-        await WaitForNoActiveSyncLeaseAsync(page);
+        // A page that went away mid-pass (the navigations above) may leave its sync lease active for 15 seconds; the
+        // sync asked for when the connection returns then runs once that lease expired, within the waits below
+        // (docs/development/driver-offline-replay-flake.md).
         await context.SetOfflineAsync(true);
         try
         {
@@ -742,6 +942,8 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
     /// UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12 (owner answer "No, llama a despacho (Recommended)"): with the cash
     /// saved on the phone "No se pudo entregar" is not offered; discarding the saved collection, with the existing
     /// confirmation, brings it back. With the cash recorded on the server the stop asks the driver to call dispatch.
+    /// DRV-DISPATCH-CONTACT-2026-10-12: the organization has no dispatch number configured (the API answers
+    /// phone_e164 null), so the text stays as it is and no "Llamar a despacho" link is shown.
     /// </summary>
     [Fact]
     [Trait("Category", "DriverOfflineOperationsPwa")]
@@ -753,6 +955,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         await using var context = await browser.NewContextAsync();
         var page = await context.NewPageAsync();
         await InstallSessionAsync(page, "opaque-drv-failed-cash");
+        await DriverDispatchContact.RouteAsync(page, null);
         var backend = new SyntheticOfflineBackend { CodExpectedCents = 125_000 };
         backend.SetOrderState("DELIVERING", 8);
         await backend.RouteAsync(page);
@@ -795,8 +998,82 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         Assert.Equal(
             0,
             await page.GetByRole(AriaRole.Button, new() { Name = "No se pudo entregar" }).CountAsync());
+        // DRV-DISPATCH-CONTACT-2026-10-12: the "none configured" answer is saved like any answer, and no link shows.
+        var saved = Assert.Single(await DriverDispatchContact.WaitForSavedAsync(page, 1));
+        Assert.Equal(JsonValueKind.Null, saved.GetProperty("phoneE164").ValueKind);
+        Assert.Empty(await DriverDispatchContact.LinksAsync(page));
         Assert.DoesNotContain("tel:", await page.ContentAsync(), StringComparison.Ordinal);
         Assert.Empty(backend.Calls);
+    }
+
+    /// <summary>
+    /// DRV-DISPATCH-CONTACT-2026-10-12 (owner answer "Sí, configurable (Recommended)"): with the organization's
+    /// dispatch number configured (synthetic here), the recorded-cash notice of the stop keeps its text and gets
+    /// "Llamar a despacho" next to it, a 44 px tel: link to that number. The answer is saved for the partition (the
+    /// number only), so the link is still there after an offline reload. Without a number the text stays alone (the
+    /// test above).
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Recorded_cash_offers_Llamar_a_despacho_with_the_configured_number_also_offline()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-drv-dispatch-call");
+        await DriverDispatchContact.RouteAsync(page, DriverDispatchContact.SyntheticNumber);
+        var backend = new SyntheticOfflineBackend { CodExpectedCents = 125_000, CodRecorded = true };
+        backend.SetOrderState("DELIVERING", 8);
+        await backend.RouteAsync(page);
+        var stop = new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri;
+
+        await page.GotoAsync(stop);
+        await ExpectTextAsync(page, RecordedCashCallDispatchText);
+        // The reload below is offline, so the Service Worker must control the page and hold the shell first.
+        await EnsureServiceWorkerControlAsync(page);
+        await page.GotoAsync(stop);
+        await AssertRecordedCashCallsDispatchAsync(page);
+        var saved = Assert.Single(await DriverDispatchContact.WaitForSavedAsync(page, 1));
+        Assert.Equal(
+            ["partitionKey", "phoneE164", "schemaVersion"],
+            saved.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
+        Assert.Equal(DriverDispatchContact.SyntheticNumber, saved.GetProperty("phoneE164").GetString());
+        Assert.Equal(1, saved.GetProperty("schemaVersion").GetInt32());
+
+        await context.SetOfflineAsync(true);
+        try
+        {
+            // An offline start reads the number saved for the partition.
+            await page.ReloadAsync();
+            await AssertRecordedCashCallsDispatchAsync(page);
+        }
+        finally
+        {
+            await context.SetOfflineAsync(false);
+        }
+
+        Assert.Equal(
+            0,
+            await page.GetByRole(AriaRole.Button, new() { Name = "No se pudo entregar" }).CountAsync());
+        Assert.Empty(backend.Calls);
+    }
+
+    private const string RecordedCashCallDispatchText =
+        "El cobro ya está registrado. Si no puedes entregar, llama a despacho: ellos deciden y coordinan la devolución del cobro.";
+
+    /// <summary>The recorded-cash notice with "Llamar a despacho" in the same section: a 44 px tel: link.</summary>
+    private static async Task AssertRecordedCashCallsDispatchAsync(IPage page)
+    {
+        var section = page.GetByRole(AriaRole.Region, new() { Name = "No se pudo entregar", Exact = true });
+        await section.GetByRole(AriaRole.Link, new() { Name = "Llamar a despacho", Exact = true }).WaitForAsync();
+        Assert.Contains(RecordedCashCallDispatchText, await section.InnerTextAsync(), StringComparison.Ordinal);
+        var (href, width, height) = Assert.Single(await DriverDispatchContact.LinksAsync(page));
+        Assert.Equal("tel:" + DriverDispatchContact.SyntheticNumber, href);
+        Assert.True(width >= 44 && height >= 44, $"{width}x{height}");
+        // The number is dialed, never written on the screen.
+        Assert.DoesNotContain(DriverDispatchContact.SyntheticNumber, await page.Locator("body").InnerTextAsync(), StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -814,6 +1091,8 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         await using var context = await browser.NewContextAsync();
         var page = await context.NewPageAsync();
         await InstallSessionAsync(page, "opaque-drv-failed-held");
+        // DRV-DISPATCH-CONTACT-2026-10-12: the organization has a (synthetic) dispatch number.
+        await DriverDispatchContact.RouteAsync(page, DriverDispatchContact.SyntheticNumber);
         var backend = new SyntheticOfflineBackend { CodExpectedCents = 125_000 };
         backend.SetOrderState("DELIVERING", 8);
         await backend.RouteAsync(page);
@@ -841,6 +1120,12 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         await ExpectTextAsync(
             page,
             "El cobro de esta entrega ya está registrado, así que el reporte no se envió. Llama a despacho: ellos deciden y coordinan la devolución del cobro.");
+        // DRV-DISPATCH-CONTACT-2026-10-12: "Llamar a despacho" next to the notice, the only one on the screen.
+        var notice = page.GetByRole(AriaRole.Region, new() { Name = "Acción que requiere atención", Exact = true });
+        await notice.GetByRole(AriaRole.Link, new() { Name = "Llamar a despacho", Exact = true }).WaitForAsync();
+        var (href, width, height) = Assert.Single(await DriverDispatchContact.LinksAsync(page));
+        Assert.Equal("tel:" + DriverDispatchContact.SyntheticNumber, href);
+        Assert.True(width >= 44 && height >= 44, $"{width}x{height}");
         Assert.Empty(backend.Calls);
         Assert.Empty(backend.SessionAttempts);
         Assert.Equal(0, backend.UploadCount);
@@ -1513,7 +1798,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             var shellContainsData = await page.EvaluateAsync<bool>(
                 """
                 async () => {
-                  const cache = await caches.open("paquetenvia-driver-shell-v7");
+                  const cache = await caches.open("paquetenvia-driver-shell-v8");
                   const response = await cache.match("/driver/stops");
                   const text = response ? await response.text() : "";
                   return text.includes("ORD_DRV002_ORG_A") ||
@@ -1667,7 +1952,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         page.EvaluateAsync<string>(
             """
             () => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 5);
               open.onerror = () => reject(open.error);
               open.onsuccess = () => {
                 const database = open.result;
@@ -1715,7 +2000,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             page,
             """
             async () => {
-              const cache = await caches.open("paquetenvia-driver-shell-v7");
+              const cache = await caches.open("paquetenvia-driver-shell-v8");
               return (await cache.keys()).some(
                 key => new URL(key.url).pathname.startsWith("/_next/static/"));
             }
@@ -1736,7 +2021,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             page,
             """
             status => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 5);
               open.onerror = () => reject(open.error);
               open.onsuccess = () => {
                 const database = open.result;
@@ -1814,7 +2099,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         page.EvaluateAsync<string>(
             """
             () => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 5);
               open.onerror = () => reject(open.error);
               open.onsuccess = () => {
                 const database = open.result;
@@ -1893,7 +2178,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         page.EvaluateAsync<string>(
             """
             () => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 5);
               open.onerror = () => reject(open.error);
               open.onsuccess = () => {
                 const database = open.result;
@@ -1915,50 +2200,11 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             })
             """);
 
-    /// <summary>Waits until no page holds an unexpired sync lease (an expired one stays in the store).</summary>
-    private static async Task WaitForNoActiveSyncLeaseAsync(IPage page)
-    {
-        var deadline = DateTimeOffset.UtcNow.AddSeconds(30);
-        while (true)
-        {
-            var active = await page.EvaluateAsync<int>(
-                """
-                () => new Promise((resolve, reject) => {
-                  const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
-                  open.onerror = () => reject(open.error);
-                  open.onsuccess = () => {
-                    const database = open.result;
-                    const request = database.transaction("sync_leases", "readonly")
-                      .objectStore("sync_leases").getAll();
-                    request.onerror = () => {
-                      database.close();
-                      reject(request.error);
-                    };
-                    request.onsuccess = () => {
-                      database.close();
-                      const now = Date.now();
-                      resolve(request.result.filter(lease => Date.parse(lease.expiresAt) > now).length);
-                    };
-                  };
-                })
-                """);
-            if (active == 0)
-            {
-                return;
-            }
-            if (DateTimeOffset.UtcNow >= deadline)
-            {
-                throw new TimeoutException($"Expected no active sync lease but found {active}.");
-            }
-            await Task.Delay(250);
-        }
-    }
-
     private static Task<int> ReadStoreCountAsync(IPage page, string storeName) =>
         page.EvaluateAsync<int>(
             """
             storeName => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 5);
               open.onerror = () => reject(open.error);
               open.onsuccess = () => {
                 const database = open.result;
@@ -1981,7 +2227,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         page.EvaluateAsync<int>(
             """
             () => new Promise((resolve, reject) => {
-              const open = indexedDB.open("paquetenvia-driver-stops-v1", 4);
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 5);
               open.onerror = () => reject(open.error);
               open.onsuccess = () => {
                 const database = open.result;

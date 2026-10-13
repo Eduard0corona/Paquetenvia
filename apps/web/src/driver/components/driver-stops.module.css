@@ -950,3 +950,29 @@
   flex-wrap: wrap;
   gap: 0.75rem;
 }
+
+/*
+ * DRV-DISPATCH-CONTACT-2026-10-12: "Llamar a despacho", a tel: link shown only
+ * next to a text that asks the driver to call dispatch and only while the
+ * organization's number is known; a 44 px target.
+ */
+.dispatchCall {
+  display: inline-flex;
+  width: 100%;
+  min-width: 44px;
+  min-height: 44px;
+  align-items: center;
+  justify-content: center;
+  border: 2px solid var(--accent);
+  border-radius: var(--radius-sm);
+  padding: 0.65rem 1rem;
+  background: var(--surface);
+  color: var(--accent-strong);
+  font-weight: 800;
+  text-decoration: none;
+}
+
+.dispatchCall:focus-visible {
+  outline: 3px solid var(--focus);
+  outline-offset: 3px;
+}

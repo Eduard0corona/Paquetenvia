@@ -34,6 +34,7 @@ public static class OrderEndpoints
             .Produces<OrderPageResponse>(StatusCodes.Status200OK)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status409Conflict)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/orders/{orderId:guid}", GetAsync)
@@ -127,6 +128,7 @@ public static class OrderEndpoints
     }
 
     private static async Task<IResult> ListAsync(
+        HttpContext httpContext,
         string? status,
         Guid? owner_org_id,
         string? cod_pending_reconciliation,
@@ -140,6 +142,16 @@ public static class OrderEndpoints
         if (!session.IsActive || session.UserId is not { } actorId || !tenantContext.IsSelected)
         {
             return Forbidden();
+        }
+
+        // ORD-LIST-DATE-FILTER-2026-10-12: the creation window is request shape. A malformed or repeated
+        // created_from/created_to or a window outside OrderListCreatedRange is 409 INVALID_REQUEST, decided before the
+        // capability check and before any order is read; only clients that know the new parameters send them. The
+        // cursor keeps its place after the capability: the service refuses (409) only a bound cursor issued for other
+        // filters, and reads every other cursor exactly as before.
+        if (!OrderListRequestShape.TryReadCreatedRange(httpContext.Request.Query, out var createdRange))
+        {
+            return InvalidRequest();
         }
 
         if (TenantCapabilityGate.Deny(session, tenantContext, TenantCapabilities.ListOrders) is { } denied)
@@ -186,6 +198,7 @@ public static class OrderEndpoints
                 codPendingReconciliation,
                 session.MfaSatisfied,
                 public_id,
+                createdRange,
                 cancellationToken);
             return Results.Ok(new OrderPageResponse(
                 page.Items.Select(ToResponse).ToArray(),
@@ -194,6 +207,10 @@ public static class OrderEndpoints
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
+        }
+        catch (OrderConflictException)
+        {
+            return InvalidRequest();
         }
         catch (OrderListForbiddenException)
         {
@@ -462,6 +479,9 @@ public static class OrderEndpoints
         new MoneyResponse(result.Total.Currency, result.Total.AmountCents),
         result.ClaimWindowEndsAt,
         result.FinalizedAt,
+        // ORD-ORDER-CREATED-AT-2026-10-12: always the UTC offset, so System.Text.Json writes +00:00, a strict UTC
+        // instant the web accepts (apps/web/src/lib/utc-instant.ts).
+        result.CreatedAt.ToUniversalTime(),
         ToResponse(result.ServiceWindow));
 
     private static ServiceWindowResponse? ToResponse(OrderServiceWindow? window) =>
@@ -488,6 +508,7 @@ public static class OrderEndpoints
             order.Total,
             order.ClaimWindowEndsAt,
             order.FinalizedAt,
+            order.CreatedAt,
             order.ServiceWindow,
             result.Timeline.Select(item => new OrderTimelineResponse(
                 item.EventType,
@@ -499,6 +520,13 @@ public static class OrderEndpoints
 
     private static IResult Conflict() =>
         Results.Problem(statusCode: StatusCodes.Status409Conflict, title: "Conflict.");
+
+    /// <summary>ORD-LIST-DATE-FILTER-2026-10-12: the listOrders request-shape refusal, with its stable code.</summary>
+    private static IResult InvalidRequest() =>
+        Results.Problem(
+            statusCode: StatusCodes.Status409Conflict,
+            title: "Conflict.",
+            extensions: new Dictionary<string, object?> { ["code"] = "INVALID_REQUEST" });
 
     private static IResult OfflineOperationExpired() =>
         Results.Problem(
@@ -550,6 +578,10 @@ public sealed record MoneyResponse(
     [property: JsonPropertyName("currency")] string Currency,
     [property: JsonPropertyName("amount_cents")] long AmountCents);
 
+/// <summary>
+/// AI-05 Order. <c>created_at</c> (ORD-ORDER-CREATED-AT-2026-10-12) is <c>orders.orders.created_at</c>, the order's
+/// creation instant in UTC, on every operation that returns an Order.
+/// </summary>
 public sealed record OrderResponse(
     [property: JsonPropertyName("id")] Guid Id,
     [property: JsonPropertyName("public_id")] string PublicId,
@@ -568,6 +600,7 @@ public sealed record OrderResponse(
     [property: JsonPropertyName("total")] MoneyResponse Total,
     [property: JsonPropertyName("claim_window_ends_at")] DateTimeOffset? ClaimWindowEndsAt,
     [property: JsonPropertyName("finalized_at")] DateTimeOffset? FinalizedAt,
+    [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt,
     [property: JsonPropertyName("service_window")] ServiceWindowResponse? ServiceWindow);
 
 /// <summary>ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: the order's delivery window as UTC instants.</summary>
@@ -597,6 +630,7 @@ public sealed record OrderDetailResponse(
     [property: JsonPropertyName("total")] MoneyResponse Total,
     [property: JsonPropertyName("claim_window_ends_at")] DateTimeOffset? ClaimWindowEndsAt,
     [property: JsonPropertyName("finalized_at")] DateTimeOffset? FinalizedAt,
+    [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt,
     [property: JsonPropertyName("service_window")] ServiceWindowResponse? ServiceWindow,
     [property: JsonPropertyName("timeline")] IReadOnlyList<OrderTimelineResponse> Timeline,
     [property: JsonPropertyName("allowed_transitions")] IReadOnlyList<OrderAllowedTransitionResponse> AllowedTransitions);
@@ -640,5 +674,50 @@ public static class OrderListCodFilter
             default:
                 return false;
         }
+    }
+}
+
+/// <summary>
+/// ORD-LIST-DATE-FILTER-2026-10-12: the listOrders request shape that is refused with 409 INVALID_REQUEST before the
+/// capability check. Only the new creation window is shape; the cursor, an unknown status, a malformed public_id,
+/// another owner_org_id or a cod_pending_reconciliation value other than true or false keep their place and answer
+/// after the capability check, as before.
+/// </summary>
+public static class OrderListRequestShape
+{
+    public const string CreatedFrom = "created_from";
+    public const string CreatedTo = "created_to";
+
+    /// <summary>
+    /// Each bound at most once, a strict RFC3339 UTC instant ending in Z (<see cref="OrderListCreatedRange.TryParseInstant"/>),
+    /// and the pair inside <see cref="OrderListCreatedRange"/>; an absent bound is no bound.
+    /// </summary>
+    public static bool TryReadCreatedRange(IQueryCollection query, out OrderListCreatedRange createdRange)
+    {
+        createdRange = default;
+        if (!TryReadInstant(query, CreatedFrom, out var from) || !TryReadInstant(query, CreatedTo, out var to))
+        {
+            return false;
+        }
+
+        createdRange = new OrderListCreatedRange(from, to);
+        return createdRange.IsValid;
+    }
+
+    private static bool TryReadInstant(IQueryCollection query, string name, out DateTimeOffset? value)
+    {
+        value = null;
+        if (!query.TryGetValue(name, out var values))
+        {
+            return true;
+        }
+
+        if (values.Count != 1 || !OrderListCreatedRange.TryParseInstant(values[0], out var instant))
+        {
+            return false;
+        }
+
+        value = instant;
+        return true;
     }
 }

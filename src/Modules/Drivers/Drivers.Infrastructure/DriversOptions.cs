@@ -19,6 +19,30 @@ public sealed class DriversOptions
 
     /// <summary>VOICE-001-MASKED-CALLS-2026-10-11: rate limits and idempotency of recipient calls.</summary>
     public RecipientCallOptions RecipientCalls { get; set; } = new();
+
+    /// <summary>
+    /// DRV-DISPATCH-CONTACT-2026-10-12: <c>Drivers:DispatchContacts</c>, at most one dispatch number per organization
+    /// (the driver app's "Llamar a despacho"). Empty by default: then no organization has one and the app shows no
+    /// button. Read by the API only, from configuration; it does not depend on <see cref="Provider"/>.
+    /// </summary>
+    public List<DriverDispatchContactOptions> DispatchContacts { get; set; } = [];
+}
+
+/// <summary>
+/// One entry of <c>Drivers:DispatchContacts</c> (<c>Drivers__DispatchContacts__0__OrganizationId</c> and
+/// <c>Drivers__DispatchContacts__0__PhoneE164</c> as environment variables). Both are required; see
+/// <see cref="Drivers.Application.DispatchContacts.DriverDispatchContactPolicy"/> for their form.
+/// </summary>
+public sealed class DriverDispatchContactOptions
+{
+    /// <summary>The organization, as a canonical lowercase UUID.</summary>
+    public string? OrganizationId { get; set; }
+
+    /// <summary>The dispatch number, <c>+52</c> and ten digits; never logged or printed.</summary>
+    public string? PhoneE164 { get; set; }
+
+    public override string ToString() =>
+        $"DriverDispatchContactOptions {{ OrganizationId = {OrganizationId}, PhoneE164 = [redacted] }}";
 }
 
 /// <summary>

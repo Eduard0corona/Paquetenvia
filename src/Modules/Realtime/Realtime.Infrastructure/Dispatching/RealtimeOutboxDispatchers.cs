@@ -41,6 +41,8 @@ internal sealed class BusinessOutboxDispatcher(
             while (!stoppingToken.IsCancellationRequested)
             {
                 lanes.ReportIfDue(RealtimeOutboxLanes.Monitored("business"));
+                // OBS-003: each dispatch cycle is a new root trace whose id is in the cycle's log lines.
+                using var cycle = TraceCorrelation.StartOutboxDispatchCycle(RealtimeOutboxLanes.Monitored("business"));
                 using var batch = telemetry.MeasureBatch("business");
                 try
                 {
@@ -151,6 +153,8 @@ internal sealed class LocationOutboxDispatcher(
             while (!stoppingToken.IsCancellationRequested)
             {
                 lanes.ReportIfDue(RealtimeOutboxLanes.Monitored("location"));
+                // OBS-003: each dispatch cycle is a new root trace whose id is in the cycle's log lines.
+                using var cycle = TraceCorrelation.StartOutboxDispatchCycle(RealtimeOutboxLanes.Monitored("location"));
                 using var batch = telemetry.MeasureBatch("location");
                 try
                 {

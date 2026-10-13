@@ -100,4 +100,24 @@ describe("manual route planner policy", () => {
     // The list keeps the server's order.
     expect(shell).not.toMatch(/\.sort\(|todayFirst|draftRouteChoices/);
   });
+
+  it("names the driver of every route row from the screen's one drivers read (UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12)", () => {
+    const contract = aiSeven();
+    expect(contract).toContain("    - UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12\n");
+    expect(contract).toContain(
+      "    list:\n      decision: UI-PHASE3-ROUTES-NO-IDS-2026-10-12\n" +
+        "      decision_amendment: UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12\n",
+    );
+    const shell = read("src/operations/components/manual-routes-shell.tsx");
+    // The list gets the listOrganizationDrivers read of "Crear ruta", the same one that names the detail's driver.
+    expect(shell).toContain("drivers={form.state}");
+    expect(shell).toContain("const driver = routeListDriverText(drivers, route.driver_id);");
+    expect(shell.match(/useCreateRouteForm\(\)/g)).toHaveLength(1);
+    // No second drivers read anywhere in the route planner.
+    for (const path of plannerSources)
+      expect(read(path), path).not.toMatch(/createDriversApi|listDrivers|listOrganizationDrivers\(|\/drivers\b/);
+    // The rows keep the server's order and their date names.
+    expect(shell).toContain("routes.map((route) => {");
+    expect(shell).toContain("`${routeName(route)} · ${driver}`");
+  });
 });

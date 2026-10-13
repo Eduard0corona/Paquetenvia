@@ -1,5 +1,317 @@
 # Changelog
 
+## Correlación W3C sin paquetes (OBS-003-W3C-CORRELATION-2026-10-12, fase 4 PR 1) — 2026-10-12
+
+- Aplica la fase 4 aprobada; no hay pregunta nueva al owner. Respuesta literal del owner
+  (`PHASE4-PLATFORM-APPROVAL-2026-10-12`): "Sí, avanza con la fase 4 (Recommended)" ("Empiezo por OpenTelemetry y
+  correlación, y por los límites de tasa en endpoints pesados, que son lo que más ayuda a operar el piloto.").
+- W3C Trace Context con `System.Diagnostics.Activity` y un `ActivitySource` propio (`Paqueteria`), sin paquetes
+  nuevos. Un listener que solo propaga (`PropagationData`) garantiza una actividad W3C por petición y por ciclo, sin
+  etiquetas, eventos ni baggage.
+- Entrada: se ignoran `traceparent`, `tracestate`, `baggage`, `Request-Id` y `Correlation-Context`; cada petición a la
+  API empieza una traza nueva. Salida: ninguna petición lleva esos encabezados (Google Maps, mensajes, voz, AuthCenter y
+  Azure). Azure.Core agrega `traceparent` aunque `IsDistributedTracingEnabled` sea `false`, así que cada cliente de
+  Azure envía por un transporte que quita esos encabezados.
+- Un solo identificador: el trace id W3C (32 hexadecimales en minúscula) va en `HttpContext.TraceIdentifier`, en el
+  `traceId` de todo `application/problem+json`, en `State.TraceId` de cada línea de log de la petición y en el
+  `request_id` de cada fila de `platform.audit_logs` que se escribe al atender una petición a la API, también en los
+  webhooks de voz de Twilio (estado de la llamada y teclas del repartidor y del destinatario), que ahora lo pasan en sus
+  comandos. Una excepción: `PENDING_MEMBERSHIP_ACCEPTED`, que `security.apply_pending_memberships` escribe al iniciar
+  sesión, sigue con `request_id` NULL porque la función no recibe el id. Las filas que escribe el Worker (validación
+  de pruebas y ciclo de vida de asignaciones) no pertenecen a ninguna petición y siguen en NULL hasta el PR 7. AI-05
+  dice exactamente eso en `Problem.traceId` y en la entrada `OBS-003-W3C-CORRELATION`. El seguimiento público conserva
+  sus cuerpos uniformes sin `traceId`.
+- Worker: cada ciclo de job y cada ciclo de despacho del outbox (también los despachadores de tiempo real en la API)
+  corre en su propia traza raíz.
+- AI-05, cambio aditivo: `Problem` documenta `traceId` opcional (`^[0-9a-f]{32}$`) y `x-pilot-contract-deltas` agrega
+  `OBS-003-W3C-CORRELATION`; este cambio no altera rutas, esquemas ni referencias internas (69, 125 y 651 en la base fusionada). Sin cambios en AI-04,
+  AI-06, AI-18, roles, permisos, migraciones ni paquetes. Nota: `docs/development/obs-003-w3c-correlation.md`.
+
+## OBS-003: admisión explícita de los paquetes de telemetría (OBS-003-DEPENDENCY-ADMISSION-2026-10-13) — 2026-10-13
+
+- Preguntas y respuestas literales del project owner (2026-10-13), registradas en `decision-log.md`:
+  - "¿Admites explícitamente esta lista exacta de paquetes (12 nuevos y 6 subidas, con las versiones y hashes de la
+    tabla) para la telemetría OBS-003?" → "Sí, admito la lista (Recommended)".
+  - Como esa pregunta se hizo antes de mostrar la tabla, se mostró la tabla (id, versión o subida y los primeros 16
+    caracteres del hash SHA-512 de cada paquete) y se volvió a preguntar: "Te pedí la admisión antes de mostrarte la
+    tabla. Con la tabla de arriba a la vista (12 nuevos y 6 subidas, con esas versiones y hashes), ¿confirmas que tu
+    admisión es exactamente esta lista?" → "Sí, confirmo esta tabla (Recommended)".
+- Quedan admitidos exactamente los paquetes de la entrada `OBS-003-OPENTELEMETRY` de
+  `tools/rel-000/security-remediation-policy.json`: 2 directos, 10 transitivos (5 `Microsoft.Extensions.*` solo en el
+  lock de ArchitectureTests) y 6 subidas de paquetes que ya admitió ADP-001-AZURE (Azure.Core 1.61.0 → 1.63.0 y las
+  cinco que arrastra).
+- Ningún paquete, lock file ni código cambia con esta fila: entran solo por el PR de dependencias desde
+  `deps/obs-003-opentelemetry` hacia `main` (GOV-DEPENDENCY-ROUTE-001, fase 4 PR 5).
+
+## API: `created_at` en la `Order` y columna "Creada" de "Órdenes" (ORD-ORDER-CREATED-AT-2026-10-12) — 2026-10-12
+
+- Segundo paso de la respuesta literal del project owner registrada en `UI-PHASE3-ORDERS-LIST-2026-10-12`: "Pantalla
+  Órdenes: el API de la lista no trae la fecha de creación de cada orden, así que la columna "Creada" no se puede
+  mostrar (los filtros por fecha sí funcionan). Agregarla cambia el API y la web actual rechaza campos que no conoce.
+  ¿Qué hacemos?" → "En dos pasos (Recommended)" ("Este PR deja la web lista para aceptar la fecha; en un PR siguiente
+  el API la agrega y se muestra la columna. Así ningún orden de despliegue rompe nada."); no elegida: "Sin columna de
+  fecha" ("La lista queda con guía, estado y total, de la más reciente a la más antigua; la fecha se ve al abrir la
+  orden."). El primer paso salió en #234. Fila `ORD-ORDER-CREATED-AT-2026-10-12` en `decision-log.md` (MAJOR de
+  AI-01 §7, su registro ADR).
+- AI-05: el esquema `Order` agrega `created_at` (`string`, `format: date-time`, instante UTC) y lo pone en
+  `required`, porque el servidor siempre lo tiene (`orders.orders.created_at` es NOT NULL y nunca cambia). Lo mandan
+  `createOrder`, `listOrders`, `getOrder` (`OrderDetail`) y `transitionOrder`, también al repetir una solicitud
+  idempotente. Entrada `ORD-ORDER-CREATED-AT` en `x-pilot-contract-deltas`. Rutas, esquemas y referencias internas
+  siguen en 69, 125 y 651.
+- Servidor: `OrderResult.CreatedAt` lleva el valor de la fila; `createOrder` responde el instante de creación
+  truncado a microsegundos, igual al que guarda PostgreSQL. Una respuesta idempotente guardada antes de este cambio no
+  trae `created_at`; al repetirla se lee de la fila de la orden en la misma transacción tenant (si no hay fila, falla
+  cerrado). La respuesta va en UTC: System.Text.Json escribe `+00:00`, que la regla única de la web
+  (`src/lib/utc-instant.ts`) acepta.
+- Privacidad: `created_at` no es dato personal, financiero ni secreto. El rastreo público, los eventos, el outbox,
+  SignalR, la auditoría y los logs no cambian. FINANCE lo recibe en su lista de cobros pendientes como cualquier otro
+  campo de la `Order`.
+- AI-07 `order_list`: enmienda `ORD-ORDER-CREATED-AT-2026-10-12`; la columna "Creada" dice que el API ya manda la fecha
+  y se quita de `not_supported`. La web no cambia: la columna aparece sola y los lectores siguen aceptando que falte.
+- Sin cambios de parámetros, capacidades, RLS, tablas, índices, roles, permisos, migraciones ni flujos atómicos;
+  AI-04, AI-06 y AI-18 iguales. Despliegue y reversión en cualquier orden (revertir el commit; no hay datos que
+  deshacer). Nota: `docs/development/ord-order-created-at.md`.
+
+## REL-000: subidas encadenadas entre admisiones de dependencias (GOV-REL000-CHAINED-UPGRADES-2026-10-12, OBS-003-TEST-EXTENSIONS-ADMISSION-2026-10-12) — 2026-10-12
+
+- Preguntas y respuestas literales del project owner (2026-10-12), registradas en `decision-log.md`:
+  - `GOV-REL000-CHAINED-UPGRADES-2026-10-12`: "Fase 4, paquetes de telemetría: el exportador de Azure que elegiste
+    (1.10.0) sube Azure.Core 1.61→1.63, y eso arrastra 5 subidas más (System.ClientModel, Microsoft.Identity.Client y
+    su extensión Msal, Microsoft.Bcl.AsyncInterfaces y System.Memory.Data). El control de dependencias (REL-000) hoy
+    no puede registrar la subida de un paquete que ya admitió otra entrada (ADP-001). ¿Cómo seguimos?" → "Ajustar
+    REL-000 primero (Recommended)" ("Un PR de la herramienta, como el que necesitó ADP-001: una subida exacta puede
+    encadenarse sobre la de otra entrada solo si su versión de partida coincide, y las declaraciones que se encimen se
+    rechazan. Endurece el control, no lo relaja. Después va la admisión con el exportador 1.10.0 y Azure.Core 1.63,
+    tal como lo decidiste."); no elegidas: "Exportador 1.8.3" ("Funciona hoy sin tocar REL-000 ni Azure.Core (se queda
+    en 1.61): 12 paquetes nuevos y ninguna subida. Pero el exportador queda dos versiones atrás, contradice "sube
+    Azure.Core 1.61→1.63", y subirlo después choca con el mismo hueco.") y "Detener la exportación" ("Sigo con la
+    correlación (PR 1) y los límites de tasa, sin paquetes nuevos por ahora. Retomamos Application Insights
+    después.").
+  - `OBS-003-TEST-EXTENSIONS-ADMISSION-2026-10-12`: "Además, el proyecto de pruebas de arquitectura necesita 5
+    paquetes Microsoft.Extensions.* 10.0.0 (Configuration, Configuration.Binder, Configuration.EnvironmentVariables,
+    Logging.Configuration y Options.ConfigurationExtensions). Solo cambian el lock file de pruebas; nada de eso se
+    despliega. ¿Los admitimos?" → "Sí, admitirlos (Recommended)" ("Se suman a la lista que admites explícitamente al
+    aprobar el PR de admisión. Solo afectan pruebas."); no elegida: "No, usar el framework" ("El proyecto de pruebas
+    referencia el framework de ASP.NET. Eso también poda paquetes de la línea base y exige declarar esas bajas en la
+    admisión. Más cambios en REL-000.").
+- REL-000 (`tools/rel-000/rel000.py`), sólo más estricto:
+  - Las `baseline_package_upgrades` de un mismo nodo (archivo de lock, framework e `id`) declaradas por admisiones
+    distintas forman una cadena exacta en el orden de la política: cada paso empieza donde termina el anterior (versión
+    y `content_hash`) y no vuelve a una versión ni a un `content_hash` visitados. Cualquier otro encime de subidas o
+    bajas entre admisiones se rechaza al cargar la política con el código nuevo
+    `DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT`; antes la última declaración reemplazaba en silencio a la anterior. La
+    misma versión adicional declarada dos veces sigue fallando antes con `DEPENDENCY_ADMISSION_POLICY_INVALID`.
+  - Un nodo se acepta sólo si se movió por pasos declarados consecutivos. Contra el baseline MVP-0 (`test_k`) es la
+    cadena declarada hasta donde esté hoy el nodo (6.0.0 → 10.0.9, y 6.0.0 → 10.0.9 → 10.0.10 cuando se entregue el
+    paso siguiente). Contra la base probada es un paso, porque cada paso se acredita a su admisión y un PR sólo
+    introduce los paquetes de una admisión, desde su rama (`DEPENDENCY_ADMISSION_BRANCH_NOT_AUTHORIZED` si no).
+  - Una subida que aterriza en una versión de `additional_package_versions` de la misma admisión entrega ese
+    `id@version` en ese lock; sin esto, la subida de un nodo ya admitido (Azure.Core 1.61.0 de ADP-001) quedaba
+    siempre incompleta.
+  - La clave de uso de cada paso es `upgrade:<lock>:<framework>:<id>@<to_version>` y se acredita a la admisión que
+    lo declara. AUTH-001-OIDC y ADP-001-AZURE validan igual que antes.
+  - Límite conocido, sin cambio en este PR y como seguimiento: un paso que baja de versión se acepta si está declarado
+    exactamente; REL-000 no compara versiones con el orden de NuGet.
+- Pruebas nuevas en `DependencyAdmissionAmendmentTests` con datos sintéticos: cadena aceptada contra la base probada
+  y contra el baseline, paso con otra versión o hash de partida, encimes entre admisiones (también un hash visitado
+  con otra escritura de versión), la misma versión adicional dos veces, subida a una versión no declarada, saltos
+  sobre pasos de dos admisiones, rama y entrega completa, y las admisiones registradas como cadenas de un paso.
+- Sin cambios en contratos normativos AI-xx, AI-08, `security-remediation-policy.json`, paquetes, lock files,
+  workflows ni código de la aplicación. La entrada de admisión de OBS-003 (fase 4, PR 4: exportador 1.10.0 y
+  Azure.Core 1.63) va después; el owner admite su lista exacta por paquete al aprobarla.
+
+## Credencial propia y mínima para el tiempo real de la API (RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12) — 2026-10-12
+
+- BLOCKER de seguridad y privilegio mínimo (AI-01 §7); el cambio de operación del piloto es MAJOR y lo registra
+  `docs/adr/ADR-RTM-API-REALTIME-DISPATCHER-ROLE.md`. Pregunta y respuesta literales del project owner (2026-10-12):
+  "Bloqueo del primer despliegue: la API del piloto envía los avisos en tiempo real (tablero, repartidor) leyendo la cola con la credencial del Worker, que hoy no tiene, así que no arrancaría. ¿Cómo lo resolvemos?" → "Rol propio y mínimo (Recommended)" ("Un rol de base de datos nuevo que solo puede tomar y cerrar mensajes de tiempo real, con su propio secreto en Key Vault para la API (ADR + AI-18 + migración). La API no gana ningún otro permiso."); no elegidas: "Darle a la API la del Worker" ("La API lee también el secreto del Worker. Es rápido, pero la API queda con todos los permisos del Worker (otras colas y mantenimiento).") y "Sin tiempo real en el piloto" ("Se apaga el despachador en la API; las pantallas se actualizan por consulta cada 30 s y el repartidor no recibe avisos al instante.").
+- AI-18: rol `paqueteria_realtime NOLOGIN NOBYPASSRLS`, creado sin privilegios, revocado de `paqueteria_app`,
+  `paqueteria_worker` y `paqueteria_bootstrap`, y sin poder heredar roles privilegiados (aserciones 35 a 37).
+- Lane Notifications `20261012000100_AddRealtimeDispatcherRole`: EXECUTE en las seis funciones con `lease_token` de
+  REALTIME y ubicación (`claim_realtime_outbox`, `requeue_stale_realtime_outbox`, `settle_outbox`,
+  `claim_location_outbox`, `settle_location_outbox`, `requeue_stale_location_outbox`), USAGE en siete esquemas y
+  SELECT en las 53 columnas que leen las lecturas de evidencia, todas también legibles por `paqueteria_app`. Sin
+  escrituras, sin tablas de outbox, sin otras colas, sin purgas ni mantenimiento. El Down revoca todo y lo verifica.
+- AI-24 `realtime_dispatcher_role`: `ConnectionStrings:PaqueteriaRealtime` validada al arrancar (login distinto del de
+  la API y del Worker), `SET LOCAL ROLE paqueteria_realtime`, readiness y rollback.
+- Piloto: secretos `pg-realtime-runtime-connection` y `pg-realtime-login-verifier`, login `pv_pilot_realtime`, la
+  identidad de la API lee solo ese secreto nuevo; guardas P06 y P23. Sin cambios en AI-04, AI-05, AI-06, AI-12 ni en
+  los flujos atómicos de AI-13 §4.
+- Correcciones de la revisión de seguridad (misma decisión): la readiness exige que el login tenga la forma
+  aprovisionada (`LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`) y no sea miembro,
+  directo o por cadena, de ningún rol fuera de `paqueteria_realtime`. AI-18 dice que las dos funciones de reclamo
+  devuelven filas completas de outbox REALTIME y de ubicación de todos los tenants (`payload` incluido), revoca cada
+  ejecutor también de `paqueteria_realtime` y precisa la aserción 37; AI-24 lista los pasos en el orden del código
+  (`BEGIN`, `SET LOCAL ROLE`, `set_config`).
+
+## Repartidor: "Llamar a despacho" con el teléfono de despacho de la empresa (DRV-DISPATCH-CONTACT-2026-10-12) — 2026-10-12
+
+- Pregunta y respuesta literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR
+  del contrato de la API (AI-01 §7): "En la app del repartidor, "Llama a despacho" (cuando ya registró un cobro y no
+  puede entregar) no muestra ningún número porque la app no tiene uno. ¿Agregamos un teléfono de despacho?" → "Sí,
+  configurable (Recommended)" ("Un número de despacho por empresa en la configuración del piloto; la app lo muestra
+  como botón "Llamar a despacho". Tú me das el número cuando lo tengas."); no elegida: "No, ya lo saben" ("Los
+  repartidores ya tienen el número de despacho; la app solo dice que llamen."). El owner todavía no da el número: no
+  hay ninguno configurado y las pruebas usan solo números sintéticos.
+- AI-05: nueva operación `getMyDispatchContact` (`GET /driver/me/dispatch-contact`, etiqueta Driver, con
+  `X-Organization-Id`) y esquema `DriverDispatchContact`: el objeto cerrado `{"phone_e164": "+52…"}` o
+  `{"phone_e164": null}` cuando la organización elegida no tiene número; 200, 401, 403 y 503, como
+  `getMyDriverPhone`; `Cache-Control: no-store`. `x-capability-matrix` agrega `dispatch_contact_operations` (solo
+  DRIVER, sin MFA, como `listMyStops`) y `x-pilot-contract-deltas` la entrada `DRV-DISPATCH-CONTACT`.
+- Servidor: `Drivers:DispatchContacts` (lista de `{OrganizationId, PhoneE164}`), vacía por omisión. Al arrancar se
+  valida (falla y no arranca): `OrganizationId` como UUID canónico en minúsculas y nunca el nulo; `PhoneE164` como
+  número mexicano E.164 (`+52` y diez dígitos ASCII, el primero de 2 a 9, los que llama `VoicePhoneNumber`; se eligió
+  México y no E.164 general porque el piloto y todas las reglas de teléfono del sistema son mexicanas); cada
+  organización una sola vez (un mismo número puede servir a varias). El mensaje de error no lleva valores y
+  `ToString` oculta el número. `DriverDispatchContactEndpoints` revisa la sesión, el contexto tenant (403) y la
+  capacidad antes de leer; lee solo la configuración (sin base de datos, sin transacción tenant, sin escribir, sin
+  logs) y nunca contesta el número de otra organización. Sin PII, secreto, tabla, índice, rol, permiso, migración ni
+  flujo atómico nuevo; AI-04, AI-06 y AI-18 sin cambios.
+- Piloto: el número es un valor de negocio del owner en `deploy/azure/pilot/apps.settings.json` (`businessSettings`,
+  que `apps.bicep` agrega a los ajustes de la API y del Worker): `Drivers__DispatchContacts__0__OrganizationId` y
+  `Drivers__DispatchContacts__0__PhoneE164`. Hoy no hay ninguna entrada. `env001_pilot_guards.py settings-check`
+  (guarda P17) aplica las mismas reglas antes de desplegar y nunca repite un número.
+- PWA del repartidor: `DriverDispatchContactController` pide el número al instalar la sesión del repartidor y en
+  cada sesión nueva (otro inicio de sesión u otra organización); usa al instante la respuesta guardada para la
+  partición, la reemplaza con cada respuesta correcta (número o null), la borra ante 401 o 403 y la conserva ante
+  cualquier otra falla, preguntando de nuevo como la lectura de roles (al volver la conexión o la app, hasta 5 veces
+  por sesión). Se guarda en el IndexedDB particionado de siempre, store nuevo `dispatch_contacts` (esquema 1: llave
+  de partición, esquema y número o null), que necesita la versión 5 porque la 4 ya llegó a main; la subida desde la
+  4 solo crea el store (acciones en cola, fotos, leases, instantáneas y roles guardados quedan igual) y el shell del
+  Service Worker sube a `paquetenvia-driver-shell-v8`. Sale del teléfono con la partición ante 401 o 403 y con todas
+  las instantáneas al cerrar sesión.
+- "Llamar a despacho" es un enlace `tel:` de al menos 44 px que aparece solo junto a los textos que piden llamar a
+  despacho por el cobro: el de la parada con el cobro registrado, el rechazo de "Enviar reporte" con el cobro
+  registrado (formulario y resumen de sincronización), el reporte retenido antes de su incidencia por el cobro
+  registrado y el reporte con incidencia abierta (o posiblemente abierta) retenido por el cobro registrado o todavía
+  guardado. Sin número conocido los textos quedan exactamente igual y no se muestra nada; el número nunca se escribe
+  en pantalla.
+- AI-07 `driver_stop`: nuevo `dispatch_contact`; `failed_delivery.cash` y `offline` lo citan; `offline_cache` y
+  `details.retention` agregan la respuesta guardada.
+- Despliegue: no hace falta ningún orden (la web anterior nunca llama la lectura; esta web con una API anterior
+  recibe 404 y no muestra el enlace). Rollback: la parte del API se revierte sola; la de la web no es un revert
+  simple, porque una compilación de la versión 4 no abre una base en la versión 5: es una versión que conserva
+  IndexedDB 5 con el store y deja de mostrar el enlace.
+
+## Despacho: "Órdenes" y filtro por fecha de creación en `listOrders` (UI-PHASE3-ORDERS-LIST-2026-10-12, ORD-LIST-DATE-FILTER-2026-10-12) — 2026-10-12
+
+- Preguntas y respuestas literales del project owner (2026-10-12), registradas en `decision-log.md` como dos cambios
+  MAJOR (AI-01 §7). Primera: "El menú aprobado de Despacho incluye "Órdenes", pero esa pantalla no existe (hoy se llega
+  a una orden desde la bandeja, el tablero o "Buscar guía"). ¿La hacemos?" → "Sí, lista de órdenes (Recommended)"
+  ("Lista de todas las órdenes con búsqueda por guía y filtros por estado y fecha, usando el API que ya existe; abre el
+  detalle."); no elegidas: "No, quitar del menú" y "Después del piloto". Segunda: "Corrección mía: para "Órdenes" dije
+  "filtros por estado y fecha con el API que ya existe", pero la lista de órdenes del API no filtra por fecha (solo
+  estado, dueña, cobro pendiente y guía). ¿Cómo la hacemos?" → "Agregar filtro de fecha al API (Recommended)" ("Cambio
+  pequeño y aditivo (con ADR): la lista de órdenes acepta "desde" y "hasta" (hora de Mazatlán). La pantalla filtra por
+  guía, estado y fecha."); no elegida: "Sin filtro de fecha". ADR: `docs/adr/ADR-ORD-LIST-DATE-FILTER.md`.
+- Preguntas y respuestas literales del project owner durante la revisión (2026-10-12), añadidas a la fila
+  `UI-PHASE3-ORDERS-LIST-2026-10-12`. Primera: "Pantalla Órdenes: el API de la lista no trae la fecha de creación de
+  cada orden, así que la columna "Creada" no se puede mostrar (los filtros por fecha sí funcionan). Agregarla cambia el
+  API y la web actual rechaza campos que no conoce. ¿Qué hacemos?" → "En dos pasos (Recommended)" ("Este PR deja la web
+  lista para aceptar la fecha; en un PR siguiente el API la agrega y se muestra la columna. Así ningún orden de
+  despliegue rompe nada."); no elegida: "Sin columna de fecha" ("La lista queda con guía, estado y total, de la más
+  reciente a la más antigua; la fecha se ve al abrir la orden."). Segunda: "El menú aprobado de Finanzas incluye
+  "Órdenes (lectura)", pero hoy Finanzas solo puede listar órdenes con cobro pendiente de conciliar. ¿Ampliamos su
+  acceso?" → "No por ahora (Recommended)" ("Finanzas sigue viendo solo los cobros pendientes en su pantalla; no aparece
+  "Órdenes" en su menú. Ampliar lectura es un cambio de permisos (ADR)."); no elegida: "Sí, solo lectura".
+- AI-05 `listOrders`, cambio aditivo: parámetros opcionales `created_from` y `created_to` con las cotas del tablero
+  (instantes RFC3339 estrictos en UTC, `yyyy-MM-ddTHH:mm:ss` con 0 a 7 decimales y `Z`; ambos inclusivos, cada uno
+  solo o los dos con 31 días como máximo); una cota mal formada o repetida o un rango fuera de las reglas es
+  `409 INVALID_REQUEST` antes de la capacidad (nueva respuesta `409`,
+  `x-authorization-precedence: shape-validation-then-capability-before-persisted-state`). Cada `next_cursor` nuevo queda
+  ligado a la organización y a los filtros; usado con otros filtros es `409 INVALID_REQUEST` después de la capacidad,
+  donde siempre se leyó el cursor. Todo lo demás responde como antes: un cursor del formato anterior sigue paginando y
+  cualquier otro texto (vacío, largo o ilegible), un estado desconocido, un `public_id` mal formado, otra dueña o un
+  valor de COD que no es `true`/`false` siguen dando la página vacía. Capacidad, forma `Order`, RLS y orden sin cambios;
+  FINANCE solo puede acotar con fechas su lista de cobros pendientes. Entrada `ORD-LIST-DATE-FILTER` en
+  `x-pilot-contract-deltas`; rutas y esquemas siguen en 68 y 124, referencias internas 646.
+- Servidor: la lectura de Orders agrega `created_at >= created_from` y `created_at <= created_to` en la misma
+  transacción tenant con RLS; los índices existentes `orders_owner_status_idx` y `orders_operator_status_idx` toman el
+  rango como condición de índice (EXPLAIN ANALYZE en PostgreSQL 18 con 200 000 órdenes sintéticas, en el ADR). Sin
+  migración, tabla, índice, rol ni permiso; AI-04, AI-06 y AI-18 sin cambios; ningún flujo atómico nuevo.
+- AI-07: ruta `/ops/orders` (DISPATCHER, PLATFORM_ADMIN y VIEWER) y contrato `order_list`; `work_inbox.not_supported` ya
+  no menciona la pantalla faltante. Web: "Órdenes" después de "Bandeja" y antes de "Tablero"; búsqueda por guía exacta
+  (`ORD_…`, misma validación que "Buscar guía"), un estado o todos, "Creada desde" y "Creada hasta" en días de Mazatlán
+  (primer instante y último microsegundo del día), filas con guía, estado y total en centavos enteros, "Cargar más" con
+  el cursor de la misma consulta; la fila abre el detalle existente para DISPATCHER y PLATFORM_ADMIN y no es enlace para
+  VIEWER. El detalle `/ops/orders/:id` sigue bajo "Bandeja" para quien la tiene. Sin almacenamiento del navegador ni
+  consola; sin IDs internos. VIEWER entra a "Órdenes" después del login y al cambiar a una organización donde su página
+  no aplica. La fecha escrita queda como borrador hasta ser un día completo desde 2000-01-01 (mínimo del campo) o hasta
+  vaciar el campo; una fecha incompleta dice "Escribe una fecha completa (día, mes y año, desde 2000).". El foco nunca
+  cae al cuerpo de la página ("Buscar guía", "Quitar búsqueda", último "Cargar más").
+- "En dos pasos": todo lector web de la `Order` de AI-05 (esta lista, "Buscar guía", "Agregar entrega" de Rutas,
+  "Cobro contra entrega", "Nueva orden", el detalle y las transiciones fuera de línea del repartidor) acepta un
+  `created_at` opcional, estricto en UTC cuando viene; "Órdenes" muestra la columna "Creada" (hora de Mazatlán) solo
+  cuando el API lo manda. El API no cambia aquí; lo agrega el PR siguiente. FINANCE sigue sin "Órdenes".
+- Despliegue: el API antes que la web o juntos (un API anterior ignoraría las fechas); una web anterior sigue
+  funcionando con el API nuevo, cursores incluidos. Rollback: revertir el commit, sin datos ni esquema que deshacer.
+
+## Fase 4 de UI-001, plataforma: decisiones y backlog (PHASE4-PLATFORM-APPROVAL-2026-10-12) — 2026-10-12
+
+- Preguntas y respuestas literales del project owner (2026-10-12), registradas en `decision-log.md`:
+  - `PHASE4-PLATFORM-APPROVAL-2026-10-12`: "La fase 3 quedó completa y en main. ¿Sigo con la fase 4 de la propuesta
+    (plataforma: plomería compartida, un pool de conexiones por rol, espera adaptativa del outbox, OpenTelemetry,
+    límites de tasa y pruebas de punta a punta)?" → "Sí, avanza con la fase 4 (Recommended)" ("Empiezo por
+    OpenTelemetry y correlación, y por los límites de tasa en endpoints pesados, que son lo que más ayuda a operar el
+    piloto."); no elegidas: "Primero preparar el despliegue" ("Antes de más funciones, preparo contigo el despliegue
+    del piloto en Azure con lo que ya está en main.") y "Esperar" ("Me detengo aquí; tú decides después.").
+  - `OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12`: "Fase 4, telemetría: ¿a dónde mandamos métricas y trazas? (Hoy solo
+    hay logs en Log Analytics.)" → "Application Insights (Recommended)" ("OpenTelemetry con el exportador oficial de
+    Azure, en México Central, sobre el mismo Log Analytics con muestreo de 10 %. Aprox. 0–5 USD/mes; el peor caso del
+    presupuesto no sube por el tope diario. Admite 7 paquetes nuevos y sube Azure.Core 1.61→1.63 (admisión
+    explícita)."); no elegidas: "Agente OTLP de Container Apps" ("Menos paquetes (sin tocar Azure.Core), mismo costo,
+    pero hay que verificar que acepte métricas.") y "Solo logs" ("Sin paquetes ni costo: identificador de traza en
+    cada log y resúmenes periódicos, pero sin vista de trazas."). La lista exacta de paquetes todavía necesita su
+    admisión explícita por paquete (GOV-DEPENDENCY-ADMISSION-001) cuando se prepare la entrada de admisión.
+  - `SEC-004-RATE-LIMITS-2026-10-12` (cambio MAJOR de AI-01 §7 al aplicarse; la fila es su registro ADR): "Fase 4,
+    límites de tasa: ¿qué endpoints limitamos? (Hoy solo seguimiento público, tiempo real y GPS. Es cambio de contrato:
+    cada uno declara 429 en el API.)" → "Lista corta y generosa (Recommended)" ("Por usuario: CSV 10/min (1 importación
+    a la vez), exportar liquidación 10/min, crear dirección (cuesta Google) 30/min, fotos 30–60/min, tablero y conteos
+    60/min, lista de órdenes 120/min, cotizar 60/min, repartidores asignables 60/min; inicio de sesión 20/min por red.
+    Se ajusta tras 2 semanas con métricas."); no elegidas: "Solo caros o anónimos" ("CSV, exportar, crear dirección e
+    inicio de sesión.") y "Medir primero" ("Dos semanas solo midiendo (sin nuevos 429) y luego fijamos números.").
+  - `OBS-003-TENANT-PSEUDONYM-2026-10-12`: "Fase 4, privacidad en trazas: la arquitectura pide marcar cada traza con la
+    empresa y el actor, pero la observabilidad del piloto lo prohíbe. ¿Qué hacemos?" → "Seudónimo de empresa
+    (Recommended)" ("Un código HMAC con llave en Key Vault (no el id real) solo en trazas y logs, y el actor solo como
+    tipo de rol; nunca en métricas ni alertas."); no elegidas: "Id real de la empresa" ("El id de la organización en
+    las trazas (no en métricas).") y "Sin empresa" ("Las trazas no llevan empresa; se corrige la arquitectura con un
+    ADR.").
+- AI-08: ítems nuevos OBS-003 (trazas W3C y correlación, exportación a Application Insights apagada por defecto con
+  muestreo de 10 %, lista permitida de atributos de span, seudónimo de organización y tipo de rol del actor), SEC-004
+  (plomería compartida de límites de tasa, 429 `application/problem+json` con `Retry-After`, la lista decidida y la
+  declaración 429 en AI-05), SCL-007 (un pool de conexiones por rol de base de datos y espera adaptativa del outbox) y
+  OPS-005 (pruebas de punta a punta de la plataforma); todos MVP-1, P1, compuerta `owner_technology_operations`.
+  `item_count` pasa de 66 a 70; el conjunto MVP-0/P0 no cambia. Quedan como decisiones pendientes del owner en sus
+  criterios: la espera máxima del outbox, el contexto de traza a través del outbox (columna, payload o ninguno), una
+  alerta de métrica sobre conexiones de PostgreSQL y el correo de alertas que el owner fija al desplegar, el mapeo
+  operación por operación de la lista de límites, cómo registra su 429 el tablero (`GET /operations/dashboard`, fuera
+  de AI-05 por ADR-OBS-001), el texto de cada pantalla ante un 429 y los recorridos de negocio de la suite de punta a
+  punta.
+- AI-03 §18: el tenant va como seudónimo HMAC de la organización (llave en Key Vault, nunca el id real) y el actor
+  técnico solo como tipo de rol, únicamente en trazas y logs y con contexto de organización; nunca como etiqueta de
+  métrica, dimensión de alerta o de libro de trabajo ni dimensión de telemetría. La lista permitida de OBS-002
+  (`TelemetryDimensions.Allowed`) no los incluye.
+- AI-13 §10: enmienda mínima de "enrichment tenant/correlation sin PII" con la misma regla, porque se leía como el id
+  real de la organización.
+- Secuencia de diez PR en `docs/development/phase4-platform-plan.md`. Sin cambios en AI-02, AI-04, AI-05, AI-06, AI-07,
+  AI-10, AI-12, AI-15, AI-18, AI-24, código, paquetes, plantillas, roles, migraciones ni flujos cross-module.
+
+## Rutas: el repartidor (DRV-) en cada fila de la lista (UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12) — 2026-10-12
+
+- Pregunta y respuesta literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR
+  (AI-01 §7): "En la lista de Rutas, varias rutas del mismo día se ven iguales ("Ruta del 12 de octubre de 2026") sin
+  decir de qué repartidor son. ¿Agrego el DRV- a cada fila?" → "Sí, DRV- en cada fila (Recommended)" ("Cada ruta de la
+  lista muestra "Ruta del 12 de octubre de 2026 · DRV-1a2b3c4d". Solo pantalla, sin cambiar el API."); no elegida: "No
+  por ahora" ("La lista queda como está; el repartidor se ve al abrir la ruta.").
+- AI-07 `route_planner.list` (`decision_amendment`, `display` y `driver`), `sources.drivers` y `decision_amendments`;
+  la ruta `/ops/routes` suma la decisión. Cada fila dice "Ruta del 12 de octubre de 2026 · DRV-1a2b3c4d" con la
+  referencia de la misma lectura de `listOrganizationDrivers` que ya hacen "Crear ruta" y el encabezado del detalle
+  (cualquier estado; ninguna lectura más). Un repartidor que esa lectura no trae, o una lectura fallida, es "Repartidor
+  no disponible", como en el detalle; mientras se lee, la fila muestra solo el nombre por fecha; nunca el id. Se
+  conservan el orden del servidor, los nombres por fecha, el estado, las paradas y el costo total; el nombre accesible
+  de cada fila sigue siendo su texto.
+- Sin cambios en AI-04, AI-05, AI-06, AI-18, backend, roles, capacidades, migraciones ni flujos cross-module.
+
 ## Roles propios en la organización activa: `GET /me/organization-roles` (ORG-MY-ROLES-2026-10-12) — 2026-10-12
 
 - Preguntas y respuestas literales del project owner (2026-10-12), registradas en `decision-log.md` como cambio MAJOR

@@ -15,7 +15,7 @@ import {
   type ManualRouteDetail,
   type ManualRouteStop,
 } from "../contracts/manual-route";
-import { routeDriverText } from "../state/create-route-form-controller";
+import { routeDriverText, routeListDriverText, type CreateRouteFormState } from "../state/create-route-form-controller";
 import type { RouteGuide, RoutesNotice } from "../state/manual-routes-controller";
 import { useCreateRouteForm } from "../state/use-create-route-form";
 import { useManualRoutes } from "../state/use-manual-routes";
@@ -30,6 +30,8 @@ import { CreateRouteForm } from "./create-route-form";
  * named by its date ("Ruta del 12 de octubre de 2026", "Ruta sin fecha"), its driver by the DRV- reference and each
  * stop by its guía; "Agregar entrega" takes the guía (ORD_…). Every refused change says why, with "Verificar
  * identidad" when only MFA is missing. Ids are keys and option values only, never text.
+ * UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12 ("Sí, DRV- en cada fila (Recommended)"): each row of the list also names its
+ * driver by DRV-, from the same listOrganizationDrivers read as "Crear ruta" and the detail.
  */
 export function ManualRoutesShell() {
   const { state, controller } = useManualRoutes();
@@ -57,6 +59,7 @@ export function ManualRoutesShell() {
           <h2>Rutas</h2>
           <RouteList
             routes={state.routes}
+            drivers={form.state}
             truncated={state.routesTruncated}
             selectedId={selected?.id ?? null}
             onSelect={(routeId) => void controller.select(routeId)}
@@ -99,25 +102,37 @@ export function RoutesNoticeView({ notice }: { readonly notice: RoutesNotice }) 
   );
 }
 
-/** The routes in the server's order, each by its date name, status, stops and assignment cost total. */
+/**
+ * The routes in the server's order, each by its date name and driver ("Ruta del 12 de octubre de 2026 ·
+ * DRV-1a2b3c4d", UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12), status, stops and assignment cost total. A driver the
+ * drivers read does not have is "Repartidor no disponible"; while that read is in flight the row shows the date name
+ * alone; never an id. Each row's accessible name is its text.
+ */
 export function RouteList({
   routes,
+  drivers,
   truncated,
   selectedId,
   onSelect,
 }: {
   readonly routes: readonly ManualRoute[];
+  /** The listOrganizationDrivers read of "Crear ruta", which also names the driver of the detail. */
+  readonly drivers: Pick<CreateRouteFormState, "drivers" | "driverReferences">;
   readonly truncated: boolean;
   readonly selectedId: string | null;
   readonly onSelect: (routeId: string) => void;
 }) {
   return (
     <>
-      <ul className="opsRouteList">{routes.map((route) => <li key={route.id}>
-        <button type="button" aria-current={selectedId === route.id} onClick={() => onSelect(route.id)}>
-          <strong>{routeName(route)}</strong><span>{routeStatusLabels[route.status]}</span>
-          <span>{routeStopsText(route.stop_count)} · <Money cents={route.assignment_cost_cents_total} currency={false} /></span>
-        </button></li>)}</ul>
+      <ul className="opsRouteList">{routes.map((route) => {
+        const driver = routeListDriverText(drivers, route.driver_id);
+        return <li key={route.id}>
+          <button type="button" aria-current={selectedId === route.id} onClick={() => onSelect(route.id)}>
+            <strong>{driver === null ? routeName(route) : `${routeName(route)} · ${driver}`}</strong>
+            <span>{routeStatusLabels[route.status]}</span>
+            <span>{routeStopsText(route.stop_count)} · <Money cents={route.assignment_cost_cents_total} currency={false} /></span>
+          </button></li>;
+      })}</ul>
       {truncated && <p className="fieldHint">Hay más rutas de las que esta lista muestra; algunas no aparecen.</p>}
     </>
   );

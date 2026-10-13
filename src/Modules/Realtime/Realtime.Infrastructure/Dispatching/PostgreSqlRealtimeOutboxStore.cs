@@ -46,7 +46,7 @@ internal interface IRealtimeOutboxStore
 }
 
 internal sealed class PostgreSqlRealtimeOutboxStore(
-    RealtimeWorkerConnectionFactory connections) : IRealtimeOutboxStore
+    RealtimeDispatcherConnectionFactory connections) : IRealtimeOutboxStore
 {
     public async Task<IReadOnlyList<ClaimedBusinessOutboxMessage>> ClaimBusinessAsync(
         string workerId,
@@ -56,7 +56,7 @@ internal sealed class PostgreSqlRealtimeOutboxStore(
     {
         await using var connection = await connections.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await SetWorkerRoleAsync(connection, transaction, cancellationToken);
+        await SetDispatcherRoleAsync(connection, transaction, cancellationToken);
         await using var command = new NpgsqlCommand(
             "SELECT * FROM security.claim_realtime_outbox(@worker_id,@batch_size,@lease);",
             connection,
@@ -100,7 +100,7 @@ internal sealed class PostgreSqlRealtimeOutboxStore(
     {
         await using var connection = await connections.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await SetWorkerRoleAsync(connection, transaction, cancellationToken);
+        await SetDispatcherRoleAsync(connection, transaction, cancellationToken);
         await using var command = new NpgsqlCommand(
             "SELECT * FROM security.claim_location_outbox(@worker_id,@batch_size,@lease);",
             connection,
@@ -194,7 +194,7 @@ internal sealed class PostgreSqlRealtimeOutboxStore(
     {
         await using var connection = await connections.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await SetWorkerRoleAsync(connection, transaction, cancellationToken);
+        await SetDispatcherRoleAsync(connection, transaction, cancellationToken);
         await using var command = new NpgsqlCommand(
             $"SELECT {function}(@id,@lease_token,@status,@error_code,@available_at);",
             connection,
@@ -217,7 +217,7 @@ internal sealed class PostgreSqlRealtimeOutboxStore(
     {
         await using var connection = await connections.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
-        await SetWorkerRoleAsync(connection, transaction, cancellationToken);
+        await SetDispatcherRoleAsync(connection, transaction, cancellationToken);
         await using var command = new NpgsqlCommand(
             $"SELECT {function}(interval '0 seconds',@batch_size,@maximum_attempts);",
             connection,
@@ -231,13 +231,18 @@ internal sealed class PostgreSqlRealtimeOutboxStore(
         return result;
     }
 
-    internal static async Task SetWorkerRoleAsync(
+    /// <summary>
+    /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: every dispatcher transaction runs as <c>paqueteria_realtime</c>
+    /// (NOBYPASSRLS; claim, settle and requeue only through the lease-token functions). A login that is not a member of
+    /// that role fails here, before any statement, so the Worker credential can never be used by mistake.
+    /// </summary>
+    internal static async Task SetDispatcherRoleAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
         CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand(
-            "SET LOCAL ROLE paqueteria_worker;",
+            "SET LOCAL ROLE paqueteria_realtime;",
             connection,
             transaction);
         await command.ExecuteNonQueryAsync(cancellationToken);

@@ -26,11 +26,15 @@ import {
 import type { DriverOfflineOperation } from "../offline/operation-contract";
 import type { ProjectedDriverStop } from "../offline/operation-projection";
 import type { DriverReportRole } from "../contracts/organization-roles";
-import type { DriverFailedDeliveryEnqueueResult } from "../state/driver-operations-controller";
+import {
+  driverMessageCallsDispatch,
+  type DriverFailedDeliveryEnqueueResult,
+} from "../state/driver-operations-controller";
 import {
   DriverProofPreview,
   driverProofPreviewProblemMessage,
 } from "../proofs/proof-preview";
+import { DriverDispatchCall } from "./driver-dispatch-call";
 import styles from "./driver-stops.module.css";
 
 /**
@@ -97,6 +101,7 @@ export function DriverFailedDelivery({
   stop,
   operations,
   reportRole,
+  dispatchPhone,
   disabled,
   onReport,
   onDiscardCollection,
@@ -106,6 +111,8 @@ export function DriverFailedDelivery({
   operations: readonly DriverOfflineOperation[];
   /** driverReportRole of the roles getMyOrganizationRoles answered (ORG-MY-ROLES-2026-10-12). */
   reportRole: DriverReportRole;
+  /** The organization's dispatch number getMyDispatchContact answered, or null (DRV-DISPATCH-CONTACT-2026-10-12). */
+  dispatchPhone: string | null;
   disabled: boolean;
   onReport: (
     reason: DriverFailedDeliveryReason,
@@ -122,6 +129,7 @@ export function DriverFailedDelivery({
     <FailedDeliverySection
       availability={availability}
       orderId={stop.order_id}
+      dispatchPhone={dispatchPhone}
       disabled={disabled}
       onReport={onReport}
       onDiscardCollection={onDiscardCollection}
@@ -133,12 +141,19 @@ export function DriverFailedDelivery({
 export function FailedDeliverySection({
   availability,
   orderId,
+  dispatchPhone = null,
   disabled,
   onReport,
   onDiscardCollection,
 }: Readonly<{
   availability: DriverFailedDeliveryAvailability;
   orderId: string;
+  /**
+   * DRV-DISPATCH-CONTACT-2026-10-12: with a number, "Llamar a despacho" goes
+   * next to every text here that asks to call dispatch; null keeps the text
+   * alone.
+   */
+  dispatchPhone?: string | null;
   disabled: boolean;
   onReport: (
     reason: DriverFailedDeliveryReason,
@@ -182,6 +197,7 @@ export function FailedDeliverySection({
       return (
         <section className={styles.failedDelivery} aria-label={failedDeliveryCopy.open}>
           <p className={styles.failedDeliveryNote}>{failedDeliveryCopy.codRecorded}</p>
+          <DriverDispatchCall phoneE164={dispatchPhone} />
         </section>
       );
     case "dispatch-role":
@@ -204,6 +220,7 @@ export function FailedDeliverySection({
           key={orderId}
           orderId={orderId}
           paymentReason={availability.paymentReason}
+          dispatchPhone={dispatchPhone}
           disabled={disabled}
           onReport={onReport}
         />
@@ -253,11 +270,13 @@ function SavedCollectionNotice({
 function FailedDeliveryReport({
   orderId,
   paymentReason,
+  dispatchPhone,
   disabled,
   onReport,
 }: Readonly<{
   orderId: string;
   paymentReason: boolean;
+  dispatchPhone: string | null;
   disabled: boolean;
   onReport: (
     reason: DriverFailedDeliveryReason,
@@ -332,6 +351,7 @@ function FailedDeliveryReport({
       photoChosen={photo !== null}
       disabled={disabled || sending}
       problem={problem}
+      dispatchPhone={dispatchPhone}
       headingRef={headingRef}
       onChoosePrimary={(value) => {
         setPrimary(value);
@@ -368,6 +388,7 @@ export function FailedDeliveryForm({
   photoChosen,
   disabled,
   problem,
+  dispatchPhone = null,
   headingRef,
   onChoosePrimary,
   onChooseOther,
@@ -382,6 +403,8 @@ export function FailedDeliveryForm({
   photoChosen: boolean;
   disabled: boolean;
   problem: string | null;
+  /** DRV-DISPATCH-CONTACT-2026-10-12: "Llamar a despacho" next to a refusal that asks to call dispatch. */
+  dispatchPhone?: string | null;
   headingRef?: React.RefObject<HTMLHeadingElement | null>;
   onChoosePrimary: (value: DriverFailedDeliveryReason | typeof OtherReasonChoice) => void;
   onChooseOther: (value: DriverFailedDeliveryReason) => void;
@@ -474,6 +497,9 @@ export function FailedDeliveryForm({
         <p className={styles.proofProblem} role="alert">
           {problem}
         </p>
+      ) : null}
+      {driverMessageCallsDispatch(problem) ? (
+        <DriverDispatchCall phoneE164={dispatchPhone} />
       ) : null}
     </section>
   );

@@ -4719,6 +4719,92 @@ class DependencyAdmissionTests(unittest.TestCase):
             all(item["id"].startswith("Microsoft.Extensions.") for item in entry["baseline_package_removals"])
         )
 
+    def test_committed_policy_registers_obs_003_opentelemetry_with_exact_amendments(self):
+        policy = rel000.load_remediation_policy(REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH)
+        (entry,) = [item for item in policy["dependency_admissions"] if item["id"] == "OBS-003-OPENTELEMETRY"]
+        self.assertEqual("deps/obs-003-opentelemetry", entry["authorized_source_branch"])
+        self.assertEqual("GOV-DEPENDENCY-ADMISSION-001", entry["owner_decision_id"])
+        for decision in (
+            "OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12",
+            "GOV-REL000-CHAINED-UPGRADES-2026-10-12",
+            "OBS-003-TEST-EXTENSIONS-ADMISSION-2026-10-12",
+        ):
+            self.assertIn(decision, entry["description"])
+        self.assertEqual(
+            [("Azure.Monitor.OpenTelemetry.Exporter", "1.10.0"), ("OpenTelemetry.Extensions.Hosting", "1.19.1")],
+            [(item["id"], item["version"]) for item in entry["admitted_direct_packages"]],
+        )
+        self.assertEqual(
+            [
+                ("Microsoft.Extensions.Configuration", "10.0.0"),
+                ("Microsoft.Extensions.Configuration.Binder", "10.0.0"),
+                ("Microsoft.Extensions.Configuration.EnvironmentVariables", "10.0.0"),
+                ("Microsoft.Extensions.Logging.Configuration", "10.0.0"),
+                ("Microsoft.Extensions.Options.ConfigurationExtensions", "10.0.0"),
+                ("OpenTelemetry", "1.19.1"),
+                ("OpenTelemetry.Api", "1.19.1"),
+                ("OpenTelemetry.Api.ProviderBuilderExtensions", "1.19.1"),
+                ("OpenTelemetry.PersistentStorage.Abstractions", "1.1.1"),
+                ("OpenTelemetry.PersistentStorage.FileSystem", "1.1.1"),
+            ],
+            [(item["id"], item["version"]) for item in entry["admitted_transitive_packages"]],
+        )
+        locks = [
+            "src/Paqueteria.Api/packages.lock.json",
+            "src/Paqueteria.Worker/packages.lock.json",
+            "tests/Paqueteria.ArchitectureTests/packages.lock.json",
+            "tests/Paqueteria.IntegrationTests/packages.lock.json",
+        ]
+        self.assertEqual(["Directory.Packages.props", *locks], entry["allowed_dependency_files"])
+        self.assertEqual(entry["allowed_dependency_files"], entry["required_dependency_files"])
+        self.assertNotIn("tests/Paqueteria.RealtimeTestHost/packages.lock.json", entry["allowed_dependency_files"])
+        self.assertEqual(
+            ["src/Paqueteria.Api/Paqueteria.Api.csproj", "src/Paqueteria.Worker/Paqueteria.Worker.csproj"],
+            entry["allowed_project_files"],
+        )
+        # Azure.Core 1.63.0 and the five moves it forces: new versions of ADP-001-AZURE packages,
+        # each reached by one exact upgrade step in each of the four lockfiles.
+        moves = {
+            "Azure.Core": ("1.61.0", "1.63.0"),
+            "Microsoft.Bcl.AsyncInterfaces": ("10.0.9", "10.0.10"),
+            "Microsoft.Identity.Client": ("4.84.2", "4.90.0"),
+            "Microsoft.Identity.Client.Extensions.Msal": ("4.84.2", "4.90.0"),
+            "System.ClientModel": ("1.15.0", "1.16.0"),
+            "System.Memory.Data": ("10.0.9", "10.0.10"),
+        }
+        self.assertEqual(
+            {package: (target, locks) for package, (_, target) in moves.items()},
+            {item["id"]: (item["version"], item["lock_files"]) for item in entry["additional_package_versions"]},
+        )
+        adp = {
+            item["id"]: item
+            for item in next(
+                admission for admission in policy["dependency_admissions"] if admission["id"] == "ADP-001-AZURE"
+            )["admitted_transitive_packages"]
+        }
+        self.assertEqual(
+            sorted((lock, package, *versions) for lock in locks for package, versions in moves.items()),
+            sorted(
+                (item["lock_file"], item["id"], item["from_version"], item["to_version"])
+                for item in entry["baseline_package_upgrades"]
+            ),
+        )
+        for item in entry["baseline_package_upgrades"]:
+            self.assertEqual(adp[item["id"]]["content_hash"], item["from_content_hash"])
+        self.assertNotIn("baseline_package_removals", entry)
+        # The IntegrationTests Microsoft.Bcl.AsyncInterfaces step continues ADP-001-AZURE's chain.
+        chain = rel000.admission_amendments(policy["dependency_admissions"])["upgrades"][
+            ("tests/Paqueteria.IntegrationTests/packages.lock.json", "net10.0", "microsoft.bcl.asyncinterfaces")
+        ]
+        self.assertEqual(
+            [("ADP-001-AZURE", "6.0.0", "10.0.9"), ("OBS-003-OPENTELEMETRY", "10.0.9", "10.0.10")],
+            [(step["admission_id"], step["from_version"], step["to_version"]) for step in chain],
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(policy, "deps/obs-003-opentelemetry"),
+        )
+
     def test_v2_policy_is_rejected_from_the_tree(self):
         value = self.policy([])
         value["format_version"] = "paquetenvia-rel000-security-remediation-policy-v2"
@@ -5070,7 +5156,7 @@ class DependencyAdmissionAmendmentTests(unittest.TestCase):
         self.assertEqual(["app/packages.lock.json", "host/packages.lock.json"], lockfiles)
         self.assertEqual(["host/packages.lock.json"], usage["Shared.Abstractions@8.14.0"])
         self.assertEqual(
-            ["app/packages.lock.json"], usage["upgrade:app/packages.lock.json:net10.0:Old.Async"]
+            ["app/packages.lock.json"], usage["upgrade:app/packages.lock.json:net10.0:Old.Async@10.0.9"]
         )
         self.assertEqual(
             ["app/packages.lock.json"], usage["removal:app/packages.lock.json:net10.0:Pruned.Transitive"]
@@ -5194,6 +5280,453 @@ class DependencyAdmissionAmendmentTests(unittest.TestCase):
         )
         with self.assertRaises(rel000.ValidationFailure):
             self.graph([self.other()])
+
+    # --- upgrade chains across admissions (GOV-REL000-CHAINED-UPGRADES-2026-10-12) --
+    #
+    # DEP-AMEND (merged) moved app Old.Async 6.0.0 -> 10.0.9 and admits Admitted.Transitive
+    # 3.1.0. DEP-CHAIN, a later admission, continues the chain 10.0.9 -> 10.0.10 and moves
+    # the non-baseline host Admitted.Transitive 3.1.0 -> 3.2.0, both onto its own declared
+    # additional versions.
+
+    CHAIN_DIRECT_HASH = "C" * 86 + "=="
+    NEWER_HASH = "W" * 86 + "=="
+    MOVED_HASH = "M" * 86 + "=="
+
+    def chain_admission(self, **overrides: Any) -> dict[str, Any]:
+        value = {
+            "id": "DEP-CHAIN",
+            "mode": rel000.DEPENDENCY_ADMISSION,
+            "status": "ACTIVE",
+            "owner_decision_id": "GOV-DEPENDENCY-ADMISSION-001",
+            "authorized_source_branch": "deps/chain",
+            "ecosystem": "nuget",
+            "admitted_direct_packages": [
+                {"id": "Chain.Direct", "version": "1.0.0", "content_hash": self.CHAIN_DIRECT_HASH}
+            ],
+            "admitted_transitive_packages": [],
+            "additional_package_versions": [
+                {
+                    "id": "Admitted.Transitive",
+                    "version": "3.2.0",
+                    "content_hash": self.MOVED_HASH,
+                    "lock_files": ["host/packages.lock.json"],
+                },
+                {
+                    "id": "Old.Async",
+                    "version": "10.0.10",
+                    "content_hash": self.NEWER_HASH,
+                    "lock_files": ["app/packages.lock.json"],
+                },
+            ],
+            "baseline_package_upgrades": [
+                {
+                    "lock_file": "app/packages.lock.json",
+                    "framework": "net10.0",
+                    "id": "Old.Async",
+                    "from_version": "10.0.9",
+                    "from_content_hash": self.H["New"],
+                    "to_version": "10.0.10",
+                    "to_content_hash": self.NEWER_HASH,
+                },
+                {
+                    "lock_file": "host/packages.lock.json",
+                    "framework": "net10.0",
+                    "id": "Admitted.Transitive",
+                    "from_version": "3.1.0",
+                    "from_content_hash": self.H["Transitive"],
+                    "to_version": "3.2.0",
+                    "to_content_hash": self.MOVED_HASH,
+                },
+            ],
+            "allowed_dependency_files": [
+                "Directory.Packages.props",
+                "app/packages.lock.json",
+                "host/packages.lock.json",
+            ],
+            "required_dependency_files": [
+                "Directory.Packages.props",
+                "app/packages.lock.json",
+                "host/packages.lock.json",
+            ],
+            "allowed_project_files": ["app/App.csproj"],
+        }
+        value.update(overrides)
+        return value
+
+    def chained(self, **overrides: Any) -> list[dict[str, Any]]:
+        return [self.other(), self.admission(status="MERGED"), self.chain_admission(**overrides)]
+
+    def promote_first_admission(self) -> str:
+        """Deliver DEP-AMEND and commit it: the tested base of the chained pull request."""
+
+        self.apply()
+        self.git("add", ".")
+        self.git("commit", "-qm", "DEP-AMEND delivered")
+        return self.git("rev-parse", "HEAD")
+
+    def apply_chain(self) -> None:
+        props = (self.root / "Directory.Packages.props").read_text(encoding="utf-8")
+        (self.root / "Directory.Packages.props").write_text(
+            props.replace(
+                '    <PackageVersion Include="Baseline.Direct" Version="1.2.3" />\n',
+                '    <PackageVersion Include="Baseline.Direct" Version="1.2.3" />\n'
+                '    <PackageVersion Include="Chain.Direct" Version="1.0.0" />\n',
+            ),
+            encoding="utf-8",
+        )
+        self.write_project(
+            '<PackageReference Include="Admitted.Direct" /><PackageReference Include="Chain.Direct" />'
+        )
+        self.edit(
+            "app",
+            lambda nodes: (
+                nodes.__setitem__(
+                    "Chain.Direct",
+                    {
+                        "type": "Direct",
+                        "requested": "[1.0.0, )",
+                        "resolved": "1.0.0",
+                        "contentHash": self.CHAIN_DIRECT_HASH,
+                    },
+                ),
+                nodes["Old.Async"].update(resolved="10.0.10", contentHash=self.NEWER_HASH),
+            ),
+        )
+        self.edit(
+            "host",
+            lambda nodes: nodes["Admitted.Transitive"].update(resolved="3.2.0", contentHash=self.MOVED_HASH),
+        )
+
+    def chain_diff(self, tested_base: str, admissions=None, branch: str = "deps/chain"):
+        return rel000.validate_dependency_diff(
+            self.root,
+            tested_base,
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            None,
+            self.chained() if admissions is None else admissions,
+            branch,
+            self.TODAY,
+        )
+
+    def test_chained_upgrade_is_accepted_against_the_tested_base_and_the_baseline(self):
+        rel000.validate_remediation_policy(self.policy(self.chained()))
+        tested_base = self.promote_first_admission()
+        # While the chained admission is registered but not delivered, the baseline graph
+        # holds through the first declared step only.
+        lockfiles, usage = self.graph(self.chained())
+        self.assertEqual(["app/packages.lock.json", "host/packages.lock.json"], lockfiles)
+        self.assertEqual(["app/packages.lock.json"], usage["upgrade:app/packages.lock.json:net10.0:Old.Async@10.0.9"])
+        self.assertNotIn("upgrade:app/packages.lock.json:net10.0:Old.Async@10.0.10", usage)
+
+        self.apply_chain()
+        result = self.chain_diff(tested_base)
+        self.assertEqual("ADMITTED_DEPENDENCIES", result["dependency_diff_against_base"])
+        self.assertEqual(["DEP-CHAIN"], result["dependency_admission_ids"])
+        self.assertEqual(
+            ["app/packages.lock.json", "host/packages.lock.json"], result["baseline_package_graph_lockfiles"]
+        )
+        _, introduced = rel000.package_graph_lockfile_diff(
+            self.root, tested_base, self.changed_since(tested_base), self.chained()
+        )
+        # Each upgrade that lands on a declared additional version delivers it in that lockfile.
+        self.assertEqual(["app/packages.lock.json"], introduced["Old.Async@10.0.10"])
+        self.assertEqual(["host/packages.lock.json"], introduced["Admitted.Transitive@3.2.0"])
+        self.assertEqual(
+            ["app/packages.lock.json"], introduced["upgrade:app/packages.lock.json:net10.0:Old.Async@10.0.10"]
+        )
+        self.assertNotIn("upgrade:app/packages.lock.json:net10.0:Old.Async@10.0.9", introduced)
+
+        # Against the MVP-0 style baseline the node moves 6.0.0 -> 10.0.9 -> 10.0.10 through
+        # both exact declared steps, each credited to its own admission.
+        lockfiles, usage = self.graph(self.chained(status="MERGED"))
+        self.assertEqual(["app/packages.lock.json", "host/packages.lock.json"], lockfiles)
+        amendments = rel000.admission_amendments(self.chained())
+        catalog = rel000.admitted_package_catalog(self.chained())
+        for key, admission_id in (
+            ("upgrade:app/packages.lock.json:net10.0:Old.Async@10.0.9", "DEP-AMEND"),
+            ("upgrade:app/packages.lock.json:net10.0:Old.Async@10.0.10", "DEP-CHAIN"),
+            ("Admitted.Transitive@3.2.0", "DEP-CHAIN"),
+        ):
+            with self.subTest(key=key):
+                self.assertIn(key, usage)
+                self.assertEqual(admission_id, rel000.usage_admission_id(key, catalog, amendments))
+        self.assertEqual(
+            [("6.0.0", "10.0.9", "DEP-AMEND"), ("10.0.9", "10.0.10", "DEP-CHAIN")],
+            [
+                (step["from_version"], step["to_version"], step["admission_id"])
+                for step in amendments["upgrades"][("app/packages.lock.json", "net10.0", "old.async")]
+            ],
+        )
+
+    def changed_since(self, tested_base: str) -> list[str]:
+        return sorted(
+            set(self.git("diff", "--name-only", tested_base).splitlines())
+            | set(self.git("ls-files", "--others", "--exclude-standard").splitlines())
+        )
+
+    def test_chained_step_with_a_from_version_mismatch_is_rejected(self):
+        step = self.chain_admission()["baseline_package_upgrades"][0]
+        cases = {
+            "another from version": dict(step, from_version="10.0.8"),
+            "another from content hash": dict(step, from_content_hash=self.OLD_HASH),
+            "competing step from the chain start": dict(step, from_version="6.0.0", from_content_hash=self.OLD_HASH),
+        }
+        for label, upgrade in cases.items():
+            with self.subTest(label=label):
+                upgrades = [upgrade, self.chain_admission()["baseline_package_upgrades"][1]]
+                self.assert_reason(
+                    "DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT",
+                    lambda: rel000.validate_remediation_policy(
+                        self.policy(self.chained(baseline_package_upgrades=upgrades))
+                    ),
+                )
+
+    def test_overlapping_declarations_across_admissions_are_rejected(self):
+        upgrades = self.chain_admission()["baseline_package_upgrades"]
+        additional = self.chain_admission()["additional_package_versions"]
+        removal = self.admission()["baseline_package_removals"][0]
+        cases = {
+            "removal of a node another admission upgraded": {
+                "baseline_package_upgrades": upgrades[1:],
+                "additional_package_versions": additional[:1],
+                "baseline_package_removals": [
+                    dict(removal, id="Old.Async", version="10.0.9", content_hash=self.H["New"])
+                ],
+            },
+            "removal of a node another admission removed": {"baseline_package_removals": [removal]},
+            "chain that revisits a version": {
+                "baseline_package_upgrades": [
+                    dict(upgrades[0], to_version="6.0.0", to_content_hash=self.OLD_HASH),
+                    upgrades[1],
+                ],
+                "additional_package_versions": [
+                    additional[0],
+                    dict(additional[1], version="6.0.0", content_hash=self.OLD_HASH),
+                ],
+            },
+            # Another spelling of a visited version still carries the visited content hash.
+            "chain that revisits a content hash": {
+                "baseline_package_upgrades": [
+                    dict(upgrades[0], to_version="6.0.0.0", to_content_hash=self.OLD_HASH),
+                    upgrades[1],
+                ],
+                "additional_package_versions": [
+                    additional[0],
+                    dict(additional[1], version="6.0.0.0", content_hash=self.OLD_HASH),
+                ],
+            },
+        }
+        for label, overrides in cases.items():
+            with self.subTest(label=label):
+                self.assert_reason(
+                    "DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT",
+                    lambda: rel000.validate_remediation_policy(self.policy(self.chained(**overrides))),
+                )
+        # The index itself never lets a later declaration replace an earlier one.
+        competing = self.chained(
+            baseline_package_upgrades=[dict(upgrades[0], from_version="6.0.0", from_content_hash=self.OLD_HASH)]
+        )
+        self.assert_reason(
+            "DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT", lambda: rel000.admission_amendments(competing)
+        )
+
+    def test_chained_upgrade_onto_an_undeclared_version_is_rejected(self):
+        tested_base = self.promote_first_admission()
+        for label, change in {
+            "undeclared version": lambda nodes: nodes["Old.Async"].update(resolved="10.0.11"),
+            "declared version with another hash": lambda nodes: nodes["Old.Async"].update(
+                contentHash="Z" * 86 + "=="
+            ),
+            "back to the intermediate version with the final hash": lambda nodes: nodes["Old.Async"].update(
+                resolved="10.0.9"
+            ),
+        }.items():
+            with self.subTest(label=label):
+                self.git("checkout", "--", ".")
+                self.apply_chain()
+                self.edit("app", change)
+                self.assert_reason(
+                    "DEPENDENCY_ADMISSION_BASELINE_PACKAGE_CHANGED", lambda: self.chain_diff(tested_base)
+                )
+                self.assert_reason(
+                    "DEPENDENCY_ADMISSION_BASELINE_PACKAGE_CHANGED",
+                    lambda: self.graph(self.chained(status="MERGED")),
+                )
+        # The registry still refuses a step onto a version its admission does not declare.
+        step = dict(self.chain_admission()["baseline_package_upgrades"][0], to_version="10.0.11")
+        self.assert_reason(
+            "DEPENDENCY_ADMISSION_POLICY_INVALID",
+            lambda: rel000.validate_remediation_policy(
+                self.policy(
+                    self.chained(
+                        baseline_package_upgrades=[step, self.chain_admission()["baseline_package_upgrades"][1]]
+                    )
+                )
+            ),
+        )
+
+    def test_chained_upgrade_needs_its_admission_branch_and_full_delivery(self):
+        tested_base = self.promote_first_admission()
+        self.apply_chain()
+        self.assert_reason(
+            "DEPENDENCY_ADMISSION_BRANCH_NOT_AUTHORIZED", lambda: self.chain_diff(tested_base, branch="deps/amend")
+        )
+        self.assert_reason(
+            "DEPENDENCY_ADMISSION_NOT_ACTIVE", lambda: self.chain_diff(tested_base, self.chained(status="MERGED"))
+        )
+        with self.assertRaises(rel000.ValidationFailure):
+            self.chain_diff(tested_base, [self.other(), self.admission(status="MERGED")])
+        # The credit is per lockfile: an additional version named for a lockfile whose node
+        # was not upgraded is not delivered.
+        additional = self.chain_admission()["additional_package_versions"]
+        widened = [additional[0], dict(additional[1], lock_files=["app/packages.lock.json", "host/packages.lock.json"])]
+        failure = self.assert_reason(
+            "DEPENDENCY_ADMISSION_INCOMPLETE",
+            lambda: self.chain_diff(tested_base, self.chained(additional_package_versions=widened)),
+        )
+        self.assertEqual(["Old.Async@10.0.10"], failure.details["missing_lock_packages"])
+
+    def test_the_same_additional_version_twice_is_rejected_when_the_policy_loads(self):
+        # DEP-AMEND already declares Shared.Abstractions 8.14.0; the registry rejects a
+        # second declaration (any casing) before the amendment index is built.
+        shared = self.admission()["additional_package_versions"][0]
+        for spelling in ("Shared.Abstractions", "shared.abstractions"):
+            with self.subTest(spelling=spelling):
+                duplicated = [
+                    *self.chain_admission()["additional_package_versions"],
+                    dict(shared, id=spelling),
+                ]
+                admissions = self.chained(additional_package_versions=duplicated)
+                self.assert_reason(
+                    "DEPENDENCY_ADMISSION_POLICY_INVALID",
+                    lambda: rel000.validate_remediation_policy(self.policy(admissions)),
+                )
+                # The index's own branch is defensive: reachable only by a direct call.
+                self.assert_reason(
+                    "DEPENDENCY_ADMISSION_AMENDMENT_CONFLICT", lambda: rel000.admission_amendments(admissions)
+                )
+
+    # The single-step limit against a tested base comes from the single-admission rule of
+    # validate_dependency_admission_source: every step is credited to its own admission.
+
+    THIRD_DIRECT_HASH = "K" * 86 + "=="
+    THIRD_HASH = "J" * 86 + "=="
+
+    def third_admission(self) -> dict[str, Any]:
+        """A third admission that continues the Old.Async chain 10.0.10 -> 10.0.11."""
+
+        return {
+            "id": "DEP-THIRD",
+            "mode": rel000.DEPENDENCY_ADMISSION,
+            "status": "ACTIVE",
+            "owner_decision_id": "GOV-DEPENDENCY-ADMISSION-001",
+            "authorized_source_branch": "deps/third",
+            "ecosystem": "nuget",
+            "admitted_direct_packages": [
+                {"id": "Third.Direct", "version": "1.0.0", "content_hash": self.THIRD_DIRECT_HASH}
+            ],
+            "admitted_transitive_packages": [],
+            "additional_package_versions": [
+                {
+                    "id": "Old.Async",
+                    "version": "10.0.11",
+                    "content_hash": self.THIRD_HASH,
+                    "lock_files": ["app/packages.lock.json"],
+                }
+            ],
+            "baseline_package_upgrades": [
+                {
+                    "lock_file": "app/packages.lock.json",
+                    "framework": "net10.0",
+                    "id": "Old.Async",
+                    "from_version": "10.0.10",
+                    "from_content_hash": self.NEWER_HASH,
+                    "to_version": "10.0.11",
+                    "to_content_hash": self.THIRD_HASH,
+                }
+            ],
+            "allowed_dependency_files": ["Directory.Packages.props", "app/packages.lock.json"],
+            "required_dependency_files": ["Directory.Packages.props", "app/packages.lock.json"],
+            "allowed_project_files": ["app/App.csproj"],
+        }
+
+    def move_old_async(self, version: str, content_hash: str) -> None:
+        self.edit("app", lambda nodes: nodes["Old.Async"].update(resolved=version, contentHash=content_hash))
+
+    def test_a_jump_over_two_admissions_steps_is_rejected(self):
+        # Against the original base, 6.0.0 -> 10.0.10 would deliver DEP-AMEND's and DEP-CHAIN's steps.
+        self.move_old_async("10.0.10", self.NEWER_HASH)
+        for status in ("ACTIVE", "MERGED"):
+            for branch in ("deps/amend", "deps/chain"):
+                with self.subTest(first_admission=status, branch=branch):
+                    failure = self.assert_reason(
+                        "DEPENDENCY_ADMISSION_BRANCH_NOT_AUTHORIZED",
+                        lambda: self.chain_diff(
+                            self.base,
+                            [self.other(), self.admission(status=status), self.chain_admission()],
+                            branch,
+                        ),
+                    )
+                    self.assertEqual(["DEP-AMEND", "DEP-CHAIN"], failure.details["admission_ids"])
+
+    def test_a_three_step_chain_cannot_skip_the_middle_admission(self):
+        admissions = [*self.chained(), self.third_admission()]
+        rel000.validate_remediation_policy(self.policy(admissions))
+        self.assertEqual(
+            ["DEP-AMEND", "DEP-CHAIN", "DEP-THIRD"],
+            [
+                step["admission_id"]
+                for step in rel000.admission_amendments(admissions)["upgrades"][
+                    ("app/packages.lock.json", "net10.0", "old.async")
+                ]
+            ],
+        )
+        tested_base = self.promote_first_admission()
+        # 10.0.9 -> 10.0.11 from DEP-THIRD's branch would also deliver DEP-CHAIN's step.
+        self.move_old_async("10.0.11", self.THIRD_HASH)
+        for branch in ("deps/third", "deps/chain"):
+            with self.subTest(branch=branch):
+                failure = self.assert_reason(
+                    "DEPENDENCY_ADMISSION_BRANCH_NOT_AUTHORIZED",
+                    lambda: self.chain_diff(tested_base, admissions, branch),
+                )
+                self.assertEqual(["DEP-CHAIN", "DEP-THIRD"], failure.details["admission_ids"])
+
+    def test_the_later_branch_cannot_deliver_only_the_earlier_step(self):
+        # Against the original base, 6.0.0 -> 10.0.9 is DEP-AMEND's step only.
+        self.move_old_async("10.0.9", self.H["New"])
+        for status in ("ACTIVE", "MERGED"):
+            with self.subTest(first_admission=status):
+                failure = self.assert_reason(
+                    "DEPENDENCY_ADMISSION_BRANCH_NOT_AUTHORIZED",
+                    lambda: self.chain_diff(
+                        self.base,
+                        [self.other(), self.admission(status=status), self.chain_admission()],
+                        "deps/chain",
+                    ),
+                )
+                self.assertEqual("DEP-AMEND", failure.details["admission_id"])
+
+    def test_committed_admissions_index_as_single_step_chains(self):
+        policy = rel000.load_remediation_policy(REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH)
+        earlier = [
+            item for item in policy["dependency_admissions"] if item["id"] in {"AUTH-001-OIDC", "ADP-001-AZURE"}
+        ]
+        self.assertEqual(["AUTH-001-OIDC", "ADP-001-AZURE"], [item["id"] for item in earlier])
+        amendments = rel000.admission_amendments(earlier)
+        self.assertEqual(
+            {
+                ("tests/Paqueteria.IntegrationTests/packages.lock.json", "net10.0", "microsoft.bcl.asyncinterfaces"): [
+                    ("ADP-001-AZURE", "6.0.0", "10.0.9")
+                ]
+            },
+            {
+                node: [(step["admission_id"], step["from_version"], step["to_version"]) for step in chain]
+                for node, chain in amendments["upgrades"].items()
+            },
+        )
+        self.assertEqual(18, len(amendments["removals"]))
+        self.assertEqual({"ADP-001-AZURE"}, {entry["admission_id"] for entry in amendments["extras"].values()})
 
     # --- registry ---------------------------------------------------------------
 

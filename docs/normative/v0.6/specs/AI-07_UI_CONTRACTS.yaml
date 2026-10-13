@@ -74,7 +74,8 @@ routes:
       failure: the indicators show "Sin dato" and the list keeps working; a response that breaks the contract is
         discarded
     # UI-PHASE3-INBOX-2026-10-10: shown as "Tablero" in the app shell, after Bandeja; DISPATCHER and PLATFORM_ADMIN
-    # land on /ops/inbox instead, and /ops/dashboard?view=positions opens the positions view directly.
+    # land on /ops/inbox instead (VIEWER on /ops/orders, UI-PHASE3-ORDERS-LIST-2026-10-12), and
+    # /ops/dashboard?view=positions opens the positions view directly.
   # UI-PHASE3-INBOX-2026-10-10 (project owner, 2026-10-09, "avanza con la fase 3"): the dispatcher's work inbox
   # ("Bandeja de trabajo"), built only on existing operations; the backend and RLS remain the barrier.
   /ops/inbox:
@@ -89,6 +90,22 @@ routes:
     - UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11
     - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
     - UI-PHASE3-ROUTES-DAILY-2026-10-12
+  # UI-PHASE3-ORDERS-LIST-2026-10-12 (project owner, 2026-10-12, "Sí, lista de órdenes (Recommended)"): "Órdenes", the
+  # list of every order of the selected organization, the second item of the approved dispatcher menu; filtered by
+  # status and creation date through listOrders (ORD-LIST-DATE-FILTER-2026-10-12, "Agregar filtro de fecha al API
+  # (Recommended)"). The backend and RLS remain the barrier. VIEWER lands here after login (it has no inbox); the
+  # creation column comes in two steps ("En dos pasos (Recommended)") and FINANCE keeps its COD-pending list only ("No
+  # por ahora (Recommended)").
+  /ops/orders:
+    roles:
+    - platform_admin
+    - dispatcher
+    - viewer
+    release: MVP-1
+    screen_contract: order_list
+    decisions:
+    - UI-PHASE3-ORDERS-LIST-2026-10-12
+    - ORD-LIST-DATE-FILTER-2026-10-12
   # UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: the app shell top bar offers "Buscar guía" to the roles that open the
   # order detail (DISPATCHER, PLATFORM_ADMIN with MFA). It searches only the exact tracking number through
   # GET /orders?public_id= (listOrders); a match opens /ops/orders/:id and anything else shows "No encontramos esa
@@ -222,10 +239,12 @@ routes:
     # UI-PHASE3-ROUTES-NO-IDS-2026-10-12: errors by reason with the MFA step-up, readable dates, every page of the
     # list, "Agregar entrega" by guía and a detail without internal ids (route_planner errors, list, add_order and
     # detail).
+    # UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12: each row of the list also names its driver by DRV- (route_planner.list).
     screen_contract: route_planner
     decisions:
     - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
     - UI-PHASE3-ROUTES-NO-IDS-2026-10-12
+    - UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12
   /driver/stops:
     roles:
     - own_driver
@@ -395,8 +414,8 @@ screen_contracts:
     excluded_roles: VIEWER and every other role, exactly as for the operations dashboard and the queue counts; the
       shell does not offer the inbox to them and the API answers 403
     landing: DISPATCHER and PLATFORM_ADMIN land on /ops/inbox after login and after an organization switch away from a
-      page their role cannot use; FINANCE (/finance/cod), DRIVER (/driver/stops) and every other role (/ops/dashboard)
-      keep their landing
+      page their role cannot use; FINANCE (/finance/cod) and DRIVER (/driver/stops) keep their landing, VIEWER lands on
+      /ops/orders (UI-PHASE3-ORDERS-LIST-2026-10-12) and every other role on /ops/dashboard
     navigation: the shell lists Bandeja (/ops/inbox) first, then Tablero (/ops/dashboard), + Nueva orden, Rutas,
       Incidencias, Importar CSV, Repartidores (/ops/drivers, UI-PHASE3-DRIVERS-2026-10-11) and the finance items the
       role holds; the order detail belongs to Bandeja
@@ -611,13 +630,13 @@ screen_contracts:
     - finishing or discarding the driver's older DRAFT routes - AI-05 has no operation that takes a route out of DRAFT,
       so they stay listed (after today's) until after the pilot (UI-PHASE3-ROUTES-DAILY-2026-10-12;
       route_planner.not_supported)
-    - Órdenes menu item of the approved menu - no screen yet (Repartidores is /ops/drivers, UI-PHASE3-DRIVERS-2026-10-11)
   route_planner:
     release: MVP-1
     route: /ops/routes
     decision_amendments:
     - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
     - UI-PHASE3-ROUTES-NO-IDS-2026-10-12
+    - UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12
     authority: REST API + PostgreSQL
     sources:
       list: GET /routes
@@ -628,7 +647,8 @@ screen_contracts:
       reorder: PUT /routes/{routeId}/stops/order
       # UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11: the selectors of create_form.
       drivers: GET /drivers (listOrganizationDrivers), every page, the client of /ops/drivers; the same read names the
-        driver of the detail (UI-PHASE3-ROUTES-NO-IDS-2026-10-12)
+        driver of the detail (UI-PHASE3-ROUTES-NO-IDS-2026-10-12) and of each row of the list
+        (UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12); the screen makes no other drivers read
       cities: GET /cities (listCities)
       service_areas: GET /service-areas?city_id= (listServiceAreas), once a city is chosen
       # UI-PHASE3-ROUTES-NO-IDS-2026-10-12: add_order by guía and the guía of every stop.
@@ -676,10 +696,20 @@ screen_contracts:
       idempotency: unchanged - every change sends its own fresh Idempotency-Key
     list:
       decision: UI-PHASE3-ROUTES-NO-IDS-2026-10-12
+      decision_amendment: UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12
       pages: every page of listRoutes, one after another, in the server's order (never reordered), up to 10 pages; a
         longer list says some routes are not shown and a repeated cursor fails the read
-      display: each route by its date name ("Ruta del 12 de octubre de 2026" or "Ruta sin fecha", never YYYY-MM-DD),
-        status, stops and assignment cost total; a scheduled date that is not a real calendar date fails the read
+      display: each route by its date name ("Ruta del 12 de octubre de 2026" or "Ruta sin fecha", never YYYY-MM-DD)
+        and its driver, status, stops and assignment cost total; a scheduled date that is not a real calendar date
+        fails the read
+      # UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12 (project owner, 2026-10-12, "Sí, DRV- en cada fila (Recommended)": "Cada
+      # ruta de la lista muestra "Ruta del 12 de octubre de 2026 · DRV-1a2b3c4d". Solo pantalla, sin cambiar el
+      # API."): several routes of the same day read alike without their driver.
+      driver: after the date name, "Ruta del 12 de octubre de 2026 · DRV-1a2b3c4d" - the DRV- reference from the
+        listOrganizationDrivers read the screen already makes for create_form and detail (any status; no other read);
+        a driver that read does not return, or a failed read, is "Ruta del 12 de octubre de 2026 · Repartidor no
+        disponible"; while that read is in flight the row shows its date name alone; never the driver id. The rows keep
+        the server's order and their date names, and each row's accessible name is its visible text
     add_order:
       decision: UI-PHASE3-ROUTES-NO-IDS-2026-10-12
       field: '"Guía (ORD_…)" instead of the order id'
@@ -840,6 +870,9 @@ screen_contracts:
     - 'the last successful answer of GET /me/organization-roles for the session''s partition: the role codes only
       (ORG-MY-ROLES-2026-10-12, so "No se pudo entregar" keeps its dispatch_role rule offline); it leaves the phone
       with the partition''s snapshot on 401 or 403 and with every snapshot on logout'
+    - 'the last successful answer of GET /driver/me/dispatch-contact for the session''s partition: the organization''s
+      dispatch number or null, nothing else (DRV-DISPATCH-CONTACT-2026-10-12, so "Llamar a despacho" works offline); it
+      leaves the phone with the partition''s snapshot on 401 or 403 and with every snapshot on logout'
     - pending events
     - pending proof metadata
     privacy:
@@ -890,6 +923,8 @@ screen_contracts:
         longer returns leaves the phone with the next snapshot
       - logging out wipes every saved snapshot of the phone before leaving; 401 or 403 wipes the session's snapshot
       - the saved roles answer (ORG-MY-ROLES-2026-10-12) is wiped with the snapshots, on logout and on 401 or 403
+      - the saved dispatch contact answer (DRV-DISPATCH-CONTACT-2026-10-12) is wiped with the snapshots, on logout and
+        on 401 or 403
       - the offline queue survives a logout and carries no address or contact datum
       - every listMyStops answer carries Cache-Control no-store
       - synthetic data only until GATE-007 closes
@@ -1026,7 +1061,8 @@ screen_contracts:
         FAILED_ATTEMPT at a later version only when its own incident exists. A failed attempt dispatch registered on
         its own never confirms a report that was not sent; the report is held with "Despacho ya registró el intento
         fallido de esta entrega, así que tu reporte no se envió. Descártalo."
-      offline: one closed operation of the offline queue (FAILED_DELIVERY, operation schema 3, IndexedDB version 4)
+      offline: one closed operation of the offline queue (FAILED_DELIVERY, operation schema 3, IndexedDB version 4;
+        version 5 since DRV-DISPATCH-CONTACT-2026-10-12, which only adds the dispatch contact store)
         holds the photo, the four keys and its progress (session, upload, proof id, incident requested, incident id),
         so a retry or a new tab resumes at the next step; it is the first action of its order at the door, so no other
         action of the order is sent while it is pending, retrying or held; the 72-hour rule and the per-partition
@@ -1048,7 +1084,9 @@ screen_contracts:
         held) the report is not offered and the stop asks to discard the collection first if it was a mistake, with
         the existing discard confirmation; with the cash recorded on the server (DriverStop.cod.recorded, or a
         collection the server already accepted) it is not offered and the stop asks the driver to call dispatch, who
-        decides and coordinates returning the cash (no phone number is shown; the app has none); the sync holds a
+        decides and coordinates returning the cash (the text never carries a number; when the organization''s
+        dispatch number is known, "Llamar a despacho" goes next to it: dispatch_contact,
+        DRV-DISPATCH-CONTACT-2026-10-12); the sync holds a
         queued report for attention when a collection of the same order is saved or the cash is recorded, checking
         before the upload session, before openIncident and before the transition. The incident is never requested
         while the cash is saved or recorded; when the cash is recorded after the incident was opened, the
@@ -1064,6 +1102,37 @@ screen_contracts:
         residual risk and a pending server follow-up (a proof type of its own for a failed attempt, or a delivery
         that cites its photo). The PWA reduces it by checking the attempt and the cash before the upload session and
         again before openIncident; in normal use a delivery always uploads its own photo'
+    # DRV-DISPATCH-CONTACT-2026-10-12 (project owner, 2026-10-12, "Sí, configurable (Recommended)": "Un número de
+    # despacho por empresa en la configuración del piloto; la app lo muestra como botón "Llamar a despacho". Tú me das
+    # el número cuando lo tengas."; not chosen: "No, ya lo saben"): the driver calls dispatch from the app where the
+    # app tells it to call dispatch about a recorded cash collection.
+    dispatch_contact:
+      decision: DRV-DISPATCH-CONTACT-2026-10-12
+      source: GET /driver/me/dispatch-contact (getMyDispatchContact, DriverDispatchContact) - the number the server
+        configuration (Drivers:DispatchContacts, empty by default) holds for the session's organization, or null;
+        DRIVER members only
+      label: Llamar a despacho
+      control: 'a "tel:" link to the E.164 number ("tel:+52…"), at least 44 x 44 px; the number itself is never written
+        on the screen'
+      shown_next_to:
+      - 'failed_delivery.cash on the stop: "El cobro ya está registrado. Si no puedes entregar, llama a despacho: ellos
+        deciden y coordinan la devolución del cobro."'
+      - '"Enviar reporte" refused because the cash is recorded (in the form and in the sync summary): "El cobro ya
+        está registrado. Llama a despacho: ellos deciden y coordinan la devolución del cobro."'
+      - 'a report held before its incident with the cash recorded: "El cobro de esta entrega ya está registrado, así
+        que el reporte no se envió. Llama a despacho: ellos deciden y coordinan la devolución del cobro."'
+      - a report whose incident is (or may be) open, held because the cash is recorded ("…Llama a despacho…") or still
+        saved on the phone ("…si no, llama a despacho.")
+      not_shown: without a known number (none configured, no answer yet on this phone, an earlier API, 401 or 403) the
+        texts stay exactly as they are and nothing else is shown; the link is never placed anywhere else
+      read: asked once per session start (a new sign-in or organization), the answer saved for the session's
+        partition used at once; a successful answer (a number or null) replaces it; 401 or 403 removes it; any other
+        failure keeps it and the read is made again when the connection returns or the app is shown again, at most 5
+        times per session start, like the roles read
+      offline_cache: the last successful answer per partition in the existing IndexedDB (version 5, store
+        dispatch_contacts - the partition key, the schema and the number or null), so the link works offline
+      retention: wiped with the partition on 401 or 403 and with every snapshot on logout
+      privacy: a business contact of the organization, never a person's datum; never logged
     recipient_call: VOICE-001-MASKED-CALLS-2026-10-11 ("Sí, con número enmascarado") and
       VOICE-001-PROVIDER-TWILIO-2026-10-11 - the detail of a DELIVERY stop whose confirmed status is DELIVERING offers
       "Llamar al destinatario" only when getRecipientCallAvailability answers available true; it sends
@@ -1357,6 +1426,90 @@ screen_contracts:
     - names and phones while GATE-007 is open
     not_supported:
     - EXTERNAL drivers and retired (INACTIVE) drivers - outside the approved list
+  order_list:
+    release: MVP-1
+    route: /ops/orders
+    decision: UI-PHASE3-ORDERS-LIST-2026-10-12
+    decision_amendments:
+    - ORD-LIST-DATE-FILTER-2026-10-12
+    - ORD-ORDER-CREATED-AT-2026-10-12
+    authority: REST API + PostgreSQL
+    sources:
+      list: GET /orders (listOrders) with status, public_id, created_from, created_to and cursor
+      detail: /ops/orders/:id (the existing order detail; this screen adds nothing to it)
+    roles: [DISPATCHER, PLATFORM_ADMIN, VIEWER]
+    excluded_roles: FINANCE, DRIVER and every other role; the shell does not offer the screen to them and the API answers
+      403 (FINANCE lists only COD-pending orders, FIN-PENDING-COD-LIST-FINANCE-2026-10-02, and keeps that access
+      unchanged)
+    navigation: the shell item Órdenes right after Bandeja, as in the approved menu "Bandeja · Órdenes · + Nueva orden ·
+      Rutas · Incidencias · Importar CSV · Repartidores", then Tablero; Órdenes owns /ops/orders, the order detail
+      /ops/orders/:id stays under Bandeja for the roles that have it and falls to Órdenes for VIEWER, which has no
+      Bandeja
+    landing: VIEWER lands on /ops/orders after login and after an organization switch away from a page its role cannot
+      use, as it lists orders and has no inbox (DISPATCHER and PLATFORM_ADMIN keep /ops/inbox)
+    population: every order the selected organization owns or operates, the orders listOrders returns under RLS,
+      newest first (created_at, then id)
+    search: Guía (ORD_…) - only the exact tracking number (listOrders public_id), validated like the top-bar "Buscar
+      guía" before anything is sent; a malformed, missing or other-organization number shows "No encontramos esa
+      guía"; it narrows the other filters; recipient, sender or any other personal data is never searched
+    filters:
+    - Estado - one AI-04 status or Todos los estados, grouped by the five UI-STATUS-GROUPS-2026-10-05 groups with the
+      exact es-MX status labels
+    - Creada desde and Creada hasta (hora de Mazatlán) - two optional calendar dates in America/Mazatlan, both
+      included; Desde is sent as created_from, the first instant of that Mazatlán day, and Hasta as created_to, the
+      last microsecond of that Mazatlán day (src/lib/mazatlan-time.ts); Desde after Hasta or more than 31 days is
+      refused on screen ("La fecha «Desde» no puede ser posterior a la fecha «Hasta».", "Elige un periodo de 31 días o
+      menos.") and nothing is sent
+    - what is typed in a date field stays there as a draft and the filter changes only when the field holds a whole
+      calendar date from 2000-01-01 on (the field's minimum) or is cleared; a year typed digit by digit (0002, 0020,
+      0202) or a date with a part missing is never applied, and once the field loses focus it says "Escribe una fecha
+      completa (día, mes y año, desde 2000)."; a date that cannot be read in Mazatlán time shows the same message
+      and nothing is sent
+    - status and dates live in the URL (status, from, to) so the browser returns to the same list; the guía search does
+      not
+    table:
+      columns:
+      - Guía (Order.public_id; a link to the order detail for DISPATCHER and PLATFORM_ADMIN, plain text for VIEWER)
+      - Estado (exact status with its group color, dot and text, never color alone)
+      - Creada (Order.created_at as date and time in America/Mazatlan) - the API sends created_at on every Order
+        (ORD-ORDER-CREATED-AT-2026-10-12, the second step of the owner answer "En dos pasos (Recommended)"), so the
+        column shows on every page; the web still shows it only when some order of the page carries created_at and
+        reads an order without it as "Sin dato", so an earlier API keeps working in any deployment order
+      - Total (IVA incluido) (Order.total, integer MXN cents through the shared Money component)
+      row: a click anywhere on the row opens /ops/orders/:id for the roles that open the detail; the guía link is the
+        keyboard path; VIEWER rows are not links and the screen says the detail is opened by dispatch and
+        administration
+      order: newest first, as listOrders returns it
+      states: loading, empty (Sin órdenes, Sin órdenes con estos filtros, No encontramos esa guía), error keeping the
+        rows, the period refused before sending, no session, access unavailable and the MFA step-up when only the
+        second factor is missing
+    pagination: Cargar más sends the next_cursor with exactly the query that issued it (listOrders binds a cursor to
+      its organization and filters); a repeated cursor or a refused page stops the paging with a message
+    focus: the focus never falls to the page body - Buscar guía keeps it (the search form is never remounted), Quitar
+      búsqueda returns it to the guía field, and Cargar más keeps it while the page loads (aria-disabled) and hands it
+      to the summary ("Se muestran N órdenes.") when the last page leaves no Cargar más
+    order_contract: every web reader of the AI-05 Order (this list, Buscar guía, Rutas Agregar entrega, Cobro contra
+      entrega, Nueva orden, the order detail and the driver's offline transitions) accepts an optional created_at,
+      ignored when absent and, when present, a strict UTC instant (YYYY-MM-DDTHH:mm:ss, 0 to 7 fractional digits, Z
+      or +00:00) or the response is refused; so the API can add Order.created_at in any deployment order. The API
+      sends it on every Order since ORD-ORDER-CREATED-AT-2026-10-12 and the readers keep accepting its absence, so
+      either side can be deployed or rolled back first
+    recovery:
+    - load, Actualizar and every filter change read the first page again; a filter change drops the previous rows at
+      once; the page becoming visible and window focus read it again only while a single page is shown (never while
+      hidden and never twice within 5 seconds); optimistic UI is never authoritative
+    - a 401 or 403 clears the rows; a 409 INVALID_REQUEST says the server did not accept the filters
+    privacy:
+    - no browser persistence and no client logging; an organization switch clears the list and the guía search
+    - no internal identifier, address, contact, phone or other personal data is shown; the order id is only the link
+      target
+    forbidden:
+    - changing an order from the list (no transitions, assignments or bulk actions)
+    - a search criterion other than the exact guía
+    not_supported:
+    - FINANCE "Órdenes (lectura)" of the approved menu - the owner answered "No por ahora (Recommended)", so FINANCE
+      keeps seeing only the COD-pending orders on its own screen and has no Órdenes item; widening its read access is
+      a permission change that needs an ADR
   settlement_desk:
     release: MVP-1
     route: /finance/settlements

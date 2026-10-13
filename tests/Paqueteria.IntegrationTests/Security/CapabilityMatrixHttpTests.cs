@@ -336,12 +336,12 @@ public sealed class OrderCapabilityMatrixHttpTests(OrderHttpWebApplicationFactor
         Assert.Equal(pendingId, item.GetProperty("id").GetGuid());
         Assert.NotEqual(otherId, item.GetProperty("id").GetGuid());
         // Exactly the AI-05 Order that every other listOrders reader receives: no COD amount, no address,
-        // coordinates, contact or other personal data.
+        // coordinates, contact or other personal data (ORD-ORDER-CREATED-AT-2026-10-12: created_at, for every reader).
         Assert.Equal(
             [
-                "city_id", "claim_window_ends_at", "destination_location_id", "finalized_at", "id", "operator_org_id",
-                "origin_location_id", "owner_org_id", "price_net", "pricing_tier", "public_id", "quote_id",
-                "service_area_id", "service_type", "service_window", "status", "total", "version",
+                "city_id", "claim_window_ends_at", "created_at", "destination_location_id", "finalized_at", "id",
+                "operator_org_id", "origin_location_id", "owner_org_id", "price_net", "pricing_tier", "public_id",
+                "quote_id", "service_area_id", "service_type", "service_window", "status", "total", "version",
             ],
             item.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
         Assert.DoesNotContain("cod_expected", body, StringComparison.OrdinalIgnoreCase);
@@ -383,6 +383,51 @@ public sealed class OrderCapabilityMatrixHttpTests(OrderHttpWebApplicationFactor
             using var response = await client.SendAsync(
                 CapabilityMatrix.Request(HttpMethod.Get, $"/api/v1/orders{query}", profile));
             await CapabilityMatrix.AssertForbiddenAsync(response);
+            Assert.Equal(before, factory.ListCallCount);
+        }
+    }
+
+    /// <summary>
+    /// ORD-LIST-DATE-FILTER-2026-10-12: the creation window adds no capability and widens nobody's access. VIEWER
+    /// lists with it like any listOrders reader; FINANCE may only narrow its COD pending list with it (with MFA),
+    /// without MFA that list stays 403 MFA_REQUIRED and every other FINANCE shape with a window stays the uniform 403;
+    /// DRIVER stays 403. A well-formed window never turns a refusal into a read.
+    /// </summary>
+    [Fact]
+    public async Task ListOrders_creation_window_keeps_VIEWER_FINANCE_and_DRIVER_access_unchanged()
+    {
+        const string window = "created_from=2026-10-01T07:00:00Z&created_to=2026-10-08T06:59:59.999999Z";
+
+        foreach (var (profile, query) in new[]
+                 {
+                     (MockIdentityProfiles.ActiveViewer, window),
+                     (MockIdentityProfiles.ActiveViewer, $"status=DELIVERED&{window}"),
+                     (MockIdentityProfiles.ActiveFinanceMfa, $"cod_pending_reconciliation=true&{window}"),
+                 })
+        {
+            var before = factory.ListCallCount;
+            using var response = await client.SendAsync(
+                CapabilityMatrix.Request(HttpMethod.Get, $"/api/v1/orders?{query}", profile));
+            Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+            Assert.Equal(before + 1, factory.ListCallCount);
+            Assert.NotNull(factory.LastListCreatedRange?.From);
+            Assert.NotNull(factory.LastListCreatedRange?.To);
+        }
+
+        foreach (var (profile, query, mfaRequired) in new[]
+                 {
+                     (MockIdentityProfiles.ActiveFinance, $"cod_pending_reconciliation=true&{window}", true),
+                     (MockIdentityProfiles.ActiveFinanceMfa, window, false),
+                     (MockIdentityProfiles.ActiveFinanceMfa, $"cod_pending_reconciliation=false&{window}", false),
+                     (MockIdentityProfiles.ActiveFinanceMfa, $"status=DELIVERED&{window}", false),
+                     (MockIdentityProfiles.ActiveViewer, $"cod_pending_reconciliation=true&{window}", false),
+                     (MockIdentityProfiles.ActiveDriver, window, false),
+                 })
+        {
+            var before = factory.ListCallCount;
+            using var response = await client.SendAsync(
+                CapabilityMatrix.Request(HttpMethod.Get, $"/api/v1/orders?{query}", profile));
+            await CapabilityMatrix.AssertForbiddenAsync(response, mfaRequired);
             Assert.Equal(before, factory.ListCallCount);
         }
     }

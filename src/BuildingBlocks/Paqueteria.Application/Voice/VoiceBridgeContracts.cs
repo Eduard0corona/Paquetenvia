@@ -173,12 +173,17 @@ public interface IVoiceBridgeProvider
 
 /// <summary>The provider's final report of a call, already authenticated. No phone number is carried.</summary>
 /// <param name="CallStatus">One of <see cref="VoiceCallStatuses"/>.</param>
+/// <param name="RequestId">
+/// The trace id of the webhook request (OBS-003, <c>HttpContext.TraceIdentifier</c>), written to the audit row's
+/// <c>request_id</c>.
+/// </param>
 public sealed record VoiceCallStatusReport(
     Guid OrganizationId,
     Guid CallRequestId,
     string ProviderCallId,
     string CallStatus,
-    int? DurationSeconds);
+    int? DurationSeconds,
+    string? RequestId = null);
 
 /// <summary>Twilio call statuses (the only values a status callback may report).</summary>
 public static class VoiceCallStatuses
@@ -235,7 +240,16 @@ public static class VoiceWebhookPaths
 /// key press binds to the call the platform created. No phone number is carried.
 /// </summary>
 /// <param name="Confirmed">Whether the digit pressed was exactly 1; no digit, a timeout or any other digit is false.</param>
-public sealed record VoiceKeypress(Guid OrganizationId, Guid CallRequestId, string CallSid, bool Confirmed);
+/// <param name="RequestId">
+/// The trace id of the webhook request (OBS-003, <c>HttpContext.TraceIdentifier</c>), written to the audit row's
+/// <c>request_id</c>.
+/// </param>
+public sealed record VoiceKeypress(
+    Guid OrganizationId,
+    Guid CallRequestId,
+    string CallSid,
+    bool Confirmed,
+    string? RequestId = null);
 
 /// <summary>One provider webhook as received: the path and query the provider requested and its form fields.</summary>
 /// <param name="PathAndQuery">The request path and raw query string, for example

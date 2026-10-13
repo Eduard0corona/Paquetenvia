@@ -143,7 +143,19 @@ describe("COD pending list parser", () => {
     });
   });
 
+  // UI-PHASE3-ORDERS-LIST-2026-10-12 (owner, "En dos pasos (Recommended)"): Order.created_at is accepted before the
+  // API sends it; a value that is not a strict UTC instant still fails closed.
+  it("accepts an order with a strict UTC created_at", () => {
+    const page = parsePendingCodPage({
+      items: [{ ...pendingOrderResponse(orderId, "PQ-000123"), created_at: "2026-10-12T17:04:05.1234567Z" }],
+      next_cursor: null,
+    });
+    expect(page.items).toEqual([{ id: orderId, public_id: "PQ-000123", status: "DELIVERED" }]);
+  });
+
   it.each([
+    ["a created_at without a zone", { items: [{ ...pendingOrderResponse(orderId, "PQ-1"), created_at: "2026-10-12T17:04:05" }], next_cursor: null }],
+    ["a null created_at", { items: [{ ...pendingOrderResponse(orderId, "PQ-1"), created_at: null }], next_cursor: null }],
     ["an extra page key", { items: [], next_cursor: null, total: 0 }],
     ["an order with an unknown key", { items: [{ ...pendingOrderResponse(orderId, "PQ-1"), cod: {} }], next_cursor: null }],
     ["an order without an id", { items: [{ ...pendingOrderResponse(orderId, "PQ-1"), id: "x" }], next_cursor: null }],

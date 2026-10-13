@@ -15,6 +15,7 @@ import {
   type OperationsZoneSummary,
   type OrderStatus,
 } from "./operations-dashboard";
+import { orderCreatedAtField, optionalOrderCreatedAt } from "../../lib/utc-instant";
 import { parseAllowedTransitions } from "./order-transitions";
 
 const uuidPattern =
@@ -63,9 +64,14 @@ export function parseOperationsOrderDetail(
   // it, which reads as no action offered.
   const hasAllowedTransitions =
     typeof value === "object" && value !== null && !Array.isArray(value) && "allowed_transitions" in value;
+  // UI-PHASE3-ORDERS-LIST-2026-10-12 ("En dos pasos"): Order.created_at is accepted, and validated, before the API
+  // sends it, so no deployment order breaks this screen.
+  const hasCreatedAt =
+    typeof value === "object" && value !== null && !Array.isArray(value) && orderCreatedAtField in value;
   const object = exactObject(value, [
     ...(hasServiceWindow ? ["service_window"] : []),
     ...(hasAllowedTransitions ? ["allowed_transitions"] : []),
+    ...(hasCreatedAt ? [orderCreatedAtField] : []),
     "id",
     "public_id",
     "owner_org_id",
@@ -115,6 +121,7 @@ export function parseOperationsOrderDetail(
       object.service_window === undefined || object.service_window === null
         ? null
         : serviceWindow(object.service_window),
+    created_at: optionalOrderCreatedAt(object, fail),
     timeline: timeline.map(parseTimeline),
     allowed_transitions: hasAllowedTransitions ? allowedTransitions(object.allowed_transitions) : [],
   };

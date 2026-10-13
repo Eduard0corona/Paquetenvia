@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Runtime.CompilerServices;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.TestHost;
@@ -18,6 +19,13 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
     internal static readonly Guid ExpiredQuoteId = Guid.Parse("81000000-0000-0000-0000-000000000003");
     internal static readonly Guid UsedQuoteId = Guid.Parse("81000000-0000-0000-0000-000000000004");
     internal static readonly Guid ForeignOrderId = Guid.Parse("82000000-0000-0000-0000-000000000001");
+
+    /// <summary>
+    /// ORD-ORDER-CREATED-AT-2026-10-12: the created_at of every stub order, at the microsecond precision PostgreSQL
+    /// stores, so the API writes it as 2026-10-12T17:04:05.123456+00:00.
+    /// </summary>
+    internal static readonly DateTimeOffset CreatedAt =
+        new DateTimeOffset(2026, 10, 12, 17, 4, 5, TimeSpan.Zero).AddTicks(1_234_560);
     private readonly StubOrderService orderService = new();
     private readonly InMemoryCsvOrderImportBatchIdempotencyStore csvBatches = new();
 
@@ -26,6 +34,7 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
     internal int ListCallCount => orderService.ListCallCount;
     internal bool? LastListCodPendingReconciliation => orderService.LastListCodPendingReconciliation;
     internal bool? LastListMfaSatisfied => orderService.LastListMfaSatisfied;
+    internal OrderListCreatedRange? LastListCreatedRange => orderService.LastListCreatedRange;
     internal CreateOrderCommand? LastCreateCommand => orderService.LastCreateCommand;
     internal TransitionOrderCommand? LastTransitionCommand => orderService.LastTransitionCommand;
 
@@ -142,6 +151,7 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
         private int listCallCount;
         private int lastListCodPending = -1;
         private int lastListMfa = -1;
+        private StrongBox<OrderListCreatedRange>? lastListCreatedRange;
         private volatile bool refuseCodPendingListInTransaction;
         private readonly ConcurrentDictionary<Guid, byte> codPendingOrders = new();
         private CreateOrderCommand? lastCreateCommand;
@@ -163,6 +173,9 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
             1 => true,
             _ => false,
         };
+
+        /// <summary>ORD-LIST-DATE-FILTER-2026-10-12: the creation window the last list call received.</summary>
+        internal OrderListCreatedRange? LastListCreatedRange => Volatile.Read(ref lastListCreatedRange)?.Value;
 
         internal bool RefuseCodPendingListInTransaction
         {
@@ -362,6 +375,7 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
             bool codPendingReconciliation,
             bool mfaSatisfied,
             string? publicId,
+            OrderListCreatedRange createdRange,
             CancellationToken cancellationToken)
         {
             cancellationToken.ThrowIfCancellationRequested();
@@ -378,9 +392,32 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
                 return Task.FromResult(new OrderPageResult([], null));
             }
 
-            if (cursor is not null && !OrderCursorCodec.TryDecode(cursor, out _, out _))
+            // ORD-LIST-DATE-FILTER-2026-10-12: like the PostgreSQL service, a window outside the policy or a bound cursor
+            // issued for another organization or other filters is refused before any order is read; an unbound cursor
+            // of the earlier format still pages and any other text is still the empty page.
+            Volatile.Write(ref lastListCreatedRange, new StrongBox<OrderListCreatedRange>(createdRange));
+            if (!createdRange.IsValid)
             {
-                return Task.FromResult(new OrderPageResult([], null));
+                throw new OrderConflictException(OrderConflictCode.InvalidRequest);
+            }
+
+            if (cursor is not null)
+            {
+                var reading = OrderCursorCodec.Read(
+                    cursor,
+                    OrderCursorCodec.Binding(
+                        organizationId, status, ownerOrganizationId, codPendingReconciliation, publicId, createdRange),
+                    out _,
+                    out _);
+                if (reading == OrderCursorReading.BoundToOtherFilters)
+                {
+                    throw new OrderConflictException(OrderConflictCode.InvalidRequest);
+                }
+
+                if (reading == OrderCursorReading.Unreadable)
+                {
+                    return Task.FromResult(new OrderPageResult([], null));
+                }
             }
 
             // UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: like the PostgreSQL service, a malformed tracking number
@@ -522,7 +559,8 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
             "OCCASIONAL",
             new MoneyResult("MXN", 3_000_000_000L),
             null,
-            null);
+            null,
+            CreatedAt);
 
         private sealed record StoredResponse(
             string Signature,

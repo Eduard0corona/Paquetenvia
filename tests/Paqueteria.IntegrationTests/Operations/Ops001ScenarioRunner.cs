@@ -97,7 +97,7 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
             PostgreSqlSecurityWebApplicationFactory.OutboxDeliveryState interrupted;
             await using (var initialHost = fixture.CreateApiHost(
                              data,
-                             fixture.Database.WorkerConnectionString,
+                             fixture.Database.RealtimeConnectionString,
                              failureInjector,
                              authorizationRecorder: initialAuthorization))
             {
@@ -129,7 +129,7 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
             var pausingInjector = new Ops001PausingOutboxInjector(interruptedOutboxId);
             restoredHost = fixture.CreateApiHost(
                 data,
-                fixture.Database.WorkerConnectionString,
+                fixture.Database.RealtimeConnectionString,
                 pausingInjector,
                 logCollector);
             var restoredAddress = restoredHost.Start();

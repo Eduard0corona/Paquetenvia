@@ -81,6 +81,13 @@ nueva la pide; si otra pestaña bloquea la subida, la pantalla pide cerrarla y
 recargar, y la conexión tardía se cierra. Ver
 `ui-001-phase3-driver-failed-delivery.md`.
 
+Actualización `DRV-DISPATCH-CONTACT-2026-10-12`: la base sube a la versión `5` solo para crear el store
+`dispatch_contacts` (la última respuesta de `getMyDispatchContact` por partición: el número de despacho o null). La
+versión 4 ya había llegado a main, así que el store nuevo necesita su propia versión. La subida desde la 4 no toca
+operaciones (siguen en esquema 3), fotos, leases, instantáneas ni roles guardados; una app de la versión 4 no puede
+abrir la base. El shell del Service Worker sube a `paquetenvia-driver-shell-v8`. El store sale del teléfono con la
+partición ante 401/403 y al cerrar sesión, como las instantáneas. Ver `ui-001-phase3-driver-dispatch-contact.md`.
+
 La base conserva el nombre `paquetenvia-driver-stops-v1` y sube su versión de
 base de datos a `2`. El snapshot DRV-001 conserva `schemaVersion: 1`. La
 actualización agrega:
@@ -101,7 +108,10 @@ La partition key sigue siendo un SHA-256 base64url del namespace opaco y la
 organización activa. Todas las lecturas y escrituras usan esa key; no se
 enumeran otras particiones. Un lease evita dos schedulers activos para la misma
 partición; se renueva con heartbeat cancelable mientras existe trabajo activo y
-una lease expirada puede recuperarse sin crear un lock global.
+una lease expirada puede recuperarse sin crear un lock global. Un sync pedido
+mientras otra página tiene la lease vigente (por ejemplo, una página que se fue
+a mitad de un pase) no se descarta: se vuelve a pedir tras una duración de
+lease (ver `driver-offline-replay-flake.md`).
 
 No se persisten bearer tokens, signed URLs, headers firmados, object keys,
 teléfono, coordenadas ni respuestas técnicas. Las URLs y headers firmados sólo

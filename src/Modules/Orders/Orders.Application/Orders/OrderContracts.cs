@@ -35,6 +35,11 @@ public sealed record OrderServiceWindow(DateTimeOffset From, DateTimeOffset To);
 
 public sealed record MoneyResult(string Currency, long AmountCents);
 
+/// <param name="CreatedAt">
+/// ORD-ORDER-CREATED-AT-2026-10-12: <c>orders.orders.created_at</c> (NOT NULL), the instant the order was created, at
+/// the microsecond precision PostgreSQL stores. Every AI-05 Order carries it. A stored idempotency response written
+/// before the field existed deserializes it as <c>default</c>; the replay then reads it from the order row.
+/// </param>
 public sealed record OrderResult(
     Guid Id,
     string PublicId,
@@ -53,6 +58,7 @@ public sealed record OrderResult(
     MoneyResult Total,
     DateTimeOffset? ClaimWindowEndsAt,
     DateTimeOffset? FinalizedAt,
+    DateTimeOffset CreatedAt,
     OrderServiceWindow? ServiceWindow = null);
 
 public sealed record OrderTimelineItem(string EventType, DateTimeOffset OccurredAt);
@@ -97,6 +103,16 @@ public interface IOrderService
     /// a well-formed <see cref="OrderPublicIdPolicy"/> identifier matches nothing and is never sent to the database;
     /// RLS keeps the match inside the orders the selected organization may read.
     /// </param>
+    /// <param name="cursor">
+    /// ORD-LIST-DATE-FILTER-2026-10-12: a position this operation issued for the same organization and filters
+    /// (<see cref="OrderCursorCodec"/>); any other value is refused with <see cref="OrderConflictCode.InvalidRequest"/>
+    /// before any order is read.
+    /// </param>
+    /// <param name="createdRange">
+    /// ORD-LIST-DATE-FILTER-2026-10-12: the inclusive creation window; <c>default</c> applies none. A window that
+    /// breaks <see cref="OrderListCreatedRange.IsValid"/> is refused with <see cref="OrderConflictCode.InvalidRequest"/>
+    /// before any order is read.
+    /// </param>
     Task<OrderPageResult> ListAsync(
         Guid actorId,
         Guid organizationId,
@@ -106,6 +122,7 @@ public interface IOrderService
         bool codPendingReconciliation,
         bool mfaSatisfied,
         string? publicId,
+        OrderListCreatedRange createdRange,
         CancellationToken cancellationToken);
 
     /// <param name="mfaSatisfied">

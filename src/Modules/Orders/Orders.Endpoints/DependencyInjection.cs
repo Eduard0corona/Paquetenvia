@@ -7,6 +7,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Orders.Application.Tracking;
 using Paqueteria.Application.Security;
+using System.Text.Json;
 using System.Threading.RateLimiting;
 
 namespace Orders.Endpoints;
@@ -39,12 +40,15 @@ public static class DependencyInjection
                 context.HttpContext.RequestServices
                     .GetRequiredService<IPublicTrackingTelemetry>()
                     .RateLimitRejected();
-                context.HttpContext.Response.ContentType = "application/problem+json";
+                // AI-05 publicTracking 429: the uniform problem body, sent as application/problem+json (the
+                // overload without a content type would reset it to application/json; charset=utf-8).
                 await context.HttpContext.Response.WriteAsJsonAsync(
                     new PublicTrackingProblemResponse(
                         "about:blank",
                         "Too Many Requests",
                         StatusCodes.Status429TooManyRequests),
+                    (JsonSerializerOptions?)null,
+                    "application/problem+json",
                     cancellationToken);
             };
             rateLimiter.AddPolicy(

@@ -123,6 +123,8 @@ public sealed class AssignmentLifecycleDispatcher(
         while (!stoppingToken.IsCancellationRequested)
         {
             lanes.ReportIfDue(OutboxLanes.Dispatch);
+            // OBS-003: each dispatch cycle is a new root trace whose id is in the cycle's log lines.
+            using var cycle = TraceCorrelation.StartOutboxDispatchCycle(OutboxLanes.Dispatch);
             try
             {
                 if (DateTimeOffset.UtcNow >= nextRecovery)

@@ -144,7 +144,8 @@ public sealed partial class ManualRoutesPwaPlaywrightTests(DriverStopsNextServer
         Assert.All(selectorRequests, request => Assert.Equal(OrganizationA, request.Organization));
         await page.Locator(".opsRouteDetail header p", new() { HasText = "Repartidor DRV-55555555 · Borrador · Sin paradas" })
             .WaitForAsync();
-        Assert.Contains("Ruta del 30 de agosto de 2026", await page.Locator(".opsRouteList").InnerTextAsync());
+        // UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12: each row of the list names its driver by DRV- after the date name.
+        await ExpectRouteRowsAsync(page, "Ruta del 30 de agosto de 2026 · DRV-55555555");
         Assert.Equal(0, await page.GetByText("2026-08-30", new() { Exact = false }).CountAsync());
         Assert.Equal(0, await page.GetByText("ID de la orden", new() { Exact = false }).CountAsync());
 
@@ -226,6 +227,8 @@ public sealed partial class ManualRoutesPwaPlaywrightTests(DriverStopsNextServer
             }
             """,
             OrganizationB);
+        // A driver outside listOrganizationDrivers is "Repartidor no disponible" in its row too, never its id.
+        await ExpectRouteRowsAsync(page, "Ruta del 15 de septiembre de 2026 · Repartidor no disponible");
         await page.Locator(".opsRouteList button").First.ClickAsync();
         await page.GetByRole(AriaRole.Heading, new() { Name = "Ruta del 15 de septiembre de 2026", Exact = true }).WaitForAsync();
         // A driver outside listOrganizationDrivers is never named by its id; the stop shows its guía from getOrder.
@@ -261,17 +264,35 @@ public sealed partial class ManualRoutesPwaPlaywrightTests(DriverStopsNextServer
         await page.RouteAsync("**/api/v1/routes**", state.HandleAsync);
         var orders = new OrderApiState();
         await page.RouteAsync("**/api/v1/orders**", orders.HandleAsync);
-        await page.RouteAsync("**/api/v1/drivers**", route => FulfillAsync(route, new
+        // UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12: the drivers answer waits until the list was checked without them.
+        var driversAnswer = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        await page.RouteAsync("**/api/v1/drivers**", async route =>
         {
-            items = new object[] { Driver(DriverId, "DRV-55555555", "ACTIVE") },
-            next_cursor = (string?)null,
-        }));
+            await driversAnswer.Task;
+            await FulfillAsync(route, new
+            {
+                items = new object[] { Driver(DriverId, "DRV-55555555", "ACTIVE") },
+                next_cursor = (string?)null,
+            });
+        });
         await page.RouteAsync("**/api/v1/cities**", route => FulfillAsync(route, Array.Empty<object>()));
 
         // The dashboard's "Agregar a ruta" opens Rutas with ?orderId=: the field shows that order's guía, never the id.
         await page.GotoAsync(new Uri(server.BaseAddress, $"/ops/routes?orderId={OrderIds[0]}").AbsoluteUri);
         await page.GetByRole(AriaRole.Heading, new() { Name = "Rutas manuales", Exact = true }).WaitForAsync();
         await ExpectStatusAsync(page, "Selecciona una ruta para agregar la orden indicada.");
+        // While the drivers are read the row shows its date name alone; then its driver by DRV-, never an id.
+        try
+        {
+            await ExpectRouteRowsAsync(page, "Ruta sin fecha");
+            Assert.DoesNotMatch("DRV-|Repartidor|Cargando", await page.Locator(".opsRouteList").InnerTextAsync());
+            await AssertNoIdentifiersAsync(page);
+        }
+        finally
+        {
+            driversAnswer.TrySetResult();
+        }
+        await ExpectRouteRowsAsync(page, "Ruta sin fecha · DRV-55555555");
         await page.Locator(".opsRouteList button").First.ClickAsync();
         await page.GetByRole(AriaRole.Heading, new() { Name = "Ruta sin fecha", Exact = true }).WaitForAsync();
         await page.Locator(".opsRouteDetail header p", new() { HasText = "Repartidor DRV-55555555 · Borrador · 1 parada" })
@@ -334,6 +355,20 @@ public sealed partial class ManualRoutesPwaPlaywrightTests(DriverStopsNextServer
             await Task.Delay(50);
         }
         Assert.Fail($"The route stops did not match the authoritative response: {string.Join(" | ", actual)}");
+    }
+
+    /// <summary>The name of every row of the route list, in order: the date name and, once read, the driver.</summary>
+    private static async Task ExpectRouteRowsAsync(IPage page, params string[] expected)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(20);
+        IReadOnlyList<string> actual = [];
+        while (DateTimeOffset.UtcNow < deadline)
+        {
+            actual = await page.Locator(".opsRouteList button strong").AllTextContentsAsync();
+            if (actual.Select(text => text.Trim()).SequenceEqual(expected, StringComparer.Ordinal)) return;
+            await Task.Delay(50);
+        }
+        Assert.Fail($"The route list rows did not match: {string.Join(" | ", actual)}");
     }
 
     private static async Task ExpectStatusAsync(IPage page, string text) =>

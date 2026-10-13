@@ -23,7 +23,7 @@ public sealed class RealtimeOutboxPlaywrightTests(
         var initialHost = new RealtimeKestrelWebApplicationFactory(
             database.ApplicationConnectionString,
             recorder,
-            workerConnectionString: database.WorkerConnectionString,
+            realtimeConnectionString: database.RealtimeConnectionString,
             failureInjector: failureInjector);
         var baseAddress = initialHost.Start();
         using (var healthClient = new HttpClient { BaseAddress = baseAddress })
@@ -302,7 +302,7 @@ public sealed class RealtimeOutboxPlaywrightTests(
             database.ApplicationConnectionString,
             recorder,
             port,
-            database.WorkerConnectionString);
+            database.RealtimeConnectionString);
         Assert.Equal(baseAddress, restoredHost.Start());
         await page.WaitForFunctionAsync(
             "() => document.querySelector('#lifecycle').textContent === 'Reconnecting,Reconnected'",

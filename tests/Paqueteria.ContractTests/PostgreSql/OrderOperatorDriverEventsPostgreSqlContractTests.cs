@@ -30,7 +30,7 @@ public sealed partial class OrderAttemptCustodyPostgreSqlContractTests
             Assert.Equal(world.DriverId.ToString("D"), driver);
             Assert.Equal(world.AssignmentId.ToString("D"), assignment);
 
-            await using var connections = new RealtimeWorkerConnectionFactory(fixture.WorkerConnectionString);
+            await using var connections = new RealtimeDispatcherConnectionFactory(fixture.RealtimeConnectionString);
             var evidence = new PostgreSqlRealtimeOutboxEvidenceReader(connections);
             Assert.True(await evidence.IsDriverAudienceAuthorizedAsync(
                 world.Scenario.OrganizationId, world.Scenario.OrderId, world.AssignmentId, world.DriverId, default));

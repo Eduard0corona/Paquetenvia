@@ -15,6 +15,7 @@ function files(directory: string, pattern: RegExp): string[] {
 /** The screen component each /ops and /finance page renders. */
 const screens = [
   "src/operations/components/operations-inbox-shell.tsx",
+  "src/operations/components/operations-orders-shell.tsx",
   "src/operations/components/operations-dashboard-shell.tsx",
   "src/operations/components/operations-order-detail-shell.tsx",
   "src/operations/components/create-order-shell.tsx",

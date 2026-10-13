@@ -122,7 +122,25 @@ paths:
         the request and the session, before any order is read; the COD pending list then re-checks the
         getOrderFinancials roles inside the tenant transaction, before any order is read. FINANCE receives the
         same Order fields as every other reader and never creates, imports, transitions or opens an order.
-      x-authorization-precedence: capability-before-persisted-state
+        ORD-LIST-DATE-FILTER-2026-10-12 is purely additive: every request valid before is answered as before. It
+        adds the optional creation window created_from and created_to, with the bounds of the parameters of the
+        same name of the operations dashboard: strict RFC3339 instants in UTC (yyyy-MM-ddTHH:mm:ss, 0 to 7
+        fractional digits, ending in Z), both inclusive (created_from <= created_at <= created_to), each usable
+        alone; with both, created_from is not after created_to and at most 31 days lie between them. The window
+        narrows every other filter, adds no capability of its own and changes nobody's access (FINANCE may narrow
+        its COD pending list with it and nothing else). A malformed or repeated created_from or created_to and a
+        window outside those rules are request shape - 409 INVALID_REQUEST, decided before the capability check,
+        without opening the tenant transaction or reading any order; only clients that know the new parameters
+        send them. Every next_cursor issued from now on is bound to the selected organization and to the filters of
+        the request that received it (status, owner_org_id, cod_pending_reconciliation, public_id, created_from and
+        created_to); such a bound cursor sent with other filters or another organization is 409 INVALID_REQUEST,
+        decided where the cursor always was, after the capability check and before any order is read. A cursor of
+        the earlier unbound format still pages exactly as before, and any other cursor text, an unknown status, a
+        malformed public_id, another owner_org_id and a cod_pending_reconciliation value other than true or false
+        keep answering the empty page after the capability check, as before. Tenant isolation is the same RLS that
+        scopes every listOrders read: the orders the selected organization owns or operates, newest first.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-shape-validation: invalid-request-without-productive-transaction
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - name: status
@@ -168,8 +186,45 @@ paths:
         schema:
           type: string
           pattern: ^ORD_[A-Za-z0-9_-]{22}$
+      - name: created_from
+        in: query
+        required: false
+        description: >-
+          ORD-LIST-DATE-FILTER-2026-10-12. Earliest creation instant, inclusive
+          (created_at >= created_from): a strict RFC3339 date-time in UTC
+          (yyyy-MM-ddTHH:mm:ss with 0 to 7 fractional digits and Z, nothing
+          around it), at most once. The operations web sends the first instant
+          of the first chosen calendar day in America/Mazatlan. A malformed or
+          repeated value, a created_from after created_to or more than 31 days
+          between them is 409 INVALID_REQUEST before the capability check.
+        schema:
+          type: string
+          format: date-time
+      - name: created_to
+        in: query
+        required: false
+        description: >-
+          ORD-LIST-DATE-FILTER-2026-10-12. Latest creation instant, inclusive
+          (created_at <= created_to): a strict RFC3339 date-time in UTC
+          (yyyy-MM-ddTHH:mm:ss with 0 to 7 fractional digits and Z, nothing
+          around it), at most once. The operations web sends the last
+          microsecond of the last chosen calendar day in America/Mazatlan. A
+          malformed or repeated value, a created_to before created_from or more
+          than 31 days between them is 409 INVALID_REQUEST before the capability
+          check.
+        schema:
+          type: string
+          format: date-time
       - name: cursor
         in: query
+        description: >-
+          The next_cursor of a previous page, opaque. ORD-LIST-DATE-FILTER-2026-10-12:
+          a next_cursor issued from now on is bound to the selected organization
+          and to every filter of the request that received it, and is valid
+          only with exactly those filters; sent with others it is 409
+          INVALID_REQUEST after the capability check. A cursor of the earlier
+          unbound format still pages as before and any other text is still the
+          empty page.
         schema:
           type: string
       responses:
@@ -192,6 +247,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
   /orders/csv/preview:
@@ -1596,6 +1653,37 @@ paths:
           $ref: '#/components/responses/RecipientCallConflict'
         '429':
           $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /driver/me/dispatch-contact:
+    get:
+      tags:
+      - Driver
+      operationId: getMyDispatchContact
+      description: >-
+        DRV-DISPATCH-CONTACT-2026-10-12 (project owner, 2026-10-12, "Sí, configurable (Recommended)") - the dispatch
+        phone number configured for the organization selected with X-Organization-Id (server setting
+        Drivers:DispatchContacts, at most one number per organization), or phone_e164 null when that organization has
+        none. The driver app shows it as "Llamar a despacho" only next to its texts that ask the driver to call
+        dispatch after a recorded cash collection. DRIVER members only (x-capability-matrix
+        dispatch_contact_operations), without MFA like listMyStops; every other role, and a missing, malformed or
+        foreign X-Organization-Id, receives the uniform 403 before anything is read. It reads the server
+        configuration only - no tenant data and no database access - and never answers another organization's
+        number. The number is a business contact, never logged. Cache-Control no-store.
+      x-authorization-precedence: capability-before-persisted-state
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      responses:
+        '200':
+          description: The dispatch number of the selected organization, or null
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/DriverDispatchContact'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
   /voice/twilio/call-status:
@@ -4032,6 +4120,7 @@ components:
       - pricing_tier
       - total
       - city_id
+      - created_at
       properties:
         id:
           type: string
@@ -4090,6 +4179,14 @@ components:
           - string
           - 'null'
           format: date-time
+        created_at:
+          type: string
+          format: date-time
+          description: >-
+            ORD-ORDER-CREATED-AT-2026-10-12 - the instant the order was created (orders.orders.created_at, NOT NULL)
+            as a UTC instant, sent on every operation that returns an Order (createOrder, listOrders, getOrder and
+            transitionOrder, an idempotent replay included); it never changes. It is not personal data, and adding
+            it changed no public tracking response, order event or outbox payload.
         service_window:
           type:
           - object
@@ -5220,6 +5317,20 @@ components:
           items:
             type: object
             additionalProperties: true
+        traceId:
+          type: string
+          pattern: ^[0-9a-f]{32}$
+          description: >-
+            OBS-003-W3C-CORRELATION-2026-10-12. The W3C trace id of the request, 32 lowercase hexadecimal digits:
+            the same value the API writes in every log line of the request and in the request_id of every
+            platform.audit_logs row written while handling the request, the Twilio voice webhooks included. One
+            exception: PENDING_MEMBERSHIP_ACCEPTED, written at sign-in by security.apply_pending_memberships, which
+            takes no request id, keeps request_id NULL. Rows the Worker writes (proof validation, assignment
+            lifecycle) belong to no request and keep request_id NULL until trace context crosses the outbox (phase 4
+            PR 7). Every request starts a new trace; an inbound traceparent, tracestate or baggage is ignored. Optional
+            and additive: every problem the API writes carries it, including those described by the other problem
+            schemas (open objects), except the public tracking answers (publicTracking 404, 429 and 503 and the
+            tracking hub), which keep their uniform bodies without it (Invariant 5).
     DriverPhoneStatus:
       type: object
       additionalProperties: false
@@ -5269,6 +5380,23 @@ components:
         consent_version:
           type: string
           const: VOICE-001-CONSENT-V1
+    DriverDispatchContact:
+      type: object
+      additionalProperties: false
+      required:
+      - phone_e164
+      description: >-
+        DRV-DISPATCH-CONTACT-2026-10-12 - the dispatch number of the selected organization, a business contact; null
+        while none is configured for it.
+      properties:
+        phone_e164:
+          type:
+          - string
+          - 'null'
+          pattern: '^\+52[2-9][0-9]{9}$'
+          description: >-
+            +52 followed by the ten Mexican national digits, the first one 2-9 (E.164 without spaces); the driver app
+            dials it with a tel: link.
     RecipientCallAvailability:
       type: object
       additionalProperties: false
@@ -7795,6 +7923,12 @@ x-capability-matrix:
   own_membership_operations:
     getMyOrganizationRoles: [PLATFORM_ADMIN, DISPATCHER, FINANCE, ALLY_ADMIN, ALLY_OPERATOR, BUSINESS_ADMIN,
       BUSINESS_OPERATOR, DRIVER, VIEWER]
+  dispatch_contact_operations_decision: DRV-DISPATCH-CONTACT-2026-10-12 (project owner, 2026-10-12, "Sí, configurable
+    (Recommended)") - getMyDispatchContact answers only the dispatch number configured for the organization selected
+    with X-Organization-Id, to its DRIVER members, without MFA like listMyStops; every other role receives the uniform
+    403 before anything is read
+  dispatch_contact_operations:
+    getMyDispatchContact: [DRIVER]
 x-pilot-contract-deltas:
   purpose: Contract deltas recorded for the pilot. The HTTP surface above is unchanged until the implementing task publishes
     each delta together with code and tests. Every entry is an owner decision (DECIDED).
@@ -7967,3 +8101,68 @@ x-pilot-contract-deltas:
       without MFA; the uniform 403 without such a membership; Cache-Control no-store; nothing about any other person,
       no PII and no schema, role, grant or migration change; listOrganizationContexts and OrganizationContext are
       unchanged, so every client and every deployment order keep working
+  - id: ORD-LIST-DATE-FILTER
+    status: DECIDED
+    decision: ORD-LIST-DATE-FILTER-2026-10-12 (project owner, 2026-10-12)
+    literal: '"Corrección mía: para "Órdenes" dije "filtros por estado y fecha con el API que ya existe", pero la lista
+      de órdenes del API no filtra por fecha (solo estado, dueña, cobro pendiente y guía). ¿Cómo la hacemos?" - Agregar
+      filtro de fecha al API (Recommended)'
+    implementation: shipped by feat/ui-001-orders-list together with its code and tests - OrderListCreatedRange,
+      OrderListRequestShape, the bound OrderCursorCodec and the created_at window of the listOrders read
+    delta: purely additive - listOrders accepts the optional created_from and created_to (strict RFC3339 UTC instants
+      ending in Z, inclusive, each alone or both, at most 31 days apart, the operations dashboard bounds); a malformed
+      or repeated bound or a window outside those rules is 409 INVALID_REQUEST before the capability check; every
+      next_cursor issued from now on is bound to the selected organization and the filters, and such a bound cursor
+      sent with other filters is 409 INVALID_REQUEST after the capability check; cursors of the earlier format page
+      as before and unreadable ones keep the empty page (the response gains 409 Conflict); the capability, the Order
+      shape, RLS and every other filter are unchanged; no table, index, role, grant or migration change
+  - id: ORD-ORDER-CREATED-AT
+    status: DECIDED
+    decision: ORD-ORDER-CREATED-AT-2026-10-12 (project owner, 2026-10-12; step 2 of the answer recorded in
+      UI-PHASE3-ORDERS-LIST-2026-10-12)
+    literal: '"Pantalla Órdenes: el API de la lista no trae la fecha de creación de cada orden, así que la columna
+      "Creada" no se puede mostrar (los filtros por fecha sí funcionan). Agregarla cambia el API y la web actual
+      rechaza campos que no conoce. ¿Qué hacemos?" - En dos pasos (Recommended)'
+    option: 'Este PR deja la web lista para aceptar la fecha; en un PR siguiente el API la agrega y se muestra la
+      columna. Así ningún orden de despliegue rompe nada.'
+    not_chosen: 'Sin columna de fecha ("La lista queda con guía, estado y total, de la más reciente a la más antigua;
+      la fecha se ve al abrir la orden.")'
+    implementation: shipped by feat/ord-order-created-at together with its code and tests - OrderResult.CreatedAt,
+      the created_at of OrderResponse and OrderDetailResponse, and the replay of an idempotent createOrder or
+      transitionOrder response stored before the field existed, which reads the value from the order row
+    delta: Order requires created_at (string, date-time), orders.orders.created_at written as a UTC instant
+      (System.Text.Json writes +00:00); createOrder, listOrders, getOrder (OrderDetail) and transitionOrder send it.
+      Step 1 (#234) made every web reader of the Order accept an optional strict UTC created_at, so the web shows
+      the "Creada" column by itself and every deployment order keeps working; no parameter, capability, RLS, table,
+      index, role, grant, migration, event, outbox payload or public tracking field changes
+  - id: DRV-DISPATCH-CONTACT
+    status: DECIDED
+    decision: DRV-DISPATCH-CONTACT-2026-10-12 (project owner, 2026-10-12)
+    literal: '"En la app del repartidor, "Llama a despacho" (cuando ya registró un cobro y no puede entregar) no muestra ningún número porque la app no tiene uno. ¿Agregamos un teléfono de despacho?" - Sí, configurable (Recommended)'
+    option: 'Un número de despacho por empresa en la configuración del piloto; la app lo muestra como botón "Llamar a
+      despacho". Tú me das el número cuando lo tengas.'
+    not_chosen: 'No, ya lo saben ("Los repartidores ya tienen el número de despacho; la app solo dice que llamen.")'
+    implementation: shipped by feat/driver-dispatch-phone together with its code and tests - getMyDispatchContact,
+      DriverDispatchContactResponse, Drivers:DispatchContacts with its startup validation,
+      ConfiguredDriverDispatchContactDirectory, the dispatch_contact_operations capability and the driver app's
+      dispatch contact client, phone cache and "Llamar a despacho" link
+    delta: a new read-only operation getMyDispatchContact (GET /driver/me/dispatch-contact, schema
+      DriverDispatchContact) answers {"phone_e164":"+52..."} or {"phone_e164":null} - the number the server
+      configuration (Drivers:DispatchContacts, empty by default) holds for the organization selected with
+      X-Organization-Id; DRIVER members only, without MFA; the uniform 403 for every other role; Cache-Control
+      no-store; configuration only, no tenant data, no PII, no schema, role, grant or migration change; no client
+      depends on it, so every deployment order keeps working
+  - id: OBS-003-W3C-CORRELATION
+    status: DECIDED
+    decision: OBS-003-W3C-CORRELATION-2026-10-12, applying PHASE4-PLATFORM-APPROVAL-2026-10-12 (project owner, 2026-10-12)
+    literal: '"Sí, avanza con la fase 4 (Recommended)" - "Empiezo por OpenTelemetry y correlación, y por los límites de
+      tasa en endpoints pesados, que son lo que más ayuda a operar el piloto."'
+    implementation: shipped by feat/obs-003-w3c-correlation (phase 4 PR 1) together with its code and tests -
+      TraceCorrelation, the request trace id in HttpContext.TraceIdentifier and AddProblemDetailsTraceId
+    delta: purely additive - Problem documents the optional traceId (32 lowercase hexadecimal digits), the W3C trace id
+      of the request, which is also the TraceId of the request's log lines and the request_id of every
+      platform.audit_logs row written while handling the request (the Twilio voice webhooks included), except
+      PENDING_MEMBERSHIP_ACCEPTED (written at sign-in by security.apply_pending_memberships, which takes no request id,
+      with request_id NULL); rows the Worker writes keep request_id NULL until phase 4 PR 7; inbound trace headers are
+      ignored; no path, operation, status code, required member or other schema changes, and the public tracking
+      bodies stay uniform without it

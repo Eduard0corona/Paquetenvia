@@ -1,3 +1,4 @@
+import { isStrictUtcInstant, orderCreatedAtField } from "../../lib/utc-instant";
 import { asUuid } from "../../realtime/envelope";
 import {
   resolveRequestAuthorization,
@@ -483,10 +484,14 @@ function parseTransitionReceipt(value: unknown): DriverTransitionReceipt {
   // service_window; that response is still the exact pre-window contract, so a rolling
   // deploy never strands the offline queue. When present it is validated below.
   const hasServiceWindow = readRecord(value).service_window !== undefined;
+  // UI-PHASE3-ORDERS-LIST-2026-10-12 ("En dos pasos"): Order.created_at is accepted before the API sends it, so a
+  // rolling deploy never strands the offline queue; when present it must be a strict UTC instant.
+  const hasCreatedAt = Object.hasOwn(readRecord(value), orderCreatedAtField);
   const record = readExactRecord(
     value,
     new Set([
       ...(hasServiceWindow ? ["service_window"] : []),
+      ...(hasCreatedAt ? [orderCreatedAtField] : []),
       "id",
       "public_id",
       "owner_org_id",
@@ -523,6 +528,9 @@ function parseTransitionReceipt(value: unknown): DriverTransitionReceipt {
   readMoney(record.total);
   readNullableUtcTimestamp(record.claim_window_ends_at);
   readNullableUtcTimestamp(record.finalized_at);
+  if (hasCreatedAt && !isStrictUtcInstant(record.created_at)) {
+    throw new DriverSyncApiError("invalid-contract");
+  }
   // ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: validated as part of the Order contract, not kept.
   if (hasServiceWindow && record.service_window !== null) {
     const window = readExactRecord(record.service_window, new Set(["from", "to"]));

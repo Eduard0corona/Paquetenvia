@@ -290,6 +290,8 @@ public sealed class PublicTrackingPostgreSqlTests(
         using var second = await client.GetAsync("/api/v1/tracking/second");
         Assert.Equal(HttpStatusCode.TooManyRequests, second.StatusCode);
         AssertPrivacyHeaders(second);
+        // AI-05 publicTracking 429: exactly application/problem+json, and the same uniform body (no traceId).
+        Assert.Equal("application/problem+json", second.Content.Headers.ContentType?.ToString());
         Assert.Equal(
             """{"type":"about:blank","title":"Too Many Requests","status":429}""",
             await second.Content.ReadAsStringAsync());

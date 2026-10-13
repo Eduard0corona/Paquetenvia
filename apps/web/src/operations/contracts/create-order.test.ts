@@ -361,6 +361,30 @@ describe("service window on createOrder (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02)
       expect(() => parseCreatedOrder(orderResponse({ service_window: bad }))).toThrow(CreateOrderContractError);
     }
   });
+
+  // UI-PHASE3-ORDERS-LIST-2026-10-12 (owner, "En dos pasos (Recommended)"): "Nueva orden", "Cobro contra entrega" and
+  // the order list read Order.created_at once the API sends it; absent it is null.
+  it("reads created_at absent as null, keeps a strict UTC instant and fails closed on anything else", () => {
+    const withoutDate = orderResponse();
+    delete withoutDate.created_at;
+    expect(parseCreatedOrder(withoutDate).created_at).toBeNull();
+    for (const value of ["2026-10-02T19:00:00Z", "2026-10-02T19:00:00.1234567Z", "2026-10-02T19:00:00.5+00:00"])
+      expect(parseCreatedOrder(orderResponse({ created_at: value })).created_at).toBe(value);
+    for (const bad of [
+      null,
+      "",
+      "2026-10-02T19:00:00",
+      "2026-10-02T12:00:00-07:00",
+      "2026-10-02",
+      "2026-10-02T19:00:00.12345678Z",
+      "2026-13-02T19:00:00Z",
+      "2026-10-02T19:60:00Z",
+      "2026-10-02T19:00:00Z ",
+      1_791_000_000,
+    ]) {
+      expect(() => parseCreatedOrder(orderResponse({ created_at: bad })), String(bad)).toThrow(CreateOrderContractError);
+    }
+  });
 });
 
 describe("low price authorization (LOW-PRICE-MANUAL-AUTH-2026-10-02)", () => {

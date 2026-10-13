@@ -341,7 +341,8 @@ public sealed class OrderCodExpectedTests
             return Task.FromResult(new OrderResult(
                 Guid.NewGuid(), "ORD_AAAAAAAAAAAAAAAAAAAAAA", command.OrganizationId, null, "DRAFT",
                 new MoneyResult("MXN", 10_000), 1, Guid.NewGuid(), Guid.NewGuid(), "SAME_DAY",
-                command.QuoteId, Guid.NewGuid(), null, "OCCASIONAL", new MoneyResult("MXN", 10_000), null, null));
+                command.QuoteId, Guid.NewGuid(), null, "OCCASIONAL", new MoneyResult("MXN", 10_000), null, null,
+                new DateTimeOffset(2026, 10, 12, 17, 4, 5, TimeSpan.Zero)));
         }
 
         public Task<OrderPageResult> ListAsync(
@@ -353,6 +354,7 @@ public sealed class OrderCodExpectedTests
             bool codPendingReconciliation,
             bool mfaSatisfied,
             string? publicId,
+            OrderListCreatedRange createdRange,
             CancellationToken cancellationToken) => throw new NotSupportedException();
 
         public Task<OrderDetailResult> GetAsync(

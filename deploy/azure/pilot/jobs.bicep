@@ -18,7 +18,8 @@ var tags = {
 // Key Vault Secrets User (built-in), assigned per individual secret.
 var kvReaderRole = '4633458b-17de-408a-b874-0445c86b69e6'
 // Least privilege per job identity: migrate and verify read only the migration connection; the logins job
-// (its own identity) reads the migration connection and the two SCRAM verifiers.
+// (its own identity) reads the migration connection and the three SCRAM verifiers (API, Worker and, since
+// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12, the API's realtime dispatcher login).
 var migrateSecretNames = [
   'pg-migrate-connection'
 ]
@@ -26,6 +27,7 @@ var loginsSecretNames = [
   'pg-migrate-connection'
   'pg-api-login-verifier'
   'pg-worker-login-verifier'
+  'pg-realtime-login-verifier'
 ]
 
 // Classification that lets the E-002 ownership bridge run on the pilot database (exact pair, see
@@ -103,6 +105,14 @@ var loginsKeyVaultEnv = [
   {
     name: 'KeyVaultSecrets__Mappings__2__ConfigurationKey'
     value: 'PAQUETERIA_WORKER_LOGIN_VERIFIER'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__3__SecretName'
+    value: 'pg-realtime-login-verifier'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__3__ConfigurationKey'
+    value: 'PAQUETERIA_REALTIME_LOGIN_VERIFIER'
   }
 ]
 

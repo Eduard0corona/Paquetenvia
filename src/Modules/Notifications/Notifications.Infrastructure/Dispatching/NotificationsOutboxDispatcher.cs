@@ -23,6 +23,8 @@ internal sealed class NotificationsOutboxDispatcher(
         while (!stoppingToken.IsCancellationRequested)
         {
             lanes.ReportIfDue(OutboxLanes.Notifications);
+            // OBS-003: each dispatch cycle is a new root trace whose id is in the cycle's log lines.
+            using var cycle = TraceCorrelation.StartOutboxDispatchCycle(OutboxLanes.Notifications);
             try
             {
                 if (DateTimeOffset.UtcNow >= nextRecovery)

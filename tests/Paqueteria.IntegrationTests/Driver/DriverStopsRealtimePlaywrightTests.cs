@@ -21,7 +21,7 @@ public sealed class DriverStopsRealtimePlaywrightTests(
         await using var api = new RealtimeKestrelWebApplicationFactory(
             database.ApplicationConnectionString,
             recorder,
-            workerConnectionString: database.WorkerConnectionString,
+            realtimeConnectionString: database.RealtimeConnectionString,
             allowedOrigin: nextOrigin,
             enableDispatch: true,
             enableDriverApiCors: true);
