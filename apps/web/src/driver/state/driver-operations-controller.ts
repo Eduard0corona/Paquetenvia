@@ -205,16 +205,29 @@ export class DriverOperationsController {
     return () => this.listeners.delete(listener);
   }
 
+  /**
+   * Opens the queue and starts the sync scheduler. When the controller is
+   * disposed while start waits (the session changed or ended, or React
+   * StrictMode unmounted the first mount), it stops at that point: no
+   * scheduler is created, so no `online` or `visibilitychange` listener, timer,
+   * sync lease or OPS-003 expiry can follow for a session that is gone. Nothing
+   * that outlives dispose exists before the scheduler, and from the check
+   * after the last wait to `scheduler.start()` nothing is awaited, so a later
+   * dispose always finds the scheduler and disposes it.
+   */
   public async start(): Promise<void> {
     try {
-      this.partition = await createDriverCachePartition(this.options.session);
-      const operations = await this.queue.listOperations(this.partition);
+      const partition = await createDriverCachePartition(this.options.session);
+      if (this.disposed) return;
+      this.partition = partition;
+      const operations = await this.queue.listOperations(partition);
+      if (this.disposed) return;
       this.setState({ ...initialState, operations, loading: false });
       const createScheduler =
         this.options.schedulerFactory ??
         ((schedulerOptions) => new DriverSyncScheduler(schedulerOptions));
       this.scheduler = createScheduler({
-        partition: this.partition,
+        partition,
         queue: this.queue,
         api: this.options.api,
         refreshStops: this.options.refreshStops,

@@ -17,6 +17,12 @@ namespace Dispatch.Endpoints;
 
 public static class DispatchEndpoints
 {
+    /// <summary>
+    /// SEC-004: <c>listAssignableDrivers</c>, <c>RateLimits:AssignableDrivers</c> (60 per minute) per user. The host
+    /// registers it with every other policy.
+    /// </summary>
+    public const string AssignableDriversRateLimitPolicy = "Dispatch.AssignableDrivers";
+
     private static readonly JsonSerializerOptions RequestJsonOptions = new(JsonSerializerDefaults.Web)
     {
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Skip,
@@ -40,6 +46,7 @@ public static class DispatchEndpoints
         endpoints.MapGet("/api/v1/orders/{orderId}/assignable-drivers", ListAssignableDriversAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
             .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .RequireRateLimiting(DispatchEndpoints.AssignableDriversRateLimitPolicy)
             .WithName("listAssignableDrivers")
             .WithTags("Dispatch")
             .Produces<AssignableDriverPageResponse>(StatusCodes.Status200OK)
@@ -47,6 +54,7 @@ public static class DispatchEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status429TooManyRequests)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/drivers", ListOrganizationDriversAsync)

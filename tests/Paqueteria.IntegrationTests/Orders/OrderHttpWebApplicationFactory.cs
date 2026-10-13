@@ -64,6 +64,10 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
             {
                 ["Authentication:Provider"] = "Mock",
                 ["IdentityBootstrap:Provider"] = "Mock",
+                // SEC-004: these classes exercise the order and CSV operations, not their limits
+                // (Sec004HeavyEndpointLimitsTests does); one mock user here sends more CSV requests in a
+                // minute than the 10 the pilot allows. The one-commit-at-a-time rule still applies.
+                ["RateLimits:CsvImport:PermitLimit"] = "10000",
             }));
         builder.ConfigureTestServices(services =>
         {

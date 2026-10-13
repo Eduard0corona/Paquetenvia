@@ -56,6 +56,8 @@ builder.Services.AddTraceCorrelation();
 // access_token query values) are rewritten before hosting diagnostics, logging or telemetry read them.
 builder.Services.AddRequestTargetRedaction();
 builder.AddHttpHardening();
+// SEC-004: every rate-limit policy, its partition keys and the one 429 writer, registered once.
+builder.Services.AddApiRateLimiting();
 // OBS-002: one PII-free summary of response status classes per minute (no path, user or tenant).
 builder.Services.AddHttpStatusTelemetry();
 builder.Services.AddPlatformDataProtection(builder.Configuration);

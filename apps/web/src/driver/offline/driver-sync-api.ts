@@ -1,3 +1,4 @@
+import { readRetryAfterSeconds } from "../../lib/retry-after";
 import { isStrictUtcInstant, orderCreatedAtField } from "../../lib/utc-instant";
 import { asUuid } from "../../realtime/envelope";
 import {
@@ -22,6 +23,11 @@ export type DriverSyncApiFailure =
   | "not-found"
   | "conflict"
   | "recoverable"
+  /**
+   * SEC-004: a 429 (AI-05 TooManyRequests). Nothing was applied; the same
+   * request is sent again, with the same keys, once the server's wait ends.
+   */
+  | "rate-limited"
   | "session-expired"
   | "invalid-contract"
   | "cancelled";
@@ -30,6 +36,11 @@ export class DriverSyncApiError extends Error {
   public constructor(
     public readonly category: DriverSyncApiFailure,
     public readonly publicCode: string | null = null,
+    /**
+     * For "rate-limited": the wait the server asked for (Retry-After), in
+     * milliseconds, or null when the answer did not say.
+     */
+    public readonly retryAfterMilliseconds: number | null = null,
   ) {
     super("No fue posible sincronizar la operación.");
     this.name = "DriverSyncApiError";
@@ -411,6 +422,14 @@ async function classifyResponse(
   if (response.status === 401) return new DriverSyncApiError("unauthorized");
   if (response.status === 403) return new DriverSyncApiError("forbidden");
   if (response.status === 404) return new DriverSyncApiError("not-found");
+  if (response.status === 429) {
+    const seconds = readRetryAfterSeconds(response.headers);
+    return new DriverSyncApiError(
+      "rate-limited",
+      null,
+      seconds === null ? null : seconds * 1_000,
+    );
+  }
   if (response.status >= 500) return new DriverSyncApiError("recoverable");
   if (response.status === 409) {
     return new DriverSyncApiError(

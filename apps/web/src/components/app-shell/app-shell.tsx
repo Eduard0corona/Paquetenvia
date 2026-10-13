@@ -10,6 +10,7 @@ import { accountLabel } from "../../auth/session-account";
 import { canSearchOrders } from "../../operations/contracts/capabilities";
 import { activeNavKey, navItemsForRole, type NavItem, type NavKey } from "./nav-items";
 import { OrderSearchBox } from "./order-search-box";
+import { RateLimitAnnouncer } from "../ui/rate-limit-notice";
 import { useShellContext, type ShellContext } from "./use-shell-context";
 
 const sidebarId = "app-sidebar";
@@ -88,6 +89,8 @@ export function AppShell({ children }: { readonly children: ReactNode }) {
         <main id="main" className="appContent" tabIndex={-1}>
           {children}
         </main>
+        {/* SEC-004: the one polite announcement of a 429's wait in this tab; the screens show the countdown. */}
+        <RateLimitAnnouncer />
       </div>
     </div>
   );

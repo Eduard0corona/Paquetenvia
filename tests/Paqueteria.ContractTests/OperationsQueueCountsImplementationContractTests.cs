@@ -45,7 +45,7 @@ public sealed class OperationsQueueCountsImplementationContractTests
             ["#/components/parameters/OrganizationContext"],
             operation.Sequence("parameters").Children.Cast<YamlMappingNode>().Select(node => node.Scalar("$ref")));
         Assert.Equal(
-            ["200", "400", "401", "403", "503"],
+            ["200", "400", "401", "403", "429", "503"],
             operation.Mapping("responses").Children.Keys.Select(key => ((YamlScalarNode)key).Value));
         Assert.Equal(
             "#/components/schemas/OperationsQueueCounts",

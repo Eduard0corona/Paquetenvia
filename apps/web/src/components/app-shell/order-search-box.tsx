@@ -9,14 +9,20 @@ import type { OperationsSession } from "../../operations/session/operations-sess
 import {
   orderDetailPath,
   orderSearchFailedMessage,
+  orderSearchRateLimit,
   searchOrderByPublicId,
 } from "../../operations/state/order-search";
+import { RateLimitNoticeView, useRateLimitWait } from "../ui/rate-limit-notice";
 
 /**
  * UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: "Buscar guía" in the top bar. The person types a
  * tracking number; an exact match in the selected organization opens its detail, anything else
  * shows "No encontramos esa guía". Only the tracking number is searched, never personal data,
  * and the typed text is not kept anywhere.
+ *
+ * SEC-004, owner answer Q13 "Mensaje común": during the server's wait for listOrders the common
+ * message counts down under the search and "Buscar" is disabled; the typed guía stays and
+ * nothing is sent again by itself.
  */
 export function OrderSearchBox({ session }: { readonly session: OperationsSession }) {
   const router = useRouter();
@@ -26,6 +32,9 @@ export function OrderSearchBox({ session }: { readonly session: OperationsSessio
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const rateLimit = useRateLimitWait(orderSearchRateLimit);
+  const waiting = rateLimit.secondsLeft > 0;
+  const rateLimitId = useId();
 
   // A new session or organization drops any search in flight and its message.
   useEffect(() => {
@@ -56,7 +65,7 @@ export function OrderSearchBox({ session }: { readonly session: OperationsSessio
       if (outcome.kind === "found") {
         setValue("");
         router.push(orderDetailPath(outcome.orderId));
-      } else {
+      } else if (outcome.kind !== "rate_limited") {
         setMessage(outcome.kind === "not_found" ? orderNotFoundMessage : orderSearchFailedMessage);
       }
     } catch {
@@ -77,7 +86,7 @@ export function OrderSearchBox({ session }: { readonly session: OperationsSessio
       noValidate
       onSubmit={(event) => {
         event.preventDefault();
-        if (!busy) void search();
+        if (!busy && !waiting) void search();
       }}
     >
       <label htmlFor={inputId} className="srOnly">
@@ -94,20 +103,22 @@ export function OrderSearchBox({ session }: { readonly session: OperationsSessio
         placeholder="Buscar guía (ORD_…)"
         maxLength={64}
         value={value}
-        aria-describedby={message === null ? undefined : messageId}
+        aria-describedby={waiting ? rateLimitId : message !== null ? messageId : undefined}
         onChange={(event) => {
           setValue(event.currentTarget.value);
           setMessage(null);
         }}
       />
-      <button type="submit" className="btn btnSecondary" aria-disabled={busy}>
+      <button type="submit" className="btn btnSecondary" aria-disabled={busy || waiting}>
         {busy ? "Buscando…" : "Buscar"}
       </button>
-      {message !== null && (
+      {/* While "Buscar" waits, its countdown is what the search says (owner answer Q13), wherever the wait started. */}
+      {message !== null && !waiting && (
         <p id={messageId} className="appSearchMessage" role="status" aria-live="polite">
           {message}
         </p>
       )}
+      <RateLimitNoticeView {...rateLimit} className="appSearchMessage" id={rateLimitId} />
     </form>
   );
 }

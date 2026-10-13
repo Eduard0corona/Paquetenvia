@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RateLimitWaits } from "../../lib/rate-limit-wait";
 import { TenantApiError } from "../api/tenant-request";
 import type { AssignableDriver, AssignableDriverPage, Assignment } from "../contracts/assignable-driver";
 import { intersectEligibility, type BulkDriverChoice, type BulkOrder } from "../contracts/bulk-assignment";
@@ -337,5 +338,73 @@ describe("bulk assignment controller (UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-
     expect(api.assignCalls).toHaveLength(1);
     expect(states).toHaveLength(seen);
     expect(onChanged).not.toHaveBeenCalled();
+  });
+});
+
+describe("bulk assignment under the SEC-004 limit (owner answer Q10)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-13T12:00:00Z"));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("fails only the order that met the 429, makes the rest wait for the same wait, and re-enables its retry at 0", async () => {
+    const waits = new RateLimitWaits();
+    const api = new FakeApi();
+    api.lists[second.orderId] = () => {
+      waits.record("assignable_drivers", 2);
+      return Promise.reject(new TenantApiError("rate_limited", null, false, 2));
+    };
+    const controller = new BulkAssignmentController(api, () => undefined, () => undefined, "/ops/inbox", () => "uuid", {
+      waits,
+    });
+    const loading = controller.load([first, second, third]);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.calls).toEqual([`list ${first.orderId}`, `list ${second.orderId}`]);
+    expect(controller.current.drivers[second.orderId]).toEqual({
+      kind: "failed",
+      message: bulkDriversUnavailableMessage,
+      retryable: true,
+    });
+    expect(controller.rateLimited).toBe(true);
+
+    // The third order is not read during the wait.
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(api.calls).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    await loading;
+    expect(api.calls).toEqual([`list ${first.orderId}`, `list ${second.orderId}`, `list ${third.orderId}`]);
+    expect(controller.current.phase).toBe("ready");
+    expect(controller.rateLimited).toBe(false);
+
+    // The order that met the limit is not read again by itself; its "Reintentar" works again.
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(api.calls).toHaveLength(3);
+    delete api.lists[second.orderId];
+    await controller.retryLoad(second.orderId);
+    expect(api.calls).toHaveLength(4);
+    expect(controller.current.drivers[second.orderId]?.kind).toBe("ready");
+  });
+
+  it("refuses 'Reintentar' while the wait lasts", async () => {
+    const waits = new RateLimitWaits();
+    const api = new FakeApi();
+    let limited = true;
+    api.lists[first.orderId] = () => {
+      if (!limited) return Promise.resolve(page([driver]));
+      waits.record("assignable_drivers", 5);
+      return Promise.reject(new TenantApiError("rate_limited", null, false, 5));
+    };
+    const controller = new BulkAssignmentController(api, () => undefined, () => undefined, "/ops/inbox", () => "uuid", {
+      waits,
+    });
+    await controller.load([first]);
+    limited = false;
+    await controller.retryLoad(first.orderId);
+    expect(api.calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(5_000);
+    await controller.retryLoad(first.orderId);
+    expect(api.calls).toHaveLength(2);
+    expect(controller.current.drivers[first.orderId]?.kind).toBe("ready");
   });
 });

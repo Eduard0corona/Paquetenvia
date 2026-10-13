@@ -12,7 +12,12 @@ import {
 } from "../contracts/order-list";
 import type { OperationsSession } from "../session/operations-session";
 import { ExternalStore } from "./external-store";
-import { describeFailure } from "./tenant-error-messages";
+import { ScreenReloads, type ReloadTimers } from "./screen-reloads";
+import { describeFailure, isRateLimited } from "./tenant-error-messages";
+import { type RateLimitedOperation, type RateLimitWaits } from "../../lib/rate-limit-wait";
+
+/** SEC-004: listOrders, 120 per minute per user (shared with the pending COD list and the guía searches). */
+export const orderListRateLimit: readonly RateLimitedOperation[] = ["order_list"];
 
 /**
  * UI-PHASE3-ORDERS-LIST-2026-10-12 ("Sí, lista de órdenes"): state of the "Órdenes" screen.
@@ -23,8 +28,13 @@ import { describeFailure } from "./tenant-error-messages";
  * A filter change drops the rows of the previous filters at once. The page becoming visible or focused again re-reads
  * the first page only while no further page was loaded, so "Cargar más" pages are never dropped behind the person's
  * back. Everything lives in memory; a session or organization change starts from an empty list.
+ *
+ * SEC-004 (owner answers Q11 and Q14): during the server's wait after a 429 nothing is read, whatever asked; a filter
+ * change is kept on screen without being sent. When the wait ends the list is read once, by itself ("wait_end"), with
+ * the filters on screen, unless "Cargar más" already loaded further pages: then nothing is read, so they are not lost,
+ * and only the buttons re-enable.
  */
-export type OrderListTrigger = "initial" | "filters" | "manual" | "visibility" | "focus";
+export type OrderListTrigger = "initial" | "filters" | "manual" | "visibility" | "focus" | "wait_end";
 
 const backgroundTriggers: ReadonlySet<OrderListTrigger> = new Set(["visibility", "focus"]);
 export const backgroundRefreshIntervalMilliseconds = 5_000;
@@ -67,6 +77,9 @@ export interface OrderListDependencies {
   readonly loadRole: (session: OperationsSession, signal: AbortSignal) => Promise<string | null>;
   readonly isHidden?: () => boolean;
   readonly now?: () => number;
+  /** SEC-004: the tab's server waits and the timers of the read when one ends (tests pass their own). */
+  readonly waits?: RateLimitWaits;
+  readonly timers?: Partial<ReloadTimers>;
 }
 
 const emptyList = {
@@ -104,12 +117,26 @@ export class OrderListController extends ExternalStore<OrderListState> {
   private pagesLoaded = 0;
   private seenCursors = new Set<string>();
   private lastReadAt = Number.NEGATIVE_INFINITY;
+  private readonly reloads: ScreenReloads<"list">;
 
   public constructor(
     private readonly dependencies: OrderListDependencies,
     view: OrderListView = defaultOrderListView,
   ) {
     super(initialState(view));
+    this.reloads = new ScreenReloads({
+      operations: orderListRateLimit,
+      // No realtime here: nothing to space, only the server's wait.
+      spacing: 0,
+      waits: dependencies.waits,
+      timers: dependencies.timers,
+      reload: () => void this.refresh("wait_end"),
+    });
+  }
+
+  /** The server's wait for listOrders is running: "Actualizar" and "Cargar más" stay disabled. */
+  public get rateLimited(): boolean {
+    return this.reloads.waiting;
   }
 
   /** Starts (again) for the installed session: drops everything of the previous one, then reads the list. */
@@ -163,7 +190,12 @@ export class OrderListController extends ExternalStore<OrderListState> {
     const api = this.api;
     const state = this.getSnapshot();
     if (api === null || state.phase !== "ready") return;
-    if (backgroundTriggers.has(trigger)) {
+    if (trigger === "wait_end") {
+      // Owner answer Q14: further pages loaded with "Cargar más" are not dropped; only the buttons re-enable.
+      if (this.pagesLoaded > 1) return;
+      // A hidden page reads when it becomes visible again.
+      if (this.dependencies.isHidden?.() ?? false) return;
+    } else if (backgroundTriggers.has(trigger)) {
       if (this.dependencies.isHidden?.() ?? false) return;
       if (state.loading || state.loadingMore || this.pagesLoaded > 1) return;
       if (this.now() - this.lastReadAt < backgroundRefreshIntervalMilliseconds) return;
@@ -196,6 +228,11 @@ export class OrderListController extends ExternalStore<OrderListState> {
       createdFrom: range.createdFrom,
       createdTo: range.createdTo,
     };
+    // SEC-004: during the server's wait nothing is sent; the list is read once when it ends.
+    if (!this.reloads.admit("list")) {
+      this.update({ rangeError: null });
+      return;
+    }
 
     this.update({ loading: true, loadingMore: false, rangeError: null });
     try {
@@ -231,7 +268,7 @@ export class OrderListController extends ExternalStore<OrderListState> {
     const query = this.pageQuery;
     const cursor = state.nextCursor;
     if (api === null || state.phase !== "ready" || query === null || cursor === null) return;
-    if (state.loading || state.loadingMore) return;
+    if (state.loading || state.loadingMore || this.reloads.waiting) return;
     const generation = this.generation;
     const sequence = this.readSequence;
     this.update({ loadingMore: true });
@@ -258,6 +295,12 @@ export class OrderListController extends ExternalStore<OrderListState> {
   }
 
   private fail(error: unknown, kind: "read" | "page"): void {
+    if (isRateLimited(error)) {
+      // SEC-004: the common message counts down and the rows stay; the list is read once when the wait ends.
+      this.update({ error: null });
+      this.reloads.rateLimited("list");
+      return;
+    }
     if (error instanceof TenantApiError && (error.category === "unauthorized" || error.category === "forbidden")) {
       if (error.mfaRequired) {
         // Only the second factor is missing: nothing is shown until it is verified.
@@ -288,6 +331,7 @@ export class OrderListController extends ExternalStore<OrderListState> {
 
   private reset(): void {
     this.generation += 1;
+    this.reloads.cancel();
     this.sessionController?.abort();
     this.sessionController = new AbortController();
     this.readController?.abort();

@@ -27,6 +27,8 @@ import {
   type BulkRowResult,
 } from "../state/bulk-assignment-controller";
 import { OperationsBulkRoute } from "./operations-bulk-route";
+import { assignableDriversRateLimit } from "../state/driver-assignment-controller";
+import { RateLimitNoticeView, useRateLimitWait } from "../../components/ui/rate-limit-notice";
 
 /** The id of the panel heading; the inbox labels the panel's section with it. */
 export const bulkAssignmentTitleId = "inbox-bulk-title";
@@ -87,6 +89,11 @@ export function OperationsBulkAssignment({
   const controllerRef = useRef<BulkAssignmentController | null>(null);
   const onChangedRef = useRef(onChanged);
   const { confirm, dialog } = useConfirmDialog();
+  // SEC-004 (owner answer Q10, as the task states it): one message for the batch while the server's wait for
+  // listAssignableDrivers lasts; the orders not read yet wait for it, and each order's "Reintentar" stays disabled
+  // until it ends (it is not read again by itself).
+  const rateLimit = useRateLimitWait(assignableDriversRateLimit);
+  const waiting = rateLimit.secondsLeft > 0;
 
   useEffect(() => {
     onChangedRef.current = onChanged;
@@ -191,6 +198,7 @@ export function OperationsBulkAssignment({
           Tu sesión no es válida; inicia sesión de nuevo.
         </p>
       )}
+      <RateLimitNoticeView {...rateLimit} />
       {state.phase === "loading" && !sessionMissing && (
         <p className="live" aria-live="polite">
           Revisando qué repartidores pueden llevar cada orden…
@@ -290,6 +298,7 @@ export function OperationsBulkAssignment({
                         load={load}
                         onRetry={() => void controllerRef.current?.retryLoad(order.orderId)}
                         canRetry={state.phase === "ready"}
+                        waiting={waiting}
                       />
                     )}
                   </td>
@@ -457,10 +466,13 @@ function LoadText({
   load,
   canRetry,
   onRetry,
+  waiting,
 }: {
   readonly load: BulkDriversLoad | undefined;
   readonly canRetry: boolean;
   readonly onRetry: () => void;
+  /** SEC-004: the server's wait for listAssignableDrivers is running; "Reintentar" re-enables itself when it ends. */
+  readonly waiting: boolean;
 }) {
   if (load === undefined || load.kind === "loading") return <span>Revisando repartidores…</span>;
   if (load.kind === "ready") return <span>Lista para asignar</span>;
@@ -468,7 +480,7 @@ function LoadText({
     <span className="opsBulkProblem">
       {load.message}{" "}
       {load.retryable && canRetry && (
-        <button type="button" className="btnLink" onClick={onRetry}>
+        <button type="button" className="btnLink" onClick={onRetry} disabled={waiting}>
           Reintentar
         </button>
       )}

@@ -15,6 +15,18 @@ namespace Custody.Endpoints;
 
 public static class ProofEndpoints
 {
+    /// <summary>
+    /// SEC-004 (owner answer Q2, "60 cada paso"): <c>createProofUploadSession</c>, <c>RateLimits:ProofUploadSession</c>
+    /// (60 per minute) per driver. The host registers it with every other policy.
+    /// </summary>
+    public const string UploadSessionRateLimitPolicy = "Custody.ProofUploadSession";
+
+    /// <summary>
+    /// SEC-004 (owner answer Q2): <c>finalizeProof</c>, <c>RateLimits:ProofFinalize</c> (60 per minute) per driver, a
+    /// budget of its own.
+    /// </summary>
+    public const string FinalizeRateLimitPolicy = "Custody.ProofFinalize";
+
     private static readonly JsonSerializerOptions RequestJsonOptions = new(JsonSerializerDefaults.Web)
     {
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Skip,
@@ -27,6 +39,7 @@ public static class ProofEndpoints
                 CreateUploadSessionAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
             .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .RequireRateLimiting(ProofEndpoints.UploadSessionRateLimitPolicy)
             .WithName("createProofUploadSession")
             .WithTags("Custody")
             .Accepts<CreateProofUploadSessionRequest>("application/json")
@@ -35,11 +48,13 @@ public static class ProofEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status429TooManyRequests)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapPost("/api/v1/orders/{orderId}/proofs", FinalizeProofAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
             .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .RequireRateLimiting(ProofEndpoints.FinalizeRateLimitPolicy)
             .WithName("finalizeProof")
             .WithTags("Custody")
             .Accepts<FinalizeProofRequest>("application/json")
@@ -48,6 +63,7 @@ public static class ProofEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status404NotFound)
             .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status429TooManyRequests)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
         return endpoints;
     }

@@ -1,5 +1,83 @@
 # Changelog
 
+## Límites de tasa en las pantallas del panel: mensaje con cuenta regresiva y recargas espaciadas (SEC-004-PANEL-SCREENS-2026-10-13, fase 4 PR 3, parte del panel) — 2026-10-13
+
+- Respuestas literales del project owner (2026-10-13), registradas en `decision-log.md` con su contexto y las opciones
+  no elegidas:
+  - Q11, pantallas que se actualizan solas: "Reintenta sola (Recommended)".
+  - Q12, un segundo: ""1 segundo" (Recommended)".
+  - Q13, "Buscar guía" y "Agregar entrega": "Mensaje común (Recommended)".
+  - Q14, botones de las pantallas que se actualizan solas: "Se pausan (Recommended)".
+  - Q15, selector de repartidor: "La pide sola (Recommended)".
+  - Q16, solo los conteos: "Toda la pantalla (Recommended)".
+- Aplica también Q6 "Mensaje común con espera (Recommended)" (`SEC-004-HEAVY-ENDPOINT-MAPPING-2026-10-12`) y Q9
+  "Espaciar recargas (Recommended)" y Q10 "Dejarlo en 60/min (Recommended)" (`SEC-004-RELOADS-AND-BULK-2026-10-13`).
+- AI-07 agrega `panel_rate_limit` y una entrada `rate_limit` en cada pantalla limitada: "Demasiadas solicitudes. Espera
+  N segundos e intenta de nuevo." con N del `Retry-After` contando cada segundo ("1 segundo" al final; 60 si el
+  encabezado falta o no es un entero positivo), anunciado una vez por espera.
+- Pantallas que envían (CSV, exportar liquidación, "Calcular precio", "Buscar guía", "Agregar entrega"): el botón se
+  desactiva durante la espera y se reactiva solo; lo capturado se conserva y nada se reenvía solo; al volver a pulsar
+  se envía la misma `Idempotency-Key`.
+- Pantallas que se actualizan solas (tablero, bandeja, detalle de la orden, Órdenes, Cobros pendientes): se pausan las
+  recargas automáticas, "Actualizar" y "Cargar más"; un cambio de filtro se guarda; al llegar a 0 se recargan una vez
+  (Órdenes no, si ya se cargaron más páginas). Una espera de los conteos pausa toda la pantalla.
+- Toda pantalla que recarga con avisos en tiempo real (tablero, bandeja, detalle de la orden, Rutas) recarga como
+  máximo cada 3 segundos por pestaña, sin perder avisos.
+- Ningún límite cambia. Sin cambios en AI-04, AI-05, AI-06, AI-18, roles, permisos, migraciones ni paquetes. Nota:
+  `docs/development/sec-004-panel-limits.md`.
+
+## Recargas del panel y asignación en lote ante los límites (SEC-004-RELOADS-AND-BULK-2026-10-13, fase 4 PR 3) — 2026-10-13
+
+- Respuestas literales del project owner (2026-10-13), registradas en `decision-log.md` con su contexto: la premisa
+  de Q3 ("se refrescan cada 30 segundos") estaba incompleta, porque el tablero y la bandeja también recargan con cada
+  aviso en tiempo real y cada recarga lee los conteos.
+  - Q9, tablero y conteos: "Espaciar recargas (Recommended)" ("El panel junta los avisos y recarga como máximo cada 3
+    segundos por pestaña. Los límites de 60/min no cambian. Los cambios se ven hasta 3 segundos después. Va en el PR de
+    pantallas del panel.").
+  - Q10, repartidores asignables: "Dejarlo en 60/min (Recommended)" ("En el piloto, tres lotes de 20 en un minuto es
+    raro. Si pasa, el panel pide esperar unos segundos. Se revisa con las métricas en 2 semanas.").
+- Ningún número cambia: tablero, conteos y repartidores asignables siguen en 60 por minuto por usuario.
+- El espaciado de 3 segundos por pestaña sale en el PR de pantallas del panel (la parte web del PR 3). Hasta que se
+  fusione, una ráfaga de avisos (una asignación en lote, la confirmación de un CSV) todavía puede gastar esos cupos.
+- La asignación en lote sigue leyendo los repartidores de cada orden por separado: un lote de 20 órdenes usa al menos
+  20 de los 60 por minuto. Se revisa con el evento 4604 en 2 semanas.
+- Sin cambios en AI-04, AI-05, AI-06, AI-07, AI-18, roles, permisos, migraciones ni paquetes. Nota:
+  `docs/development/sec-004-heavy-endpoint-limits.md` (riesgos residuales).
+
+## Límites de tasa en los endpoints pesados: servidor, contratos y app del repartidor (SEC-004, fase 4 PR 3) — 2026-10-13
+
+- Respuestas literales del project owner (2026-10-12 y 2026-10-13), registradas en `decision-log.md`:
+  - `SEC-004-HEAVY-ENDPOINT-MAPPING-2026-10-12`: CSV "Compartido, 1 a la vez (Recommended)"; fotos "60 cada paso
+    (Recommended)"; tablero y conteos "Uno cada uno (Recommended)"; inicio de sesión "Solo /auth/login (Recommended)";
+    texto ante un 429 "Mensaje común con espera (Recommended)".
+  - `OBS-001-DASHBOARD-429-2026-10-12`: "Enmendar ADR-OBS-001 (Recommended)".
+  - `SEC-004-RETRY-AFTER-2026-10-13`: "Sí, agregarlo (Recommended)".
+  - `SEC-004-REJECTION-SUMMARY-2026-10-13`: "Resumen en los logs (Recommended)".
+- Límites por usuario (hash del sujeto; la red del cliente sin sujeto), ventana fija sin cola: vista previa y
+  confirmación del CSV 10/min juntas y una confirmación a la vez por usuario; exportar liquidación 10/min; crear
+  dirección 30/min; pedir subida de foto 60/min y confirmarla 60/min, cada uno con su presupuesto; tablero 60/min y
+  conteos 60/min, cada uno con el suyo; lista de órdenes 120/min; cotizar 60/min; repartidores asignables 60/min.
+  Inicio de sesión: 20/min por red, solo `GET /auth/login`; `/signin-authcenter` no se limita. Los números son la
+  sección `RateLimits`, validada al arrancar; un valor inválido detiene la API.
+- AI-05: 429 `TooManyRequests` en `previewOrderCsv`, `commitOrderCsv`, `exportSettlementCsv`, `createLocation`,
+  `createProofUploadSession`, `finalizeProof`, `getOperationsQueueCounts`, `listOrders`, `createQuote` y
+  `listAssignableDrivers`; `startAuthCenterSignIn` declara su 429 (página HTML simple para una navegación del
+  navegador, con el texto aprobado, o el problema). `TooManyRequests` declara el encabezado `Retry-After` (entero,
+  mínimo 1) que ya manda todo 429. Entrada `SEC-004-HEAVY-ENDPOINT-LIMITS` en `x-pilot-contract-deltas`. Rutas y
+  esquemas siguen en 69 y 125; las referencias internas pasan de 651 a 662.
+- El tablero, fuera de AI-05, registra su 429 en una enmienda de ADR-OBS-001; `HttpSurfaceOpenApiCoverageTests` ya no
+  lo omite y revisa sus respuestas de error contra esa enmienda.
+- OBS-002: evento 4604 `RateLimitSummary`, una línea por límite y minuto con rechazos (`Policy`, `Rejected`,
+  `WindowSeconds`); `Policy` y `Rejected` entran a `TelemetryDimensions.Allowed`. Ninguna alerta ni libro de trabajo
+  lo lee.
+- App del repartidor (respuestas Q2 y Q6): un 429 al pedir o confirmar una foto ya no se toma por evidencia rechazada.
+  La acción conserva sus llaves y su avance, la cola no manda nada hasta que pasa el `Retry-After` del servidor (ni con
+  "Sincronizar ahora") y sigue sola, sin mensaje. AI-07 lo registra en `driver_stop.rate_limit` y la página de
+  `/auth/login` en la ruta `/login`.
+- AI-08 SEC-004: las tres decisiones pendientes del PR 3 quedan decididas. El mensaje y la espera del botón en cada
+  pantalla del panel (AI-07) salen en la parte web del PR 3. Sin cambios en AI-04, AI-06, AI-18, roles, permisos,
+  migraciones ni paquetes. Nota: `docs/development/sec-004-heavy-endpoint-limits.md`.
+
 ## Correlación W3C sin paquetes (OBS-003-W3C-CORRELATION-2026-10-12, fase 4 PR 1) — 2026-10-12
 
 - Aplica la fase 4 aprobada; no hay pregunta nueva al owner. Respuesta literal del owner

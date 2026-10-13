@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { OperationsApiError } from "../api/operations-api";
 import type { OperationsQueueCounts } from "../contracts/queue-counts";
 import { QueueCountsLoader, type QueueCountsView } from "./queue-counts-loader";
 
@@ -97,5 +98,17 @@ describe("queue counts loader (UI-PHASE2-QUEUE-COUNTS-2026-10-05)", () => {
     pending.resolve(counts(5));
     await load;
     expect(views).toEqual([{ counts: null, unavailable: false }]);
+  });
+});
+
+describe("queue counts under the SEC-004 limit (owner answer Q16)", () => {
+  it("keeps the counts on screen on a 429 and says so, so the screen waits as a whole", async () => {
+    const views: QueueCountsView[] = [];
+    const loader = new QueueCountsLoader((view) => views.push(view));
+    expect(await loader.load(async () => counts(3))).toBe("loaded");
+    expect(await loader.load(() => Promise.reject(new OperationsApiError("rate_limited", 5)))).toBe("rate_limited");
+    expect(views).toEqual([{ counts: counts(3), unavailable: false }]);
+    expect(await loader.load(() => Promise.reject(new OperationsApiError("unavailable")))).toBe("failed");
+    expect(views.at(-1)).toEqual({ counts: null, unavailable: true });
   });
 });

@@ -2,9 +2,14 @@ import type { AssignmentApi } from "../api/assignment-api";
 import { TenantApiError } from "../api/tenant-request";
 import type { AssignableDriver } from "../contracts/assignable-driver";
 import { bulkRunSummary, type BulkDriverChoice, type BulkOrder } from "../contracts/bulk-assignment";
-import { assignmentConflictMessages } from "./driver-assignment-controller";
+import {
+  assignableDriversRateLimit,
+  assignmentConflictMessages,
+  type DriverListWaitOptions,
+} from "./driver-assignment-controller";
 import { PendingSubmissions } from "./pending-submissions";
 import { describeFailure } from "./tenant-error-messages";
+import { rateLimitWaits, sleepUntilWaitEnds, type RateLimitWaits } from "../../lib/rate-limit-wait";
 
 /**
  * UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: state of one "Asignar seleccionadas…" batch.
@@ -16,6 +21,12 @@ import { describeFailure } from "./tenant-error-messages";
  * answer; a retry after a network or server failure resends that key. Each order keeps its own
  * result, a stop is never hidden, and the inbox reads REST again afterwards. Nothing is stored in
  * the browser and nothing is logged.
+ *
+ * SEC-004, owner answer Q10 ("Si pasa, el panel pide esperar unos segundos."): a 429 on one order's
+ * drivers leaves that order failed with its "Reintentar", which stays disabled while the server's
+ * wait lasts and re-enables itself when it ends (it is not read again by itself). The orders not
+ * read yet wait for the same wait before their first read instead of meeting the same 429. The
+ * per-order read is unchanged.
  */
 export type BulkAssignmentApi = Pick<AssignmentApi, "listAssignableDrivers" | "assignDriver">;
 
@@ -104,8 +115,14 @@ export class BulkAssignmentController {
     /** Where the MFA step-up returns (the inbox view). */
     private readonly returnUrl: string,
     randomUuid: () => string = () => crypto.randomUUID(),
+    private readonly limits: DriverListWaitOptions = {},
   ) {
     this.keys = new PendingSubmissions(() => `assign-driver-${randomUuid()}`);
+  }
+
+  /** The server's wait for listAssignableDrivers is running: "Reintentar" stays disabled. */
+  public get rateLimited(): boolean {
+    return this.waits().isWaiting(assignableDriversRateLimit);
   }
 
   public get current(): BulkAssignmentState {
@@ -122,6 +139,9 @@ export class BulkAssignmentController {
     });
     for (const order of orders) {
       if (this.disposed) return;
+      // SEC-004: the next order is read only once the server's wait (if any) has passed.
+      await sleepUntilWaitEnds(this.waits(), assignableDriversRateLimit, this.abort.signal);
+      if (this.disposed) return;
       if (this.has(order.orderId)) await this.loadOrder(order.orderId);
     }
     if (!this.disposed && this.state.phase === "loading") this.set({ ...this.state, phase: "ready" });
@@ -130,6 +150,7 @@ export class BulkAssignmentController {
   /** Reads one order's drivers again after a failure. */
   public async retryLoad(orderId: string): Promise<void> {
     if (this.disposed || this.state.phase !== "ready" || this.state.drivers[orderId]?.kind !== "failed") return;
+    if (this.rateLimited) return;
     this.setDrivers(orderId, { kind: "loading" });
     await this.loadOrder(orderId);
   }
@@ -283,6 +304,10 @@ export class BulkAssignmentController {
       stop: !(error instanceof TenantApiError && error.category === "conflict"),
       stepUpHref: view.stepUpHref,
     };
+  }
+
+  private waits(): RateLimitWaits {
+    return this.limits.waits ?? rateLimitWaits;
   }
 
   private has(orderId: string): boolean {

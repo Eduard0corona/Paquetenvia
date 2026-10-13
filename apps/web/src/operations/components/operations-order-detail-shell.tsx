@@ -14,7 +14,8 @@ import { DateTime } from "../../components/ui/date-time";
 import { DescriptionList } from "../../components/ui/description-list";
 import { PageHeader } from "../../components/ui/page-header";
 import { StatusBadge } from "../../components/ui/status-badge";
-import { useOperationsOrderDetail } from "../state/use-operations-order-detail";
+import { RateLimitNoticeView, useRateLimitWait } from "../../components/ui/rate-limit-notice";
+import { orderDetailRateLimit, useOperationsOrderDetail } from "../state/use-operations-order-detail";
 import { OperationsDriverAssignment } from "./operations-driver-assignment";
 import { OperationsFailedAttempt } from "./operations-failed-attempt";
 import { OperationsNextStep } from "./operations-next-step";
@@ -29,6 +30,10 @@ export function OperationsOrderDetailShell({
   readonly inboxHref?: string | null;
 }) {
   const state = useOperationsOrderDetail(orderId);
+  // SEC-004 (owner answers Q11, Q14): during the server's wait for the dashboard the order is not read, "Actualizar"
+  // is disabled, and it is read once by itself when the wait ends.
+  const rateLimit = useRateLimitWait(orderDetailRateLimit);
+  const waiting = rateLimit.secondsLeft > 0;
   const backToInbox =
     inboxHref === null ? null : (
       <Link className="btnLink opsBackLink" href={inboxHref}>
@@ -67,6 +72,7 @@ export function OperationsOrderDetailShell({
           title="Detalle de orden"
           description={state.error ?? "Cargando información operativa…"}
         />
+        <RateLimitNoticeView {...rateLimit} />
       </div>
     );
   }
@@ -87,13 +93,14 @@ export function OperationsOrderDetailShell({
               Última actualización:{" "}
               {state.lastUpdated === null ? "Pendiente" : <DateTime value={state.lastUpdated} />}
             </span>
-            <button type="button" className="btn btnSecondary" onClick={state.refresh}>
+            <button type="button" className="btn btnSecondary" onClick={state.refresh} disabled={waiting}>
               Actualizar
             </button>
           </>
         }
       />
       <p className="pageNote">Horarios mostrados en hora de Mazatlán.</p>
+      <RateLimitNoticeView {...rateLimit} />
 
       <DescriptionList
         variant="grid"

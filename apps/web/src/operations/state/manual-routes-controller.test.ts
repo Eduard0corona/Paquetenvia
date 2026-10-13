@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RateLimitWaits } from "../../lib/rate-limit-wait";
 import type { CreateRouteInput, RoutesApi } from "../api/routes-api";
 import { OperationsApiError } from "../api/operations-api";
 import { TenantApiError } from "../api/tenant-request";
@@ -827,5 +828,109 @@ describe("Rutas errors by reason (UI-PHASE3-ROUTES-NO-IDS-2026-10-12)", () => {
     await controller.reorder([routeA.stops[2]!.id, routeA.stops[1]!.id, routeA.stops[0]!.id]);
     expect(state().selected?.version).toBe(5);
     expect(state().notice).toEqual({ tone: "warn", text: routeSavedStaleMessage, stepUpHref: null });
+  });
+});
+
+describe("route planner under SEC-004 (owner answers Q9, Q13)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-13T12:00:00Z"));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  async function limitedPlanner(api = new FakeRoutesApi([routeA, routeB])) {
+    const waits = new RateLimitWaits();
+    let counter = 0;
+    const controller = new ManualRoutesController({
+      readSession: () => session,
+      createApi: () => api,
+      readQuery: () => new URLSearchParams(`routeId=${routeA.id}`),
+      randomUuid: () => `key-${++counter}`,
+      waits,
+    });
+    await controller.start();
+    await vi.advanceTimersByTimeAsync(0);
+    api.calls.length = 0;
+    return { controller, api, waits, state: () => controller.getSnapshot() };
+  }
+
+  it("'Agregar entrega' keeps the guía on a 429, says nothing of its own, and sends nothing during the wait", async () => {
+    const api = new FakeRoutesApi([routeA, routeB]);
+    const { controller, waits, state } = await limitedPlanner(api);
+    api.lookupAnswer = () => {
+      waits.record("order_list", 2);
+      return Promise.reject(new TenantApiError("rate_limited", null, false, 2));
+    };
+    controller.setGuide(guideOf(7));
+    await controller.addStop();
+    expect(api.calls).toEqual([`lookup ${guideOf(7)}`]);
+    expect(state()).toMatchObject({ notice: null, guide: guideOf(7), mutating: false });
+
+    api.lookupAnswer = null;
+    await controller.addStop();
+    expect(api.calls).toHaveLength(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    // Never sent again by itself; pressed again, it looks the guía up and adds the stop.
+    expect(api.calls).toHaveLength(1);
+    await controller.addStop();
+    expect(api.calls.slice(0, 2)).toEqual([`lookup ${guideOf(7)}`, `lookup ${guideOf(7)}`]);
+    expect(api.calls).toContain(`add ${routeA.id} ${orderOf(7)} v4`);
+  });
+
+  it("is not held by another limit", async () => {
+    const { controller, api, waits } = await limitedPlanner();
+    waits.record("dashboard", 60);
+    controller.setGuide(guideOf(7));
+    await controller.addStop();
+    expect(api.calls[0]).toBe(`lookup ${guideOf(7)}`);
+  });
+
+  it("gathers RouteChanged notices into at most one read every 3 seconds, losing none (Q9)", async () => {
+    const { controller, api } = await limitedPlanner();
+    const lists = () => api.calls.filter((call) => call === "list").length;
+    const shownReads = () => api.calls.filter((call) => call === `get ${routeA.id}`).length;
+    // The start read the list at t = 0: ten notices in the next second are read together 3 s after it.
+    for (let notice = 0; notice < 10; notice += 1) {
+      controller.notice(notice % 2 === 0 ? routeB.id : routeA.id);
+      await vi.advanceTimersByTimeAsync(100);
+    }
+    expect(lists()).toBe(0);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(lists()).toBe(0);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(lists()).toBe(1);
+    // The route shown was named by one of the gathered notices: it is read once, with the list.
+    expect(shownReads()).toBe(1);
+    // One more right after: read when the spacing ends, not lost.
+    await vi.advanceTimersByTimeAsync(1_000);
+    controller.notice(routeB.id);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(lists()).toBe(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(lists()).toBe(2);
+    expect(shownReads()).toBe(1);
+    controller.stop();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("counts every read of the list for the spacing, 'Actualizar' included (AI-07: any reload)", async () => {
+    const { controller, api } = await limitedPlanner();
+    const lists = () => api.calls.filter((call) => call === "list").length;
+    await vi.advanceTimersByTimeAsync(10_000);
+    // A quiet period: the first notice is read at once.
+    controller.notice(routeB.id);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lists()).toBe(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    // "Actualizar" reads the list; a notice right after it waits 3 s from that read.
+    await controller.refresh();
+    expect(lists()).toBe(2);
+    await vi.advanceTimersByTimeAsync(500);
+    controller.notice(routeB.id);
+    await vi.advanceTimersByTimeAsync(2_499);
+    expect(lists()).toBe(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(lists()).toBe(3);
+    controller.stop();
   });
 });

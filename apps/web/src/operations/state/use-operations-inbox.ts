@@ -27,9 +27,11 @@ export interface OperationsInboxState extends InboxState {
 
 /**
  * UI-PHASE3-INBOX-2026-10-10: the work inbox for the view in the URL. Realtime events
- * (OperationsHub, 250 ms debounce), a reconnect, polling every 30 s and the page becoming
+ * (OperationsHub, 250 ms debounce, then at most one read every 3 seconds: owner answer Q9 of
+ * SEC-004-RELOADS-AND-BULK-2026-10-13), a reconnect, polling every 30 s and the page becoming
  * visible only trigger a REST read of the same view, exactly as the operations dashboard
- * does (ADR-OBS-001); nothing is kept outside this tab's memory.
+ * does (ADR-OBS-001); during the server's wait after a 429 none is sent (SEC-004). Nothing is
+ * kept outside this tab's memory.
  */
 export function useOperationsInbox(view: InboxView): OperationsInboxState {
   const [controller] = useState(
@@ -54,12 +56,9 @@ export function useOperationsInbox(view: InboxView): OperationsInboxState {
   useEffect(() => {
     const apiBaseUrl = clientApiBaseUrl();
     let realtime: ManagedRealtimeConnection | null = null;
-    let realtimeTimer: ReturnType<typeof setTimeout> | null = null;
     let generation = 0;
 
     const stopRealtime = async () => {
-      if (realtimeTimer !== null) clearTimeout(realtimeTimer);
-      realtimeTimer = null;
       const current = realtime;
       realtime = null;
       if (current !== null) await current.stop().catch(() => undefined);
@@ -83,13 +82,8 @@ export function useOperationsInbox(view: InboxView): OperationsInboxState {
         return;
       }
       const connection = createOperationsDashboardRealtime(apiBaseUrl, session, {
-        refreshOperations: () => {
-          if (realtimeTimer !== null) clearTimeout(realtimeTimer);
-          realtimeTimer = setTimeout(() => {
-            realtimeTimer = null;
-            void controller.refresh("realtime");
-          }, 250);
-        },
+        // The controller gathers the notices into at most one read every 3 seconds (owner answer Q9).
+        refreshOperations: () => controller.notice(),
         // Positions are not part of the inbox; a location update changes no queue.
         refreshLocation: () => undefined,
         resynchronize: async () => {

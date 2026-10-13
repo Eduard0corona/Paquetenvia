@@ -20,6 +20,12 @@ namespace Finance.Endpoints;
 /// </summary>
 public static class SettlementEndpoints
 {
+    /// <summary>
+    /// SEC-004: <c>exportSettlementCsv</c>, <c>RateLimits:SettlementExport</c> (10 per minute) per user. The host
+    /// registers it with every other policy.
+    /// </summary>
+    public const string ExportRateLimitPolicy = "Finance.SettlementExport";
+
     private static readonly JsonSerializerOptions RequestJsonOptions = new(JsonSerializerDefaults.Web)
     {
         PropertyNameCaseInsensitive = false,
@@ -105,10 +111,12 @@ public static class SettlementEndpoints
         endpoints.MapGet("/api/v1/settlements/{settlementId}/export.csv", ExportAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
             .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .RequireRateLimiting(SettlementEndpoints.ExportRateLimitPolicy)
             .WithName("exportSettlementCsv")
             .WithTags("Finance")
             .Produces(StatusCodes.Status200OK, typeof(string), "text/csv")
-            .ProducesSettlementProblems();
+            .ProducesSettlementProblems()
+            .ProducesProblem(StatusCodes.Status429TooManyRequests);
 
         return endpoints;
     }

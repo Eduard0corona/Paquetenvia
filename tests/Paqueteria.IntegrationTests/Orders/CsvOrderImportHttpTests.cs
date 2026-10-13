@@ -372,8 +372,19 @@ public sealed class CsvOrderImportHttpTests : IClassFixture<OrderHttpWebApplicat
         var digest = Digest(csv);
         var batchKey = BatchKey();
 
-        var responses = await Task.WhenAll(Enumerable.Range(0, 6).Select(_ =>
-            SendAsync(CommitRoute, csv, idempotencyKey: batchKey, contentDigest: digest)));
+        // SEC-004 (owner answer Q1, "Compartido, 1 a la vez"): one commit per user runs at a time, so the concurrent
+        // callers are four colleagues of the organization; the batch key replays whoever sends it, because the actor
+        // is not part of the batch's request hash (CsvOrderImportIdempotency). Sec004HeavyEndpointLimitsTests covers
+        // a second commit of the same user while the first runs.
+        var colleagues = new[]
+        {
+            MockIdentityProfiles.ActiveDispatcher,
+            MockIdentityProfiles.LocalDispatcherMfa,
+            MockIdentityProfiles.ActivePlatformAdminMfa,
+            MockIdentityProfiles.ActiveDispatcherPlatformAdminNoMfa,
+        };
+        var responses = await Task.WhenAll(colleagues.Select(bearer =>
+            SendAsync(CommitRoute, csv, bearer: bearer, idempotencyKey: batchKey, contentDigest: digest)));
         var bodies = new List<string>(responses.Length);
         foreach (var response in responses)
         {

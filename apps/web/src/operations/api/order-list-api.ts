@@ -27,7 +27,7 @@ export function createOrderListApi(baseUrl: string, session: OperationsSession):
       } catch {
         throw new TenantApiError("invalid");
       }
-      const response = await send({ method: "GET", path: "/api/v1/orders", search, signal });
+      const response = await send({ method: "GET", path: "/api/v1/orders", search, signal, rateLimit: "order_list" });
       if (response.status !== 200) throw new TenantApiError("invalid");
       return (await readJson(response, parseOrderListPage)) as OrderListPage;
     },

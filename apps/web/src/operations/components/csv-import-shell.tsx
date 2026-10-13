@@ -12,14 +12,19 @@ import {
   type CsvImportPreview,
 } from "../contracts/csv-import";
 import { operationsOrderHref } from "../routing/operations-routing";
-import type { CsvImportController, CsvImportState } from "../state/csv-import-controller";
+import { csvImportRateLimit, type CsvImportController, type CsvImportState } from "../state/csv-import-controller";
 import { useCsvImport } from "../state/use-csv-import";
 import { Feedback, ScreenGate } from "../../components/ui/feedback";
+import { RateLimitNoticeView, useRateLimitWait } from "../../components/ui/rate-limit-notice";
 import { Money } from "../../components/ui/money";
 import { PageHeader } from "../../components/ui/page-header";
 
 export function CsvImportShell() {
   const { state, controller } = useCsvImport();
+  // SEC-004 (owner answers Q1, Q6): preview and commit share one budget, so during the server's wait both
+  // "Previsualizar" and "Confirmar" are disabled; the file and the report stay and nothing is sent by itself.
+  const rateLimit = useRateLimitWait(csvImportRateLimit);
+  const waiting = rateLimit.secondsLeft > 0;
   return (
     <div className="page" aria-busy={state.phase === "loading" || state.busy}>
       <PageHeader
@@ -30,14 +35,17 @@ export function CsvImportShell() {
 
       <ScreenGate phase={state.phase} accessMessage="Tu rol en la organización activa no importa órdenes." />
       <Feedback errors={state.errors} message={state.message} stepUpHref={state.stepUpHref} />
+      <RateLimitNoticeView {...rateLimit} />
 
       {state.phase === "ready" && (
         <section className="opsFormLayout">
-          <UploadForm key={`upload-${state.formKey}`} state={state} controller={controller} />
+          <UploadForm key={`upload-${state.formKey}`} state={state} controller={controller} waiting={waiting} />
           <section>
             {state.commit !== null
               ? <CommitReport commit={state.commit} controller={controller} />
-              : state.preview !== null && <PreviewReport preview={state.preview} state={state} controller={controller} />}
+              : state.preview !== null && (
+                <PreviewReport preview={state.preview} state={state} controller={controller} waiting={waiting} />
+              )}
           </section>
         </section>
       )}
@@ -48,9 +56,12 @@ export function CsvImportShell() {
 function UploadForm({
   state,
   controller,
+  waiting,
 }: {
   readonly state: CsvImportState;
   readonly controller: CsvImportController;
+  /** SEC-004: the server's wait for the CSV budget is running. */
+  readonly waiting: boolean;
 }) {
   return (
     <form className="opsForm" autoComplete="off" onSubmit={(event) => {
@@ -80,7 +91,7 @@ function UploadForm({
         </label>
         {state.fileBytes !== null && <p>Archivo listo en memoria ({state.fileBytes} bytes).</p>}
         <div className="opsFormActions">
-          <button className="btn btnPrimary" type="submit" disabled={state.busy || state.fileBytes === null}>
+          <button className="btn btnPrimary" type="submit" disabled={state.busy || state.fileBytes === null || waiting}>
             {state.busy && state.commit === null ? "Procesando…" : "Previsualizar"}
           </button>
           <button className="btn btnSecondary" type="button" disabled={state.busy} onClick={() => controller.reset()}>
@@ -96,10 +107,13 @@ function PreviewReport({
   preview,
   state,
   controller,
+  waiting,
 }: {
   readonly preview: CsvImportPreview;
   readonly state: CsvImportState;
   readonly controller: CsvImportController;
+  /** SEC-004: the server's wait for the CSV budget is running. */
+  readonly waiting: boolean;
 }) {
   const committable = isCommittable(preview);
   return (
@@ -150,7 +164,7 @@ function PreviewReport({
             archivo contiene artículos prohibidos
           </label>
           <div className="opsFormActions">
-            <button className="btn btnPrimary" type="submit" disabled={state.busy}>
+            <button className="btn btnPrimary" type="submit" disabled={state.busy || waiting}>
               {state.busy ? "Confirmando…" : `Confirmar lote de ${preview.valid_rows} orden(es)`}
             </button>
           </div>

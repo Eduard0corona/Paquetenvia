@@ -4723,6 +4723,9 @@ class DependencyAdmissionTests(unittest.TestCase):
         policy = rel000.load_remediation_policy(REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH)
         (entry,) = [item for item in policy["dependency_admissions"] if item["id"] == "OBS-003-OPENTELEMETRY"]
         self.assertEqual("deps/obs-003-opentelemetry", entry["authorized_source_branch"])
+        self.assertEqual(247, entry["tracked_pull_request"])
+        # #247 landed on main and reached development through MAIN_BACKSYNC #249.
+        self.assertEqual("MERGED", entry["status"])
         self.assertEqual("GOV-DEPENDENCY-ADMISSION-001", entry["owner_decision_id"])
         for decision in (
             "OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12",

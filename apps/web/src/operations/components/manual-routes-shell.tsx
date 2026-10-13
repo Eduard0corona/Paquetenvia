@@ -19,6 +19,12 @@ import { routeDriverText, routeListDriverText, type CreateRouteFormState } from 
 import type { RouteGuide, RoutesNotice } from "../state/manual-routes-controller";
 import { useCreateRouteForm } from "../state/use-create-route-form";
 import { useManualRoutes } from "../state/use-manual-routes";
+import { orderSearchRateLimit } from "../state/order-search";
+import {
+  RateLimitNoticeView,
+  useRateLimitWait,
+  type RateLimitWaitView,
+} from "../../components/ui/rate-limit-notice";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Field } from "../../components/ui/field";
 import { Money } from "../../components/ui/money";
@@ -38,6 +44,8 @@ export function ManualRoutesShell() {
   const form = useCreateRouteForm();
   const { confirm, dialog } = useConfirmDialog();
   const selected = state.selected;
+  // SEC-004 (owner answer Q13): "Agregar entrega" looks the guía up with listOrders.
+  const rateLimit = useRateLimitWait(orderSearchRateLimit);
   return (
     <div className="page" aria-busy={state.loading || state.mutating}>
       <PageHeader
@@ -74,6 +82,7 @@ export function ManualRoutesShell() {
               guides={state.guides}
               guide={state.guide}
               mutating={state.mutating}
+              rateLimit={rateLimit}
               onGuideChange={(value) => controller.setGuide(value)}
               onAdd={() => void controller.addStop()}
               onReorder={(stopIds) => void controller.reorder(stopIds)}
@@ -148,6 +157,7 @@ export function RouteDetailView({
   guides,
   guide,
   mutating,
+  rateLimit = { secondsLeft: 0 },
   onGuideChange,
   onAdd,
   onReorder,
@@ -159,6 +169,11 @@ export function RouteDetailView({
   readonly guides: Readonly<Record<string, RouteGuide>>;
   readonly guide: string;
   readonly mutating: boolean;
+  /**
+   * SEC-004 (owner answer Q13): during the server's wait for listOrders the common message counts down under the
+   * guía and "Agregar entrega" is disabled; the typed guía stays and nothing is sent by itself.
+   */
+  readonly rateLimit?: RateLimitWaitView;
   readonly onGuideChange: (value: string) => void;
   readonly onAdd: () => void;
   readonly onReorder: (stopIds: readonly string[]) => void;
@@ -178,8 +193,11 @@ export function RouteDetailView({
           {(control) => <input {...control} name="guide" type="text" inputMode="text" required autoComplete="off" autoCapitalize="off"
             spellCheck={false} maxLength={64} placeholder="ORD_…" value={guide} onChange={(event) => onGuideChange(event.currentTarget.value)} />}
         </Field>
-        <button className="btn btnPrimary" type="submit" disabled={mutating || !draft}>Agregar entrega</button>
+        <button className="btn btnPrimary" type="submit" disabled={mutating || !draft || rateLimit.secondsLeft > 0}>
+          Agregar entrega
+        </button>
       </form>
+      <RateLimitNoticeView {...rateLimit} />
       <ol className="opsRouteStops">{route.stops.map((stop, index, stops) => {
         const view = guides[stop.order_id] ?? loadingGuide;
         const publicId = view.kind === "ready" ? view.publicId : null;

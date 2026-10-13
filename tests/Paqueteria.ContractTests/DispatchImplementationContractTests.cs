@@ -309,7 +309,7 @@ public sealed class DispatchImplementationContractTests
             operation.Sequence("x-capability-protected-state").Children.Cast<YamlScalarNode>().Select(value => value.Value));
         var responses = operation.Mapping("responses");
         Assert.Equal(
-            ["200", "401", "403", "404", "409", "503"],
+            ["200", "401", "403", "404", "409", "429", "503"],
             responses.Children.Keys.Cast<YamlScalarNode>().Select(value => value.Value));
         Assert.Equal("#/components/responses/UniformNotFound", responses.Mapping("404").Scalar("$ref"));
         Assert.Equal("#/components/responses/DispatchAssignmentConflict", responses.Mapping("409").Scalar("$ref"));

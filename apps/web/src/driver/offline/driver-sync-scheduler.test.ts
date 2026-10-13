@@ -988,6 +988,149 @@ describe("OPS-003 offline operation expiry", () => {
   });
 });
 
+describe("SEC-004 photo limits", () => {
+  // Owner answer Q2 ("60 cada paso"): past the limit, "la app espera lo que
+  // indique el servidor y sigue sola"; Q6: "la cola espera lo que indique el
+  // servidor y reintenta sin mensaje".
+  const start = Date.parse("2026-07-26T12:00:30.000Z");
+
+  function photoScheduler(
+    queue: MemoryQueue,
+    api: Partial<DriverSyncApi>,
+    clock: { now: number },
+  ): DriverSyncScheduler {
+    return new DriverSyncScheduler({
+      partition,
+      queue,
+      api: {
+        transitionOrder: vi.fn(),
+        createProofUploadSession: vi.fn(),
+        finalizeProof: vi.fn(),
+        recordCodCollection: vi.fn(),
+        openFailedDeliveryIncident: vi.fn(),
+        ...api,
+      },
+      refreshStops: async () =>
+        stopList([
+          stopA("AT_PICKUP", 4),
+          { ...stopA("AT_PICKUP", 4), order_id: orderB, order_public_id: "ORD_B" },
+        ]),
+      onQueueChanged: vi.fn(),
+      onAccessRevoked: vi.fn(),
+      onOperationExpired: vi.fn(),
+      now: () => new Date(clock.now),
+      randomUuid: () => "99999999-9999-4999-8999-999999999999",
+      upload: vi.fn().mockResolvedValue(undefined),
+    });
+  }
+
+  function photo(orderId: string, idTail: number): DriverOfflineOperation {
+    return operation("PICKUP_PROOF", orderId, 4, idTail);
+  }
+
+  it("waits the server's Retry-After for the whole queue, without a message or a rejected photo", async () => {
+    const first = photo(orderA, 1);
+    const second = photo(orderB, 2);
+    const queue = new MemoryQueue([first, second]);
+    queue.proofs.set(first.id, proofFor(first));
+    queue.proofs.set(second.id, proofFor(second));
+    const clock = { now: start };
+    const createProofUploadSession = vi
+      .fn()
+      .mockRejectedValue(new DriverSyncApiError("rate-limited", null, 60_000));
+    const scheduler = photoScheduler(queue, { createProofUploadSession }, clock);
+
+    await scheduler.requestSync(true);
+
+    // One 429, then the queue waits: the other order's photo is not tried.
+    expect(createProofUploadSession).toHaveBeenCalledTimes(1);
+    expect(queue.operations.find((value) => value.id === first.id)).toMatchObject({
+      status: "RETRY_WAIT",
+      attemptCount: 1,
+      nextAttemptAt: "2026-07-26T12:01:30.000Z",
+      safeError: null,
+      rejectionCode: null,
+    });
+    expect(queue.operations.find((value) => value.id === second.id)).toMatchObject({
+      status: "PENDING",
+      attemptCount: 0,
+    });
+    expect(queue.proofs.has(first.id)).toBe(true);
+    expect(queue.proofs.has(second.id)).toBe(true);
+
+    // "Sincronizar ahora" during the wait sends nothing either.
+    clock.now = start + 59_999;
+    await scheduler.requestSync(true);
+    expect(createProofUploadSession).toHaveBeenCalledTimes(1);
+
+    // Once the wait is over the queue resumes by itself, with the same keys.
+    clock.now = start + 60_000;
+    await scheduler.requestSync(false);
+    expect(createProofUploadSession).toHaveBeenCalledTimes(2);
+    expect(createProofUploadSession.mock.calls[1][0]).toMatchObject({
+      id: first.id,
+      sessionIdempotencyKey: first.sessionIdempotencyKey,
+    });
+    await scheduler.dispose();
+  });
+
+  it("keeps the granted session and the uploaded photo when finalize answers 429", async () => {
+    const queued = photo(orderA, 1);
+    const queue = new MemoryQueue([queued]);
+    queue.proofs.set(queued.id, proofFor(queued));
+    const clock = { now: start };
+    const createProofUploadSession = vi.fn().mockResolvedValue(grant());
+    const finalizeProof = vi
+      .fn()
+      .mockRejectedValue(new DriverSyncApiError("rate-limited", null, 5_000));
+    const scheduler = photoScheduler(queue, { createProofUploadSession, finalizeProof }, clock);
+
+    await scheduler.requestSync(true);
+
+    expect(queue.operations[0]).toMatchObject({
+      status: "RETRY_WAIT",
+      uploadSessionId: grant().id,
+      uploadAccepted: true,
+      nextAttemptAt: "2026-07-26T12:00:35.000Z",
+      safeError: null,
+    });
+    expect(queue.proofs.has(queued.id)).toBe(true);
+
+    clock.now = start + 5_000;
+    await scheduler.requestSync(false);
+
+    // The retry only confirms: no new session and no second upload.
+    expect(createProofUploadSession).toHaveBeenCalledTimes(1);
+    expect(finalizeProof).toHaveBeenCalledTimes(2);
+    expect(finalizeProof.mock.calls[1][1]).toBe(grant().id);
+    await scheduler.dispose();
+  });
+
+  it("waits the bounded backoff when the 429 does not say how long", async () => {
+    const queued = photo(orderA, 1);
+    const queue = new MemoryQueue([queued]);
+    queue.proofs.set(queued.id, proofFor(queued));
+    const scheduler = photoScheduler(
+      queue,
+      {
+        createProofUploadSession: vi
+          .fn()
+          .mockRejectedValue(new DriverSyncApiError("rate-limited")),
+      },
+      { now: start },
+    );
+
+    await scheduler.requestSync(true);
+
+    expect(queue.operations[0]).toMatchObject({
+      status: "RETRY_WAIT",
+      nextAttemptAt: new Date(start + DriverSyncBackoffMilliseconds[0]).toISOString(),
+      safeError: null,
+    });
+    await scheduler.dispose();
+  });
+});
+
 function expiryScheduler(
   queue: MemoryQueue,
   apiOverrides: Partial<DriverSyncApi>,

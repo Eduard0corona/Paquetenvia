@@ -5,6 +5,7 @@ import { useConfirmDialog, type ConfirmRequest } from "../../components/confirm-
 import { DateTime } from "../../components/ui/date-time";
 import { EmptyState } from "../../components/ui/empty-state";
 import { Feedback, ScreenGate } from "../../components/ui/feedback";
+import { RateLimitNoticeView, useRateLimitWait } from "../../components/ui/rate-limit-notice";
 import { Money } from "../../components/ui/money";
 import { PageHeader } from "../../components/ui/page-header";
 import { shortId } from "../../lib/short-id";
@@ -33,6 +34,7 @@ import {
   payeeLabel,
   payeeListFailedMessage,
   payeeListTruncatedMessage,
+  settlementExportRateLimit,
   settlementMfaHint,
   visibleSettlementActions,
   type SettlementsController,
@@ -251,6 +253,10 @@ function SettlementDetail({
   const payee = payeeLabel(state, settlement.payee_id);
   // While another settlement is loading, no action may target the one still shown.
   const locked = state.busy || state.selecting !== null;
+  // SEC-004 (owner answer Q6): during the server's wait for exportSettlementCsv "Exportar CSV" is disabled and the
+  // export is never sent by itself; the other actions are not limited.
+  const rateLimit = useRateLimitWait(settlementExportRateLimit);
+  const exportWaiting = rateLimit.secondsLeft > 0;
   return (
     <>
       <header>
@@ -298,7 +304,7 @@ function SettlementDetail({
             })}>Marcar pagada</button>
         )}
         {actions.includes("export") && (
-          <button type="button" className="btn btnSecondary" disabled={locked} aria-describedby="settlement-export-note"
+          <button type="button" className="btn btnSecondary" disabled={locked || exportWaiting} aria-describedby="settlement-export-note"
             onClick={() => void controller.exportCsv()}>Exportar CSV</button>
         )}
         <button type="button" className="btn btnSecondary" onClick={() => controller.clearSelection()}>Cerrar</button>
@@ -309,6 +315,7 @@ function SettlementDetail({
           Cada exportación a CSV queda registrada en la bitácora de auditoría.
         </p>
       )}
+      {actions.includes("export") && <RateLimitNoticeView {...rateLimit} />}
 
       {actions.includes("adjust") && (
         <form className="opsForm" autoComplete="off" onSubmit={(event) => {
