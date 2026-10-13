@@ -27,6 +27,8 @@ import {
   type BulkRowResult,
 } from "../state/bulk-assignment-controller";
 import { OperationsBulkRoute } from "./operations-bulk-route";
+import { assignableDriversRateLimit } from "../state/driver-assignment-controller";
+import { RateLimitNotice } from "../../components/ui/rate-limit-notice";
 
 /** The id of the panel heading; the inbox labels the panel's section with it. */
 export const bulkAssignmentTitleId = "inbox-bulk-title";
@@ -191,6 +193,8 @@ export function OperationsBulkAssignment({
           Tu sesión no es válida; inicia sesión de nuevo.
         </p>
       )}
+      {/* SEC-004 (owner answer Q10): the drivers are read again by themselves once the wait ends. */}
+      <RateLimitNotice operations={assignableDriversRateLimit} />
       {state.phase === "loading" && !sessionMissing && (
         <p className="live" aria-live="polite">
           Revisando qué repartidores pueden llevar cada orden…

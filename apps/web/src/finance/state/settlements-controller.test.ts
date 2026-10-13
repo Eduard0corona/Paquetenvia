@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { rateLimitWaits } from "../../lib/rate-limit-wait";
 import { TenantApiError } from "../../operations/api/tenant-request";
 import type { OperationsSession } from "../../operations/session/operations-session";
 import { PendingSubmissions } from "../../operations/state/pending-submissions";
@@ -10,6 +11,7 @@ import {
   maximumPayeePages,
   payeeLabel,
   SettlementsController,
+  settlementExportRateLimit,
   settlementMfaHint,
   visibleSettlementActions,
 } from "./settlements-controller";
@@ -471,5 +473,31 @@ describe("payee picker and DRV- names (UI-PHASE3-DRIVERS-2026-10-11)", () => {
   it("asks a PLATFORM_ADMIN for MFA on every settlement operation, the payee list included", () => {
     expect(settlementMfaHint("PLATFORM_ADMIN", [])).toBe("Operar liquidaciones requiere verificar tu identidad (MFA).");
     expect(settlementMfaHint("FINANCE", [])).toBeNull();
+  });
+});
+
+describe("SEC-004 export limit (owner answer Q6, 'Mensaje común con espera')", () => {
+  afterEach(() => rateLimitWaits.clear());
+
+  it("shows no message of its own on a 429 and sends nothing until the server's wait ends", async () => {
+    const exportCsv = vi.fn<SettlementsApi["exportCsv"]>(async () => {
+      rateLimitWaits.record("settlement_export", 30);
+      throw new TenantApiError("rate_limited", null, false, 30);
+    });
+    const { controller, download } = setup({ [orgA]: "FINANCE" }, { exportCsv });
+    await controller.start();
+    await controller.select(settlementId);
+    await controller.exportCsv();
+    expect(controller.getSnapshot()).toMatchObject({ message: null, stepUpHref: null, busy: false });
+    expect(rateLimitWaits.secondsLeft(settlementExportRateLimit)).toBe(30);
+
+    await controller.exportCsv();
+    expect(exportCsv).toHaveBeenCalledOnce();
+
+    rateLimitWaits.clear();
+    exportCsv.mockResolvedValueOnce({ filename: `settlement-${settlementId}.csv`, content: new Blob(["x"]) });
+    await controller.exportCsv();
+    expect(exportCsv).toHaveBeenCalledTimes(2);
+    expect(download).toHaveBeenCalledOnce();
   });
 });

@@ -1,30 +1,30 @@
-# SEC-004 PR 3: limits on the heavy endpoints (server, contracts and driver app)
+# SEC-004 PR 3: limits on the heavy endpoints (server, contracts, driver app and panel)
 
 Phase 4 PR 3 (`docs/development/phase4-platform-plan.md`, "PR 3: límites en los endpoints pesados"), backlog item
 **SEC-004** in `AI-08_BACKLOG.yaml`. It applies the decided list on top of the PR 2 plumbing
 (`docs/development/sec-004-rate-limit-plumbing.md`).
 
-PR 3 ships in two pull requests. This one contains:
+PR 3 ships in two pull requests. The first (#252) contains:
 
 - the policies and their configuration;
-- the contracts: AI-05, the ADR-OBS-001 amendment, AI-08, and AI-07 for what ships here;
+- the contracts: AI-05, the ADR-OBS-001 amendment, AI-08, and AI-07 for what ships there;
 - the sign-in page;
 - the per-minute log summary;
 - the driver app's wait.
 
-Next, in the panel part's own pull request:
+The second, the panel part (see "Panel" below), contains:
 
-- the message and the button countdown on each limited screen, and their AI-07 entries;
+- the message and the button countdown on each limited screen, and their AI-07 entry (`panel_rate_limit`);
 - the realtime reload spacing (owner answer Q9): the panel gathers realtime notices and reloads at most once every
   3 seconds per tab. The 60 per minute limits do not change.
 
-The driver app is in this one because, before it, the app classified a 429 on a photo step as an invalid answer, and
+The driver app is in the first because, before it, the app classified a 429 on a photo step as an invalid answer, and
 the sync scheduler turned that into rejected evidence: the photo held for the driver's attention. The photo limits
 cannot ship without it.
 
-Until the panel part merges, a panel screen that meets a limit shows its existing error for an unanswered request (for
-example "Sin respuesta válida del servidor. Puedes reintentar: se reenvía la misma solicitud sin duplicarla.") instead
-of the approved text.
+Between the two, a panel screen that meets a limit shows its existing error for an unanswered request (for example
+"Sin respuesta válida del servidor. Puedes reintentar: se reenvía la misma solicitud sin duplicarla.") instead of the
+approved text.
 
 ## Owner decisions
 
@@ -43,6 +43,7 @@ Decision rows in `decision-log.md`, with the literal questions, answers and opti
 | `SEC-004-REJECTION-SUMMARY-2026-10-13` | Q8 visibility before PR 6 | "Resumen en los logs (Recommended)" |
 | `SEC-004-RELOADS-AND-BULK-2026-10-13` | Q9 dashboard and counts against realtime reloads | "Espaciar recargas (Recommended)": "El panel junta los avisos y recarga como máximo cada 3 segundos por pestaña. Los límites de 60/min no cambian. Los cambios se ven hasta 3 segundos después. Va en el PR de pantallas del panel." |
 | | Q10 assignable drivers in bulk assignment | "Dejarlo en 60/min (Recommended)": "En el piloto, tres lotes de 20 en un minuto es raro. Si pasa, el panel pide esperar unos segundos. Se revisa con las métricas en 2 semanas." |
+| `SEC-004-PANEL-WAIT-2026-10-13` | the panel part: applies Q6, Q9 and Q10 (no new question) | AI-07 `panel_rate_limit` |
 
 Q9 and Q10 were asked after the review of #252: the Q3 premise ("se refrescan cada 30 segundos") was incomplete,
 because the dashboard and the inbox also reload on every realtime notice and every reload also reads the counts.
@@ -138,7 +139,9 @@ its own navigation failures with redirects to `/login?error=...`. This 429 is a 
   that line and requires every status the endpoint emits to be on it, so the dashboard is no longer skipped.
 - **AI-08 SEC-004.** The three pending owner decisions of PR 3 are recorded as decided, with Q7 and Q8.
 - **AI-07.** `screen_contracts.driver_stop.rate_limit` (the driver queue's wait) and the `/login` route (the sign-in
-  page) record what ships here. The panel screens' entries come with the panel part.
+  page) record #252's part. The panel part adds the top-level `panel_rate_limit` (the text, its rules, the behavior,
+  the realtime spacing and the screens), one entry for every panel screen rather than one per screen contract,
+  because the rule is the same everywhere and some screens (the order detail, the app shell) have no screen contract.
 
 ## Rejection summary (OBS-002, owner answer Q8)
 
@@ -194,22 +197,59 @@ reintenta sin mensaje" (Q6). In `apps/web/src/driver/offline/`:
 
 Owner answer Q6, "Mensaje común con espera":
 
-- **Panel** (the web part, next PR). "Demasiadas solicitudes. Espera N segundos e intenta de nuevo.", with N from
+- **Panel** (the panel part). "Demasiadas solicitudes. Espera N segundos e intenta de nuevo.", with N from
   `Retry-After`. The button re-enables itself when N runs out.
-- **Driver app** (this PR). The queue waits what the server says and retries without a message.
-- **`/auth/login`** (this PR). The page above.
+- **Driver app** (#252). The queue waits what the server says and retries without a message.
+- **`/auth/login`** (#252). The page above.
 
-| Screen | Operations |
-| --- | --- |
-| `/ops/orders/import` | `previewOrderCsv`, `commitOrderCsv` |
-| `/finance/settlements` | `exportSettlementCsv` |
-| `/ops/orders/new` | `createQuote` |
-| `/ops/dashboard`, `/ops/inbox`, the order detail | dashboard, `getOperationsQueueCounts` |
-| `/ops/orders`, `/finance/cod` (pending COD list) | `listOrders` |
-| order detail and inbox (driver picker, "Asignar seleccionadas…") | `listAssignableDrivers` |
-| driver app offline queue | `createProofUploadSession`, `finalizeProof` |
+| Screen | Operations | During the wait |
+| --- | --- | --- |
+| `/ops/orders/import` | `previewOrderCsv`, `commitOrderCsv` (one wait) | "Previsualizar" and "Confirmar lote" disabled |
+| `/finance/settlements` | `exportSettlementCsv` | "Exportar CSV" disabled |
+| `/ops/orders/new` | `createQuote` | "Calcular precio" aria-disabled |
+| `/ops/dashboard` | dashboard, `getOperationsQueueCounts` | "Actualizar", "Cargar más" disabled; reads held |
+| `/ops/inbox` | dashboard, `getOperationsQueueCounts`; `listAssignableDrivers` in "Asignar seleccionadas…" | "Actualizar", "Cargar más" disabled; reads held |
+| `/ops/orders/:id` | dashboard (its row); `listAssignableDrivers` in the picker | "Actualizar" disabled, "Cargar más repartidores" aria-disabled; reads held |
+| `/ops/orders` | `listOrders` | "Actualizar" disabled, "Cargar más" aria-disabled |
+| `/ops/routes` | `listOrders` ("Agregar entrega" by guía) | "Agregar entrega" disabled |
+| `/finance/cod` | `listOrders` (the pending list) | "Actualizar lista", "Cargar más" disabled |
+| app shell | `listOrders` ("Buscar guía") | "Buscar" aria-disabled; the text replaces the search message |
+| driver app offline queue | `createProofUploadSession`, `finalizeProof` | the queue waits, no message (#252) |
 
 No web screen calls `createLocation` today.
+
+## Panel (owner answers Q6, Q9 and Q10, the panel part)
+
+AI-07 `panel_rate_limit` records it (`SEC-004-PANEL-WAIT-2026-10-13`). In `apps/web`:
+
+- **One wait per operation, per tab.** `src/lib/rate-limit-wait.ts` keeps, in memory, until when each limited operation
+  waits: `csv_import`, `settlement_export`, `quote`, `order_list`, `assignable_drivers`, `dashboard` and
+  `queue_counts`. The API clients record it when a 429 arrives (`tenant-request.ts` and `operations-api.ts`, through
+  the request's `rateLimit`); a 429 is the error category `rate_limited`, with its `retryAfterSeconds`.
+  - N is `Retry-After` in whole seconds (`src/lib/retry-after.ts`); without a usable header, the API's 60-second
+    window; never more than an hour.
+  - An organization switch keeps the wait: the limits are per user.
+- **The text.** `RateLimitNotice` (`src/components/ui/rate-limit-notice.tsx`) shows the owner's text with the seconds
+  left, every second, as a `role="timer"` (read on request, not announced every second), and nothing once the wait
+  ends. `Feedback` shows it when a screen names its operations. A 429 sets none of the screen's own failure texts.
+- **The buttons.** Each screen disables the buttons that would call the waiting operation (`aria-disabled` on the
+  wizard and the driver picker, which never disable their buttons) and its controller sends nothing during the wait.
+  They re-enable themselves when it ends.
+- **Nothing is lost.** A 429 keeps the rows, the counts already shown, the preview report, the selection and the typed
+  text. A submission sent again after the wait (CSV commit, quote) keeps its `Idempotency-Key` and payload: the server
+  applied nothing.
+- **Screens that read by themselves** (dashboard, inbox, order detail) hold their polling, visibility and realtime
+  reads during the wait and read once, by themselves, when it ends. A dashboard session that could not start because
+  of a 429 starts by itself when the wait ends. The counts, with their own budget, read once when theirs ends.
+- **Driver lists** (the order's picker and each order of a bulk assignment) wait the server and then read the list by
+  themselves, from the first page; the orders not read yet stay "Revisando repartidores…". Q10: "Si pasa, el panel
+  pide esperar unos segundos."
+- **Realtime reloads (Q9).** `ReloadSpacer` (`src/operations/state/reload-spacer.ts`) gathers the OperationsHub notices
+  of a screen into one reload: the first notice keeps its short wait (250 ms; 500 ms for a driver position), later ones
+  join it, and the reload runs no sooner than 3 seconds after the screen's previous reload of any kind (polling,
+  "Actualizar" included), and not during the server's wait. A steady stream of notices reloads every 3 seconds. The
+  dashboard's gathered reload reads the counts when any of the notices was an order notice. A tab shows one screen, so
+  one spacer per screen is one per tab.
 
 ## Choices not written in the task
 
@@ -246,6 +286,19 @@ No web screen calls `createLocation` today.
   cola espera"; the limits are per driver, so sending another order's photo would only meet the same 429.
 - **`Retry-After` is capped at one hour on the web** (`maximumRetryAfterSeconds`), so a broken header cannot park the
   queue. The API never sends more than its window (60 s).
+- **Panel choices** (the panel part):
+  - The wait is per operation and per tab, in memory, and survives an organization switch (the limits are per user).
+  - Without a usable `Retry-After` the panel waits 60 seconds, the API's window, rather than nothing.
+  - The countdown is a `role="timer"` paragraph, read on request rather than announced every second.
+  - Screens that read by themselves read once when the wait ends, and the driver lists of the picker and of a bulk
+    assignment are read by themselves after it; elsewhere the person presses the button again, as Q6 says.
+  - A dashboard session whose first read met a 429 starts by itself when the wait ends; otherwise the realtime
+    connection would never start.
+  - The 3-second spacing counts from the screen's previous reload of any kind, and a pending gathered reload keeps its
+    time, so a steady stream of notices reloads every 3 seconds instead of postponing the reload forever.
+  - "Buscar guía" shows the countdown in the place of its own message, only after a search met the wait.
+  - Buttons the screens already left enabled while busy (the wizard, the driver picker) get `aria-disabled`, as their
+    page-policy tests require.
 
 ## Tests
 
@@ -310,6 +363,24 @@ No web screen calls `createLocation` today.
     - a finalize 429 keeps the granted session and the uploaded photo;
     - no `Retry-After` means the bounded backoff;
   - `src/driver/offline/rate-limit-policy.test.ts`: AI-07, AI-05 and the code agree.
+- Web, the panel part (vitest):
+  - `src/lib/rate-limit-wait.test.ts`: the owner's text with whole seconds ("1 segundo"), the wait per operation, the
+    60-second fallback, the one-hour cap, the longest wait wins, and the sleep until it ends;
+  - `src/components/ui/rate-limit-notice.test.ts`: the text as a timer while the wait lasts, nothing after it or for
+    another operation;
+  - `src/operations/api/rate-limit-api.test.ts`: each of the ten panel calls of a limited operation reads a 429 as
+    `rate_limited` and records the wait of its own operation only; no usable `Retry-After` means 60 seconds;
+  - `src/operations/state/reload-spacer.test.ts` (Q9): one reload after the first notice's short wait, a burst of twenty
+    notices gathered, at most one reload every 3 seconds under a steady stream, any reload counts, the stronger kind
+    wins, nothing during the server's wait and one reload when it ends, cancel;
+  - `src/operations/state/panel-rate-limit.test.ts`: the CSV commit keeps the report and its key through a 429 and
+    preview and commit wait together; the order list and "Buscar guía" keep what they had and send nothing during the
+    wait; the inbox gathers twenty realtime notices into three reloads (counts read once per reload), holds every read
+    during the wait and reads once when it ends, and reads its counts once when their own wait ends; the order's driver
+    picker and a bulk assignment wait the server and go on by themselves;
+  - 429 cases added to the settlements, COD, create-order and manual-routes controller tests;
+  - `src/operations/panel-rate-limit-policy.test.ts`: AI-07 `panel_rate_limit`, the text, every screen showing the wait
+    of its operations, AI-05 declaring 429 on each of them, and the realtime hooks going through the spacing.
 - Browser: `DriverOfflineOperationsPwaPlaywrightTests.Photo_429_waits_the_server_and_syncs_by_itself_without_a_message`.
   The first upload session answers 429 with `Retry-After: 2`; the photo waits with no attention notice, then syncs by
   itself with the same key, one upload and one finalize.
@@ -345,7 +416,10 @@ No web screen calls `createLocation` today.
   A burst of events (a bulk assignment, a CSV commit) can therefore spend the 60 per minute of
   `Reporting.OperationsDashboard` and `Reporting.QueueCounts`. The owner's decision (Q9, "Espaciar recargas") mitigates
   it in the panel pull request: at most one reload every 3 seconds per tab, with the limits unchanged. Until that pull
-  request merges, bursts can still spend these budgets.
+  request merges, bursts can still spend these budgets. With it, a tab reloads at most 20 times a minute on notices,
+  reading the counts once each time; the inbox's "Requiere atención" reads four dashboard pages per reload, so notices
+  arriving every few seconds for most of a minute can still reach 60 there. The screen then shows the wait, keeps its
+  rows and reads once when the wait ends.
 - **Forward deploy of the driver app.** A phone still running the previous web build reads a photo 429 as rejected
   evidence: the action needs attention (`EVIDENCE_REJECTED`) and the photo stays on the phone. That lasts until the
   phone loads the new build:
@@ -414,3 +488,6 @@ cd apps/web && pnpm test && pnpm typecheck && pnpm lint
     the web must not be rolled back alone while the API keeps them.
 - Actions a phone queued while waiting keep their normal shape: a `RETRY_WAIT` with no `safeError`. An older web build
   reads them as before.
+- The panel part reverts on its own (web and AI-07 only): the screens go back to their generic error on a 429 and to
+  one reload per burst of notices (250 ms debounce). Nothing is stored, so nothing is left behind. The server limits
+  stay.

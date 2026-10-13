@@ -44,6 +44,7 @@ export function createCsvImportApi(baseUrl: string, session: OperationsSession):
         path: "/api/v1/orders/csv/preview",
         form: upload(file),
         signal,
+        rateLimit: "csv_import",
       });
       return (await readJson(response, parseCsvImportPreview)) as CsvImportPreview;
     },
@@ -55,6 +56,8 @@ export function createCsvImportApi(baseUrl: string, session: OperationsSession):
         idempotencyKey,
         passThroughStatuses: [422],
         signal,
+        // SEC-004 (owner answer Q1): the commit spends the preview's budget, and one commit runs at a time.
+        rateLimit: "csv_import",
       });
       if (response.status === 422) {
         const preview = (await readJson(response, parseCsvImportPreview)) as CsvImportPreview;

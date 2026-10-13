@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { OrderActionsApi } from "../api/order-actions-api";
 import type { OrdersApi } from "../api/orders-api";
 import {
@@ -27,7 +27,9 @@ import {
   CreateOrderController,
   orderNotCreatedMessage,
   priceChangedWhileQuotingMessage,
+  quoteRateLimit,
 } from "./create-order-controller";
+import { rateLimitWaits } from "../../lib/rate-limit-wait";
 import { PendingSubmissions } from "./pending-submissions";
 
 const orgA = "11111111-1111-4111-8111-111111111111";
@@ -115,6 +117,38 @@ async function reachConfirm(controller: CreateOrderController, extra: Partial<Or
 }
 
 const fields = (controller: CreateOrderController) => controller.getSnapshot().fieldErrors.map((error) => error.field);
+
+describe("SEC-004 quote limit (owner answer Q6, 'Mensaje común con espera')", () => {
+  afterEach(() => rateLimitWaits.clear());
+
+  it("shows no message of its own on a 429, sends nothing during the wait, then quotes with the same key", async () => {
+    const createQuote = vi
+      .fn<OrdersApi["createQuote"]>()
+      .mockImplementationOnce(async () => {
+        rateLimitWaits.record("quote", 25);
+        throw new TenantApiError("rate_limited", null, false, 25);
+      })
+      .mockResolvedValue(parseQuote(quoteResponse()));
+    const { controller } = setup({ [orgA]: "DISPATCHER" }, { createQuote });
+    await controller.start();
+    fillShipment(controller);
+    controller.next();
+    controller.next();
+    await controller.requestQuote();
+    expect(controller.getSnapshot()).toMatchObject({ busy: null, quote: null, message: null, stepUpHref: null });
+    expect(rateLimitWaits.secondsLeft(quoteRateLimit)).toBe(25);
+
+    await controller.requestQuote();
+    expect(createQuote).toHaveBeenCalledOnce();
+
+    rateLimitWaits.clear();
+    await controller.requestQuote();
+    expect(createQuote).toHaveBeenCalledTimes(2);
+    // The server applied nothing: the same payload goes again with the same Idempotency-Key.
+    expect(createQuote.mock.calls[1][1]).toBe(createQuote.mock.calls[0][1]);
+    expect(controller.getSnapshot().quote).not.toBeNull();
+  });
+});
 
 describe("create order capability gating", () => {
   it.each(["DISPATCHER", "PLATFORM_ADMIN"])("offers quote, order and confirmation to %s", async (role) => {

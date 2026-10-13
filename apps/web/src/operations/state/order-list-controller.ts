@@ -12,7 +12,8 @@ import {
 } from "../contracts/order-list";
 import type { OperationsSession } from "../session/operations-session";
 import { ExternalStore } from "./external-store";
-import { describeFailure } from "./tenant-error-messages";
+import { describeFailure, isRateLimited } from "./tenant-error-messages";
+import { rateLimitWaits, type RateLimitedOperation, type RateLimitWaits } from "../../lib/rate-limit-wait";
 
 /**
  * UI-PHASE3-ORDERS-LIST-2026-10-12 ("Sí, lista de órdenes"): state of the "Órdenes" screen.
@@ -67,7 +68,12 @@ export interface OrderListDependencies {
   readonly loadRole: (session: OperationsSession, signal: AbortSignal) => Promise<string | null>;
   readonly isHidden?: () => boolean;
   readonly now?: () => number;
+  /** SEC-004: the tab's server-imposed waits (tests pass their own). */
+  readonly waits?: RateLimitWaits;
 }
+
+/** SEC-004: listOrders, 120 per minute per user (the pending COD list spends the same budget). */
+export const orderListRateLimit: readonly RateLimitedOperation[] = ["order_list"];
 
 const emptyList = {
   rows: [],
@@ -196,6 +202,12 @@ export class OrderListController extends ExternalStore<OrderListState> {
       createdFrom: range.createdFrom,
       createdTo: range.createdTo,
     };
+    // SEC-004 (owner answer Q6): while the server's wait lasts nothing is sent (another request would only meet the
+    // same 429); "Actualizar" re-enables itself when it ends.
+    if (this.waiting()) {
+      this.update({ rangeError: null });
+      return;
+    }
 
     this.update({ loading: true, loadingMore: false, rangeError: null });
     try {
@@ -231,7 +243,7 @@ export class OrderListController extends ExternalStore<OrderListState> {
     const query = this.pageQuery;
     const cursor = state.nextCursor;
     if (api === null || state.phase !== "ready" || query === null || cursor === null) return;
-    if (state.loading || state.loadingMore) return;
+    if (state.loading || state.loadingMore || this.waiting()) return;
     const generation = this.generation;
     const sequence = this.readSequence;
     this.update({ loadingMore: true });
@@ -258,6 +270,11 @@ export class OrderListController extends ExternalStore<OrderListState> {
   }
 
   private fail(error: unknown, kind: "read" | "page"): void {
+    // SEC-004 (owner answer Q6): the screen shows the common message with its countdown; nothing of its own.
+    if (isRateLimited(error)) {
+      this.update({ error: null });
+      return;
+    }
     if (error instanceof TenantApiError && (error.category === "unauthorized" || error.category === "forbidden")) {
       if (error.mfaRequired) {
         // Only the second factor is missing: nothing is shown until it is verified.
@@ -301,5 +318,9 @@ export class OrderListController extends ExternalStore<OrderListState> {
 
   private now(): number {
     return this.dependencies.now?.() ?? Date.now();
+  }
+
+  private waiting(): boolean {
+    return (this.dependencies.waits ?? rateLimitWaits).isWaiting(orderListRateLimit);
   }
 }

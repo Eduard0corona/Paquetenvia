@@ -9,8 +9,11 @@ import type { OperationsSession } from "../../operations/session/operations-sess
 import {
   orderDetailPath,
   orderSearchFailedMessage,
+  orderSearchRateLimit,
   searchOrderByPublicId,
 } from "../../operations/state/order-search";
+import { rateLimitMessage } from "../../lib/rate-limit-wait";
+import { useRateLimitWait } from "../ui/rate-limit-notice";
 
 /**
  * UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05: "Buscar guía" in the top bar. The person types a
@@ -25,12 +28,18 @@ export function OrderSearchBox({ session }: { readonly session: OperationsSessio
   const [value, setValue] = useState("");
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  // SEC-004 (owner answer Q6): a search that met the server's wait shows the common message, counting down, and
+  // "Buscar" re-enables itself when the wait ends.
+  const [limited, setLimited] = useState(false);
+  const waitSeconds = useRateLimitWait(orderSearchRateLimit);
+  const shownMessage = limited && waitSeconds > 0 ? rateLimitMessage(waitSeconds) : message;
   const abortRef = useRef<AbortController | null>(null);
 
   // A new session or organization drops any search in flight and its message.
   useEffect(() => {
     const timer = window.setTimeout(() => {
       setMessage(null);
+      setLimited(false);
       setBusy(false);
     }, 0);
     return () => {
@@ -46,6 +55,7 @@ export function OrderSearchBox({ session }: { readonly session: OperationsSessio
     abortRef.current = controller;
     setBusy(true);
     setMessage(null);
+    setLimited(false);
     try {
       const outcome = await searchOrderByPublicId(
         createOrderActionsApi(clientApiBaseUrl(), session),
@@ -56,6 +66,8 @@ export function OrderSearchBox({ session }: { readonly session: OperationsSessio
       if (outcome.kind === "found") {
         setValue("");
         router.push(orderDetailPath(outcome.orderId));
+      } else if (outcome.kind === "rate_limited") {
+        setLimited(true);
       } else {
         setMessage(outcome.kind === "not_found" ? orderNotFoundMessage : orderSearchFailedMessage);
       }
@@ -77,7 +89,14 @@ export function OrderSearchBox({ session }: { readonly session: OperationsSessio
       noValidate
       onSubmit={(event) => {
         event.preventDefault();
-        if (!busy) void search();
+        if (busy) return;
+        if (waitSeconds > 0) {
+          // Nothing is sent during the wait; the message says how long it lasts.
+          setMessage(null);
+          setLimited(true);
+          return;
+        }
+        void search();
       }}
     >
       <label htmlFor={inputId} className="srOnly">
@@ -94,18 +113,23 @@ export function OrderSearchBox({ session }: { readonly session: OperationsSessio
         placeholder="Buscar guía (ORD_…)"
         maxLength={64}
         value={value}
-        aria-describedby={message === null ? undefined : messageId}
+        aria-describedby={shownMessage === null ? undefined : messageId}
         onChange={(event) => {
           setValue(event.currentTarget.value);
           setMessage(null);
         }}
       />
-      <button type="submit" className="btn btnSecondary" aria-disabled={busy}>
+      <button type="submit" className="btn btnSecondary" aria-disabled={busy || waitSeconds > 0}>
         {busy ? "Buscando…" : "Buscar"}
       </button>
-      {message !== null && (
-        <p id={messageId} className="appSearchMessage" role="status" aria-live="polite">
-          {message}
+      {shownMessage !== null && (
+        <p
+          id={messageId}
+          className="appSearchMessage"
+          role={limited && waitSeconds > 0 ? "timer" : "status"}
+          aria-live={limited && waitSeconds > 0 ? "off" : "polite"}
+        >
+          {shownMessage}
         </p>
       )}
     </form>

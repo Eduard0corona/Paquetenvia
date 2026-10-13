@@ -17,6 +17,8 @@ import { useCsvImport } from "../state/use-csv-import";
 import { Feedback, ScreenGate } from "../../components/ui/feedback";
 import { Money } from "../../components/ui/money";
 import { PageHeader } from "../../components/ui/page-header";
+import { useRateLimitWait } from "../../components/ui/rate-limit-notice";
+import { csvImportRateLimit } from "../state/csv-import-controller";
 
 export function CsvImportShell() {
   const { state, controller } = useCsvImport();
@@ -29,7 +31,12 @@ export function CsvImportShell() {
       />
 
       <ScreenGate phase={state.phase} accessMessage="Tu rol en la organización activa no importa órdenes." />
-      <Feedback errors={state.errors} message={state.message} stepUpHref={state.stepUpHref} />
+      <Feedback
+        errors={state.errors}
+        message={state.message}
+        stepUpHref={state.stepUpHref}
+        rateLimit={csvImportRateLimit}
+      />
 
       {state.phase === "ready" && (
         <section className="opsFormLayout">
@@ -52,6 +59,8 @@ function UploadForm({
   readonly state: CsvImportState;
   readonly controller: CsvImportController;
 }) {
+  // SEC-004 (owner answer Q6): the button re-enables itself when the server's wait ends.
+  const waiting = useRateLimitWait(csvImportRateLimit) > 0;
   return (
     <form className="opsForm" autoComplete="off" onSubmit={(event) => {
       event.preventDefault();
@@ -80,7 +89,7 @@ function UploadForm({
         </label>
         {state.fileBytes !== null && <p>Archivo listo en memoria ({state.fileBytes} bytes).</p>}
         <div className="opsFormActions">
-          <button className="btn btnPrimary" type="submit" disabled={state.busy || state.fileBytes === null}>
+          <button className="btn btnPrimary" type="submit" disabled={state.busy || state.fileBytes === null || waiting}>
             {state.busy && state.commit === null ? "Procesando…" : "Previsualizar"}
           </button>
           <button className="btn btnSecondary" type="button" disabled={state.busy} onClick={() => controller.reset()}>
@@ -102,6 +111,7 @@ function PreviewReport({
   readonly controller: CsvImportController;
 }) {
   const committable = isCommittable(preview);
+  const waiting = useRateLimitWait(csvImportRateLimit) > 0;
   return (
     <>
       <h2>Prevalidación</h2>
@@ -150,7 +160,7 @@ function PreviewReport({
             archivo contiene artículos prohibidos
           </label>
           <div className="opsFormActions">
-            <button className="btn btnPrimary" type="submit" disabled={state.busy}>
+            <button className="btn btnPrimary" type="submit" disabled={state.busy || waiting}>
               {state.busy ? "Confirmando…" : `Confirmar lote de ${preview.valid_rows} orden(es)`}
             </button>
           </div>

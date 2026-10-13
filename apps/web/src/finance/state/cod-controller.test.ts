@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { rateLimitWaits } from "../../lib/rate-limit-wait";
 import { TenantApiError } from "../../operations/api/tenant-request";
 import {
   bearerSession,
@@ -14,7 +15,7 @@ import type { OperationsSession } from "../../operations/session/operations-sess
 import { PendingSubmissions } from "../../operations/state/pending-submissions";
 import type { CodApi } from "../api/cod-api";
 import { parseCodTransaction, parseOrderFinancials } from "../contracts/cod";
-import { CodController } from "./cod-controller";
+import { CodController, codPendingRateLimit } from "./cod-controller";
 
 const expected = () => parseOrderFinancials(financialsResponse());
 const recorded = () =>
@@ -402,5 +403,34 @@ describe("COD tenant switch", () => {
     resolve(expected());
     await inFlight;
     expect(context.controller.getSnapshot().financials).toBeNull();
+  });
+});
+
+describe("SEC-004 pending list limit (owner answer Q6, 'Mensaje común con espera')", () => {
+  afterEach(() => rateLimitWaits.clear());
+
+  it("keeps the list on a 429, shows no message of its own and sends nothing until the wait ends", async () => {
+    const pendingOrder = { id: orderId, public_id: "PQ-000123", status: "DELIVERED" };
+    const pendingReconciliation = vi
+      .fn<CodApi["pendingReconciliation"]>()
+      .mockResolvedValueOnce({ items: [pendingOrder], next_cursor: null })
+      .mockImplementationOnce(async () => {
+        rateLimitWaits.record("order_list", 12);
+        throw new TenantApiError("rate_limited", null, false, 12);
+      })
+      .mockResolvedValue({ items: [], next_cursor: null });
+    const { controller } = setup({ [orgA]: "FINANCE" }, { pendingReconciliation });
+    await controller.start();
+    await controller.loadPending();
+    expect(controller.getSnapshot()).toMatchObject({ pending: [pendingOrder], message: null, pendingLoading: false });
+    expect(rateLimitWaits.secondsLeft(codPendingRateLimit)).toBe(12);
+
+    await controller.loadPending();
+    expect(pendingReconciliation).toHaveBeenCalledTimes(2);
+
+    rateLimitWaits.clear();
+    await controller.loadPending();
+    expect(pendingReconciliation).toHaveBeenCalledTimes(3);
+    expect(controller.getSnapshot().pending).toEqual([]);
   });
 });

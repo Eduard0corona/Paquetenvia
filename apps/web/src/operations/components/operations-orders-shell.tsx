@@ -28,8 +28,9 @@ import {
 import { normalizePublicIdInput, orderNotFoundMessage } from "../contracts/order-transitions";
 import { orderStatusGroupIds, orderStatusGroups, statusesInGroup } from "../contracts/status-groups";
 import { operationsOrderHref } from "../routing/operations-routing";
-import type { OrderListState } from "../state/order-list-controller";
+import { orderListRateLimit, type OrderListState } from "../state/order-list-controller";
 import { useOrderList } from "../state/use-order-list";
+import { useRateLimitWait } from "../../components/ui/rate-limit-notice";
 
 /**
  * UI-PHASE3-ORDERS-LIST-2026-10-12 ("Sí, lista de órdenes"): every order of the selected organization, newest first,
@@ -78,6 +79,8 @@ export function OrderListScreen({
 }: OrderListScreenProps) {
   const blocked = state.phase === "no_session" || state.phase === "access_unavailable";
   const filtered = hasOrderListFilters(state.view);
+  // SEC-004 (owner answer Q6): "Actualizar" and "Cargar más" re-enable themselves when the server's wait ends.
+  const waiting = useRateLimitWait(orderListRateLimit) > 0;
   const summaryRef = useRef<HTMLParagraphElement>(null);
   // "Cargar más" leaves the page with the last page: focus goes to the summary instead of the document body.
   const focusSummaryWhenPaged = useRef(false);
@@ -103,7 +106,7 @@ export function OrderListScreen({
               type="button"
               className="btn btnSecondary"
               onClick={onRefresh}
-              disabled={state.phase !== "ready" || state.loading}
+              disabled={state.phase !== "ready" || state.loading || waiting}
             >
               Actualizar
             </button>
@@ -125,7 +128,7 @@ export function OrderListScreen({
               {state.rangeError}
             </p>
           )}
-          <Feedback errors={[]} message={state.message} stepUpHref={state.stepUpHref} />
+          <Feedback errors={[]} message={state.message} stepUpHref={state.stepUpHref} rateLimit={orderListRateLimit} />
           {state.error !== null && (
             <p className="notice noticeCrit" role="alert">
               {state.error}
@@ -159,9 +162,9 @@ export function OrderListScreen({
             <button
               type="button"
               className="btn btnSecondary opsOrdersMore"
-              aria-disabled={state.loadingMore}
+              aria-disabled={state.loadingMore || waiting}
               onClick={() => {
-                if (state.loadingMore) return;
+                if (state.loadingMore || waiting) return;
                 focusSummaryWhenPaged.current = true;
                 onLoadMore();
               }}

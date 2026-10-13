@@ -36,7 +36,8 @@ import {
   type ManualRoutesState,
   type RouteMutation,
 } from "./manual-routes-controller";
-import { orderSearchFailedMessage } from "./order-search";
+import { orderSearchFailedMessage, orderSearchRateLimit } from "./order-search";
+import { rateLimitWaits } from "../../lib/rate-limit-wait";
 
 const session = bearerSession();
 const driverId = syntheticUuid(0x601);
@@ -533,6 +534,24 @@ describe("Agregar entrega by guía (UI-PHASE3-ROUTES-NO-IDS-2026-10-12)", () => 
       text: "Esta acción requiere verificar tu identidad (MFA).",
       stepUpHref: mfaHref(`/ops/routes?routeId=${routeA.id}`),
     });
+  });
+
+  it("shows no notice of its own on a 429 of the lookup and looks up nothing until the wait ends (SEC-004)", async () => {
+    try {
+      const api = new FakeRoutesApi([routeA]);
+      api.lookupAnswer = () => Promise.reject(new TenantApiError("rate_limited", null, false, 14));
+      const { controller, state } = await opened(api);
+      controller.setGuide(guideOf(7));
+      await controller.addStop();
+      expect(state().notice).toBeNull();
+      expect(state().guide).toBe(guideOf(7));
+      expect(rateLimitWaits.secondsLeft(orderSearchRateLimit)).toBe(14);
+      await controller.addStop();
+      expect(api.calls).toEqual([`lookup ${guideOf(7)}`]);
+      expect(state().mutating).toBe(false);
+    } finally {
+      rateLimitWaits.clear();
+    }
   });
 
   it("adds the order found with the route's version and a fresh key, then clears the field and reads the list", async () => {

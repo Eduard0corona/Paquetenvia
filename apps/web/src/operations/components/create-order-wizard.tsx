@@ -23,8 +23,13 @@ import {
   type OrderWizardStep,
 } from "../contracts/order-wizard";
 import { maximumServiceWindowHours } from "../contracts/service-window";
-import type { CreateOrderController, CreateOrderState } from "../state/create-order-controller";
+import {
+  quoteRateLimit,
+  type CreateOrderController,
+  type CreateOrderState,
+} from "../state/create-order-controller";
 import { Feedback } from "../../components/ui/feedback";
+import { useRateLimitWait } from "../../components/ui/rate-limit-notice";
 import { Field, type FieldControlProps } from "../../components/ui/field";
 import { Money } from "../../components/ui/money";
 import { OrderSummary, payerLabels } from "./create-order-summary";
@@ -68,10 +73,13 @@ export function CreateOrderWizard({
     }
   };
 
+  const quoting = state.step === "service" && state.quote === null;
+  // SEC-004 (owner answer Q6): "Calcular precio" re-enables itself when the server's wait ends.
+  const quoteWaiting = useRateLimitWait(quoteRateLimit) > 0;
   const primary =
     state.step === "confirm"
       ? { label: state.busy === "order" ? "Creando la orden…" : state.busy === "confirm" ? "Confirmando la orden…" : "Crear y confirmar orden", action: () => controller.submit() }
-      : state.step === "service" && state.quote === null
+      : quoting
         ? { label: state.busy === "quote" ? "Calculando el precio…" : "Calcular precio", action: () => controller.requestQuote() }
         : { label: "Siguiente", action: () => controller.next() };
 
@@ -108,6 +116,7 @@ export function CreateOrderWizard({
             errors={state.fieldErrors.map((error) => error.message)}
             message={state.message}
             stepUpHref={state.stepUpHref}
+            rateLimit={quoteRateLimit}
           />
           {state.step === "where" && <WhereStep state={state} controller={controller} />}
           {state.step === "what" && <WhatStep state={state} controller={controller} />}
@@ -133,7 +142,7 @@ export function CreateOrderWizard({
                 id={state.step === "service" ? quoteButtonId : undefined}
                 type="submit"
                 className="btn btnPrimary opsWizardPrimary"
-                aria-disabled={busy}
+                aria-disabled={busy || (quoting && quoteWaiting)}
                 disabled={state.step === "confirm" && !versionsConfigured}
               >
                 {primary.label}

@@ -1,20 +1,26 @@
 import Link from "next/link";
+import type { RateLimitedOperation } from "../../lib/rate-limit-wait";
+import { RateLimitNotice } from "./rate-limit-notice";
 
 /**
  * Validation errors and the last server outcome of a tenant screen, with the MFA step-up
- * link when it applies. The only implementation in the app (UI-001 phase 1).
+ * link when it applies. The only implementation in the app (UI-001 phase 1). With
+ * `rateLimit`, it also shows the SEC-004 wait of those operations while it lasts.
  */
 export function Feedback({
   errors,
   message,
   stepUpHref,
+  rateLimit,
 }: {
   readonly errors: readonly string[];
   readonly message: string | null;
   readonly stepUpHref: string | null;
+  readonly rateLimit?: readonly RateLimitedOperation[];
 }) {
   return (
     <>
+      {rateLimit !== undefined && <RateLimitNotice operations={rateLimit} />}
       {errors.length > 0 && (
         <ul className="notice noticeCrit" role="alert">
           {errors.map((error) => <li key={error}>{error}</li>)}

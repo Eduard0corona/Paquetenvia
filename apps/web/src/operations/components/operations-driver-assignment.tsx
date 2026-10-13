@@ -21,10 +21,12 @@ import {
   subscribeToOperationsSession,
 } from "../session/operations-session";
 import {
+  assignableDriversRateLimit,
   DriverAssignmentController,
   initialDriverAssignmentState,
   type DriverAssignmentState,
 } from "../state/driver-assignment-controller";
+import { RateLimitNotice, useRateLimitWait } from "../../components/ui/rate-limit-notice";
 
 /**
  * UI-PHASE2-DRIVER-PICKER-2026-10-05: "Asignar repartidor" on the order detail.
@@ -58,6 +60,8 @@ export function OperationsDriverAssignment({
   const controllerRef = useRef<DriverAssignmentController | null>(null);
   const onOrderChangedRef = useRef(onOrderChanged);
   const { confirm, dialog } = useConfirmDialog();
+  // SEC-004 (owner answer Q6): "Cargar más repartidores" re-enables itself when the server's wait ends.
+  const listWaiting = useRateLimitWait(assignableDriversRateLimit) > 0;
 
   useEffect(() => {
     onOrderChangedRef.current = onOrderChanged;
@@ -138,6 +142,7 @@ export function OperationsDriverAssignment({
         Elige a un repartidor de tu flota y escribe el costo de la asignación. Solo puedes elegir a
         quien cumple hoy los requisitos para esta orden.
       </p>
+      <RateLimitNotice operations={assignableDriversRateLimit} />
       {state.kind === "loading" && <p className="live" aria-live="polite">Cargando repartidores…</p>}
       {state.kind === "ready" && drivers.length === 0 && (
         <p className="emptyState">
@@ -213,6 +218,7 @@ export function OperationsDriverAssignment({
               <button
                 type="button"
                 className="btn btnSecondary"
+                aria-disabled={listWaiting}
                 onClick={() => void controllerRef.current?.loadMore()}
               >
                 {state.busy === "loading-more" ? "Cargando…" : "Cargar más repartidores"}

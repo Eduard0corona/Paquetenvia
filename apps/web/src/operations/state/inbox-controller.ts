@@ -22,6 +22,16 @@ import {
 import { ExternalStore } from "./external-store";
 import { inboxAggregateVersions, mergeInboxSources } from "./inbox-merge";
 import { QueueCountsLoader } from "./queue-counts-loader";
+import { ReloadSpacer, type ReloadSpacerOptions } from "./reload-spacer";
+import { rateLimitWaits, type RateLimitedOperation, type RateLimitWaits } from "../../lib/rate-limit-wait";
+
+/** SEC-004: the inbox reads the dashboard and the counts, each with its own budget (owner answer Q3). */
+export const inboxRateLimit: readonly RateLimitedOperation[] = ["dashboard", "queue_counts"];
+export const inboxListRateLimit: readonly RateLimitedOperation[] = ["dashboard"];
+const inboxCountsRateLimit: readonly RateLimitedOperation[] = ["queue_counts"];
+
+/** The short wait that gathers a burst of realtime notices into one reload (as before SEC-004). */
+export const inboxRealtimeDebounceMilliseconds = 250;
 
 /**
  * UI-PHASE3-INBOX-2026-10-10: state of the dispatcher's work inbox ("Bandeja de trabajo").
@@ -41,6 +51,10 @@ export interface InboxDependencies {
   readonly createApi: (session: OperationsSession) => InboxApi;
   /** Realtime, polling and visibility loads wait while the page is hidden. */
   readonly isHidden?: () => boolean;
+  /** SEC-004: the tab's server-imposed waits (tests pass their own). */
+  readonly waits?: RateLimitWaits;
+  /** The clock and timers of the reload spacing (tests pass fake ones). */
+  readonly timers?: Pick<ReloadSpacerOptions<string>, "now" | "setTimer" | "clearTimer">;
 }
 
 export type InboxPhase = "loading" | "no_session" | "ready" | "access_unavailable";
@@ -110,6 +124,10 @@ export class InboxController extends ExternalStore<InboxState> {
   private readonly zoneNames = new Map<string, string>();
   private coordinator = new AuthoritativeRefreshCoordinator<LoadResult>();
   private readonly counts: QueueCountsLoader;
+  /** SEC-004-RELOADS-AND-BULK-2026-10-13 (owner answer Q9): at most one realtime reload every 3 seconds. */
+  private readonly spacer: ReloadSpacer<"realtime">;
+  /** SEC-004: the counts read once by themselves when their wait ends. */
+  private readonly countsSpacer: ReloadSpacer<"counts">;
 
   public constructor(
     private readonly dependencies: InboxDependencies,
@@ -133,6 +151,26 @@ export class InboxController extends ExternalStore<InboxState> {
     this.counts = new QueueCountsLoader((view) =>
       this.update({ counts: view.counts, countsUnavailable: view.unavailable }),
     );
+    this.spacer = new ReloadSpacer({
+      ...dependencies.timers,
+      reload: () => void this.load("replace", "realtime", "normal"),
+      waitLeft: () => this.waits().millisecondsLeft(inboxListRateLimit),
+    });
+    this.countsSpacer = new ReloadSpacer({
+      ...dependencies.timers,
+      reload: () => void this.loadCounts(),
+      waitLeft: () => this.waits().millisecondsLeft(inboxCountsRateLimit),
+      spacing: 0,
+    });
+  }
+
+  /**
+   * A realtime notice (OperationsHub): the notices are gathered into one reload, at most every 3 seconds and
+   * never during the server's wait (owner answer Q9).
+   */
+  public notice(): void {
+    if (this.api === null || this.getSnapshot().phase === "access_unavailable") return;
+    this.spacer.request("realtime", inboxRealtimeDebounceMilliseconds);
   }
 
   /**
@@ -211,6 +249,8 @@ export class InboxController extends ExternalStore<InboxState> {
 
   private newScope(): void {
     this.scope += 1;
+    this.spacer.cancel();
+    this.countsSpacer.cancel();
     this.coordinator.cancel();
     this.coordinator = new AuthoritativeRefreshCoordinator<LoadResult>();
   }
@@ -229,14 +269,22 @@ export class InboxController extends ExternalStore<InboxState> {
     }
     if (requirement === "normal" && backgroundTriggers.has(trigger) && (this.dependencies.isHidden?.() ?? false))
       return null;
+    // SEC-004 (owner answer Q6): while the server's wait lasts nothing is sent; the inbox reads once, by itself,
+    // when it ends. A realtime reconnect still reads (and fails) as before.
+    if (requirement === "normal" && this.waits().isWaiting(inboxListRateLimit)) {
+      if (kind === "replace") this.spacer.request("realtime");
+      return null;
+    }
     const isCurrent = () => this.scope === scope && this.api === api;
     try {
       return await coordinator.request({
         requirement,
         isCurrent,
         execute: async (signal) => {
-          if (kind === "replace") this.update({ loading: true });
-          else this.update({ loadingMore: true });
+          if (kind === "replace") {
+            this.spacer.reloaded();
+            this.update({ loading: true });
+          } else this.update({ loadingMore: true });
           try {
             if (kind === "replace") {
               const queries = inboxQueries(this.getSnapshot().view);
@@ -276,6 +324,11 @@ export class InboxController extends ExternalStore<InboxState> {
           error: null,
           lastUpdated: null,
         });
+      } else if (category === "rate_limited") {
+        // SEC-004 (owner answer Q6): the common message counts down and the rows stay; the inbox reads again
+        // once the wait ends.
+        this.update({ phase: "ready", error: null });
+        if (kind === "replace") this.spacer.request("realtime");
       } else {
         this.update({
           phase: "ready",
@@ -344,9 +397,22 @@ export class InboxController extends ExternalStore<InboxState> {
         .sort((left, right) => left.label.localeCompare(right.label, "es-MX") || (left.id < right.id ? -1 : 1)),
     });
     // The counts are read again with every list read, exactly like the dashboard.
-    if (result.kind === "replace" && this.api !== null) {
-      const api = this.api;
-      void this.counts.load((signal) => api.queueCounts(signal));
+    if (result.kind === "replace") void this.loadCounts();
+  }
+
+  /** SEC-004: during the server's wait for the counts nothing is sent; they are read once when it ends. */
+  private async loadCounts(): Promise<void> {
+    const api = this.api;
+    if (api === null) return;
+    if (this.waits().isWaiting(inboxCountsRateLimit)) {
+      this.countsSpacer.request("counts");
+      return;
     }
+    await this.counts.load((signal) => api.queueCounts(signal));
+    if (this.api === api && this.waits().isWaiting(inboxCountsRateLimit)) this.countsSpacer.request("counts");
+  }
+
+  private waits(): RateLimitWaits {
+    return this.dependencies.waits ?? rateLimitWaits;
   }
 }

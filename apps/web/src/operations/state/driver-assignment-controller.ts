@@ -1,7 +1,23 @@
 import type { AssignmentApi } from "../api/assignment-api";
 import { TenantApiError } from "../api/tenant-request";
 import type { AssignableDriver } from "../contracts/assignable-driver";
-import { describeFailure } from "./tenant-error-messages";
+import { describeFailure, isRateLimited } from "./tenant-error-messages";
+import {
+  rateLimitWaits,
+  sleepUntilWaitEnds,
+  type RateLimitedOperation,
+  type RateLimitWaits,
+} from "../../lib/rate-limit-wait";
+
+/** SEC-004: listAssignableDrivers, 60 per minute per user (owner answer Q10 keeps it). */
+export const assignableDriversRateLimit: readonly RateLimitedOperation[] = ["assignable_drivers"];
+
+export interface DriverListWaitOptions {
+  /** The tab's server-imposed waits (tests pass their own). */
+  readonly waits?: RateLimitWaits;
+  /** Waits the given milliseconds or until the signal aborts (tests pass a fake one). */
+  readonly sleep?: (milliseconds: number, signal: AbortSignal) => Promise<void>;
+}
 
 /**
  * UI-PHASE2-DRIVER-PICKER-2026-10-05: the order detail's "Asignar repartidor" panel.
@@ -54,6 +70,7 @@ export class DriverAssignmentController {
   private disposed = false;
   private generation = 0;
   private pending: PendingAssignment | null = null;
+  private readonly abort = new AbortController();
 
   public constructor(
     private readonly api: AssignmentApi,
@@ -61,6 +78,7 @@ export class DriverAssignmentController {
     private readonly onChange: (state: DriverAssignmentState) => void,
     private readonly onOrderChanged: () => void,
     private readonly randomUuid: () => string = () => crypto.randomUUID(),
+    private readonly limits: DriverListWaitOptions = {},
   ) {}
 
   public get current(): DriverAssignmentState {
@@ -72,19 +90,33 @@ export class DriverAssignmentController {
     if (this.disposed) return;
     const generation = ++this.generation;
     this.set({ ...this.state, kind: this.state.drivers.length === 0 ? "loading" : this.state.kind, busy: "idle" });
-    try {
-      const page = await this.api.listAssignableDrivers(this.orderId);
+    // SEC-004 (owner answer Q6): during the server's wait nothing is sent; the panel shows the common message with
+    // its countdown and reads the list by itself when the wait ends.
+    for (;;) {
+      await sleepUntilWaitEnds(this.waits(), assignableDriversRateLimit, this.abort.signal, this.limits.sleep);
       if (!this.isCurrent(generation)) return;
-      this.set({ ...this.state, kind: "ready", drivers: page.items, nextCursor: page.next_cursor });
-    } catch (error: unknown) {
-      if (!this.isCurrent(generation)) return;
-      this.set({ ...initialDriverAssignmentState, kind: "unavailable", ...this.listFailure(error) });
+      try {
+        const page = await this.api.listAssignableDrivers(this.orderId);
+        if (!this.isCurrent(generation)) return;
+        this.set({ ...this.state, kind: "ready", drivers: page.items, nextCursor: page.next_cursor });
+        return;
+      } catch (error: unknown) {
+        if (!this.isCurrent(generation)) return;
+        if (isRateLimited(error)) {
+          this.waits().ensure("assignable_drivers", error.retryAfterSeconds);
+          continue;
+        }
+        this.set({ ...initialDriverAssignmentState, kind: "unavailable", ...this.listFailure(error) });
+        return;
+      }
     }
   }
 
   public async loadMore(): Promise<void> {
     const cursor = this.state.nextCursor;
     if (this.disposed || cursor === null || this.state.busy !== "idle") return;
+    // SEC-004 (owner answer Q6): "Cargar más repartidores" re-enables itself when the server's wait ends.
+    if (this.waits().isWaiting(assignableDriversRateLimit)) return;
     const generation = ++this.generation;
     this.set({ ...this.state, busy: "loading-more" });
     try {
@@ -99,6 +131,12 @@ export class DriverAssignmentController {
       });
     } catch (error: unknown) {
       if (!this.isCurrent(generation)) return;
+      // SEC-004: the common message with its countdown says it all; the drivers already shown stay.
+      if (isRateLimited(error)) {
+        this.waits().ensure("assignable_drivers", error.retryAfterSeconds);
+        this.set({ ...this.state, busy: "idle" });
+        return;
+      }
       this.set({ ...this.state, busy: "idle", success: false, ...this.listFailure(error) });
     }
   }
@@ -151,6 +189,11 @@ export class DriverAssignmentController {
     this.disposed = true;
     this.generation += 1;
     this.pending = null;
+    this.abort.abort();
+  }
+
+  private waits(): RateLimitWaits {
+    return this.limits.waits ?? rateLimitWaits;
   }
 
   private listFailure(error: unknown): Pick<DriverAssignmentState, "message" | "stepUpHref"> {

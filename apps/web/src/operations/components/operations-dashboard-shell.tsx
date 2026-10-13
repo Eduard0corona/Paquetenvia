@@ -13,10 +13,17 @@ import { DateTime } from "../../components/ui/date-time";
 import { EmptyState } from "../../components/ui/empty-state";
 import { PageHeader } from "../../components/ui/page-header";
 import { StatusGroupChip } from "../../components/ui/status-badge";
-import { useOperationsDashboard } from "../state/use-operations-dashboard";
+import { RateLimitNotice, useRateLimitWait } from "../../components/ui/rate-limit-notice";
+import {
+  dashboardListRateLimit,
+  dashboardRateLimit,
+  useOperationsDashboard,
+} from "../state/use-operations-dashboard";
 
 export function OperationsDashboardShell() {
   const state = useOperationsDashboard();
+  // SEC-004 (owner answer Q6): "Actualizar" and "Cargar más" re-enable themselves when the server's wait ends.
+  const waiting = useRateLimitWait(dashboardListRateLimit) > 0;
   const { confirm, dialog } = useConfirmDialog();
   // UI-PHASE3-INBOX-2026-10-10: the view lives in the URL and is read while rendering, so a deep link
   // (/ops/dashboard?view=positions, "Mapa de posiciones" in the inbox) opens the positions view without
@@ -62,7 +69,7 @@ export function OperationsDashboardShell() {
               type="button"
               className="btn btnSecondary"
               onClick={state.refresh}
-              disabled={state.loading || state.accessUnavailable}
+              disabled={state.loading || state.accessUnavailable || waiting}
             >
               Actualizar
             </button>
@@ -78,12 +85,12 @@ export function OperationsDashboardShell() {
           <p>No es posible mostrar información de operaciones.</p>
         </section>
       )}
+      <RateLimitNotice operations={dashboardRateLimit} />
       {state.error !== null && (
         <p className="notice noticeCrit" role="alert">
           {state.error}
         </p>
       )}
-
 
       <section className="opsSummary" aria-label="Resumen operativo">
         <Summary label="Sin asignar" value={counts?.queues.unassigned ?? pendingValue} />
@@ -177,7 +184,7 @@ export function OperationsDashboardShell() {
           type="button"
           className="btn btnSecondary"
           onClick={state.loadMore}
-          disabled={state.loadingMore}
+          disabled={state.loadingMore || waiting}
         >
           {state.loadingMore ? "Cargando…" : "Cargar más"}
         </button>

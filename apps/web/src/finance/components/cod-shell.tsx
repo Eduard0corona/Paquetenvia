@@ -25,8 +25,9 @@ import {
   codRecordConfirmation,
   pendingCodReconciliationConfirmation,
 } from "../contracts/confirmations";
-import type { CodController, CodState } from "../state/cod-controller";
+import { codPendingRateLimit, type CodController, type CodState } from "../state/cod-controller";
 import { useCod } from "../state/use-cod";
+import { RateLimitNotice, useRateLimitWait } from "../../components/ui/rate-limit-notice";
 
 /** The order's tracking number when the pending list named it; confirmations fall back to the id. */
 function trackingNumber(state: CodState, orderId: string): string | null {
@@ -106,11 +107,14 @@ function PendingList({
   readonly confirm: (request: ConfirmRequest) => void;
 }) {
   const busy = state.busy || state.loadingOrder !== null;
+  // SEC-004 (owner answer Q6): the pending list is listOrders; its buttons re-enable themselves when the wait ends.
+  const waiting = useRateLimitWait(codPendingRateLimit) > 0;
   return (
     <section className="panel" aria-busy={state.pendingLoading}>
       <h2>Cobros pendientes de conciliar</h2>
-      <button className="btn btnSecondary" type="button" disabled={state.pendingLoading}
+      <button className="btn btnSecondary" type="button" disabled={state.pendingLoading || waiting}
         onClick={() => void controller.loadPending()}>Actualizar lista</button>
+      <RateLimitNotice operations={codPendingRateLimit} />
       {state.pending === null ? (
         state.pendingLoading ? <p className="live" aria-live="polite">Cargando cobros pendientes.</p> : null
       ) : state.pending.length === 0 ? (
@@ -124,7 +128,7 @@ function PendingList({
         </ul>
       )}
       {state.pendingCursor !== null && (
-        <button className="btn btnSecondary" type="button" disabled={state.pendingLoading}
+        <button className="btn btnSecondary" type="button" disabled={state.pendingLoading || waiting}
           onClick={() => void controller.loadPending(true)}>Cargar más</button>
       )}
     </section>

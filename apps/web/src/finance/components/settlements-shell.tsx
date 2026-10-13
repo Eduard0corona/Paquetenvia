@@ -33,11 +33,13 @@ import {
   payeeLabel,
   payeeListFailedMessage,
   payeeListTruncatedMessage,
+  settlementExportRateLimit,
   settlementMfaHint,
   visibleSettlementActions,
   type SettlementsController,
   type SettlementsState,
 } from "../state/settlements-controller";
+import { useRateLimitWait } from "../../components/ui/rate-limit-notice";
 import { useSettlements } from "../state/use-settlements";
 
 export function SettlementsShell() {
@@ -56,7 +58,12 @@ export function SettlementsShell() {
       />
 
       <ScreenGate phase={state.phase} accessMessage="Tu rol en la organización activa no opera liquidaciones." />
-      <Feedback errors={state.errors} message={state.message} stepUpHref={state.stepUpHref} />
+      <Feedback
+        errors={state.errors}
+        message={state.message}
+        stepUpHref={state.stepUpHref}
+        rateLimit={settlementExportRateLimit}
+      />
 
       {state.phase === "ready" && (
         <section className="opsRouteLayout">
@@ -251,6 +258,8 @@ function SettlementDetail({
   const payee = payeeLabel(state, settlement.payee_id);
   // While another settlement is loading, no action may target the one still shown.
   const locked = state.busy || state.selecting !== null;
+  // SEC-004 (owner answer Q6): "Exportar CSV" re-enables itself when the server's wait ends.
+  const exportWaiting = useRateLimitWait(settlementExportRateLimit) > 0;
   return (
     <>
       <header>
@@ -298,7 +307,8 @@ function SettlementDetail({
             })}>Marcar pagada</button>
         )}
         {actions.includes("export") && (
-          <button type="button" className="btn btnSecondary" disabled={locked} aria-describedby="settlement-export-note"
+          <button type="button" className="btn btnSecondary" disabled={locked || exportWaiting}
+            aria-describedby="settlement-export-note"
             onClick={() => void controller.exportCsv()}>Exportar CSV</button>
         )}
         <button type="button" className="btn btnSecondary" onClick={() => controller.clearSelection()}>Cerrar</button>

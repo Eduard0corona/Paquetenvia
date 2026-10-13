@@ -2,9 +2,14 @@ import type { AssignmentApi } from "../api/assignment-api";
 import { TenantApiError } from "../api/tenant-request";
 import type { AssignableDriver } from "../contracts/assignable-driver";
 import { bulkRunSummary, type BulkDriverChoice, type BulkOrder } from "../contracts/bulk-assignment";
-import { assignmentConflictMessages } from "./driver-assignment-controller";
+import {
+  assignableDriversRateLimit,
+  assignmentConflictMessages,
+  type DriverListWaitOptions,
+} from "./driver-assignment-controller";
 import { PendingSubmissions } from "./pending-submissions";
-import { describeFailure } from "./tenant-error-messages";
+import { describeFailure, isRateLimited } from "./tenant-error-messages";
+import { rateLimitWaits, sleepUntilWaitEnds, type RateLimitWaits } from "../../lib/rate-limit-wait";
 
 /**
  * UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11: state of one "Asignar seleccionadas…" batch.
@@ -104,6 +109,7 @@ export class BulkAssignmentController {
     /** Where the MFA step-up returns (the inbox view). */
     private readonly returnUrl: string,
     randomUuid: () => string = () => crypto.randomUUID(),
+    private readonly limits: DriverListWaitOptions = {},
   ) {
     this.keys = new PendingSubmissions(() => `assign-driver-${randomUuid()}`);
   }
@@ -239,15 +245,34 @@ export class BulkAssignmentController {
     this.onChanged();
   }
 
+  /**
+   * SEC-004-RELOADS-AND-BULK-2026-10-13, owner answer Q10 ("Si pasa, el panel pide esperar unos segundos."): during
+   * the server's wait nothing is read; the panel shows the common message with its countdown and the order stays
+   * "Revisando repartidores…" until the wait ends, then its list is read from the first page by itself.
+   */
   private async loadOrder(orderId: string): Promise<void> {
-    try {
-      const drivers = await this.readAllDrivers(orderId);
+    for (;;) {
+      await sleepUntilWaitEnds(this.waits(), assignableDriversRateLimit, this.abort.signal, this.limits.sleep);
       if (this.disposed || !this.has(orderId)) return;
-      this.setDrivers(orderId, { kind: "ready", drivers });
-    } catch (error: unknown) {
-      if (this.disposed || !this.has(orderId)) return;
-      this.setDrivers(orderId, { kind: "failed", ...loadFailure(error, this.returnUrl) });
+      try {
+        const drivers = await this.readAllDrivers(orderId);
+        if (this.disposed || !this.has(orderId)) return;
+        this.setDrivers(orderId, { kind: "ready", drivers });
+        return;
+      } catch (error: unknown) {
+        if (this.disposed || !this.has(orderId)) return;
+        if (isRateLimited(error)) {
+          this.waits().ensure("assignable_drivers", error.retryAfterSeconds);
+          continue;
+        }
+        this.setDrivers(orderId, { kind: "failed", ...loadFailure(error, this.returnUrl) });
+        return;
+      }
     }
+  }
+
+  private waits(): RateLimitWaits {
+    return this.limits.waits ?? rateLimitWaits;
   }
 
   /** Every page of one order's list; a repeated cursor or too many pages leave it incomplete. */

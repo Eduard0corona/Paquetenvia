@@ -108,6 +108,7 @@ export function createSettlementsApi(baseUrl: string, session: OperationsSession
         path: path(settlementId, "/export.csv"),
         accept: "text/csv",
         signal,
+        rateLimit: "settlement_export",
       });
       const contentType = response.headers.get("content-type") ?? "";
       if (!contentType.toLowerCase().startsWith("text/csv")) throw new TenantApiError("invalid");

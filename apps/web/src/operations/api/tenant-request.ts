@@ -1,4 +1,6 @@
 import { isMfaRequiredProblem } from "../../auth/step-up";
+import { rateLimitWaits, type RateLimitedOperation } from "../../lib/rate-limit-wait";
+import { readRetryAfterSeconds } from "../../lib/retry-after";
 import {
   resolveRequestAuthorization,
   type RequestAuthorization,
@@ -12,12 +14,15 @@ export type TenantApiErrorCategory =
   | "conflict"
   | "invalid"
   | "unavailable"
-  | "network";
+  | "network"
+  /** SEC-004: a 429 (AI-05 TooManyRequests); nothing was applied. */
+  | "rate_limited";
 
 /**
  * Failure of an AI-05 tenant operation. `code` is the stable problem code when the
  * API sent one (for example `SETTLEMENT_STATE_CONFLICT`); `mfaRequired` is true
- * only for a 403 whose problem code is `MFA_REQUIRED` (AUTH-001-MFA-STEP-UP). The
+ * only for a 403 whose problem code is `MFA_REQUIRED` (AUTH-001-MFA-STEP-UP);
+ * `retryAfterSeconds` is the wait a 429 asked for (Retry-After), when it said. The
  * message never carries server text, identifiers or personal data.
  */
 export class TenantApiError extends Error {
@@ -25,14 +30,22 @@ export class TenantApiError extends Error {
     public readonly category: TenantApiErrorCategory,
     public readonly code: string | null = null,
     public readonly mfaRequired = false,
+    public readonly retryAfterSeconds: number | null = null,
   ) {
     super("La operación no está disponible.");
     this.name = "TenantApiError";
   }
 
-  /** Worth retrying with the same Idempotency-Key and the same payload. */
+  /**
+   * Worth retrying with the same Idempotency-Key and the same payload (a 429
+   * too, once its wait has passed: the server applied nothing).
+   */
   public get retryable(): boolean {
-    return this.category === "network" || this.category === "unavailable";
+    return (
+      this.category === "network" ||
+      this.category === "unavailable" ||
+      this.category === "rate_limited"
+    );
   }
 }
 
@@ -52,6 +65,12 @@ export interface TenantRequest {
   readonly idempotencyKey?: string;
   readonly accept?: string;
   readonly signal?: AbortSignal;
+  /**
+   * SEC-004: the limited operation this request spends. A 429 records the
+   * server's wait for it, so the screens show the countdown and keep its
+   * buttons disabled until it ends.
+   */
+  readonly rateLimit?: RateLimitedOperation;
 }
 
 const problemCodePattern = /^[A-Z][A-Z0-9_]{0,63}$/;
@@ -115,8 +134,13 @@ export function createTenantRequester(
     } finally {
       clearTimeout(timer);
     }
-    if (!response.ok && !(request.passThroughStatuses ?? []).includes(response.status))
-      throw await classifyFailure(response);
+    if (!response.ok && !(request.passThroughStatuses ?? []).includes(response.status)) {
+      const failure = await classifyFailure(response);
+      if (failure.category === "rate_limited" && request.rateLimit !== undefined) {
+        rateLimitWaits.record(request.rateLimit, failure.retryAfterSeconds);
+      }
+      throw failure;
+    }
     return response;
   };
 }
@@ -164,6 +188,8 @@ export async function classifyFailure(response: Response): Promise<TenantApiErro
     case 400:
     case 422:
       return new TenantApiError("invalid", code);
+    case 429:
+      return new TenantApiError("rate_limited", null, false, readRetryAfterSeconds(response.headers));
     default:
       return new TenantApiError("unavailable");
   }

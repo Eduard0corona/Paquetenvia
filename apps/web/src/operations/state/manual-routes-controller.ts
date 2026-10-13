@@ -10,8 +10,9 @@ import type { ManualRoute, ManualRouteDetail, ManualRoutePage } from "../contrac
 import { normalizePublicIdInput, orderNotFoundMessage } from "../contracts/order-transitions";
 import type { OperationsSession } from "../session/operations-session";
 import { ExternalStore } from "./external-store";
-import { orderSearchFailedMessage } from "./order-search";
-import { describeFailure } from "./tenant-error-messages";
+import { orderSearchFailedMessage, orderSearchRateLimit } from "./order-search";
+import { describeFailure, isRateLimited } from "./tenant-error-messages";
+import { rateLimitWaits, type RateLimitWaits } from "../../lib/rate-limit-wait";
 
 /**
  * UI-PHASE3-ROUTES-NO-IDS-2026-10-12 (project owner, 2026-10-12, "Sí, todo (Recommended)": "Mensaje por motivo y
@@ -115,6 +116,8 @@ export interface ManualRoutesDependencies {
   readonly readQuery: () => URLSearchParams;
   /** Idempotency-Key source: a fresh key for every change, as the screen always did. */
   readonly randomUuid?: () => string;
+  /** SEC-004: the tab's server-imposed waits (tests pass their own). */
+  readonly waits?: RateLimitWaits;
 }
 
 export type RouteMutation = "create" | "add" | "remove" | "reorder";
@@ -284,11 +287,24 @@ export class ManualRoutesController extends ExternalStore<ManualRoutesState> {
         this.update({ notice: warn(orderNotFoundMessage) });
         return;
       }
+      // SEC-004 (owner answer Q6): the guía lookup is listOrders; during the server's wait nothing is sent, the
+      // screen shows the common message with its countdown and "Agregar entrega" re-enables itself when it ends.
+      const waits = this.dependencies.waits ?? rateLimitWaits;
+      if (waits.isWaiting(orderSearchRateLimit)) {
+        this.update({ notice: null });
+        return;
+      }
       let orderId: string | null;
       try {
         orderId = await api.findOrderIdByPublicId(publicId, this.abort.signal);
       } catch (error: unknown) {
-        if (generation === this.generation) this.update({ notice: lookupFailure(error, this.returnUrl(route.id)) });
+        if (generation !== this.generation) return;
+        if (isRateLimited(error)) {
+          waits.ensure("order_list", error.retryAfterSeconds);
+          this.update({ notice: null });
+          return;
+        }
+        this.update({ notice: lookupFailure(error, this.returnUrl(route.id)) });
         return;
       }
       if (generation !== this.generation) return;

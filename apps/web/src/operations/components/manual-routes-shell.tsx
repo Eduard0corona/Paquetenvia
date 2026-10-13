@@ -24,6 +24,8 @@ import { Field } from "../../components/ui/field";
 import { Money } from "../../components/ui/money";
 import { PageHeader } from "../../components/ui/page-header";
 import { CreateRouteForm } from "./create-route-form";
+import { orderSearchRateLimit } from "../state/order-search";
+import { RateLimitNotice, useRateLimitWait } from "../../components/ui/rate-limit-notice";
 
 /**
  * The route planner (`/ops/routes`). UI-PHASE3-ROUTES-NO-IDS-2026-10-12 ("Sí, todo (Recommended)"): every route is
@@ -166,6 +168,8 @@ export function RouteDetailView({
 }) {
   const dragged = useRef<string | null>(null);
   const draft = route.status === "DRAFT";
+  // SEC-004 (owner answer Q6): the guía lookup is listOrders; "Agregar entrega" re-enables itself when the wait ends.
+  const lookupWaiting = useRateLimitWait(orderSearchRateLimit) > 0;
   return (
     <>
       <header>
@@ -173,13 +177,14 @@ export function RouteDetailView({
         <p>{driver} · {routeStatusLabels[route.status]} · {routeStopsText(route.stop_count)}</p>
         <Money cents={route.assignment_cost_cents_total} currency={false} strong />
       </header>
-      <form className="opsRouteAdd" onSubmit={(event) => { event.preventDefault(); onAdd(); }}>
+      <form className="opsRouteAdd" onSubmit={(event) => { event.preventDefault(); if (!lookupWaiting) onAdd(); }}>
         <Field label="Guía (ORD_…)" hint="La orden debe estar asignada a tu flota propia.">
           {(control) => <input {...control} name="guide" type="text" inputMode="text" required autoComplete="off" autoCapitalize="off"
             spellCheck={false} maxLength={64} placeholder="ORD_…" value={guide} onChange={(event) => onGuideChange(event.currentTarget.value)} />}
         </Field>
-        <button className="btn btnPrimary" type="submit" disabled={mutating || !draft}>Agregar entrega</button>
+        <button className="btn btnPrimary" type="submit" disabled={mutating || !draft || lookupWaiting}>Agregar entrega</button>
       </form>
+      <RateLimitNotice operations={orderSearchRateLimit} />
       <ol className="opsRouteStops">{route.stops.map((stop, index, stops) => {
         const view = guides[stop.order_id] ?? loadingGuide;
         const publicId = view.kind === "ready" ? view.publicId : null;

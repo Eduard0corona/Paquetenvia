@@ -1579,6 +1579,47 @@ global_rules:
 - organization switcher uses /me/organization-contexts and sends X-Organization-Id
 - 404 screen is identical for missing and cross-tenant resources
 - POD offline queue stores upload metadata/idempotency key, never unencrypted PII in logs
+# SEC-004-HEAVY-ENDPOINT-MAPPING-2026-10-12, owner answer Q6 "Mensaje común con espera (Recommended)" ("En el panel:
+# "Demasiadas solicitudes. Espera N segundos e intenta de nuevo.", y el botón se reactiva solo."), and
+# SEC-004-RELOADS-AND-BULK-2026-10-13, owner answers Q9 "Espaciar recargas (Recommended)" ("El panel junta los avisos y
+# recarga como máximo cada 3 segundos por pestaña. Los límites de 60/min no cambian. Los cambios se ven hasta 3 segundos
+# después.") and Q10 "Dejarlo en 60/min (Recommended)" ("Si pasa, el panel pide esperar unos segundos."). The driver app
+# and /auth/login answer a 429 as screen_contracts.driver_stop.rate_limit and the /login route say.
+panel_rate_limit:
+  decisions:
+  - SEC-004-HEAVY-ENDPOINT-MAPPING-2026-10-12
+  - SEC-004-RELOADS-AND-BULK-2026-10-13
+  message: Demasiadas solicitudes. Espera N segundos e intenta de nuevo.
+  message_rules:
+  - N is the whole seconds left of the 429's Retry-After, counting down each second ("1 segundo" when one is left);
+    without a usable Retry-After it is the API's 60-second window, and never more than one hour
+  - it is shown on the screen that called the limited operation while the wait lasts, instead of that screen's own
+    failure text, and disappears when the wait ends; it is a timer that assistive technology reads on request, not
+    every second
+  behavior:
+  - during the wait the screen sends nothing to that operation; the buttons that would call it are disabled (marked
+    aria-disabled on the screens that never disable their buttons) and re-enable themselves when N runs out
+  - a 429 drops nothing already on screen (rows, counts shown before, preview report, selection, typed text) and a
+    submission sent again after the wait keeps its Idempotency-Key and payload, because the server applied nothing
+  - the screens that read by themselves (realtime notices, polling, the page becoming visible, the order picker and
+    the bulk assignment's driver lists) send nothing during the wait and read once, by themselves, when it ends
+  - the wait lives in the tab's memory only, one per limited operation; an organization switch keeps it, because the
+    limits are per user; the shared CSV budget makes preview and commit wait together
+  realtime_reloads: the OperationsHub notices of a screen are gathered into one reload, at most one every 3 seconds per
+    tab, counted from the screen's previous reload of any kind, and none during the server's wait; a change shows up to
+    3 seconds later
+  screens:
+    /ops/dashboard: the operations dashboard and getOperationsQueueCounts, each with its own wait
+    /ops/inbox: the operations dashboard (one read per status of the queue) and getOperationsQueueCounts;
+      listAssignableDrivers for every order of "Asignar seleccionadas…"
+    /ops/orders/:id: the operations dashboard (the order's row); listAssignableDrivers in the assignment_picker
+    /ops/orders: listOrders
+    /ops/orders/new: createQuote ("Calcular precio")
+    /ops/orders/import: previewOrderCsv and commitOrderCsv, one wait for both
+    /ops/routes: listOrders ("Agregar entrega" by guía)
+    /finance/cod: listOrders (the pending list)
+    /finance/settlements: exportSettlementCsv ("Exportar CSV")
+    app shell: listOrders ("Buscar guía")
 driver_location:
   batch_size: 1-20
   response: per-item accepted/duplicate/rejected

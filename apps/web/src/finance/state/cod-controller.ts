@@ -3,7 +3,8 @@ import { canListPendingCod, canPerform, requiresMfa } from "../../operations/con
 import type { OperationsSession } from "../../operations/session/operations-session";
 import { ExternalStore } from "../../operations/state/external-store";
 import { PendingSubmissions } from "../../operations/state/pending-submissions";
-import { describeFailure } from "../../operations/state/tenant-error-messages";
+import { describeFailure, isRateLimited } from "../../operations/state/tenant-error-messages";
+import { rateLimitWaits, type RateLimitedOperation, type RateLimitWaits } from "../../lib/rate-limit-wait";
 import type { CodApi } from "../api/cod-api";
 import {
   buildRecordCodBody,
@@ -16,6 +17,9 @@ import {
   type PendingCodOrder,
   type RecordCodBody,
 } from "../contracts/cod";
+
+/** SEC-004: the pending list is listOrders, so it spends and waits with the order list (120 per minute per user). */
+export const codPendingRateLimit: readonly RateLimitedOperation[] = ["order_list"];
 
 export const codPath = "/finance/cod";
 
@@ -55,6 +59,8 @@ export interface CodDependencies {
   readonly readSession: () => OperationsSession | null;
   readonly createApi: (session: OperationsSession) => CodApi;
   readonly loadRole: (session: OperationsSession, signal: AbortSignal) => Promise<string | null>;
+  /** SEC-004: the tab's server-imposed waits (tests pass their own). */
+  readonly waits?: RateLimitWaits;
   /** Order to reopen after returning from the MFA step-up. */
   readonly initialOrder?: () => string | null;
 }
@@ -156,6 +162,8 @@ export class CodController extends ExternalStore<CodState> {
     if (api === null || state.phase !== "ready" || !state.canListPending) return;
     const cursor = more ? state.pendingCursor : null;
     if (more && cursor === null) return;
+    // SEC-004 (owner answer Q6): while the server's wait lasts nothing is sent; the buttons re-enable themselves.
+    if ((this.dependencies.waits ?? rateLimitWaits).isWaiting(codPendingRateLimit)) return;
     const generation = this.generation;
     const token = ++this.pendingToken;
     const isLatest = () => generation === this.generation && token === this.pendingToken;
@@ -171,7 +179,8 @@ export class CodController extends ExternalStore<CodState> {
       });
     } catch (error) {
       if (!isLatest()) return;
-      if (!more) this.update({ pending: null, pendingCursor: null });
+      // SEC-004: a 429 keeps the list already shown; the common message counts down above it.
+      if (!more && !isRateLimited(error)) this.update({ pending: null, pendingCursor: null });
       this.fail(error, null);
     } finally {
       if (isLatest()) this.update({ pendingLoading: false });
@@ -372,6 +381,11 @@ export class CodController extends ExternalStore<CodState> {
   }
 
   private fail(error: unknown, orderId: string | null): void {
+    // SEC-004 (owner answer Q6): the screen shows the common message with its countdown; nothing of its own.
+    if (isRateLimited(error)) {
+      this.update({ message: null, stepUpHref: null });
+      return;
+    }
     const view = describeFailure(error, codReturnUrl(orderId), financeConflictMessages);
     this.update({ message: view.message, stepUpHref: view.stepUpHref });
   }

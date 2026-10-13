@@ -25,6 +25,7 @@ export function createOrdersApi(baseUrl: string, session: OperationsSession): Or
         body,
         idempotencyKey,
         signal,
+        rateLimit: "quote",
       });
       return (await readJson(response, parseQuote)) as Quote;
     },

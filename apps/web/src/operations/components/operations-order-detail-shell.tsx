@@ -14,7 +14,8 @@ import { DateTime } from "../../components/ui/date-time";
 import { DescriptionList } from "../../components/ui/description-list";
 import { PageHeader } from "../../components/ui/page-header";
 import { StatusBadge } from "../../components/ui/status-badge";
-import { useOperationsOrderDetail } from "../state/use-operations-order-detail";
+import { orderDetailRateLimit, useOperationsOrderDetail } from "../state/use-operations-order-detail";
+import { RateLimitNotice, useRateLimitWait } from "../../components/ui/rate-limit-notice";
 import { OperationsDriverAssignment } from "./operations-driver-assignment";
 import { OperationsFailedAttempt } from "./operations-failed-attempt";
 import { OperationsNextStep } from "./operations-next-step";
@@ -29,6 +30,8 @@ export function OperationsOrderDetailShell({
   readonly inboxHref?: string | null;
 }) {
   const state = useOperationsOrderDetail(orderId);
+  // SEC-004 (owner answer Q6): "Actualizar" re-enables itself when the server's wait ends.
+  const waiting = useRateLimitWait(orderDetailRateLimit) > 0;
   const backToInbox =
     inboxHref === null ? null : (
       <Link className="btnLink opsBackLink" href={inboxHref}>
@@ -67,6 +70,7 @@ export function OperationsOrderDetailShell({
           title="Detalle de orden"
           description={state.error ?? "Cargando información operativa…"}
         />
+        <RateLimitNotice operations={orderDetailRateLimit} />
       </div>
     );
   }
@@ -87,13 +91,14 @@ export function OperationsOrderDetailShell({
               Última actualización:{" "}
               {state.lastUpdated === null ? "Pendiente" : <DateTime value={state.lastUpdated} />}
             </span>
-            <button type="button" className="btn btnSecondary" onClick={state.refresh}>
+            <button type="button" className="btn btnSecondary" onClick={state.refresh} disabled={waiting}>
               Actualizar
             </button>
           </>
         }
       />
       <p className="pageNote">Horarios mostrados en hora de Mazatlán.</p>
+      <RateLimitNotice operations={orderDetailRateLimit} />
 
       <DescriptionList
         variant="grid"

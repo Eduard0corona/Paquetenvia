@@ -13,9 +13,13 @@ import {
 import type { OperationsSession } from "../session/operations-session";
 import { ExternalStore } from "./external-store";
 import { PendingSubmissions } from "./pending-submissions";
-import { describeFailure } from "./tenant-error-messages";
+import { describeFailure, isRateLimited } from "./tenant-error-messages";
+import { rateLimitWaits, type RateLimitedOperation, type RateLimitWaits } from "../../lib/rate-limit-wait";
 
 export const csvImportPath = "/ops/orders/import";
+
+/** SEC-004 (owner answer Q1): preview and commit spend one budget, so they wait together. */
+export const csvImportRateLimit: readonly RateLimitedOperation[] = ["csv_import"];
 
 export interface CsvImportState {
   readonly phase: "no_session" | "loading" | "ready" | "access_unavailable";
@@ -37,6 +41,8 @@ export interface CsvImportDependencies {
   readonly readSession: () => OperationsSession | null;
   readonly createApi: (session: OperationsSession) => CsvImportApi;
   readonly loadRole: (session: OperationsSession, signal: AbortSignal) => Promise<string | null>;
+  /** SEC-004: the tab's server-imposed waits (tests pass their own). */
+  readonly waits?: RateLimitWaits;
 }
 
 const initialState: CsvImportState = {
@@ -143,7 +149,7 @@ export class CsvImportController extends ExternalStore<CsvImportState> {
   public async preview(): Promise<void> {
     const api = this.api;
     const file = this.file;
-    if (api === null || file === null || this.getSnapshot().busy) return;
+    if (api === null || file === null || this.getSnapshot().busy || this.waiting()) return;
     const generation = this.generation;
     this.pending.settle(commitScope);
     this.update({ busy: true, preview: null, commit: null, errors: [], message: null, stepUpHref: null });
@@ -174,7 +180,7 @@ export class CsvImportController extends ExternalStore<CsvImportState> {
     const state = this.getSnapshot();
     const preview = state.preview;
     if (api === null || file === null || preview === null || !state.canCommit || state.busy) return;
-    if (!isCommittable(preview)) return;
+    if (!isCommittable(preview) || this.waiting()) return;
     if (!restrictedGoodsAcknowledged) {
       this.update({ errors: [csvRestrictedGoodsRequiredMessage], message: null, stepUpHref: null });
       return;
@@ -227,7 +233,17 @@ export class CsvImportController extends ExternalStore<CsvImportState> {
   }
 
   private fail(error: unknown): void {
+    // SEC-004 (owner answer Q6): the screen shows the common message with its countdown; nothing of its own.
+    if (isRateLimited(error)) {
+      this.update({ message: null, stepUpHref: null });
+      return;
+    }
     const view = describeFailure(error, csvImportPath, csvConflictMessages);
     this.update({ message: view.message, stepUpHref: view.stepUpHref });
+  }
+
+  /** While the server's wait lasts, the buttons are disabled and nothing is sent. */
+  private waiting(): boolean {
+    return (this.dependencies.waits ?? rateLimitWaits).isWaiting(csvImportRateLimit);
   }
 }

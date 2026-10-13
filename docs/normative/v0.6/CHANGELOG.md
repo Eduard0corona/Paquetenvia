@@ -1,5 +1,23 @@
 # Changelog
 
+## Límites de tasa en el panel: mensaje con espera y recargas espaciadas (SEC-004-PANEL-WAIT-2026-10-13, fase 4 PR 3, parte web) — 2026-10-13
+
+- Aplica respuestas literales ya registradas, sin pregunta nueva: Q6 "Mensaje común con espera (Recommended)" ("En el
+  panel: "Demasiadas solicitudes. Espera N segundos e intenta de nuevo.", y el botón se reactiva solo."), Q9 "Espaciar
+  recargas (Recommended)" y Q10 "Dejarlo en 60/min (Recommended)".
+- AI-07 agrega `panel_rate_limit`: el texto exacto, con N en segundos enteros del `Retry-After` que cuentan hacia
+  atrás ("1 segundo" al final; 60 segundos si el encabezado no sirve, nunca más de una hora), en la pantalla que llamó
+  la operación limitada y en lugar de su propio texto de falla.
+- Durante la espera no se envía nada a esa operación y sus botones quedan desactivados hasta reactivarse solos; un 429
+  no borra nada de la pantalla y un reenvío conserva su `Idempotency-Key`. Las pantallas que leen solas (avisos en
+  tiempo real, sondeo, al volver a la pestaña, la lista de repartidores de la orden y la de la asignación en lote) leen
+  una vez, solas, al terminar la espera.
+- Tablero, bandeja y detalle de la orden juntan los avisos de OperationsHub en una recarga, como máximo cada 3 segundos
+  por pestaña.
+- Pantallas: tablero, bandeja, detalle de la orden, Órdenes, Nueva orden, Importar CSV, Rutas ("Agregar entrega"),
+  Cobro contra entrega, Liquidaciones y "Buscar guía". Ningún número cambia. Sin cambios en AI-04, AI-05, AI-06,
+  AI-18, roles, permisos, migraciones ni paquetes.
+
 ## Recargas del panel y asignación en lote ante los límites (SEC-004-RELOADS-AND-BULK-2026-10-13, fase 4 PR 3) — 2026-10-13
 
 - Respuestas literales del project owner (2026-10-13), registradas en `decision-log.md` con su contexto: la premisa

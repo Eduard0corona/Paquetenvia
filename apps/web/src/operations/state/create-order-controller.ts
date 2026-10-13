@@ -39,7 +39,8 @@ import type { OperationsSession } from "../session/operations-session";
 import { ExternalStore } from "./external-store";
 import { transitionReturnUrl } from "./order-transition-controller";
 import { PendingSubmissions } from "./pending-submissions";
-import { describeFailure } from "./tenant-error-messages";
+import { describeFailure, isRateLimited } from "./tenant-error-messages";
+import { rateLimitWaits, type RateLimitedOperation, type RateLimitWaits } from "../../lib/rate-limit-wait";
 
 export const createOrderPath = "/ops/orders/new";
 
@@ -108,7 +109,12 @@ export interface CreateOrderDependencies {
   /** Owner-set terms/privacy versions from the server; `null` blocks confirmation. */
   readonly acceptanceVersions: AcceptanceVersions | null;
   readonly now?: () => Date;
+  /** SEC-004: the tab's server-imposed waits (tests pass their own). */
+  readonly waits?: RateLimitWaits;
 }
+
+/** SEC-004: createQuote, 60 per minute per user. */
+export const quoteRateLimit: readonly RateLimitedOperation[] = ["quote"];
 
 const wizardStart = {
   step: "where",
@@ -283,6 +289,8 @@ export class CreateOrderController extends ExternalStore<CreateOrderState> {
     const api = this.api;
     const state = this.getSnapshot();
     if (api === null || !state.canQuote || state.busy !== null || state.outcome !== null) return;
+    // SEC-004 (owner answer Q6): while the server's wait lasts, "Calcular precio" sends nothing.
+    if ((this.dependencies.waits ?? rateLimitWaits).isWaiting(quoteRateLimit)) return;
     const quoteDraft = quoteDraftOf(state.draft, state.canAuthorizeLowPrice);
     const errors = quoteDraftErrors(quoteDraft);
     if (errors.length > 0) {
@@ -311,6 +319,11 @@ export class CreateOrderController extends ExternalStore<CreateOrderState> {
     } catch (error) {
       if (generation !== this.generation) return;
       this.settleUnlessRetryable("quote", error);
+      // SEC-004 (owner answer Q6): the wizard shows the common message with its countdown; nothing of its own.
+      if (isRateLimited(error)) {
+        this.update({ busy: null, message: null, stepUpHref: null });
+        return;
+      }
       const view = describeFailure(
         error,
         createOrderPath,

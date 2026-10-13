@@ -39,6 +39,8 @@ import { orderStatusLabels, serviceTypeLabel } from "../contracts/operations-for
 import type { OperationsQueueId } from "../contracts/queue-counts";
 import { formatServiceWindow } from "../contracts/service-window";
 import { useOperationsInbox } from "../state/use-operations-inbox";
+import { inboxListRateLimit, inboxRateLimit } from "../state/inbox-controller";
+import { RateLimitNotice, useRateLimitWait } from "../../components/ui/rate-limit-notice";
 import { bulkAssignmentTitleId, OperationsBulkAssignment } from "./operations-bulk-assignment";
 import { OperationsDriverAssignment } from "./operations-driver-assignment";
 
@@ -91,6 +93,8 @@ export function OperationsInboxShell() {
   const view = useMemo(() => parseInboxView(new URLSearchParams(searchKey)), [searchKey]);
   const viewKey = inboxViewKey(view);
   const state = useOperationsInbox(view);
+  // SEC-004 (owner answer Q6): "Actualizar" and "Cargar más" re-enable themselves when the server's wait ends.
+  const waiting = useRateLimitWait(inboxListRateLimit) > 0;
   const [assigning, setAssigning] = useState<AssignTarget | null>(null);
   const [selection, setSelection] = useState<Selection>({ key: "", ids: [] });
   const [batch, setBatch] = useState<BulkBatch | null>(null);
@@ -169,7 +173,7 @@ export function OperationsInboxShell() {
               type="button"
               className="btn btnSecondary"
               onClick={() => state.refresh()}
-              disabled={state.loading || blocked}
+              disabled={state.loading || blocked || waiting}
             >
               Actualizar
             </button>
@@ -186,6 +190,7 @@ export function OperationsInboxShell() {
 
       {!blocked && (
         <>
+          <RateLimitNotice operations={inboxRateLimit} />
           {state.error !== null && (
             <p className="notice noticeCrit" role="alert">
               {state.error}
@@ -362,7 +367,12 @@ export function OperationsInboxShell() {
             </div>
           )}
           {showing && state.hasMore && (
-            <button type="button" className="btn btnSecondary" onClick={state.loadMore} disabled={state.loadingMore}>
+            <button
+              type="button"
+              className="btn btnSecondary"
+              onClick={state.loadMore}
+              disabled={state.loadingMore || waiting}
+            >
               {state.loadingMore ? "Cargando…" : "Cargar más"}
             </button>
           )}

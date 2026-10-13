@@ -23,6 +23,16 @@ import {
   RefreshScopeChangedError,
   type RefreshRequirement,
 } from "./authoritative-refresh-coordinator";
+import { ReloadSpacer } from "./reload-spacer";
+import {
+  rateLimitWaits,
+  type RateLimitedOperation,
+} from "../../lib/rate-limit-wait";
+
+/** SEC-004: the order detail reads its row of the operations dashboard (Reporting.OperationsDashboard). */
+export const orderDetailRateLimit: readonly RateLimitedOperation[] = [
+  "dashboard",
+];
 
 interface OrderDetailRefreshResult {
   readonly detail: OperationsOrderDetail;
@@ -58,7 +68,15 @@ export function useOperationsOrderDetail(
   const apiRef = useRef<OperationsDashboardApi | null>(null);
   const sessionRef = useRef<OperationsSession | null>(null);
   const connectionRef = useRef<ManagedRealtimeConnection | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // SEC-004-RELOADS-AND-BULK-2026-10-13 (owner answer Q9): realtime notices are
+  // gathered into at most one reload every 3 seconds, and none while the
+  // server's wait for the dashboard lasts. Its reload is set from an effect.
+  const [spacer] = useState(
+    () =>
+      new ReloadSpacer<"realtime">({
+        waitLeft: () => rateLimitWaits.millisecondsLeft(orderDetailRateLimit),
+      }),
+  );
   const refreshCoordinatorRef = useRef(
     new AuthoritativeRefreshCoordinator<OrderDetailRefreshResult>(),
   );
@@ -71,6 +89,16 @@ export function useOperationsOrderDetail(
       requirement: RefreshRequirement = "normal",
     ): Promise<OrderDetailRefreshResult | null> => {
       const scope = refreshScopeRef.current;
+      // SEC-004 (owner answer Q6): while the server's wait lasts nothing is
+      // sent; the order reads once, by itself, when it ends. A realtime
+      // reconnect still reads (and fails) as before.
+      if (
+        requirement === "normal" &&
+        rateLimitWaits.isWaiting(orderDetailRateLimit)
+      ) {
+        spacer.request("realtime");
+        return null;
+      }
       try {
         return await refreshCoordinatorRef.current.request({
           requirement,
@@ -79,6 +107,7 @@ export function useOperationsOrderDetail(
             sessionRef.current === session &&
             apiRef.current === api,
           execute: async (signal) => {
+            spacer.reloaded();
             setLoading(true);
             try {
               const [detail, page] = await Promise.all([
@@ -129,6 +158,11 @@ export function useOperationsOrderDetail(
             await connectionRef.current?.stop().catch(() => undefined);
             connectionRef.current = null;
           }
+        } else if (category === "rate_limited") {
+          // SEC-004 (owner answer Q6): the common message counts down and the
+          // order stays as it was; it reads again once the wait ends.
+          setError(null);
+          spacer.request("realtime");
         } else {
           setError("No fue posible actualizar la orden.");
         }
@@ -136,26 +170,20 @@ export function useOperationsOrderDetail(
         return null;
       }
     },
-    [orderId],
+    [orderId, spacer],
   );
-
-  const schedule = useCallback(
-    (delay: number) => {
-      if (timerRef.current !== null) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => {
-        timerRef.current = null;
-        const api = apiRef.current;
-        const session = sessionRef.current;
-        if (api !== null && session !== null) void load(api, session);
-      }, delay);
-    },
-    [load],
-  );
+  useEffect(() => {
+    spacer.setReload(() => {
+      const api = apiRef.current;
+      const session = sessionRef.current;
+      if (api !== null && session !== null) void load(api, session);
+    });
+  }, [load, spacer]);
 
   const start = useCallback(async () => {
     refreshScopeRef.current += 1;
     refreshCoordinatorRef.current.cancel();
-    if (timerRef.current !== null) clearTimeout(timerRef.current);
+    spacer.cancel();
     await connectionRef.current?.stop().catch(() => undefined);
     connectionRef.current = null;
     setOrder(null);
@@ -177,8 +205,8 @@ export function useOperationsOrderDetail(
     await load(api, session);
     if (sessionRef.current !== session || blockedRef.current) return;
     const realtime = createOperationsDashboardRealtime(apiBaseUrl, session, {
-      refreshOperations: () => schedule(250),
-      refreshLocation: () => schedule(500),
+      refreshOperations: () => spacer.request("realtime", 250),
+      refreshLocation: () => spacer.request("realtime", 500),
       resynchronize: async () => {
         if (readOperationsSession() !== session) throw new Error("Session changed.");
         const result = await load(api, session, "mandatory-reconnect");
@@ -208,7 +236,7 @@ export function useOperationsOrderDetail(
     } catch {
       setConnectionState("Sin conexión");
     }
-  }, [apiBaseUrl, load, schedule]);
+  }, [apiBaseUrl, load, spacer]);
 
   useEffect(() => {
     const initial = window.setTimeout(() => void start(), 0);
@@ -239,10 +267,10 @@ export function useOperationsOrderDetail(
   useEffect(
     () => () => {
       refreshCoordinatorRef.current.cancel();
-      if (timerRef.current !== null) clearTimeout(timerRef.current);
+      spacer.cancel();
       void connectionRef.current?.stop();
     },
-    [],
+    [spacer],
   );
 
   return {
