@@ -65,7 +65,8 @@ public sealed class HttpSurfaceOpenApiCoverageTests(WebApplicationFactory<Progra
     /// declares in its endpoint metadata is declared in AI-05, and so are the ones the pipeline emits on its
     /// behalf — 503 wherever the identity context is resolved (every authorized operation) or the
     /// PLATFORM_ADMIN tenant-activation audit is written (every tenant operation), and the tenant
-    /// middleware's status for a missing or malformed X-Organization-Id header.
+    /// middleware's status for a missing or malformed X-Organization-Id header, and 429 wherever a rate-limit policy
+    /// applies (SEC-004).
     /// </summary>
     [Fact]
     public void Every_error_status_the_host_emits_is_declared_in_AI05()
@@ -73,6 +74,7 @@ public sealed class HttpSurfaceOpenApiCoverageTests(WebApplicationFactory<Progra
         var declared = ReadDeclaredResponses();
         var missing = new List<string>();
         var checkedOperations = 0;
+        var rateLimited = 0;
         foreach (var (operation, endpoint) in ReadServedEndpoints())
         {
             if (KnownUndeclaredOperations.Contains(operation, StringComparer.Ordinal))
@@ -91,6 +93,14 @@ public sealed class HttpSurfaceOpenApiCoverageTests(WebApplicationFactory<Progra
                 emitted.Add(StatusCodes.Status503ServiceUnavailable);
             }
 
+            // SEC-004: every operation under a rate-limit policy can answer 429 (the limiter writes it, not the
+            // endpoint), whatever its own metadata declares.
+            if (endpoint.Metadata.GetMetadata<Microsoft.AspNetCore.RateLimiting.EnableRateLimitingAttribute>() is not null)
+            {
+                emitted.Add(StatusCodes.Status429TooManyRequests);
+                rateLimited++;
+            }
+
             if (endpoint.Metadata.GetMetadata<Organizations.Endpoints.Tenancy.RequiresTenantContextMetadata>() is { } tenant)
             {
                 emitted.Add(StatusCodes.Status503ServiceUnavailable);
@@ -103,6 +113,8 @@ public sealed class HttpSurfaceOpenApiCoverageTests(WebApplicationFactory<Progra
         }
 
         Assert.True(checkedOperations >= 40, $"Only {checkedOperations} operations were checked.");
+        // publicTracking and publishDriverLocation; the hubs are not versioned operations (AI-12, not AI-05).
+        Assert.True(rateLimited >= 2, $"Only {rateLimited} rate-limited operations were seen.");
         Assert.Empty(missing);
 
         // The two anonymous or specially limited cases are pinned by name.
