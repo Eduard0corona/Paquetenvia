@@ -1,36 +1,5 @@
 # Changelog
 
-## Remediación de seguridad NuGet: SignalR, Cryptography.Pkcs y Cryptography.Xml a 10.0.13 (SEC-2026-12-NUGET-REMEDIATION-2026-10-13) — 2026-10-13
-
-- Respuestas literales del project owner (2026-10-13), registradas en `decision-log.md` con su contexto y las opciones
-  no elegidas:
-  - aviso de SignalR: "Remediar con la tabla (Recommended)";
-  - ampliación a Pkcs y Xml: "Los 4 en un PR (Recommended)";
-  - cómo subir Xml y Pkcs: "Fijado transitivo (Recommended)";
-  - dos avisos más de Xml: "Incluir los 6 (Recommended)".
-- Seis avisos de Microsoft del 2026-10-13, todos corregidos en 10.0.13. El tracking es el Issue #260 y la ruta es la de
-  SEC-2026-11 (PR de remediación a `main`, back-sync a `development` y retiro):
-  - `GHSA-334f-vvp4-7g6p` (SignalR.Common);
-  - `GHSA-846f-f764-76mx` y `GHSA-2fmv-rv2c-59x7` (Pkcs);
-  - `GHSA-r955-8q5j-3h83`, `GHSA-7hqp-7c5m-4vq6` y `GHSA-c399-9853-6jmj` (Xml).
-- `Directory.Packages.props`:
-  - `Microsoft.AspNetCore.SignalR.Client` pasa a 10.0.13;
-  - `CentralPackageTransitivePinningEnabled` queda activo en todo el repositorio;
-  - `System.Security.Cryptography.Pkcs` y `.Xml` se fijan en 10.0.13.
-- Los locks se regeneran con `dotnet restore --force-evaluate` y se mueven exactamente 22 nodos:
-  - IntegrationTests: los 14 paquetes SignalR más Xml y Pkcs;
-  - ContractTests, ArchitectureTests y DatabaseMigrator: Xml y Pkcs, que pasan a `CentralTransitive`.
-
-  Ningún otro lock cambia, tampoco los de la API y el Worker.
-- REL-000 agrega:
-  - la autorización `SEC-2026-12-SIGNALR-CRYPTOGRAPHY`;
-  - un validador de grafo exacto: ediciones del manifiesto en su lugar, los 16 movimientos con versiones y hashes
-    exactos, y el SHA-256 de cada lock.
-- El grafo permanente MVP-0 (`test_k`) también acepta exactamente esos movimientos (`nuget_remediations`). La evidencia
-  de liberación no lo usa, así que el modo normal y las admisiones no cambian. Nota:
-  `docs/development/rel-000-internal-release.md`.
-- Sin cambios en código de producción, migraciones, AI-04, AI-05, AI-06, AI-18, roles ni permisos.
-
 ## Límites de tasa en las pantallas del panel: mensaje con cuenta regresiva y recargas espaciadas (SEC-004-PANEL-SCREENS-2026-10-13, fase 4 PR 3, parte del panel) — 2026-10-13
 
 - Respuestas literales del project owner (2026-10-13), registradas en `decision-log.md` con su contexto y las opciones

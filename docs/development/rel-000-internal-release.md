@@ -539,7 +539,9 @@ marca explícita o se rechaza.
 `SEC-2026-12-SIGNALR-CRYPTOGRAPHY` (Issue #260, rama `fix/security-2026-12-signalr-common`, base
 `fbc77db`) es la primera remediación de seguridad sólo NuGet desde el congelamiento MVP-0. El owner
 decidió "Remediar con la tabla", "Los 4 en un PR", "Fijado transitivo" e "Incluir los 6"
-(2026-10-13, `SEC-2026-12-NUGET-REMEDIATION-2026-10-13` en el decision-log). El cambio es:
+(2026-10-13). La fila `SEC-2026-12-NUGET-REMEDIATION-2026-10-13` del decision-log y su entrada del
+CHANGELOG entran con el PR de retiro hacia `development`, como en #208. Así el PR de remediación a
+`main` no toca `docs/normative/**` y el back-sync no tiene conflictos. El cambio es:
 
 - `Microsoft.AspNetCore.SignalR.Client` pasa de 10.0.10 a 10.0.13;
 - `CentralPackageTransitivePinningEnabled` queda activo en todo el repositorio;
@@ -572,7 +574,18 @@ movimientos antes de juzgar el grafo:
 Todo lo demás se juzga como antes y cualquier otra deriva falla cerrada. Los campos del grafo
 (`NUGET_REMEDIATION_GRAPH_FIELDS`) sólo pueden aparecer en la autorización exacta de SEC-2026-12,
 activa o retirada, y sólo con exactamente sus movimientos. La evidencia de liberación nunca pasa
-`nuget_remediations`, así que el modo normal y las admisiones no cambian.
+`nuget_remediations`, así que el código del modo normal y de las admisiones no cambia.
+
+Lo que sí cambia es lo que una admisión futura puede admitir, porque el fijado transitivo queda
+activo en todo el repositorio. Dos casos fallan cerrados:
+
+- una admisión que agregue un `PackageVersion` para un paquete que ya es transitivo en algún lock
+  convierte ese nodo de `Transitive` en `CentralTransitive`, y `_existing_lock_admitted_diff` lo
+  rechaza con `DEPENDENCY_ADMISSION_BASELINE_PACKAGE_CHANGED`;
+- un consumidor nuevo de Xml o Pkcs en un lock que hoy no los tiene también falla: ADP-001 los admitió
+  sólo en 10.0.10 y como transitivos, y el nodo nuevo es 10.0.13 `CentralTransitive`.
+
+Esos casos necesitan una regla nueva del owner.
 
 ## Rollback REL-000
 

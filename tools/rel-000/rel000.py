@@ -271,15 +271,12 @@ SIGNALR_CRYPTOGRAPHY_LOCK_FILES = [
     _SIGNALR_CRYPTOGRAPHY_INTEGRATION_LOCK,
     "tools/Paqueteria.DatabaseMigrator/packages.lock.json",
 ]
+# A main-direct remediation leaves docs/normative/** untouched, so the back-sync merges
+# cleanly; the decision-log row and CHANGELOG entry go in with the retirement.
 SIGNALR_CRYPTOGRAPHY_NON_DEPENDENCY_FILES = [
     ".github/workflows/ci.yml",
     ".github/workflows/pr-validation.yml",
     "docs/development/rel-000-internal-release.md",
-    "docs/normative/v0.6/CHANGELOG.md",
-    "docs/normative/v0.6/CHECKSUMS_SHA256.txt",
-    "docs/normative/v0.6/MANIFEST.json",
-    "docs/normative/v0.6/decision-log.md",
-    "tests/Paqueteria.ArchitectureTests/SyntheticEnvironmentArchitectureTests.cs",
     "tests/fixtures/rel-000/security-tracking.json",
     "tools/rel-000/rel000.py",
     "tools/rel-000/security-remediation-policy.json",

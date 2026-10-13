@@ -9068,6 +9068,13 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
             {("10.0.10", "10.0.13")},
             {(move["from_version"], move["to_version"]) for move in moves.values()},
         )
+        self.assertFalse(
+            [
+                path
+                for path in authorization["allowed_non_dependency_files"]
+                if path.startswith("docs/normative/") or path.endswith(".cs")
+            ]
+        )
         mutations = [
             lambda item: item.update(tracked_issue=205),
             lambda item: item.update(tracked_issue_title="SEC-2026-12: something else"),
@@ -9096,6 +9103,9 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
             lambda item: item["required_dependency_files"].pop(),
             lambda item: item["allowed_non_dependency_files"].append(
                 "src/Paqueteria.Api/Program.cs"
+            ),
+            lambda item: item["allowed_non_dependency_files"].append(
+                "docs/normative/v0.6/decision-log.md"
             ),
             lambda item: item["expected_central_version_changes"][
                 "Microsoft.AspNetCore.SignalR.Client"
@@ -9151,28 +9161,52 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
                         "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
                     )
         # Retired, the entry still declares exactly this graph (the permanent check reads
-        # it), so a historical copy with any other move fails closed as well.
-        retired = copy.deepcopy(authorization)
-        retired["status"] = "MERGED"
-        retired["expected_nuget_package_moves"]["Microsoft.Extensions.Options"][
-            "to_version"
-        ] = "10.0.14"
-        value = copy.deepcopy(self.policy_value)
-        value["active_remediations"] = [
-            item
-            for item in value["active_remediations"]
-            if item["id"] != rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID
-        ]
-        value["historical_remediations"].append(retired)
-        path = self.root / "retired.json"
-        path.write_text(json.dumps(value), encoding="utf-8")
-        self.assert_reason(
-            "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
-        )
-        retired["expected_nuget_package_moves"] = copy.deepcopy(
-            authorization["expected_nuget_package_moves"]
-        )
-        path.write_text(json.dumps(value), encoding="utf-8")
+        # it), so a historical copy with any other move or central edit fails closed too.
+        def retired_policy(mutate) -> Path:
+            retired = copy.deepcopy(authorization)
+            retired["status"] = "MERGED"
+            mutate(retired)
+            value = copy.deepcopy(self.policy_value)
+            value["active_remediations"] = [
+                item
+                for item in value["active_remediations"]
+                if item["id"] != rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID
+            ]
+            value["historical_remediations"].append(retired)
+            path = self.root / "retired.json"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            return path
+
+        for name, mutate in (
+            (
+                "other move",
+                lambda item: item["expected_nuget_package_moves"][
+                    "Microsoft.Extensions.Options"
+                ].update(to_version="10.0.14"),
+            ),
+            (
+                "other central change",
+                lambda item: item["expected_central_version_changes"][
+                    "Microsoft.AspNetCore.SignalR.Client"
+                ].update(to="10.0.14"),
+            ),
+            (
+                "other central addition",
+                lambda item: item["expected_central_version_additions"][1].update(
+                    version="10.0.14"
+                ),
+            ),
+            (
+                "pinning not required",
+                lambda item: item.update(central_package_transitive_pinning_required=False),
+            ),
+        ):
+            with self.subTest(retired=name):
+                path = retired_policy(mutate)
+                self.assert_reason(
+                    "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+                )
+        path = retired_policy(lambda item: None)
         self.assertEqual(
             [rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID],
             [
@@ -9194,14 +9228,21 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
         self.assertFalse(result["dependency_workspace_changed"])
 
     def test_file_outside_allowlist_is_rejected(self):
-        root, base, authorization = self.dependency_repo()
-        path = root / "src/Paqueteria.Api/Program.cs"
-        path.parent.mkdir(parents=True)
-        path.write_text("// drift\n", encoding="utf-8")
-        self.assert_reason(
-            "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
-            lambda: self.validate_dependency(root, base, authorization),
-        )
+        for relative in (
+            "src/Paqueteria.Api/Program.cs",
+            # A main-direct remediation never touches docs/normative/**, so the back-sync
+            # merges cleanly; the decision-log row goes in with the retirement.
+            "docs/normative/v0.6/decision-log.md",
+        ):
+            with self.subTest(file=relative):
+                root, base, authorization = self.dependency_repo()
+                path = root / relative
+                path.parent.mkdir(parents=True)
+                path.write_text("drift\n", encoding="utf-8")
+                self.assert_reason(
+                    "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
         # Another lockfile is a dependency file outside the authorization.
         root, base, authorization = self.dependency_repo()
         path = root / "src/Paqueteria.Api/packages.lock.json"
@@ -9417,6 +9458,30 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
         self.assertEqual(
             "x", reverted["dependencies"]["net10.0"]["Microsoft.Extensions.Logging"]["contentHash"]
         )
+        # A pinned package that a later change turns Direct, or requests differently, is not
+        # this remediation's node: it stays as it is, so test_k judges it and fails closed.
+        for name, changes in (
+            ("later Direct", {"type": "Direct"}),
+            ("other request", {"requested": "[10.0.12, )"}),
+        ):
+            with self.subTest(xml=name):
+                current = json.loads(self.target_file(self.INTEGRATION_LOCK))
+                xml = current["dependencies"]["net10.0"]["System.Security.Cryptography.Xml"]
+                xml.update(changes)
+                kept = copy.deepcopy(xml)
+                reverted = rel000.nuget_remediation_reverted_lock(
+                    self.INTEGRATION_LOCK, current, moves
+                )
+                self.assertEqual(
+                    kept,
+                    reverted["dependencies"]["net10.0"]["System.Security.Cryptography.Xml"],
+                )
+                self.assertEqual(
+                    "10.0.10",
+                    reverted["dependencies"]["net10.0"]["System.Security.Cryptography.Pkcs"][
+                        "resolved"
+                    ],
+                )
         self.assertEqual(
             "10.0.10",
             reverted["dependencies"]["net10.0"]["Microsoft.Extensions.Options"]["resolved"],
