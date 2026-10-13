@@ -1,5 +1,21 @@
 # Changelog
 
+## OBS-003: admisión explícita de los paquetes de telemetría (OBS-003-DEPENDENCY-ADMISSION-2026-10-13) — 2026-10-13
+
+- Preguntas y respuestas literales del project owner (2026-10-13), registradas en `decision-log.md`:
+  - "¿Admites explícitamente esta lista exacta de paquetes (12 nuevos y 6 subidas, con las versiones y hashes de la
+    tabla) para la telemetría OBS-003?" → "Sí, admito la lista (Recommended)".
+  - Como esa pregunta se hizo antes de mostrar la tabla, se mostró la tabla (id, versión o subida y los primeros 16
+    caracteres del hash SHA-512 de cada paquete) y se volvió a preguntar: "Te pedí la admisión antes de mostrarte la
+    tabla. Con la tabla de arriba a la vista (12 nuevos y 6 subidas, con esas versiones y hashes), ¿confirmas que tu
+    admisión es exactamente esta lista?" → "Sí, confirmo esta tabla (Recommended)".
+- Quedan admitidos exactamente los paquetes de la entrada `OBS-003-OPENTELEMETRY` de
+  `tools/rel-000/security-remediation-policy.json`: 2 directos, 10 transitivos (5 `Microsoft.Extensions.*` solo en el
+  lock de ArchitectureTests) y 6 subidas de paquetes que ya admitió ADP-001-AZURE (Azure.Core 1.61.0 → 1.63.0 y las
+  cinco que arrastra).
+- Ningún paquete, lock file ni código cambia con esta fila: entran solo por el PR de dependencias desde
+  `deps/obs-003-opentelemetry` hacia `main` (GOV-DEPENDENCY-ROUTE-001, fase 4 PR 5).
+
 ## REL-000: subidas encadenadas entre admisiones de dependencias (GOV-REL000-CHAINED-UPGRADES-2026-10-12, OBS-003-TEST-EXTENSIONS-ADMISSION-2026-10-12) — 2026-10-12
 
 - Preguntas y respuestas literales del project owner (2026-10-12), registradas en `decision-log.md`:
