@@ -259,14 +259,16 @@ public sealed class AddOutboxTraceContext : Migration
 
         DO $obs003_trace_downgrade$
         BEGIN
-          IF to_regclass('platform.__ef_migrations_history_notifications') IS NOT NULL
-             AND EXISTS (
-               SELECT 1 FROM platform.__ef_migrations_history_notifications
-               WHERE "MigrationId"='{{NotificationsStepMigrationId}}') THEN
-            RAISE EXCEPTION USING
-              MESSAGE = '{{DowngradeOrderRefused}}',
-              DETAIL = 'Roll the Notifications lane step {{NotificationsStepMigrationId}} back first; its functions write platform.outbox_events.trace_parent.',
-              ERRCODE = 'P0001';
+          -- Nested so the history table is named only once it is known to exist (PL/pgSQL plans a condition whole).
+          IF to_regclass('platform.__ef_migrations_history_notifications') IS NOT NULL THEN
+            IF EXISTS (
+                 SELECT 1 FROM platform.__ef_migrations_history_notifications
+                 WHERE "MigrationId"='{{NotificationsStepMigrationId}}') THEN
+              RAISE EXCEPTION USING
+                MESSAGE = '{{DowngradeOrderRefused}}',
+                DETAIL = 'Roll the Notifications lane step {{NotificationsStepMigrationId}} back first; its functions write platform.outbox_events.trace_parent.',
+                ERRCODE = 'P0001';
+            END IF;
           END IF;
         END
         $obs003_trace_downgrade$;

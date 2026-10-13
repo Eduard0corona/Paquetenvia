@@ -326,8 +326,9 @@ public sealed class OutboxTraceContextPostgreSqlContractTests(PostgreSqlContract
             await using var connection = new NpgsqlConnection(connectionString);
             await connection.OpenAsync();
             var installed = await CatalogAsync(connection);
-            Assert.Contains("column:location_outbox_events.trace_parent:text:nullable", installed);
-            Assert.Contains("column:outbox_events.trace_parent:text:nullable", installed);
+            // Each column line ends with its default expression, '-' for none.
+            Assert.Contains("column:location_outbox_events.trace_parent:text:nullable:-", installed);
+            Assert.Contains("column:outbox_events.trace_parent:text:nullable:-", installed);
             Assert.Contains("column-acl:outbox_events.trace_parent:paqueteria_operator_outbox_executor:INSERT:false", installed);
             Assert.Equal(3, installed.Count(line => line.StartsWith("function:", StringComparison.Ordinal) && line.EndsWith(":trace", StringComparison.Ordinal)));
 
