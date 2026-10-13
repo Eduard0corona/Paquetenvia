@@ -1,5 +1,26 @@
 # Changelog
 
+## Espera adaptativa de los avisos en tiempo real (SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13, fase 4 PR 9) — 2026-10-13
+
+- Respuesta literal del project owner (2026-10-13), registrada en `decision-log.md` con su contexto y las opciones no
+  elegidas: "1 segundo en ambos (Recommended)" ("Negocio y ubicación esperan como máximo 1 s. Sin trabajo bajan de unas
+  6 a 2 consultas por segundo; el primer aviso después de un rato sin trabajo tarda hasta 1 s más, dentro de los 2 s de
+  AI-15.").
+- Los despachadores de tiempo real de la API (lanes de negocio y de ubicación) vuelven a reclamar de inmediato cuando un
+  claim trae trabajo, lleno o parcial, y vuelven a empezar. Tras un claim vacío esperan su intervalo de poll y duplican
+  la espera con cada claim vacío siguiente, hasta 1 s: negocio 250 ms, 500 ms y 1 s; ubicación 500 ms y 1 s. Sin
+  trabajo pasan de unas 6 a unas 2 consultas por segundo. Cada lane tiene su propia espera.
+- Configuración validada al arrancar: `Realtime:OutboxDispatcher:Business:MaximumIdleWaitMilliseconds` y
+  `Realtime:OutboxDispatcher:Location:MaximumIdleWaitMilliseconds`, 1000 por defecto. Un valor menor que el intervalo de
+  poll del lane, mayor que 1000 ms (la mitad del aviso `event_delivery_p95_seconds` de AI-15, 2 s) o que no sea un
+  número impide arrancar la API.
+- Se mantienen el latido por minuto de `OutboxLaneSummary` (OBS-002), el aviso `oldest_outbox_age_seconds` de AI-15
+  (60 s) y el de `event_delivery_p95_seconds` (2 s). `MaxClaimAgeMs` ya incluye la espera: se mide al volver el claim.
+- Solo se usan las funciones existentes de claim, settle y requeue con `lease_token`. Los pollers del Worker no cambian.
+- AI-08 SCL-007 registra la decisión, los límites y la prueba de entrega tras un rato sin trabajo. Sin cambios en
+  AI-04, AI-05, AI-06, AI-12, AI-13, AI-15, AI-18, AI-24, SQL, permisos, migraciones, secretos, Bicep ni paquetes. Nota:
+  `docs/development/scl-007-adaptive-outbox-wait.md`.
+
 ## Un pool de conexiones por rol (SCL-007-POOL-PER-ROLE-2026-10-13, fase 4 PR 8) — 2026-10-13
 
 - Aplica la fase 4 aprobada; no hay pregunta nueva al owner. Respuesta literal del owner

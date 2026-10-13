@@ -13,6 +13,7 @@ internal sealed class BusinessOutboxDispatcher(
     RealtimeOutboxTelemetry telemetry,
     IOptions<OutboxDispatcherOptions> options,
     OutboxLaneMonitor lanes,
+    TimeProvider timeProvider,
     ILogger<BusinessOutboxDispatcher> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -35,6 +36,8 @@ internal sealed class BusinessOutboxDispatcher(
             "business",
             "postgresql");
         var lane = options.Value.Business;
+        // SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13: this lane's own wait between claims.
+        var idle = new OutboxIdleWait(lane);
         var nextRequeue = DateTimeOffset.MinValue;
         try
         {
@@ -46,7 +49,7 @@ internal sealed class BusinessOutboxDispatcher(
                 using var batch = telemetry.MeasureBatch("business");
                 try
                 {
-                    if (DateTimeOffset.UtcNow >= nextRequeue)
+                    if (timeProvider.GetUtcNow() >= nextRequeue)
                     {
                         var count = await store.RequeueStaleBusinessAsync(
                             lane.BatchSize,
@@ -61,7 +64,7 @@ internal sealed class BusinessOutboxDispatcher(
                                 "requeued");
                         }
 
-                        nextRequeue = DateTimeOffset.UtcNow.AddSeconds(
+                        nextRequeue = timeProvider.GetUtcNow().AddSeconds(
                             options.Value.StaleRequeueIntervalSeconds);
                     }
 
@@ -78,9 +81,12 @@ internal sealed class BusinessOutboxDispatcher(
                         RealtimeOutboxLanes.Monitored("business"),
                         messages.Count,
                         messages.Count == 0 ? null : messages.Min(static message => message.AvailableAt));
+                    var wait = idle.After(messages.Count);
                     if (messages.Count == 0)
                     {
-                        await Task.Delay(lane.PollIntervalMilliseconds, stoppingToken);
+                        // SCL-007: the batch duration measures the iteration's work, never the wait.
+                        batch.Dispose();
+                        await Task.Delay(wait, timeProvider, stoppingToken);
                         continue;
                     }
 
@@ -105,7 +111,8 @@ internal sealed class BusinessOutboxDispatcher(
                         "realtime_outbox_message_failed lane={Lane} error_class={ErrorClass}",
                         "business",
                         "DATABASE_TRANSIENT");
-                    await Task.Delay(lane.PollIntervalMilliseconds, stoppingToken);
+                    batch.Dispose();
+                    await Task.Delay(idle.Shortest, timeProvider, stoppingToken);
                 }
             }
         }
@@ -125,6 +132,7 @@ internal sealed class LocationOutboxDispatcher(
     RealtimeOutboxTelemetry telemetry,
     IOptions<OutboxDispatcherOptions> options,
     OutboxLaneMonitor lanes,
+    TimeProvider timeProvider,
     ILogger<LocationOutboxDispatcher> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -147,6 +155,8 @@ internal sealed class LocationOutboxDispatcher(
             "location",
             "postgresql");
         var lane = options.Value.Location;
+        // SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13: this lane's own wait between claims.
+        var idle = new OutboxIdleWait(lane);
         var nextRequeue = DateTimeOffset.MinValue;
         try
         {
@@ -158,7 +168,7 @@ internal sealed class LocationOutboxDispatcher(
                 using var batch = telemetry.MeasureBatch("location");
                 try
                 {
-                    if (DateTimeOffset.UtcNow >= nextRequeue)
+                    if (timeProvider.GetUtcNow() >= nextRequeue)
                     {
                         var count = await store.RequeueStaleLocationAsync(
                             lane.BatchSize,
@@ -173,7 +183,7 @@ internal sealed class LocationOutboxDispatcher(
                                 "requeued");
                         }
 
-                        nextRequeue = DateTimeOffset.UtcNow.AddSeconds(
+                        nextRequeue = timeProvider.GetUtcNow().AddSeconds(
                             options.Value.StaleRequeueIntervalSeconds);
                     }
 
@@ -190,9 +200,12 @@ internal sealed class LocationOutboxDispatcher(
                         RealtimeOutboxLanes.Monitored("location"),
                         messages.Count,
                         messages.Count == 0 ? null : messages.Min(static message => message.AvailableAt));
+                    var wait = idle.After(messages.Count);
                     if (messages.Count == 0)
                     {
-                        await Task.Delay(lane.PollIntervalMilliseconds, stoppingToken);
+                        // SCL-007: the batch duration measures the iteration's work, never the wait.
+                        batch.Dispose();
+                        await Task.Delay(wait, timeProvider, stoppingToken);
                         continue;
                     }
 
@@ -217,7 +230,8 @@ internal sealed class LocationOutboxDispatcher(
                         "realtime_outbox_message_failed lane={Lane} error_class={ErrorClass}",
                         "location",
                         "DATABASE_TRANSIENT");
-                    await Task.Delay(lane.PollIntervalMilliseconds, stoppingToken);
+                    batch.Dispose();
+                    await Task.Delay(idle.Shortest, timeProvider, stoppingToken);
                 }
             }
         }
