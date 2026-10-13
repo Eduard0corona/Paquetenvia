@@ -1,13 +1,15 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
 using Orders.Application.Tracking;
+using Paqueteria.Infrastructure.Database.Pooling;
 
 namespace Orders.Infrastructure.Tracking;
 
 public sealed class PostgreSqlPublicTrackingProjectionReader(
-    NpgsqlDataSource dataSource,
+    [FromKeyedServices(RuntimeDatabaseRole.Application)] NpgsqlDataSource dataSource,
     IOptions<PublicTrackingOptions> options,
     ILogger<PostgreSqlPublicTrackingProjectionReader> logger,
     IPublicTrackingTelemetry telemetry) : IPublicTrackingProjectionReader

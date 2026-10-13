@@ -206,19 +206,20 @@ public sealed class Scl001StatelessDistributedContractTests(PostgreSqlContractFi
         string applicationName,
         string runtimeRole = DataProtectionRuntimeRoles.Application)
     {
-        var connectionString = runtimeRole == DataProtectionRuntimeRoles.Worker
-            ? fixture.WorkerConnectionString
-            : fixture.AppConnectionString;
+        // SCL-007: each role reads the key ring through its own pool, paired with its own connection name.
+        var worker = runtimeRole == DataProtectionRuntimeRoles.Worker;
+        var connectionName = worker ? "PaqueteriaWorker" : "Paqueteria";
         var configuration = new ConfigurationBuilder()
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["DataProtection:Provider"] = "PostgreSql",
                 ["DataProtection:ApplicationName"] = applicationName,
-                ["DataProtection:ConnectionStringName"] = "Paqueteria",
+                ["DataProtection:ConnectionStringName"] = connectionName,
                 ["DataProtection:RuntimeRole"] = runtimeRole,
                 ["DataProtection:KeyLifetimeDays"] = "90",
                 ["DataProtection:CommandTimeoutSeconds"] = "15",
-                ["ConnectionStrings:Paqueteria"] = connectionString,
+                [$"ConnectionStrings:{connectionName}"] =
+                    worker ? fixture.WorkerConnectionString : fixture.AppConnectionString,
             })
             .Build();
         var services = new ServiceCollection();

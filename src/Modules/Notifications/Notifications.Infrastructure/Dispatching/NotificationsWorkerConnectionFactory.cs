@@ -1,16 +1,13 @@
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
+using Paqueteria.Infrastructure.Database.Pooling;
 
 namespace Notifications.Infrastructure.Dispatching;
 
-internal sealed class NotificationsWorkerConnectionFactory(string connectionString) : IAsyncDisposable
+/// <summary>SCL-007: the Worker's one <c>paqueteria_worker</c> pool, shared with every other Worker module.</summary>
+internal sealed class NotificationsWorkerConnectionFactory(
+    [FromKeyedServices(RuntimeDatabaseRole.Worker)] RuntimeDataSource pool)
 {
-    private readonly NpgsqlDataSource _dataSource = NpgsqlDataSource.Create(
-        !string.IsNullOrWhiteSpace(connectionString)
-            ? connectionString
-            : "Host=127.0.0.1;Database=disabled;Username=disabled;Password=disabled");
-
     public ValueTask<NpgsqlConnection> OpenAsync(CancellationToken cancellationToken) =>
-        _dataSource.OpenConnectionAsync(cancellationToken);
-
-    public ValueTask DisposeAsync() => _dataSource.DisposeAsync();
+        pool.OpenConnectionAsync(cancellationToken);
 }

@@ -1,5 +1,7 @@
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using NpgsqlTypes;
+using Paqueteria.Infrastructure.Database.Pooling;
 
 namespace Paqueteria.Infrastructure.Database.Outbox.Retention;
 
@@ -28,26 +30,9 @@ internal interface IOutboxPurgeGateway
     Task<int> CountDeadEligibleAsync(OutboxRetentionLane lane, DateTimeOffset deadBefore, int limit, CancellationToken cancellationToken);
 }
 
-/// <summary>
-/// Owns the Worker-login pool used by the retention job, apart from the tenant-scoped data
-/// sources registered by the modules.
-/// </summary>
-internal sealed class OutboxRetentionDataSource(string connectionString) : IAsyncDisposable
-{
-    private readonly Lazy<NpgsqlDataSource> _dataSource = new(() => NpgsqlDataSource.Create(
-        !string.IsNullOrWhiteSpace(connectionString)
-            ? connectionString
-            : throw new InvalidOperationException(
-                $"ConnectionStrings:{OutboxRetentionOptions.ConnectionStringName} is required when OutboxRetention:Enabled=true.")));
-
-    public NpgsqlDataSource Value => _dataSource.Value;
-
-    public ValueTask DisposeAsync() =>
-        _dataSource.IsValueCreated ? _dataSource.Value.DisposeAsync() : ValueTask.CompletedTask;
-}
-
+/// <summary>SCL-007: purges through the Worker's one shared <c>paqueteria_worker</c> pool.</summary>
 internal sealed class PostgreSqlOutboxPurgeGateway(
-    OutboxRetentionDataSource dataSource,
+    [FromKeyedServices(RuntimeDatabaseRole.Worker)] RuntimeDataSource dataSource,
     int commandTimeoutSeconds) : IOutboxPurgeGateway
 {
     // The Worker login is NOINHERIT; EXECUTE on the purge functions belongs to this role alone.
@@ -95,7 +80,7 @@ internal sealed class PostgreSqlOutboxPurgeGateway(
 
         // One short transaction per batch: row locks are released between batches, and a batch
         // interrupted by cancellation or failure rolls back as a unit.
-        await using var connection = await dataSource.Value.OpenConnectionAsync(cancellationToken);
+        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using (var role = new NpgsqlCommand($"SET LOCAL ROLE {RuntimeRole}", connection, transaction))
         {

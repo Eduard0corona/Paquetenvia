@@ -1,5 +1,6 @@
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Paqueteria.IntegrationTests.Security;
 using Realtime.Application.Configuration;
 using Realtime.Infrastructure.Dispatching;
@@ -195,7 +196,9 @@ public sealed class RealtimeOutboxReadinessPostgreSqlTests(
     public async Task Disabled_provider_is_degraded_without_opening_or_changing_outbox()
     {
         var before = await database.ReadOutboxStateSnapshotAsync();
-        await using var connections = new RealtimeDispatcherConnectionFactory(string.Empty);
+        await using var realtimePool = RuntimeDataSource.Create(
+            RuntimeDatabaseRole.Realtime, string.Empty, maximumPoolSize: 4);
+        var connections = new RealtimeDispatcherConnectionFactory(realtimePool);
         var health = new RealtimeOutboxHealthCheck(
             connections,
             Options.Create(new RealtimeOptions()),
@@ -212,7 +215,9 @@ public sealed class RealtimeOutboxReadinessPostgreSqlTests(
 
     private static async Task<HealthCheckResult> CheckAsync(string connectionString)
     {
-        await using var connections = new RealtimeDispatcherConnectionFactory(connectionString);
+        await using var realtimePool = RuntimeDataSource.Create(
+            RuntimeDatabaseRole.Realtime, connectionString, maximumPoolSize: 4);
+        var connections = new RealtimeDispatcherConnectionFactory(realtimePool);
         var health = new RealtimeOutboxHealthCheck(
             connections,
             Options.Create(new RealtimeOptions

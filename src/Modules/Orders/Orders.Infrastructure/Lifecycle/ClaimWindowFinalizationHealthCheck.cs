@@ -1,6 +1,8 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Paqueteria.Infrastructure.Database.Pooling;
 
 namespace Orders.Infrastructure.Lifecycle;
 
@@ -46,13 +48,11 @@ internal sealed class ClaimWindowFinalizationHealthCheck(
     }
 }
 
-/// <summary>Owns the Worker-credential data source so it never collides with the API's.</summary>
-internal sealed class OrdersWorkerDataSource(string connectionString) : IAsyncDisposable
+/// <summary>
+/// The Worker credential of the Orders jobs, never the API's. SCL-007: the Worker's one <c>paqueteria_worker</c> pool,
+/// shared with every other Worker module and built on first use.
+/// </summary>
+internal sealed class OrdersWorkerDataSource([FromKeyedServices(RuntimeDatabaseRole.Worker)] RuntimeDataSource pool)
 {
-    public NpgsqlDataSource DataSource { get; } = NpgsqlDataSource.Create(
-        !string.IsNullOrWhiteSpace(connectionString)
-            ? connectionString
-            : "Host=127.0.0.1;Database=disabled;Username=disabled;Password=disabled");
-
-    public ValueTask DisposeAsync() => DataSource.DisposeAsync();
+    public NpgsqlDataSource DataSource => pool.DataSource;
 }

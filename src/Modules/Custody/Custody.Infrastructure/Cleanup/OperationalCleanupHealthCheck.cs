@@ -1,6 +1,8 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Paqueteria.Infrastructure.Database.Pooling;
 
 namespace Custody.Infrastructure.Cleanup;
 
@@ -9,7 +11,7 @@ namespace Custody.Infrastructure.Cleanup;
 /// reads catalog privileges and never calls a cleanup function.
 /// </summary>
 internal sealed class OperationalCleanupHealthCheck(
-    OperationalCleanupDataSource dataSource,
+    [FromKeyedServices(RuntimeDatabaseRole.Worker)] RuntimeDataSource dataSource,
     IOptions<OperationalCleanupOptions> options) : IHealthCheck
 {
     public async Task<HealthCheckResult> CheckHealthAsync(
@@ -24,7 +26,7 @@ internal sealed class OperationalCleanupHealthCheck(
 
         try
         {
-            await using var connection = await dataSource.Value.OpenConnectionAsync(cancellationToken);
+            await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
             await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
             await using (var role = new NpgsqlCommand("SET LOCAL ROLE paqueteria_worker;", connection, transaction))
             {

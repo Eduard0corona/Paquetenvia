@@ -3,6 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Paqueteria.Application.Scheduling;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Paqueteria.Infrastructure.Scheduling;
 
 namespace Paqueteria.Infrastructure.Database.Outbox.Retention;
@@ -32,10 +33,10 @@ public static class DependencyInjection
             ServiceDescriptor.Singleton<IValidateOptions<OutboxRetentionOptions>, OutboxRetentionOptionsValidator>());
 
         services.TryAddSingleton(TimeProvider.System);
-        services.AddSingleton(_ => new OutboxRetentionDataSource(
-            configuration.GetConnectionString(OutboxRetentionOptions.ConnectionStringName) ?? string.Empty));
+        // SCL-007: the Worker's one paqueteria_worker pool, shared with every other Worker module.
+        services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Worker);
         services.AddSingleton<IOutboxPurgeGateway>(serviceProvider => new PostgreSqlOutboxPurgeGateway(
-            serviceProvider.GetRequiredService<OutboxRetentionDataSource>(),
+            serviceProvider.GetRequiredKeyedService<RuntimeDataSource>(RuntimeDatabaseRole.Worker),
             serviceProvider.GetRequiredService<IOptions<OutboxRetentionOptions>>().Value.CommandTimeoutSeconds));
         services.AddSingleton<OutboxRetentionTelemetry>();
         services.AddSingleton<OutboxRetentionService>();

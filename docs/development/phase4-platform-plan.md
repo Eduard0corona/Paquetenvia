@@ -212,6 +212,9 @@ la de la petición que lo originó. Si el owner elige esa opción, el PR 7 revis
 
 ### PR 8: un pool de conexiones por rol (SCL-007)
 
+Lo aplicado está en `docs/development/scl-007-pool-per-role.md` (`SCL-007-POOL-PER-ROLE-2026-10-13`): tres pools
+(`paqueteria_app` y `paqueteria_realtime` en la API, `paqueteria_worker` en el Worker), 10 + 4 + 10 = 24 conexiones.
+
 - Un `NpgsqlDataSource` por rol de base de datos en cada proceso (`paqueteria_app` en la API, `paqueteria_worker` en el
   Worker), compartido por todos los módulos, en lugar de los 22 actuales.
 - Presupuesto de conexiones: la suma de los máximos configurados queda debajo del límite del B1ms (unas 50), con margen

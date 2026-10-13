@@ -1,6 +1,8 @@
 using System.Globalization;
+using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using NpgsqlTypes;
+using Paqueteria.Infrastructure.Database.Pooling;
 
 namespace Dispatch.Infrastructure.Lifecycle;
 
@@ -18,20 +20,17 @@ public sealed record ClaimedDispatchOutboxMessage(
     DateTimeOffset LeaseExpiresAt,
     DateTimeOffset? AvailableAt = null);
 
-/// <summary>Connection source for the Worker credential; every scope runs as paqueteria_worker.</summary>
-public sealed class DispatchWorkerConnectionFactory(string connectionString) : IAsyncDisposable
+/// <summary>
+/// Connection source for the Worker credential; every scope runs as paqueteria_worker. SCL-007: the Worker's one
+/// <c>paqueteria_worker</c> pool, shared with every other Worker module.
+/// </summary>
+public sealed class DispatchWorkerConnectionFactory(
+    [FromKeyedServices(RuntimeDatabaseRole.Worker)] RuntimeDataSource pool)
 {
-    private readonly NpgsqlDataSource _dataSource = NpgsqlDataSource.Create(
-        !string.IsNullOrWhiteSpace(connectionString)
-            ? connectionString
-            : "Host=127.0.0.1;Database=disabled;Username=disabled;Password=disabled");
-
-    public NpgsqlDataSource DataSource => _dataSource;
+    public NpgsqlDataSource DataSource => pool.DataSource;
 
     public ValueTask<NpgsqlConnection> OpenAsync(CancellationToken cancellationToken) =>
-        _dataSource.OpenConnectionAsync(cancellationToken);
-
-    public ValueTask DisposeAsync() => _dataSource.DisposeAsync();
+        pool.OpenConnectionAsync(cancellationToken);
 
     internal static async Task SetWorkerRoleAsync(
         NpgsqlConnection connection,

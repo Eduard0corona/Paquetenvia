@@ -7,6 +7,7 @@ using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
 using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Paqueteria.Infrastructure.Observability;
 using Paqueteria.Infrastructure.Tenancy;
 
@@ -30,8 +31,8 @@ public static class AssignmentLifecycleServiceCollectionExtensions
                     !string.IsNullOrWhiteSpace(configuration.GetConnectionString("PaqueteriaWorker")),
                 "Dispatch:AssignmentLifecycle:Provider=PostgreSql requires ConnectionStrings:PaqueteriaWorker.")
             .ValidateOnStart();
-        services.AddSingleton(_ => new DispatchWorkerConnectionFactory(
-            configuration.GetConnectionString("PaqueteriaWorker") ?? string.Empty));
+        services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Worker);
+        services.TryAddSingleton<DispatchWorkerConnectionFactory>();
         services.TryAddSingleton<IClock, SystemClock>();
         services.TryAddSingleton<IAuditPayloadRedactor, AuditPayloadRedactor>();
         services.AddSingleton<IDispatchOutboxStore, PostgreSqlDispatchOutboxStore>();

@@ -1,9 +1,16 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Npgsql;
+using Paqueteria.Infrastructure.Database.Pooling;
 
 namespace Custody.Infrastructure.Proofs;
 
-public sealed class CustodyWorkerReadinessHealthCheck(NpgsqlDataSource dataSource) : IHealthCheck
+/// <summary>
+/// Ready only when the Worker's shared <c>paqueteria_worker</c> pool (SCL-007) assumes <c>paqueteria_worker</c> and that
+/// role does not bypass row level security.
+/// </summary>
+public sealed class CustodyWorkerReadinessHealthCheck(
+    [FromKeyedServices(RuntimeDatabaseRole.Worker)] RuntimeDataSource dataSource) : IHealthCheck
 {
     public async Task<HealthCheckResult> CheckHealthAsync(
         HealthCheckContext context,
