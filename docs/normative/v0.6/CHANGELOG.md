@@ -1,5 +1,23 @@
 # Changelog
 
+## Recargas del panel y asignación en lote ante los límites (SEC-004-RELOADS-AND-BULK-2026-10-13, fase 4 PR 3) — 2026-10-13
+
+- Respuestas literales del project owner (2026-10-13), registradas en `decision-log.md` con su contexto: la premisa
+  de Q3 ("se refrescan cada 30 segundos") estaba incompleta, porque el tablero y la bandeja también recargan con cada
+  aviso en tiempo real y cada recarga lee los conteos.
+  - Q9, tablero y conteos: "Espaciar recargas (Recommended)" ("El panel junta los avisos y recarga como máximo cada 3
+    segundos por pestaña. Los límites de 60/min no cambian. Los cambios se ven hasta 3 segundos después. Va en el PR de
+    pantallas del panel.").
+  - Q10, repartidores asignables: "Dejarlo en 60/min (Recommended)" ("En el piloto, tres lotes de 20 en un minuto es
+    raro. Si pasa, el panel pide esperar unos segundos. Se revisa con las métricas en 2 semanas.").
+- Ningún número cambia: tablero, conteos y repartidores asignables siguen en 60 por minuto por usuario.
+- El espaciado de 3 segundos por pestaña sale en el PR de pantallas del panel (la parte web del PR 3). Hasta que se
+  fusione, una ráfaga de avisos (una asignación en lote, la confirmación de un CSV) todavía puede gastar esos cupos.
+- La asignación en lote sigue leyendo los repartidores de cada orden por separado: un lote de 20 órdenes usa al menos
+  20 de los 60 por minuto. Se revisa con el evento 4604 en 2 semanas.
+- Sin cambios en AI-04, AI-05, AI-06, AI-07, AI-18, roles, permisos, migraciones ni paquetes. Nota:
+  `docs/development/sec-004-heavy-endpoint-limits.md` (riesgos residuales).
+
 ## Límites de tasa en los endpoints pesados: servidor, contratos y app del repartidor (SEC-004, fase 4 PR 3) — 2026-10-13
 
 - Respuestas literales del project owner (2026-10-12 y 2026-10-13), registradas en `decision-log.md`:

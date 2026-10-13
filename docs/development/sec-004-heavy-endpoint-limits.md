@@ -12,8 +12,11 @@ PR 3 ships in two pull requests. This one contains:
 - the per-minute log summary;
 - the driver app's wait.
 
-The panel part (the message and the button countdown on each limited screen, and their AI-07 entries) follows in its
-own pull request.
+Next, in the panel part's own pull request:
+
+- the message and the button countdown on each limited screen, and their AI-07 entries;
+- the realtime reload spacing (owner answer Q9): the panel gathers realtime notices and reloads at most once every
+  3 seconds per tab. The 60 per minute limits do not change.
 
 The driver app is in this one because, before it, the app classified a 429 on a photo step as an invalid answer, and
 the sync scheduler turned that into rejected evidence: the photo held for the driver's attention. The photo limits
@@ -38,6 +41,11 @@ Decision rows in `decision-log.md`, with the literal questions, answers and opti
 | `OBS-001-DASHBOARD-429-2026-10-12` | Q4 dashboard 429 | "Enmendar ADR-OBS-001 (Recommended)" |
 | `SEC-004-RETRY-AFTER-2026-10-13` | Q7 `Retry-After` on public tracking | "Sí, agregarlo (Recommended)" (shipped by #251; AI-05 declares the header here) |
 | `SEC-004-REJECTION-SUMMARY-2026-10-13` | Q8 visibility before PR 6 | "Resumen en los logs (Recommended)" |
+| `SEC-004-RELOADS-AND-BULK-2026-10-13` | Q9 dashboard and counts against realtime reloads | "Espaciar recargas (Recommended)": "El panel junta los avisos y recarga como máximo cada 3 segundos por pestaña. Los límites de 60/min no cambian. Los cambios se ven hasta 3 segundos después. Va en el PR de pantallas del panel." |
+| | Q10 assignable drivers in bulk assignment | "Dejarlo en 60/min (Recommended)": "En el piloto, tres lotes de 20 en un minuto es raro. Si pasa, el panel pide esperar unos segundos. Se revisa con las métricas en 2 semanas." |
+
+Q9 and Q10 were asked after the review of #252: the Q3 premise ("se refrescan cada 30 segundos") was incomplete,
+because the dashboard and the inbox also reload on every realtime notice and every reload also reads the counts.
 
 ## Policies
 
@@ -322,7 +330,8 @@ No web screen calls `createLocation` today.
 - **Bulk assignment spends the driver-list budget.** `bulk-assignment-controller.ts` reads `listAssignableDrivers`
   once per order of the batch: up to `bulkSelectionLimit` = 20 orders, each up to `maximumDriverPagesPerOrder` = 10
   pages of 100 drivers. One 20-order bulk preview spends at least 20 of the 60 per minute of
-  `Dispatch.AssignableDrivers`. An owner decision on this is pending; no number changes here.
+  `Dispatch.AssignableDrivers`. It stays at 60 per minute by the owner's decision (Q10, "Dejarlo en 60/min"), and is
+  reviewed with the metrics in 2 weeks.
 - **Realtime refreshes spend the dashboard and counts budgets.** Besides the 30 s polling:
   - the dashboard and the inbox reload on every realtime order event (`OrderStatusChanged`,
     `OrderTimelineEventAdded`, `AssignmentChanged`, `RouteChanged`, `IncidentCreated`, `ExternalOfferChanged`), with a
@@ -334,8 +343,9 @@ No web screen calls `createLocation` today.
   - the budgets are per user, so every tab the user has open spends the same 60 per minute.
 
   A burst of events (a bulk assignment, a CSV commit) can therefore spend the 60 per minute of
-  `Reporting.OperationsDashboard` and `Reporting.QueueCounts`. An owner decision on this is pending; no number changes
-  here.
+  `Reporting.OperationsDashboard` and `Reporting.QueueCounts`. The owner's decision (Q9, "Espaciar recargas") mitigates
+  it in the panel pull request: at most one reload every 3 seconds per tab, with the limits unchanged. Until that pull
+  request merges, bursts can still spend these budgets.
 - **Forward deploy of the driver app.** A phone still running the previous web build reads a photo 429 as rejected
   evidence: the action needs attention (`EVIDENCE_REJECTED`) and the photo stays on the phone. That lasts until the
   phone loads the new build:
