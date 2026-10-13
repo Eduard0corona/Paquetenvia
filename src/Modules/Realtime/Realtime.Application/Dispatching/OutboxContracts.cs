@@ -44,7 +44,8 @@ public sealed record ClaimedBusinessOutboxMessage(
     Guid LeaseToken,
     DateTimeOffset LeaseExpiresAt,
     DateTimeOffset CreatedAt,
-    DateTimeOffset AvailableAt);
+    DateTimeOffset AvailableAt,
+    string? TraceParent = null);
 
 public sealed record ClaimedLocationOutboxMessage(
     Guid Id,
@@ -56,7 +57,8 @@ public sealed record ClaimedLocationOutboxMessage(
     Guid LeaseToken,
     DateTimeOffset LeaseExpiresAt,
     DateTimeOffset CreatedAt,
-    DateTimeOffset AvailableAt);
+    DateTimeOffset AvailableAt,
+    string? TraceParent = null);
 
 public abstract record ParsedBusinessOutboxEvent(
     Guid EventId,

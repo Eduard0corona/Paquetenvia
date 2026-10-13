@@ -1,5 +1,30 @@
 # Changelog
 
+## Contexto de traza a través del outbox (OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13, fase 4 PR 7) — 2026-10-13
+
+- Respuesta literal del project owner (2026-10-13), registrada en `decision-log.md` con su contexto y las opciones no
+  elegidas: "Columna nueva (Recommended)" ("Una columna con la traza en las dos tablas del outbox (migración con ida y
+  vuelta probadas). Los logs del Worker llevan la traza de la petición original, así que una sola búsqueda en Log
+  Analytics muestra API y Worker juntos, aunque haya muestreo. No toca el contenido del evento ni lo que reciben los
+  clientes. Cumple AI-03 §18 tal como está.").
+- AI-06: columna `trace_parent` (`text`, nula) con CHECK de forma exacta (`00-{trace id}-{span id}-{00|01}`) en
+  `platform.outbox_events` y `platform.location_outbox_events`. Nunca `tracestate`, baggage, empresa, usuario ni datos
+  de la petición, y nunca dentro del `payload`.
+- Cada productor la escribe en su propia transacción con el contexto de su actividad actual (`ValueGeneratedNever`, sin
+  `RETURNING`); la función del operador (DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03) conserva su firma y la lee de
+  `app.trace_parent`, local a la transacción; las dos funciones de Notifications copian la del evento de origen.
+- AI-18: el ejecutor del operador recibe `INSERT (trace_parent)` sobre `platform.outbox_events`, propiedad del paso del
+  lane de Dispatch; la sentencia publicada no cambia y la aserción 30 lo documenta.
+- Migraciones: `20261013000100_AddOutboxTraceContext` (Dispatch) y `20261013000200_CarryOutboxTraceContext`
+  (Notifications), con ida, vuelta e ida probadas en PostgreSQL y el catálogo idéntico; la vuelta va primero en
+  Notifications y Dispatch la rechaza en otro orden. Ninguna fila se reescribe.
+- Las funciones de claim devuelven la columna sin cambios (devuelven la fila completa). El Worker y los lanes de tiempo
+  real de la API procesan cada mensaje en su propia actividad, hija del contexto guardado: sus logs llevan la traza de
+  la petición original. Los ciclos de despacho siguen siendo su propia traza y nunca se exportan; con la exportación
+  encendida, el mensaje se exporta solo si la traza de origen se muestreó, sin atributos.
+- Sin cambios en AI-03, AI-04, AI-05, AI-12, AI-13 ni AI-24, en el contenido de los eventos, en los mensajes de SignalR
+  ni en las notificaciones. AI-08 OBS-003 registra la decisión. Nota: `docs/development/obs-003-outbox-trace-context.md`.
+
 ## Exportación de trazas y métricas a Application Insights (OBS-003-APPINSIGHTS-EXPORT-2026-10-13, fase 4 PR 6) — 2026-10-13
 
 - Aplica `OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12` ("Application Insights (Recommended)") y

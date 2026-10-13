@@ -1,6 +1,8 @@
 using Npgsql;
 using NpgsqlTypes;
 using Paqueteria.Application.Auditing;
+using Paqueteria.Infrastructure.Database.Outbox;
+using Paqueteria.Infrastructure.Observability;
 
 namespace Dispatch.Infrastructure.Assignments;
 
@@ -14,9 +16,20 @@ namespace Dispatch.Infrastructure.Assignments;
 /// supplied here and nothing read back. The functions verify the caller's tenant context, actor, order, order event,
 /// assignment, topic, action and payload before writing and raise 42501 otherwise, which rolls the whole
 /// assignment back. The owner path keeps inserting directly under RLS.
+/// <para>
+/// OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13: the outbox definer keeps its published signature, so an application version
+/// that predates the <c>trace_parent</c> column keeps calling it during a deploy. The producing trace context reaches it
+/// the way the tenant and the actor do: the transaction-local setting <c>app.trace_parent</c>
+/// (<see cref="OutboxTraceContextColumn.TransactionSetting"/>), set here with <c>set_config(..., true)</c> right before each
+/// call, empty outside a trace. The definer stores it in the row it inserts.
+/// </para>
 /// </summary>
 internal static class OperatorOwnerEventWriter
 {
+    /// <summary>OBS-003: the producing trace context for the definer, transaction-local like the tenant context.</summary>
+    internal const string TraceContextSql =
+        "SELECT pg_catalog.set_config('app.trace_parent', @trace_parent, true)";
+
     internal const string OutboxSql =
         """
         SELECT security.append_operator_order_outbox(
@@ -45,6 +58,18 @@ internal static class OperatorOwnerEventWriter
         DateTimeOffset occurredAt,
         CancellationToken cancellationToken)
     {
+        await using (var trace = new NpgsqlCommand(TraceContextSql, connection, transaction)
+        {
+            CommandTimeout = commandTimeoutSeconds,
+        })
+        {
+            trace.Parameters.Add(new NpgsqlParameter<string>(OutboxTraceContextColumn.ParameterName, NpgsqlDbType.Text)
+            {
+                TypedValue = OutboxTraceContext.Current() ?? string.Empty,
+            });
+            await trace.ExecuteNonQueryAsync(cancellationToken);
+        }
+
         await using var command = new NpgsqlCommand(OutboxSql, connection, transaction)
         {
             CommandTimeout = commandTimeoutSeconds,

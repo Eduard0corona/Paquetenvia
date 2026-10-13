@@ -18,6 +18,7 @@ using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
 using Paqueteria.Application.Idempotency;
 using Paqueteria.Application.Tenancy;
+using Paqueteria.Infrastructure.Database.Outbox;
 using Paqueteria.Infrastructure.Tenancy;
 using DispatchMoneyResult = Dispatch.Application.Assignments.MoneyResult;
 
@@ -1319,10 +1320,10 @@ public sealed class PostgreSqlExternalOfferService(
             INSERT INTO platform.outbox_events(
               id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,
               aggregate_version,payload,priority,status,attempts,available_at,
-              locked_at,locked_by,lease_token,lease_expires_at,last_error,created_at,processed_at)
+              locked_at,locked_by,lease_token,lease_expires_at,last_error,created_at,processed_at,trace_parent)
             VALUES (@id,@owner,@tenant,@topic,@aggregate_type,@aggregate_id,
                     @version,@payload,50,'PENDING',0,@now,
-                    NULL,NULL,NULL,NULL,NULL,@now,NULL)
+                    NULL,NULL,NULL,NULL,NULL,@now,NULL,@trace_parent)
             """);
         command.Parameters.Add(P("id", NpgsqlDbType.Uuid, id));
         command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, ownerOrganizationId));
@@ -1333,6 +1334,7 @@ public sealed class PostgreSqlExternalOfferService(
         command.Parameters.Add(P("version", NpgsqlDbType.Integer, aggregateVersion));
         command.Parameters.Add(P("payload", NpgsqlDbType.Jsonb, payload));
         command.Parameters.Add(P("now", NpgsqlDbType.TimestampTz, now));
+        command.Parameters.Add(OutboxTraceContextColumn.Parameter());
         RequireOne(await command.ExecuteNonQueryAsync(cancellationToken), "External offer outbox insert failed.");
     }
 

@@ -39,7 +39,9 @@ public sealed record TelemetryExportProfile(string ServiceName, IReadOnlyList<st
 /// an API request that is not a <c>/health/*</c> probe, or an ADR-034 scheduled job cycle
 /// (<see cref="TraceCorrelation.JobCycleOperation"/>), and only when the root is sampled (10 %). Outbox dispatch
 /// cycles, polling loops (proof validation), activities without a parent and contexts that came from outside are never
-/// exported. Children follow their parent's decision.
+/// exported. Children follow their parent's decision. OBS-003 PR 7: the processing of one outbox message
+/// (<see cref="TraceCorrelation.OutboxMessageOperation"/>) is a child of the trace that wrote the message, so it is
+/// exported exactly when that trace was sampled, with no attribute; it is never a root that can be sampled.
 /// </para>
 /// <para>
 /// Span attributes are an allowlist per source, checked again when the span ends (<see cref="PrepareForExport"/>):
@@ -247,6 +249,10 @@ public static partial class TelemetryExportPolicy
             RequestSpanAttributes,
         OutgoingHttpActivitySourceName when activity.Kind == ActivityKind.Client => OutgoingHttpSpanAttributes,
         TraceCorrelation.ActivitySourceName when string.Equals(activity.OperationName, TraceCorrelation.JobCycleOperation, StringComparison.Ordinal) =>
+            NoAttributes,
+        // OBS-003 PR 7: the processing of one outbox message, exported only inside a sampled producer trace (its parent
+        // decides), with no attribute and the fixed lane name.
+        TraceCorrelation.ActivitySourceName when string.Equals(activity.OperationName, TraceCorrelation.OutboxMessageOperation, StringComparison.Ordinal) =>
             NoAttributes,
         _ => null,
     };
