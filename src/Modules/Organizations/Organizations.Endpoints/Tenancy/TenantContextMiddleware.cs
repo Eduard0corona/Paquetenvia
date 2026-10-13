@@ -93,13 +93,15 @@ public sealed class TenantContextMiddleware(RequestDelegate next)
     {
         context.Response.StatusCode = statusCode;
         // The content type goes through WriteAsJsonAsync: the overload without it would reset the header to
-        // application/json; charset=utf-8. Null options keep the host's JSON options, so the body is unchanged.
+        // application/json; charset=utf-8. Null options keep the host's JSON options.
+        // OBS-003: TraceIdentifier is the request's W3C trace id, the same value as the audit request_id.
         return context.Response.WriteAsJsonAsync(
             new
             {
                 type = "about:blank",
                 title,
                 status = statusCode,
+                traceId = context.TraceIdentifier,
             },
             (JsonSerializerOptions?)null,
             ProblemContentType,

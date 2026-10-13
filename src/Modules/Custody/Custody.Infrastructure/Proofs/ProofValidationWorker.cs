@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Paqueteria.Infrastructure.Observability;
 
 namespace Custody.Infrastructure.Proofs;
 
@@ -12,6 +13,9 @@ public sealed class ProofValidationWorker(
     IOptions<ProofStorageOptions> options,
     ILogger<ProofValidationWorker> logger) : BackgroundService
 {
+    /// <summary>Fixed name of the proof validation cycle (OBS-003 activity display name).</summary>
+    public const string JobName = "custody.proof-validation";
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         if (options.Value.Provider == ProofStorageProvider.Disabled ||
@@ -25,22 +29,26 @@ public sealed class ProofValidationWorker(
         while (!stoppingToken.IsCancellationRequested)
         {
             var failed = false;
-            try
+            // OBS-003: each validation cycle is a new root trace whose id is in the cycle's log lines.
+            using (TraceCorrelation.StartJobCycle(JobName))
             {
-                await using var scope = scopeFactory.CreateAsyncScope();
-                var processor = scope.ServiceProvider.GetRequiredService<IProofValidationProcessor>();
-                await processor.ProcessAvailableAsync(stoppingToken);
-                consecutiveFailures = 0;
-            }
-            catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
-            {
-                break;
-            }
-            catch (Exception)
-            {
-                failed = true;
-                consecutiveFailures = Math.Min(consecutiveFailures + 1, 6);
-                logger.LogError("Secure proof validation iteration failed.");
+                try
+                {
+                    await using var scope = scopeFactory.CreateAsyncScope();
+                    var processor = scope.ServiceProvider.GetRequiredService<IProofValidationProcessor>();
+                    await processor.ProcessAvailableAsync(stoppingToken);
+                    consecutiveFailures = 0;
+                }
+                catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
+                {
+                    break;
+                }
+                catch (Exception)
+                {
+                    failed = true;
+                    consecutiveFailures = Math.Min(consecutiveFailures + 1, 6);
+                    logger.LogError("Secure proof validation iteration failed.");
+                }
             }
 
             var baseDelaySeconds = failed

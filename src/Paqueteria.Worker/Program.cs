@@ -10,7 +10,10 @@ using Paqueteria.Infrastructure.Database.Outbox.Retention;
 using Paqueteria.Infrastructure.Cloud;
 using Paqueteria.Infrastructure.DataProtection;
 using Paqueteria.Infrastructure.Messaging;
+using Paqueteria.Infrastructure.Observability;
 
+// OBS-003: before anything builds an HTTP handler, so no inbound or outbound trace header is ever honored or sent.
+TraceCorrelation.ConfigureProcess();
 var builder = WebApplication.CreateBuilder(args);
 // PILOT-KEYVAULT-PRIVATE-APP-READ: allowlisted Key Vault secrets, read with the managed identity
 // before anything reads configuration. Off unless KeyVaultSecrets:VaultUri is set.
@@ -18,6 +21,8 @@ builder.Configuration.AddPaqueteriaKeyVaultSecrets();
 
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
+// OBS-003: every job cycle and outbox dispatch cycle is a new W3C trace whose id is in its log lines.
+builder.Services.AddTraceCorrelation();
 builder.Services.AddPlatformDataProtection(builder.Configuration);
 builder.Services.AddOutboxRetention(builder.Configuration);
 builder.Services.AddCustodyInfrastructure(

@@ -48,6 +48,11 @@ The JSON console line looks like this (checked with the .NET 10 `JsonConsoleForm
 
 The KQL reads it as `parse_json(Log_s)`, then `e.EventId` and `e.State.<Property>`.
 
+Since OBS-003 PR 1 (`obs-003-w3c-correlation.md`), every line written inside a request or a Worker cycle also
+carries `State.TraceId`, the random 32-hex W3C trace id. It is not a telemetry dimension: no alert or workbook reads
+it, and `TelemetryDimensions.Allowed` does not include it. The lane summary (4601) and the HTTP summary (4603) run
+outside any trace and never carry it. A scheduled job cycle (4602) carries the id of its own cycle.
+
 ### Outbox lag: what is measured and what is not
 
 Invariant 3 forbids a direct `SELECT` on the outbox from runtime. No existing SECURITY DEFINER or

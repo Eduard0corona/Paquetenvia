@@ -40,6 +40,8 @@ using Reporting.Infrastructure;
 using Routing.Endpoints;
 using Routing.Infrastructure;
 
+// OBS-003: before anything builds an HTTP handler, so no inbound or outbound trace header is ever honored or sent.
+TraceCorrelation.ConfigureProcess();
 var builder = WebApplication.CreateBuilder(args);
 // PILOT-KEYVAULT-PRIVATE-APP-READ: allowlisted Key Vault secrets, read with the managed identity
 // before anything reads configuration. Off unless KeyVaultSecrets:VaultUri is set.
@@ -47,6 +49,8 @@ builder.Configuration.AddPaqueteriaKeyVaultSecrets();
 
 builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
+// OBS-003: every request is a new W3C trace whose id is in its log lines, its audit rows and its problems.
+builder.Services.AddTraceCorrelation();
 
 // Invariant 5: secrets carried in request targets (the public tracking token in the lookup path, hub
 // access_token query values) are rewritten before hosting diagnostics, logging or telemetry read them.
@@ -57,6 +61,7 @@ builder.Services.AddHttpStatusTelemetry();
 builder.Services.AddPlatformDataProtection(builder.Configuration);
 builder.Services.AddEmailLookupHashing(builder.Configuration, builder.Environment);
 builder.Services.AddProblemDetails();
+builder.Services.AddProblemDetailsTraceId();
 builder.Services.AddOpenApi();
 builder.Services.AddIdentityInfrastructure(builder.Configuration, builder.Environment);
 builder.Services.AddDriversInfrastructure(builder.Configuration);
@@ -92,6 +97,7 @@ builder.Services
 
 var app = builder.Build();
 
+app.UseTraceCorrelation();
 app.UseHttpStatusTelemetry();
 app.UseTrustedForwardedHeaders();
 app.UseExceptionHandler();

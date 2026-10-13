@@ -170,7 +170,7 @@ public sealed partial class AzureKeyVaultPiiKeyWrapClient : IPiiKeyWrapClient
         options.Retry.MaxRetries = 2;
         options.Retry.NetworkTimeout = TimeSpan.FromSeconds(10);
         options.Diagnostics.IsLoggingContentEnabled = false;
-        return options;
+        return options.WithoutDistributedTracing();
     }
 
     [GeneratedRegex("^[0-9a-f]{32}$", RegexOptions.CultureInvariant)]
