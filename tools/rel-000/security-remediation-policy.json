@@ -165,9 +165,10 @@
     {
       "id": "OBS-003-OPENTELEMETRY",
       "mode": "DEPENDENCY_ADMISSION",
-      "status": "ACTIVE",
+      "status": "MERGED",
       "owner_decision_id": "GOV-DEPENDENCY-ADMISSION-001",
       "authorized_source_branch": "deps/obs-003-opentelemetry",
+      "tracked_pull_request": 247,
       "ecosystem": "nuget",
       "description": "OpenTelemetry SDK and the official Azure Monitor exporter for the OBS-003 traces and metrics of the API and Worker hosts (OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12: workspace-based Application Insights through the official Azure exporter): Azure.Monitor.OpenTelemetry.Exporter 1.10.0 and OpenTelemetry.Extensions.Hosting 1.19.1 direct in src/Paqueteria.Api and src/Paqueteria.Worker, with their exact transitives. Declares the exact amendments the restore produces (GOV-REL000-CHAINED-UPGRADES-2026-10-12): Azure.Core 1.61.0 -> 1.63.0 and the five moves it forces (System.ClientModel 1.15.0 -> 1.16.0, Microsoft.Identity.Client and Microsoft.Identity.Client.Extensions.Msal 4.84.2 -> 4.90.0, Microsoft.Bcl.AsyncInterfaces and System.Memory.Data 10.0.9 -> 10.0.10), all admitted by ADP-001-AZURE, as additional versions reached by upgrade steps in the Api, Worker, ArchitectureTests and IntegrationTests locks; the IntegrationTests Microsoft.Bcl.AsyncInterfaces step continues the ADP-001-AZURE chain 6.0.0 -> 10.0.9. Microsoft.Extensions.Configuration, Configuration.Binder, Configuration.EnvironmentVariables, Logging.Configuration and Options.ConfigurationExtensions 10.0.0 appear only in the ArchitectureTests lock, which the ASP.NET Core framework does not prune (OBS-003-TEST-EXTENSIONS-ADMISSION-2026-10-12). tests/Paqueteria.RealtimeTestHost/packages.lock.json is not allowed: the dependency PR reverts its newline-only rewrite.",
       "admitted_direct_packages": [
