@@ -13,7 +13,7 @@ public sealed class ProofValidationWorker(
     IOptions<ProofStorageOptions> options,
     ILogger<ProofValidationWorker> logger) : BackgroundService
 {
-    /// <summary>Fixed name of the proof validation cycle (OBS-003 activity display name).</summary>
+    /// <summary>Fixed name of the proof validation poll (OBS-003 activity display name).</summary>
     public const string JobName = "custody.proof-validation";
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -29,8 +29,9 @@ public sealed class ProofValidationWorker(
         while (!stoppingToken.IsCancellationRequested)
         {
             var failed = false;
-            // OBS-003: each validation cycle is a new root trace whose id is in the cycle's log lines.
-            using (TraceCorrelation.StartJobCycle(JobName))
+            // OBS-003: each validation cycle is a new root trace whose id is in the cycle's log lines. It is a poll, not
+            // an ADR-034 scheduled job, so its trace is never exported (Q-PR6-1).
+            using (TraceCorrelation.StartPollCycle(JobName))
             {
                 try
                 {

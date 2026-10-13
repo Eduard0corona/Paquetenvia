@@ -95,6 +95,18 @@ class SettingsTests(unittest.TestCase):
         self.assertEqual([], guards.validate_settings([{"name": "Finance__OperationalTimeZone", "value": "America/Mazatlan"}], allow_sentinel=False))
         self.assertTrue(guards.validate_settings([{"name": "Finance__OperationalTimeZone", "value": "owner_decision_required"}], allow_sentinel=False))
 
+    def test_the_telemetry_export_cannot_be_switched_or_redirected_from_the_settings_file(self):
+        # OBS-003: the export switch, its connection string and the pseudonym key version are reviewed apps.bicep values.
+        for name, value in {
+            "TelemetryExport__Enabled": "true",
+            "TelemetryExport__ConnectionString": "InstrumentationKey=00000000-0000-0000-0000-000000000001",
+            "TelemetryPseudonym__CurrentKeyVersion": "2",
+        }.items():
+            with self.subTest(name=name):
+                failures = guards.validate_settings([{"name": name, "value": value}], allow_sentinel=False)
+                self.assertIn(f"setting {name} is platform-managed by apps.bicep and cannot be overridden", failures)
+        self.assertTrue(guards.validate_settings([{"name": "TelemetryPseudonym__Keys__1", "value": "x"}], allow_sentinel=False))
+
     def test_the_masked_call_bridge_cannot_be_enabled_from_the_settings_file(self):
         # VOICE-001-PROVIDER-TWILIO-2026-10-11: Voice stays Disabled in the pilot; every Voice__ key is refused.
         for name, value in {
@@ -774,6 +786,83 @@ class TemplateGuardTests(unittest.TestCase):
         self.assertNotEqual(text, not_generated)
         self.assert_fails(23, self.context(workflow_text=not_generated), "api, worker and realtime runtime logins")
 
+    def test_obs003_application_insights_and_the_export_switch_fail_closed(self):
+        def component(t):
+            return self.resource(t, "platform", "Microsoft.Insights/components")
+
+        def classic(t):
+            del component(t)["properties"]["WorkspaceResourceId"]
+        self.assert_fails(21, self.context(classic), "workspace-based")
+
+        def own_ingestion(t):
+            component(t)["properties"]["IngestionMode"] = "ApplicationInsights"
+        self.assert_fails(21, self.context(own_ingestion), "workspace-based")
+
+        def unmasked(t):
+            component(t)["properties"]["DisableIpMasking"] = True
+        self.assert_fails(21, self.context(unmasked), "IP masking")
+
+        def ingestion_sampling(t):
+            component(t)["properties"]["SamplingPercentage"] = 100
+        self.assert_fails(21, self.context(ingestion_sampling), "SamplingPercentage")
+
+        def elsewhere(t):
+            component(t)["location"] = "eastus"
+        self.assert_fails(21, self.context(elsewhere), "region")
+
+        def second(t):
+            t["observability"]["resources"].append(copy.deepcopy(component(t)))
+        self.assert_fails(21, self.context(second), "exactly one Application Insights component")
+
+        def switched_by_parameter(t):
+            self.edit(t, "apps", "'TelemetryExport__Enabled', 'value', 'false'", "'TelemetryExport__Enabled', 'value', parameters('publicHost')", count=2)
+        self.assert_fails(21, self.context(switched_by_parameter), "TelemetryExport__Enabled to the literal")
+
+        def foreign_destination(t):
+            self.edit(t, "apps", "'TelemetryExport__ConnectionString', 'value', reference(", "'TelemetryExport__ConnectionString', 'value', concat('InstrumentationKey=x', reference(", count=1)
+        self.assert_fails(21, self.context(foreign_destination), "TelemetryExport__ConnectionString from the pilot Application Insights")
+
+        def sampler_override(t):
+            self.edit(t, "apps", "createObject('name', 'TelemetryPseudonym__CurrentKeyVersion', 'value', '1')",
+                      "createObject('name', 'TelemetryPseudonym__CurrentKeyVersion', 'value', '1'), createObject('name', 'OTEL_TRACES_SAMPLER', 'value', 'always_on')")
+        self.assert_fails(21, self.context(sampler_override), "unexpected telemetry settings")
+
+        def web_exports(t):
+            web = self.resource(t, "apps", "Microsoft.App/containerApps", "ca-pv-pilot-web")
+            web["properties"]["template"]["containers"][0]["env"].append({"name": "APPLICATIONINSIGHTS_CONNECTION_STRING", "value": "x"})
+        self.assert_fails(21, self.context(web_exports), "ca-pv-pilot-web must not receive telemetry settings")
+
+        def query_reads_requests(t):
+            self.edit(t, "observability", "ContainerAppSystemLogs_CL", "AppRequests | union ContainerAppSystemLogs_CL")
+        self.assert_fails(21, self.context(query_reads_requests), "Application Insights table AppRequests")
+
+        def query_reads_pseudonym(t):
+            self.edit(t, "observability", "e.State.Dead", "e.State.OrganizationPseudonym")
+        self.assert_fails(21, self.context(query_reads_pseudonym), "OrganizationPseudonym")
+
+        text = (REPO_ROOT / guards.PILOT_WORKFLOW).read_text(encoding="utf-8")
+        unchecked = text.replace("if ! has_secret paquetenvia-telemetry-pseudonym-key-1; then", "if false; then", 1)
+        self.assertNotEqual(text, unchecked)
+        self.assert_fails(21, self.context(workflow_text=unchecked), "lacks paquetenvia-telemetry-pseudonym-key-1")
+
+    def test_obs003_pseudonym_key_is_read_by_the_api_and_the_worker_only_from_key_vault(self):
+        def worker_without_key(t):
+            t["apps"]["variables"]["workerSecretNames"] = ["pg-worker-runtime-connection"]
+        self.assert_fails(6, self.context(worker_without_key), "apps.workerSecretNames")
+
+        def key_in_environment(t):
+            self.edit(t, "apps", "createObject('name', 'TelemetryPseudonym__CurrentKeyVersion', 'value', '1')",
+                      "createObject('name', 'TelemetryPseudonym__CurrentKeyVersion', 'value', '1'), createObject('name', 'TelemetryPseudonym__Keys__1', 'value', 'inline')")
+        self.assert_fails(6, self.context(key_in_environment), "sensitive setting TelemetryPseudonym__Keys__1")
+
+        def api_maps_a_worker_secret_instead(t):
+            self.edit(t, "apps", "'value', 'paquetenvia-telemetry-pseudonym-key-1'", "'value', 'pg-worker-runtime-connection'")
+        self.assert_fails(6, self.context(api_maps_a_worker_secret_instead), "differ from the least-privilege set")
+
+        # The shared pseudonym key is not a Worker credential: P23 still refuses every other Worker secret in the API.
+        results = {r.number: r for r in guards.run_guards(self.context())}
+        self.assertTrue(results[23].passed, results[23].detail)
+
     def test_observability_template_is_required(self):
         def drop(t):
             del t["observability"]
@@ -782,6 +871,11 @@ class TemplateGuardTests(unittest.TestCase):
         def unknown_insights_type(t):
             t["observability"]["resources"].append({"type": "Microsoft.Insights/diagnosticSettings", "apiVersion": "2021-05-01-preview", "name": "d"})
         self.assert_fails(1, self.context(unknown_insights_type), "Microsoft.Insights/diagnosticSettings")
+
+        # OBS-003: no new alert without its own decision; a metric alert on the exported metrics is refused too.
+        def metric_alert(t):
+            t["observability"]["resources"].append({"type": "Microsoft.Insights/metricAlerts", "apiVersion": "2018-03-01", "name": "m"})
+        self.assert_fails(1, self.context(metric_alert), "Microsoft.Insights/metricAlerts")
 
 
 if __name__ == "__main__":

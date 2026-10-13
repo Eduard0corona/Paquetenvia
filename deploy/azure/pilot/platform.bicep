@@ -105,6 +105,28 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2025-02-01' = {
   }
 }
 
+// ---------------------------------------------------------------- Application Insights (OBS-003)
+// OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12: workspace-based, in the pilot region, on the pilot workspace. Its traces
+// and metrics are stored and billed in that workspace, so they count against the same daily ingestion cap
+// (logDailyQuotaGb) and the worst case of the budget does not grow. The API and the Worker send to it only when
+// apps.bicep sets TelemetryExport__Enabled to 'true'; the instrumentation key of the connection string authenticates
+// that export (Q-PR6-2, "Llave en la conexión (Recommended)"). No alert reads it (no new alert without its own decision).
+resource appInsights 'Microsoft.Insights/components@2020-02-02' = {
+  name: 'appi-pv-pilot-${suffix}'
+  location: location
+  tags: tags
+  kind: 'web'
+  properties: {
+    Application_Type: 'web'
+    WorkspaceResourceId: logAnalytics.id
+    IngestionMode: 'LogAnalytics'
+    DisableLocalAuth: false
+    DisableIpMasking: false
+    publicNetworkAccessForIngestion: 'Enabled'
+    publicNetworkAccessForQuery: 'Enabled'
+  }
+}
+
 // ---------------------------------------------------------------- registry
 resource registry 'Microsoft.ContainerRegistry/registries@2025-04-01' = {
   name: 'pvpilot${suffix}'

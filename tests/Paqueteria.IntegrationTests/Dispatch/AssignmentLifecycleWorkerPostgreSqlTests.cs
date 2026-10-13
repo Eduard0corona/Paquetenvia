@@ -11,6 +11,7 @@ using Paqueteria.IntegrationTests.Realtime;
 using Paqueteria.IntegrationTests.Security;
 using Realtime.Infrastructure.Dispatching;
 using WorkerProgram = WorkerHost::WorkerProgram;
+using Paqueteria.IntegrationTests.Observability;
 
 namespace Paqueteria.IntegrationTests.Dispatch;
 
@@ -209,6 +210,8 @@ public sealed class AssignmentLifecycleWorkerPostgreSqlTests(PostgreSqlSecurityW
         protected override void ConfigureHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Production");
+            // OBS-003 PR 6: outside Development and Testing the host needs the organization pseudonym key.
+            builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(TelemetryPseudonymTestKey.Settings));
             builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(settings));
         }
     }

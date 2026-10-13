@@ -68,10 +68,13 @@ REQUIRED_SECRET_MAPPINGS = {
         "PublicTracking:LinkKeys:1": "public-tracking-link-key",
         # RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the in-process realtime dispatchers' own least-privilege login.
         "ConnectionStrings:PaqueteriaRealtime": "pg-realtime-runtime-connection",
+        # OBS-003-TENANT-PSEUDONYM-2026-10-12: owner-written HMAC key of the organization pseudonym (logs and traces).
+        "TelemetryPseudonym:Keys:1": "paquetenvia-telemetry-pseudonym-key-1",
     },
     WORKER_APP: {
         "ConnectionStrings:PaqueteriaWorker": "pg-worker-runtime-connection",
         "ConnectionStrings:Paqueteria": "pg-worker-runtime-connection",
+        "TelemetryPseudonym:Keys:1": "paquetenvia-telemetry-pseudonym-key-1",
     },
     WEB_APP: {},
     MIGRATE_JOB: {"PAQUETERIA_MIGRATION_CONNECTION": "pg-migrate-connection"},
@@ -95,7 +98,7 @@ SECRET_RBAC_VARIABLE = {
 }
 MAPPING_KEY = re.compile(r"^KeyVaultSecrets__Mappings__(\d+)__(SecretName|ConfigurationKey)$")
 SENSITIVE_SETTINGS = re.compile(
-    r"^(ConnectionStrings__.*|.*Secret|EmailLookup__Keys__.*|PublicTracking__LinkKeys__.*|PAQUETERIA_MIGRATION_CONNECTION|.*_VERIFIER|.*Password.*|.*ApiKey.*|.*Token)$")
+    r"^(ConnectionStrings__.*|.*Secret|EmailLookup__Keys__.*|PublicTracking__LinkKeys__.*|TelemetryPseudonym__Keys__.*|PAQUETERIA_MIGRATION_CONNECTION|.*_VERIFIER|.*Password.*|.*ApiKey.*|.*Token)$")
 
 AUTHORIZED_RESOURCE_TYPES = frozenset(
     {
@@ -125,6 +128,8 @@ AUTHORIZED_RESOURCE_TYPES = frozenset(
         "Microsoft.Insights/scheduledQueryRules",
         "Microsoft.Insights/actionGroups",
         "Microsoft.Insights/workbooks",
+        # OBS-003 (platform.bicep): one workspace-based Application Insights on the pilot workspace (checked by P21).
+        "Microsoft.Insights/components",
     }
 )
 PROHIBITED_TYPE_PREFIXES = (
@@ -180,6 +185,10 @@ PLATFORM_MANAGED_PREFIXES = (
     # delivers the Twilio account, number and Key Vault secrets and GATE-007 is resolved; enabling it is an
     # apps.bicep change under review, never a free-form setting.
     "Voice__",
+    # OBS-003: the export switch, its connection string and the pseudonym key version are reviewed apps.bicep values
+    # (P21); apps.settings.json can neither turn the export on nor send telemetry elsewhere.
+    "TelemetryExport__",
+    "TelemetryPseudonym__",
     "Urls",
 )
 # Settings that no longer exist. The API refuses to start while one is configured, so the pilot refuses
@@ -911,10 +920,81 @@ def _alert_rules(template: dict[str, Any], resource: dict[str, Any]) -> list[dic
     return rules
 
 
+# OBS-003 (OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12): one workspace-based Application Insights; the export settings
+# of the API and the Worker; the tables and names no alert or workbook query may read.
+APP_INSIGHTS_TYPE = "Microsoft.Insights/components"
+TELEMETRY_WORKLOADS = (API_APP, WORKER_APP)
+TELEMETRY_PSEUDONYM_SECRET = "paquetenvia-telemetry-pseudonym-key-1"
+TELEMETRY_ENV_PREFIXES = ("TelemetryExport__", "TelemetryPseudonym__", "APPLICATIONINSIGHTS_", "OTEL_")
+APPLICATION_INSIGHTS_TABLES = (
+    "AppRequests", "AppDependencies", "AppTraces", "AppMetrics", "AppExceptions", "AppEvents", "AppPageViews",
+    "AppAvailabilityResults", "AppBrowserTimings", "AppPerformanceCounters", "AppSystemEvents", "customMetrics",
+    "customDimensions", "customEvents",
+)
+# OBS-003-TENANT-PSEUDONYM-2026-10-12: never an alert or workbook dimension.
+PSEUDONYM_AND_ROLE_NAMES = (
+    "OrganizationPseudonym", "ActorRoleKind", "paqueteria.organization.pseudonym", "paqueteria.actor.role_kind",
+    "pseudonym", "role_kind",
+)
+
+
+def _observability_obs003_failures(ctx: Context) -> list[str]:
+    """OBS-003: the Application Insights component, the export switch of the API and the Worker, and the queries."""
+    failures: list[str] = []
+    components = ctx.resources(APP_INSIGHTS_TYPE)
+    if len(components) != 1 or components[0][0] != "platform":
+        failures.append(f"exactly one Application Insights component is allowed, in platform.bicep, found {[t for t, _ in components]}")
+    else:
+        component = components[0][1]
+        properties = component.get("properties", {}) or {}
+        if component.get("kind") != "web" or properties.get("Application_Type") != "web":
+            failures.append("Application Insights must be kind and Application_Type web")
+        if component.get("location") != "[parameters('location')]":
+            failures.append(f"Application Insights must be in the pilot resource group's region, found {component.get('location')}")
+        workspace = str(properties.get("WorkspaceResourceId", ""))
+        if properties.get("IngestionMode") != "LogAnalytics" or not workspace.startswith("[resourceId('Microsoft.OperationalInsights/workspaces'") or "law-pv-pilot-" not in workspace:
+            failures.append("Application Insights must be workspace-based (IngestionMode LogAnalytics) on the pilot Log Analytics workspace, inside its daily cap")
+        if properties.get("DisableIpMasking") is not False:
+            failures.append("Application Insights must keep IP masking on (DisableIpMasking false)")
+        for forbidden in ("SamplingPercentage", "RetentionInDays", "ImmediatePurgeDataOn30Days"):
+            if forbidden in properties:
+                failures.append(f"Application Insights must not set {forbidden} (sampling and retention follow OBS-003 and the workspace)")
+    for workload in ctx.workloads:
+        names = [key for key in workload.env if key.startswith(TELEMETRY_ENV_PREFIXES)]
+        if workload.name not in TELEMETRY_WORKLOADS:
+            if names:
+                failures.append(f"{workload.name} must not receive telemetry settings {sorted(names)}")
+            continue
+        enabled = workload.env.get("TelemetryExport__Enabled")
+        if enabled is None or enabled[0] != "value" or enabled[1] not in ("true", "false"):
+            failures.append(f"{workload.name} must set TelemetryExport__Enabled to the literal 'true' or 'false', found {enabled}")
+        if workload.env.get("TelemetryPseudonym__CurrentKeyVersion") != ("value", "1"):
+            failures.append(f"{workload.name} must set TelemetryPseudonym__CurrentKeyVersion to '1', the version of {TELEMETRY_PSEUDONYM_SECRET}")
+        raw = json.dumps(workload.resource)
+        connection = re.search(r"createObject\('name', 'TelemetryExport__ConnectionString', 'value', ([^)]*\))", raw)
+        if connection is None or not connection.group(1).startswith("reference(resourceId('Microsoft.Insights/components'"):
+            failures.append(f"{workload.name} must take TelemetryExport__ConnectionString from the pilot Application Insights component")
+        unexpected = sorted(set(names) - {"TelemetryExport__Enabled", "TelemetryExport__ConnectionString", "TelemetryPseudonym__CurrentKeyVersion"})
+        if unexpected:
+            failures.append(f"{workload.name} sets unexpected telemetry settings {unexpected} (the sampling and exporter features are fixed in code)")
+    text = json.dumps(ctx.templates.get("observability", {}).get("variables", {}))
+    for table in APPLICATION_INSIGHTS_TABLES:
+        if re.search(rf"\b{table}\b", text):
+            failures.append(f"alert and workbook queries must not read the Application Insights table {table}")
+    for name in PSEUDONYM_AND_ROLE_NAMES:
+        if name in text:
+            failures.append(f"alert and workbook queries must not read {name} (OBS-003-TENANT-PSEUDONYM-2026-10-12)")
+    if f"has_secret {TELEMETRY_PSEUDONYM_SECRET}" not in ctx.workflow_text:
+        failures.append(f"workflow must stop before deploying when Key Vault lacks {TELEMETRY_PSEUDONYM_SECRET}")
+    return failures
+
+
 def guard_21_observability(ctx: Context) -> GuardResult:
     """OBS-002: the pilot alerts exist, run every 5-15 minutes within their cost bound, notify only the
-    owner's e-mail (a parameter without default) and read only the PII-free structured events."""
-    failures: list[str] = []
+    owner's e-mail (a parameter without default) and read only the PII-free structured events. OBS-003: one
+    workspace-based Application Insights on the pilot workspace, the export switch of the API and the Worker is a
+    reviewed literal, and no query reads Application Insights tables or the organization pseudonym."""
+    failures: list[str] = _observability_obs003_failures(ctx)
     template = ctx.templates.get("observability", {})
     parameter = (template.get("parameters", {}) or {}).get("alertEmailAddress")
     if not isinstance(parameter, dict) or parameter.get("type") != "string" or "defaultValue" in parameter:
@@ -974,8 +1054,8 @@ def guard_21_observability(ctx: Context) -> GuardResult:
         failures.append(f"queries read structured-log properties outside the OBS-002 allowlist: {sorted(properties_read - OBSERVABILITY_STATE_PROPERTIES)}")
     if "observability-check" not in ctx.workflow_text or "observability.parameters.json" not in ctx.workflow_text:
         failures.append("workflow must check and deploy observability.parameters.json")
-    return _result(21, "OBS-002 alerts, e-mail action group and cost bound", failures,
-                   f"{len(rules)} alert rules at {monthly:.2f} USD/month, e-mail only")
+    return _result(21, "OBS-002 alerts, e-mail action group and cost bound; OBS-003 Application Insights", failures,
+                   f"{len(rules)} alert rules at {monthly:.2f} USD/month, e-mail only; workspace-based Application Insights")
 
 
 # ---------------------------------------------------------------------------------------------- UI-001 web
@@ -1048,7 +1128,9 @@ def guard_23_realtime_dispatcher_credential(ctx: Context) -> GuardResult:
             f"api runs the realtime outbox dispatchers but does not map {REALTIME_CONNECTION_KEY} from {REALTIME_SECRET}")
     if "ConnectionStrings:PaqueteriaWorker" in mappings:
         failures.append("api maps ConnectionStrings:PaqueteriaWorker; the Worker credential must never reach the API")
-    worker_secrets = set(REQUIRED_SECRET_MAPPINGS[WORKER_APP].values())
+    # OBS-003-TENANT-PSEUDONYM-2026-10-12: both hosts read the organization pseudonym key (not a credential; both must
+    # derive the same pseudonyms). Every other Worker secret stays out of the API.
+    worker_secrets = set(REQUIRED_SECRET_MAPPINGS[WORKER_APP].values()) - {TELEMETRY_PSEUDONYM_SECRET}
     shared = sorted(worker_secrets & set(mappings.values()))
     if shared:
         failures.append(f"api maps Worker secrets {shared}")

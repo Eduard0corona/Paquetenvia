@@ -42,6 +42,24 @@ public sealed partial class PilotApiStartupConfigurationTests
         "Drivers:Eligibility must define the DSP-001 policy used by PostgreSQL routing.",
     ];
 
+    /// <summary>
+    /// OBS-003: the pilot keeps the export off with a valid <c>TelemetryExport</c> section, and maps the organization
+    /// pseudonym key from Key Vault under the version it declares. The hosts read the section while they compose, so it
+    /// is checked here directly.
+    /// </summary>
+    [Fact]
+    public void Pilot_api_keeps_the_telemetry_export_off_and_maps_the_pseudonym_key()
+    {
+        var settings = PilotApiSettings.Load();
+        var export = Paqueteria.Infrastructure.Observability.TelemetryExportSettings.Read(
+            new ConfigurationBuilder().AddInMemoryCollection(settings.Resolved()).Build());
+
+        Assert.False(export.Enabled);
+        Assert.NotNull(export.ConnectionString);
+        Assert.Equal("1", settings.Configuration["TelemetryPseudonym:CurrentKeyVersion"]);
+        Assert.Equal("paquetenvia-telemetry-pseudonym-key-1", settings.Mappings["TelemetryPseudonym:Keys:1"]);
+    }
+
     [Fact]
     public void Pilot_api_maps_its_own_realtime_connection_and_never_the_workers()
     {
@@ -167,6 +185,9 @@ public sealed partial class PilotApiStartupConfigurationTests
                 ["dataProtectionKeyUri"] = "https://kv-pvp-synthetic.vault.azure.net/keys/paquetenvia-data-protection",
                 ["apiIdentity.properties.clientId"] = "00000000-0000-4000-8000-0000000000a1",
                 ["vault.properties.vaultUri"] = "https://kv-pvp-synthetic.vault.azure.net/",
+                // OBS-003: the connection string of the pilot Application Insights (the export stays off in the pilot).
+                ["appInsights.properties.ConnectionString"] =
+                    "InstrumentationKey=00000000-0000-4000-8000-0000000000c1;IngestionEndpoint=https://mexicocentral-0.in.applicationinsights.azure.com/",
             };
 
             var apiEnv = ApiEnvironment().Match(bicep);
@@ -225,6 +246,7 @@ public sealed partial class PilotApiStartupConfigurationTests
                     "EmailLookup:Keys:1" => Derived("email lookup key", hex: false),
                     "Locations:GoogleMaps:ApiKey" => Derived("geocoding key", hex: true),
                     "PublicTracking:LinkKeys:1" => Derived("tracking link key", hex: false),
+                    "TelemetryPseudonym:Keys:1" => Derived("telemetry pseudonym key", hex: false),
                     _ => throw new Xunit.Sdk.XunitException(
                         $"The pilot API maps {key} from Key Vault; give it a synthetic value here."),
                 };

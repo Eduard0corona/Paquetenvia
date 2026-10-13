@@ -4,6 +4,10 @@
     <PackageReference Include="OpenTelemetry.Extensions.Hosting" />
   </ItemGroup>
   <ItemGroup>
+    <!-- OBS-003 PR 6: the one OpenTelemetry wiring of both hosts; only the hosts reference the telemetry packages. -->
+    <Compile Include="..\Paqueteria.Api\Observability\AzureMonitorTelemetryExport.cs" Link="Observability\AzureMonitorTelemetryExport.cs" />
+  </ItemGroup>
+  <ItemGroup>
     <ProjectReference Include="..\BuildingBlocks\Paqueteria.Infrastructure\Paqueteria.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Orders\Orders.Infrastructure\Orders.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Pricing\Pricing.Infrastructure\Pricing.Infrastructure.csproj" />

@@ -23,6 +23,7 @@ using Paqueteria.Infrastructure.DataProtection;
 using Paqueteria.Infrastructure.Observability;
 using Paqueteria.Infrastructure.Security;
 using Paqueteria.Infrastructure.Voice;
+using Paqueteria.Hosting.Observability;
 using Locations.Endpoints;
 using Locations.Infrastructure;
 using Pricing.Endpoints;
@@ -51,6 +52,10 @@ builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
 // OBS-003: every request is a new W3C trace whose id is in its log lines, its audit rows and its problems.
 builder.Services.AddTraceCorrelation();
+// OBS-003 PR 6: the organization pseudonym key (required outside Development and Testing), and the export of traces
+// and metrics to Application Insights, registered only when TelemetryExport:Enabled turns it on.
+builder.Services.AddTelemetryOrganizationPseudonym(builder.Configuration, builder.Environment);
+builder.AddAzureMonitorTelemetryExport(TelemetryExportProfile.Api);
 
 // Invariant 5: secrets carried in request targets (the public tracking token in the lookup path, hub
 // access_token query values) are rewritten before hosting diagnostics, logging or telemetry read them.
@@ -100,6 +105,7 @@ builder.Services
 var app = builder.Build();
 
 app.UseTraceCorrelation();
+app.UseRequestSpanEnrichment();
 app.UseHttpStatusTelemetry();
 app.UseTrustedForwardedHeaders();
 app.UseExceptionHandler();
@@ -128,6 +134,7 @@ app.UseAuthentication();
 app.UseRateLimiter();
 app.UseRealtimeConnectionGate();
 app.UseMiddleware<TenantContextMiddleware>();
+app.UseTelemetryOrganizationContext();
 app.UseAuthorization();
 
 app.MapHealthChecks("/health/live", new HealthCheckOptions

@@ -186,7 +186,12 @@ public sealed class Obs003OutboundTraceHeadersTests
 
     private sealed class ProductionWorkerFactory : WebApplicationFactory<WorkerProgram>
     {
-        protected override void ConfigureWebHost(IWebHostBuilder builder) => builder.UseEnvironment("Production");
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            builder.UseEnvironment("Production");
+            // OBS-003 PR 6: outside Development and Testing the host needs the organization pseudonym key.
+            builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(TelemetryPseudonymTestKey.Settings));
+        }
     }
 
     private sealed class ProbeStartupFilter(TraceHeaderCaptureServer capture) : IStartupFilter

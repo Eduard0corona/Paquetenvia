@@ -16,6 +16,20 @@ public sealed class AzureClientTracingGuardTests
     public static TheoryData<string, string, bool, string> Bypasses() => new()
     {
         {
+            "an Azure Monitor exporter built with options that skip the wrapper",
+            """
+            using Azure.Monitor.OpenTelemetry.Exporter;
+
+            public static class Export
+            {
+                public static AzureMonitorTraceExporter Create(string connection) =>
+                    new AzureMonitorTraceExporter(new AzureMonitorExporterOptions { ConnectionString = connection });
+            }
+            """,
+            true,
+            "new AzureMonitorTraceExporter(...) is not built with options passed through"
+        },
+        {
             "target-typed field initializer",
             """
             using Azure.Security.KeyVault.Secrets;

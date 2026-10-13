@@ -19,6 +19,7 @@ using Paqueteria.Infrastructure.Database.Baseline;
 using Realtime.Application.Configuration;
 using Realtime.Infrastructure;
 using WorkerProgram = WorkerHost::WorkerProgram;
+using Paqueteria.IntegrationTests.Observability;
 
 namespace Paqueteria.IntegrationTests.Security;
 
@@ -386,14 +387,22 @@ public sealed class DevSyntheticSeedPostgreSqlFactory : PostgreSqlSecurityWebApp
 
 internal sealed class DevSyntheticApiWebApplicationFactory : WebApplicationFactory<Program>
 {
-    protected override void ConfigureWebHost(IWebHostBuilder builder) =>
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
         builder.UseEnvironment(SyntheticEnvironmentPolicy.EnvironmentName);
+        // OBS-003 PR 6: outside Development and Testing the host needs the organization pseudonym key.
+        builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(TelemetryPseudonymTestKey.Settings));
+    }
 }
 
 internal sealed class DevSyntheticWorkerWebApplicationFactory : WebApplicationFactory<WorkerProgram>
 {
-    protected override void ConfigureWebHost(IWebHostBuilder builder) =>
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
         builder.UseEnvironment(SyntheticEnvironmentPolicy.EnvironmentName);
+        // OBS-003 PR 6: outside Development and Testing the host needs the organization pseudonym key.
+        builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(TelemetryPseudonymTestKey.Settings));
+    }
 }
 
 internal sealed class ProcessEnvironmentScope : IDisposable

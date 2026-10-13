@@ -8,7 +8,9 @@ namespace Paqueteria.ArchitectureTests;
 /// OBS-002: the Worker and outbox paths log and measure only allowlisted, low-cardinality dimensions
 /// (fixed lane, job and outcome names, bounded error classes, counts and cutoffs), and the pilot alert
 /// queries read only the OBS-002 telemetry dimensions. No payload, token, tenant, identifier or
-/// personal datum can become a log property, a metric tag or an alert dimension.
+/// personal datum can become a log property, a metric tag or an alert dimension. OBS-003 PR 6: every
+/// metric the hosts export keeps only <see cref="MetricTags"/>, and the organization pseudonym and the
+/// actor role kind never reach a metric tag, an OBS-002 event or an alert or workbook query.
 /// </summary>
 public sealed partial class ObservabilityArchitectureTests
 {
@@ -60,7 +62,12 @@ public sealed partial class ObservabilityArchitectureTests
         "Attempted",
     };
 
-    private static readonly HashSet<string> MetricTags = new(StringComparer.Ordinal)
+    /// <summary>
+    /// The tag keys of the application meters, as their source declares them (every file that creates an instrument,
+    /// <see cref="MetricSourceFiles"/>): fixed lane, job, outcome, provider, hub and rate-limit policy names, error
+    /// classes and codes.
+    /// </summary>
+    private static readonly HashSet<string> ApplicationMetricTags = new(StringComparer.Ordinal)
     {
         "lane",
         "mode",
@@ -69,6 +76,62 @@ public sealed partial class ObservabilityArchitectureTests
         "job",
         "audience",
         "event_type",
+        "event.type",
+        // SEC-004: rate_limit.rejected counts by registry policy name only (RateLimitTelemetry.PolicyTag).
+        "policy",
+        "provider",
+        "proof_type",
+        "reason_code",
+        "auth.kind",
+        "hub",
+        "category",
+        "stage",
+        "publication_decision",
+        "rejection_code",
+    };
+
+    /// <summary>
+    /// OBS-003 PR 6: the tag keys of the built-in ASP.NET Core meters that the export keeps, among them the policy
+    /// name and the result of <c>aspnetcore.rate_limiting.requests</c>. Kestrel's <c>server.address</c> and
+    /// <c>server.port</c>, <c>network.protocol.name</c> and every other key are dropped by the export's view.
+    /// </summary>
+    private static readonly HashSet<string> AspNetCoreMetricTags = new(StringComparer.Ordinal)
+    {
+        "http.request.method",
+        "http.response.status_code",
+        "http.route",
+        "url.scheme",
+        "network.protocol.version",
+        "error.type",
+        "aspnetcore.request.is_unhandled",
+        "aspnetcore.routing.match_status",
+        "aspnetcore.routing.is_fallback",
+        "aspnetcore.diagnostics.handler.type",
+        "aspnetcore.diagnostics.exception.result",
+        "aspnetcore.rate_limiting.policy",
+        "aspnetcore.rate_limiting.result",
+        "signalr.connection.status",
+        "signalr.transport",
+        "aspnetcore.authentication.scheme",
+        "aspnetcore.authentication.result",
+        "aspnetcore.authorization.policy",
+        "aspnetcore.authorization.result",
+        "aspnetcore.memory_pool.owner",
+        "tls.protocol.version",
+    };
+
+    /// <summary>The OBS-002 metric allowlist: the only tag keys an exported metric keeps.</summary>
+    private static readonly HashSet<string> MetricTags = new(ApplicationMetricTags.Concat(AspNetCoreMetricTags), StringComparer.Ordinal);
+
+    /// <summary>
+    /// Instrument files whose meters record no tag at all (each measurement is a bare count or duration).
+    /// </summary>
+    private static readonly HashSet<string> UntaggedMetricFiles = new(StringComparer.Ordinal)
+    {
+        "src/Modules/Dispatch/Dispatch.Infrastructure/Assignments/PostgreSqlAssignableDriversQuery.cs",
+        "src/Modules/Dispatch/Dispatch.Infrastructure/Assignments/PostgreSqlAssignmentToOrderCoordinator.cs",
+        "src/Modules/Dispatch/Dispatch.Infrastructure/Fleet/PostgreSqlOrganizationDriversQuery.cs",
+        "src/Modules/Dispatch/Dispatch.Infrastructure/Stops/PostgreSqlDriverStopsQuery.cs",
     };
 
     private static readonly string[] ForbiddenFragments =
@@ -76,6 +139,21 @@ public sealed partial class ObservabilityArchitectureTests
         "payload", "token", "secret", "password", "email", "phone", "address", "recipient", "tenant",
         "organization", "orgid", "userid", "driverid", "orderid", "publicid", "aggregateid", "messageid",
         "name", "body", "variables", "coordinate", "latitude", "longitude",
+        // OBS-003-TENANT-PSEUDONYM-2026-10-12: the organization pseudonym, the actor role kind, a subject, a client
+        // address and a rate-limit partition key never become a dimension or a metric tag.
+        "pseudonym", "role", "subject", "client", "partition",
+    ];
+
+    /// <summary>Whole-word fragments (split on '.' and '_'): an IP address never becomes a dimension or a tag.</summary>
+    private static readonly string[] ForbiddenWords = ["ip", "peer", "user", "sub"];
+
+    /// <summary>The names under which the pseudonym and the role kind are written (logs and spans).</summary>
+    private static readonly string[] PseudonymAndRoleNames =
+    [
+        TelemetryOrganizationContext.PseudonymLogProperty,
+        TelemetryOrganizationContext.RoleKindLogProperty,
+        TelemetryExportPolicy.OrganizationPseudonymAttribute,
+        TelemetryExportPolicy.ActorRoleKindAttribute,
     ];
 
     [Fact]
@@ -148,13 +226,119 @@ public sealed partial class ObservabilityArchitectureTests
     [Fact]
     public void Worker_and_outbox_metric_tags_are_allowlisted()
     {
-        var tags = SourceFiles()
-            .Where(file => file.Text.Contains("System.Diagnostics.Metrics", StringComparison.Ordinal))
-            .SelectMany(file => MetricTagPattern().Matches(file.Text).Select(match => (file.Path, Tag: match.Groups["tag"].Value)))
-            .ToArray();
+        // OBS-003 PR 6: every exported meter is scanned, not only the Worker and outbox paths: every src file that
+        // creates an instrument, the rate-limiting registry included. Literal keys, constants, target-typed pairs,
+        // tuple helpers and TagList initializers are all read; an unresolved key fails.
+        var files = MetricSourceFiles().ToArray();
+        Assert.Contains(files, file => file.Path == "src/BuildingBlocks/Paqueteria.Infrastructure/Security/RateLimiting/RateLimitRejectionWriter.cs");
+        Assert.Contains(files, file => file.Path.StartsWith("src/BuildingBlocks/Paqueteria.Infrastructure/Database/Outbox", StringComparison.Ordinal));
 
-        Assert.NotEmpty(tags);
-        Assert.All(tags, tag => Assert.True(MetricTags.Contains(tag.Tag), $"{tag.Path}: metric tag {tag.Tag} is not allowlisted"));
+        var found = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var file in files)
+        {
+            var tags = MetricTagKeys(file.Path, file.Text).ToArray();
+            Assert.True(
+                tags.Length > 0 || UntaggedMetricFiles.Contains(file.Path),
+                $"{file.Path}: creates instruments but no tag key was read; list it as untagged only if it records none");
+            Assert.False(
+                tags.Length > 0 && UntaggedMetricFiles.Contains(file.Path),
+                $"{file.Path}: records tags but is listed as untagged");
+            foreach (var tag in tags)
+            {
+                Assert.True(ApplicationMetricTags.Contains(tag), $"{file.Path}: metric tag {tag} is not allowlisted");
+                found.Add(tag);
+            }
+        }
+
+        // Every allowlisted application tag is still in use, so the list cannot hide a stale or renamed key.
+        Assert.Equal(ApplicationMetricTags.Order(StringComparer.Ordinal), found.Order(StringComparer.Ordinal));
+    }
+
+    [Theory]
+    [InlineData(@"c.Add(1, new KeyValuePair<string, object?>(""organization_id"", id));", "organization_id")]
+    [InlineData(@"private const string Key = ""subject_hash""; void M() => c.Add(1, new KeyValuePair<string, object?>(Key, v));", "subject_hash")]
+    [InlineData(@"static KeyValuePair<string, object?> Ip(string v) => new(""client.ip"", v);", "client.ip")]
+    [InlineData(@"c.Add(1, Tags((""partition"", p), (""lane"", l)));", "partition")]
+    [InlineData(@"var tags = new TagList { { ""user.id"", u }, { ""lane"", l } };", "user.id")]
+    [InlineData(@"c.Add(1, new KeyValuePair<string, object?>(SomeType.Unknown, v));", "<unresolved:SomeType.Unknown>")]
+    public void The_metric_tag_scan_reads_every_way_a_key_can_be_written(string code, string expected)
+    {
+        Assert.Contains(expected, MetricTagKeys("fixture.cs", code));
+    }
+
+    /// <summary>
+    /// OBS-003 PR 6: the export keeps exactly the OBS-002 metric allowlist (the view on every exported instrument), and
+    /// no key of it names an identifier, an address, a partition key, the pseudonym or the role kind.
+    /// </summary>
+    [Fact]
+    public void The_export_keeps_exactly_the_metric_allowlist()
+    {
+        Assert.Equal(MetricTags.Order(StringComparer.Ordinal), TelemetryExportPolicy.MetricTagKeys.Order(StringComparer.Ordinal));
+        Assert.Contains("aspnetcore.rate_limiting.policy", MetricTags);
+        Assert.Contains("aspnetcore.rate_limiting.result", MetricTags);
+        Assert.All(MetricTags, AssertNotSensitive);
+        Assert.Equal(["Microsoft.AspNetCore.*", "Paquetenvia.*", "Paqueteria.*"], TelemetryExportPolicy.ExportedMeters.Order(StringComparer.Ordinal));
+        foreach (var path in new[] { "src/Paqueteria.Api/Program.cs", "src/Paqueteria.Worker/Program.cs" })
+        {
+            Assert.DoesNotContain("AddMeter(", File.ReadAllText(TestRepository.GetPath(path)), StringComparison.Ordinal);
+        }
+    }
+
+    /// <summary>
+    /// OBS-003-TENANT-PSEUDONYM-2026-10-12: the organization pseudonym and the actor role kind never reach a metric tag,
+    /// an OBS-002 event (its properties are exactly <see cref="TelemetryDimensions.Allowed"/>), a log template, or an
+    /// alert or workbook query, and only the reviewed files compute or carry them.
+    /// </summary>
+    [Fact]
+    public void The_pseudonym_and_role_kind_never_reach_metrics_obs002_events_or_alert_queries()
+    {
+        foreach (var name in PseudonymAndRoleNames)
+        {
+            Assert.DoesNotContain(name, TelemetryDimensions.Allowed);
+            Assert.DoesNotContain(name, MetricTags);
+            Assert.DoesNotContain(name, TelemetryExportPolicy.MetricTagKeys);
+            Assert.DoesNotContain(name, WorkerLogProperties);
+            // The forbidden-fragment rule refuses them, so neither can ever be added to an allowlist.
+            Assert.ThrowsAny<Exception>(() => AssertNotSensitive(name));
+        }
+
+        // No metric file and no log template names them.
+        foreach (var file in MetricSourceFiles())
+        {
+            Assert.DoesNotContain("Pseudonym", file.Text, StringComparison.Ordinal);
+            Assert.DoesNotContain("RoleKind", file.Text, StringComparison.Ordinal);
+            Assert.DoesNotContain("TelemetryOrganizationContext", file.Text, StringComparison.Ordinal);
+        }
+
+        foreach (var file in AllSourceFiles())
+        {
+            Assert.DoesNotContain("{" + TelemetryOrganizationContext.PseudonymLogProperty + "}", file.Text, StringComparison.Ordinal);
+            Assert.DoesNotContain("{" + TelemetryOrganizationContext.RoleKindLogProperty + "}", file.Text, StringComparison.Ordinal);
+        }
+
+        // The alert and workbook queries read neither, nor any Application Insights table.
+        var template = File.ReadAllText(TestRepository.GetPath("deploy/azure/pilot/observability.bicep"));
+        foreach (var forbidden in PseudonymAndRoleNames.Concat(["pseudonym", "Pseudonym", "role_kind", "RoleKind"]).Concat(ApplicationInsightsTables))
+        {
+            Assert.DoesNotContain(forbidden, template, StringComparison.Ordinal);
+        }
+
+        // Only these files compute the pseudonym, carry it, or register its key.
+        var users = AllSourceFiles()
+            .Where(file => PseudonymUsePattern().IsMatch(file.Text))
+            .Select(file => file.Path)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(
+            [
+                "src/BuildingBlocks/Paqueteria.Infrastructure/Observability/OrganizationPseudonym.cs",
+                "src/BuildingBlocks/Paqueteria.Infrastructure/Observability/TelemetryExportPolicy.cs",
+                "src/BuildingBlocks/Paqueteria.Infrastructure/Observability/TraceCorrelatedLogging.cs",
+                "src/Paqueteria.Api/Program.cs",
+                "src/Paqueteria.Api/Tenancy/TelemetryOrganizationContextMiddleware.cs",
+                "src/Paqueteria.Worker/Program.cs",
+            ],
+            users);
     }
 
     [Fact]
@@ -225,7 +409,93 @@ public sealed partial class ObservabilityArchitectureTests
         Assert.All(ForbiddenFragments, fragment => Assert.False(
             normalized.Contains(fragment, StringComparison.Ordinal),
             $"dimension {dimension} looks like an identifier, payload or personal field ({fragment})"));
+        var words = dimension.ToLowerInvariant().Split(['.', '_'], StringSplitOptions.RemoveEmptyEntries);
+        Assert.All(ForbiddenWords, word => Assert.False(
+            words.Contains(word, StringComparer.Ordinal),
+            $"dimension {dimension} looks like an address, subject or user field ({word})"));
     }
+
+    /// <summary>The Application Insights tables (workspace and classic names) no OBS-002 query may read.</summary>
+    private static readonly string[] ApplicationInsightsTables =
+    [
+        "AppRequests", "AppDependencies", "AppTraces", "AppMetrics", "AppExceptions", "AppEvents", "AppPageViews",
+        "customMetrics", "customDimensions", "requests |", "dependencies |",
+    ];
+
+    /// <summary>
+    /// The tag keys one metric file writes: literal or constant keys of <c>KeyValuePair</c>s, target-typed
+    /// <c>new("key", value)</c> pairs, the tuples of a <c>Tags((...))</c> helper call and <c>TagList</c> initializers.
+    /// A key that is neither a literal nor a constant of the file comes back as <c>&lt;unresolved:...&gt;</c>.
+    /// </summary>
+    private static IEnumerable<string> MetricTagKeys(string path, string text)
+    {
+        // A constant declared twice in the file (in two types) with different values is ambiguous: unresolved.
+        var constants = ConstantPattern().Matches(text)
+            .GroupBy(match => match.Groups["name"].Value, StringComparer.Ordinal)
+            .ToDictionary(
+                group => group.Key,
+                group => group.Select(match => match.Groups["value"].Value).Distinct(StringComparer.Ordinal).ToArray(),
+                StringComparer.Ordinal);
+        foreach (Match match in KeyValuePairTagPattern().Matches(text))
+        {
+            var key = match.Groups["key"].Value;
+            yield return key.StartsWith('"')
+                ? key.Trim('"')
+                : constants.TryGetValue(key, out var values) && values.Length == 1 ? values[0] : $"<unresolved:{key}>";
+        }
+
+        foreach (Match match in TargetTypedTagPattern().Matches(text))
+        {
+            yield return match.Groups["tag"].Value;
+        }
+
+        foreach (Match call in TagsHelperCallPattern().Matches(text))
+        {
+            foreach (Match tuple in TupleTagPattern().Matches(Enclosed(text, call.Index + call.Length - 1)))
+            {
+                yield return tuple.Groups["tag"].Value;
+            }
+        }
+
+        foreach (Match initializer in TagListInitializerPattern().Matches(text))
+        {
+            foreach (Match entry in InitializerTagPattern().Matches(Enclosed(text, initializer.Index + initializer.Length - 1)))
+            {
+                yield return entry.Groups["tag"].Value;
+            }
+        }
+
+        _ = path;
+    }
+
+    /// <summary>The text between the bracket at <paramref name="open"/> and its match.</summary>
+    private static string Enclosed(string text, int open)
+    {
+        var depth = 0;
+        for (var index = open; index < text.Length; index++)
+        {
+            if (text[index] is '(' or '{')
+            {
+                depth++;
+            }
+            else if (text[index] is ')' or '}' && --depth == 0)
+            {
+                return text[(open + 1)..index];
+            }
+        }
+
+        return text[(open + 1)..];
+    }
+
+    /// <summary>Every src file that creates an instrument: the meters the hosts export.</summary>
+    private static IEnumerable<(string Path, string Text)> MetricSourceFiles() =>
+        AllSourceFiles().Where(file => InstrumentCreationPattern().IsMatch(file.Text));
+
+    private static IEnumerable<(string Path, string Text)> AllSourceFiles() =>
+        Directory.EnumerateFiles(TestRepository.GetPath("src"), "*.cs", SearchOption.AllDirectories)
+            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+                           !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
+            .Select(path => (Path.GetRelativePath(TestRepository.Root, path).Replace('\\', '/'), File.ReadAllText(path)));
 
     private static IEnumerable<string> Placeholders(string call) =>
         StringLiteralPattern().Matches(call)
@@ -249,8 +519,32 @@ public sealed partial class ObservabilityArchitectureTests
     [GeneratedRegex(@"\{(?<name>[A-Za-z][A-Za-z0-9]*)\}")]
     private static partial Regex PlaceholderPattern();
 
-    [GeneratedRegex(@"(?:KeyValuePair<string, object\?>\(|\bnew\()""(?<tag>[a-z_]+)"",")]
-    private static partial Regex MetricTagPattern();
+    [GeneratedRegex(@"\.Create(?:Counter|Histogram|UpDownCounter|Gauge|ObservableCounter|ObservableGauge|ObservableUpDownCounter)\s*<")]
+    private static partial Regex InstrumentCreationPattern();
+
+    [GeneratedRegex(@"KeyValuePair<string,\s*object\?>\(\s*(?<key>""[^""]*""|[A-Za-z_][\w.]*)\s*,")]
+    private static partial Regex KeyValuePairTagPattern();
+
+    [GeneratedRegex(@"(?<![\w.])new\(\s*""(?<tag>[a-z_.]+)""\s*,")]
+    private static partial Regex TargetTypedTagPattern();
+
+    [GeneratedRegex(@"\bTags\s*\(")]
+    private static partial Regex TagsHelperCallPattern();
+
+    [GeneratedRegex(@"\(\s*""(?<tag>[^""]*)""\s*,")]
+    private static partial Regex TupleTagPattern();
+
+    [GeneratedRegex(@"\bnew\s+TagList\s*(?:\(\s*\))?\s*\{")]
+    private static partial Regex TagListInitializerPattern();
+
+    [GeneratedRegex(@"\{\s*""(?<tag>[^""]*)""\s*,")]
+    private static partial Regex InitializerTagPattern();
+
+    [GeneratedRegex(@"\bconst\s+string\s+(?<name>[A-Za-z_]\w*)\s*=\s*""(?<value>[^""]*)""\s*;")]
+    private static partial Regex ConstantPattern();
+
+    [GeneratedRegex(@"\b(?:IOrganizationPseudonymizer|TelemetryOrganizationContext|AddTelemetryOrganizationPseudonym|OrganizationPseudonymAttribute|ActorRoleKindAttribute|SetOrganization)\b")]
+    private static partial Regex PseudonymUsePattern();
 
     [GeneratedRegex(@"\be\.State\.(?<name>[A-Za-z0-9_]+)")]
     private static partial Regex StatePropertyPattern();

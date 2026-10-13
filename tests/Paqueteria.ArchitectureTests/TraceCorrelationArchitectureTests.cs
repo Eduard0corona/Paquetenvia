@@ -6,8 +6,9 @@ namespace Paqueteria.ArchitectureTests;
 /// <summary>
 /// OBS-003 (phase 4 PR 1) guards: both hosts configure W3C trace correlation before anything builds an HTTP
 /// handler, the API sets the request trace id first, every Azure SDK client strips trace context, every background
-/// loop runs its cycles in their own root trace, and no activity is ever given a tag, event or baggage (request
-/// paths, queries, headers and bodies included).
+/// loop runs its cycles in their own root trace, and no activity is ever given an event or baggage (request paths,
+/// queries, headers and bodies included). Since phase 4 PR 6 one reviewed file, <see cref="ExportPolicy"/>, writes the
+/// allowlisted attributes of an exported span and nothing else writes any.
 /// </summary>
 public sealed partial class TraceCorrelationArchitectureTests
 {
@@ -33,15 +34,21 @@ public sealed partial class TraceCorrelationArchitectureTests
                 "the Blob service client, built with CreateClientOptions, which ends in WithoutDistributedTracing",
             ["src/Modules/Custody/Custody.Infrastructure/ProofStorage/AzureBlobProofObjectStorage.cs"] =
                 "SAS builders and Blob models only; every Blob request goes through IProofBlobGateway",
+            ["src/Paqueteria.Api/Observability/AzureMonitorTelemetryExport.cs"] =
+                "the Azure Monitor trace and metric exporters (OBS-003 PR 6), built with CreateExporterOptions, which ends in WithoutDistributedTracing",
         };
 
     private const string Scheduler = "src/BuildingBlocks/Paqueteria.Infrastructure/Scheduling/PeriodicJobScheduler.cs";
+
+    /// <summary>OBS-003 PR 6: the only file that writes attributes, a status or a name on an activity it did not start.</summary>
+    private const string ExportPolicy = "src/BuildingBlocks/Paqueteria.Infrastructure/Observability/TelemetryExportPolicy.cs";
 
     /// <summary>Background loops (one per <c>BackgroundService</c> class) that run each cycle in a new root trace.</summary>
     private static readonly IReadOnlyDictionary<string, string> CycleTracedLoops =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
-            ["src/Modules/Custody/Custody.Infrastructure/Proofs/ProofValidationWorker.cs"] = "TraceCorrelation.StartJobCycle(",
+            // OBS-003 PR 6 (Q-PR6-1): a poll, not an ADR-034 scheduled job, so its traces are never exported.
+            ["src/Modules/Custody/Custody.Infrastructure/Proofs/ProofValidationWorker.cs"] = "TraceCorrelation.StartPollCycle(",
             ["src/Modules/Notifications/Notifications.Infrastructure/Dispatching/NotificationsOutboxDispatcher.cs"] =
                 "TraceCorrelation.StartOutboxDispatchCycle(",
             ["src/Modules/Dispatch/Dispatch.Infrastructure/Lifecycle/AssignmentLifecycleProcessor.cs"] =
@@ -145,6 +152,9 @@ public sealed partial class TraceCorrelationArchitectureTests
     [Fact]
     public void Activities_are_started_only_by_trace_correlation_and_never_carry_tags_events_or_baggage()
     {
+        // OBS-003 PR 6 widens one rule narrowly: TelemetryExportPolicy, and only it, writes the allowlisted attributes
+        // of an exported span (and clears its status description and rebuilds its name). Starting activities, events,
+        // links and baggage stay forbidden everywhere.
         var correlation = "src/BuildingBlocks/Paqueteria.Infrastructure/Observability/TraceCorrelation.cs";
         var starters = SourceFiles()
             .Where(file => CodeWithoutComments(file).Contains("StartActivity(", StringComparison.Ordinal) ||
@@ -159,14 +169,31 @@ public sealed partial class TraceCorrelationArchitectureTests
             .Where(file => ActivityEnrichmentPattern().IsMatch(CodeWithoutComments(file)))
             .Select(Relative)
             .ToArray();
-        Assert.Empty(enrichers);
+        Assert.Equal([ExportPolicy], enrichers);
+        var policy = CodeWithoutComments(TestRepository.GetPath(ExportPolicy));
+        Assert.Empty(EventOrBaggagePattern().Matches(policy));
+        // Every attribute it writes is a literal of its allowlist or one of its two organization constants.
+        var written = SetTagKeyPattern().Matches(policy).Select(match => match.Groups["key"].Value).ToHashSet(StringComparer.Ordinal);
+        Assert.Equal(
+            [
+                "\"http.request.method\"",
+                "\"http.response.status_code\"",
+                "\"http.route\"",
+                "ActorRoleKindAttribute",
+                "OrganizationPseudonymAttribute",
+                "tag.Key",
+            ],
+            written.Order(StringComparer.Ordinal));
+        Assert.Contains("activity.SetTag(tag.Key, null);", policy, StringComparison.Ordinal);
 
-        // The only activity name set after start is the fixed job or lane name of a cycle, whatever the receiver.
+        // The only activity names set after start are the fixed job or lane name of a cycle and the export's
+        // rebuilt span name, whatever the receiver.
         var renames = SourceFiles()
             .Where(file => AzureClientTracingGuard.DisplayNameAssignments(CodeWithoutComments(file)).Count > 0)
             .Select(Relative)
+            .Order(StringComparer.Ordinal)
             .ToArray();
-        Assert.Equal([correlation], renames);
+        Assert.Equal([ExportPolicy, correlation], renames);
     }
 
     private static IEnumerable<string> SourceFiles() =>
@@ -211,4 +238,10 @@ public sealed partial class TraceCorrelationArchitectureTests
 
     [GeneratedRegex(@"\.(?:SetTag|AddTag|SetBaggage|AddBaggage|AddEvent|AddLink|SetStatus|AddException)\(")]
     private static partial Regex ActivityEnrichmentPattern();
+
+    [GeneratedRegex(@"\.(?:AddTag|SetBaggage|AddBaggage|AddEvent|AddLink|AddException)\(")]
+    private static partial Regex EventOrBaggagePattern();
+
+    [GeneratedRegex(@"\.SetTag\(\s*(?<key>""[^""]*""|[A-Za-z_][\w.]*)\s*,")]
+    private static partial Regex SetTagKeyPattern();
 }

@@ -147,7 +147,11 @@ AI-05 (`Problem.traceId` and the `OBS-003-W3C-CORRELATION` contract delta) says 
 
 ## For later PRs
 
-- **PR 6 (OpenTelemetry SDK).** Replace the listener in `TraceCorrelation.ConfigureProcess()` with the SDK's
+- **PR 6 (OpenTelemetry SDK).** Done in `obs-003-appinsights-export.md`. The listener was kept next to the SDK's
+  `TracerProvider` (the logs and problems need a trace id also for the 90 % of traces the sampler drops), the
+  OpenTelemetry propagator is a no-op whether the export is on or off, and only scheduled job cycles and requests
+  are exported (Q-PR6-1). The original plan was:
+  Replace the listener in `TraceCorrelation.ConfigureProcess()` with the SDK's
   `TracerProvider` and its sampler.
   - Keep the propagator, the `TraceIdentifier` middleware, the problem `traceId`, the log enrichment (the logs stay
     on the console) and the Azure transport wrapper.
