@@ -4719,6 +4719,92 @@ class DependencyAdmissionTests(unittest.TestCase):
             all(item["id"].startswith("Microsoft.Extensions.") for item in entry["baseline_package_removals"])
         )
 
+    def test_committed_policy_registers_obs_003_opentelemetry_with_exact_amendments(self):
+        policy = rel000.load_remediation_policy(REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH)
+        (entry,) = [item for item in policy["dependency_admissions"] if item["id"] == "OBS-003-OPENTELEMETRY"]
+        self.assertEqual("deps/obs-003-opentelemetry", entry["authorized_source_branch"])
+        self.assertEqual("GOV-DEPENDENCY-ADMISSION-001", entry["owner_decision_id"])
+        for decision in (
+            "OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12",
+            "GOV-REL000-CHAINED-UPGRADES-2026-10-12",
+            "OBS-003-TEST-EXTENSIONS-ADMISSION-2026-10-12",
+        ):
+            self.assertIn(decision, entry["description"])
+        self.assertEqual(
+            [("Azure.Monitor.OpenTelemetry.Exporter", "1.10.0"), ("OpenTelemetry.Extensions.Hosting", "1.19.1")],
+            [(item["id"], item["version"]) for item in entry["admitted_direct_packages"]],
+        )
+        self.assertEqual(
+            [
+                ("Microsoft.Extensions.Configuration", "10.0.0"),
+                ("Microsoft.Extensions.Configuration.Binder", "10.0.0"),
+                ("Microsoft.Extensions.Configuration.EnvironmentVariables", "10.0.0"),
+                ("Microsoft.Extensions.Logging.Configuration", "10.0.0"),
+                ("Microsoft.Extensions.Options.ConfigurationExtensions", "10.0.0"),
+                ("OpenTelemetry", "1.19.1"),
+                ("OpenTelemetry.Api", "1.19.1"),
+                ("OpenTelemetry.Api.ProviderBuilderExtensions", "1.19.1"),
+                ("OpenTelemetry.PersistentStorage.Abstractions", "1.1.1"),
+                ("OpenTelemetry.PersistentStorage.FileSystem", "1.1.1"),
+            ],
+            [(item["id"], item["version"]) for item in entry["admitted_transitive_packages"]],
+        )
+        locks = [
+            "src/Paqueteria.Api/packages.lock.json",
+            "src/Paqueteria.Worker/packages.lock.json",
+            "tests/Paqueteria.ArchitectureTests/packages.lock.json",
+            "tests/Paqueteria.IntegrationTests/packages.lock.json",
+        ]
+        self.assertEqual(["Directory.Packages.props", *locks], entry["allowed_dependency_files"])
+        self.assertEqual(entry["allowed_dependency_files"], entry["required_dependency_files"])
+        self.assertNotIn("tests/Paqueteria.RealtimeTestHost/packages.lock.json", entry["allowed_dependency_files"])
+        self.assertEqual(
+            ["src/Paqueteria.Api/Paqueteria.Api.csproj", "src/Paqueteria.Worker/Paqueteria.Worker.csproj"],
+            entry["allowed_project_files"],
+        )
+        # Azure.Core 1.63.0 and the five moves it forces: new versions of ADP-001-AZURE packages,
+        # each reached by one exact upgrade step in each of the four lockfiles.
+        moves = {
+            "Azure.Core": ("1.61.0", "1.63.0"),
+            "Microsoft.Bcl.AsyncInterfaces": ("10.0.9", "10.0.10"),
+            "Microsoft.Identity.Client": ("4.84.2", "4.90.0"),
+            "Microsoft.Identity.Client.Extensions.Msal": ("4.84.2", "4.90.0"),
+            "System.ClientModel": ("1.15.0", "1.16.0"),
+            "System.Memory.Data": ("10.0.9", "10.0.10"),
+        }
+        self.assertEqual(
+            {package: (target, locks) for package, (_, target) in moves.items()},
+            {item["id"]: (item["version"], item["lock_files"]) for item in entry["additional_package_versions"]},
+        )
+        adp = {
+            item["id"]: item
+            for item in next(
+                admission for admission in policy["dependency_admissions"] if admission["id"] == "ADP-001-AZURE"
+            )["admitted_transitive_packages"]
+        }
+        self.assertEqual(
+            sorted((lock, package, *versions) for lock in locks for package, versions in moves.items()),
+            sorted(
+                (item["lock_file"], item["id"], item["from_version"], item["to_version"])
+                for item in entry["baseline_package_upgrades"]
+            ),
+        )
+        for item in entry["baseline_package_upgrades"]:
+            self.assertEqual(adp[item["id"]]["content_hash"], item["from_content_hash"])
+        self.assertNotIn("baseline_package_removals", entry)
+        # The IntegrationTests Microsoft.Bcl.AsyncInterfaces step continues ADP-001-AZURE's chain.
+        chain = rel000.admission_amendments(policy["dependency_admissions"])["upgrades"][
+            ("tests/Paqueteria.IntegrationTests/packages.lock.json", "net10.0", "microsoft.bcl.asyncinterfaces")
+        ]
+        self.assertEqual(
+            [("ADP-001-AZURE", "6.0.0", "10.0.9"), ("OBS-003-OPENTELEMETRY", "10.0.9", "10.0.10")],
+            [(step["admission_id"], step["from_version"], step["to_version"]) for step in chain],
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(policy, "deps/obs-003-opentelemetry"),
+        )
+
     def test_v2_policy_is_rejected_from_the_tree(self):
         value = self.policy([])
         value["format_version"] = "paquetenvia-rel000-security-remediation-policy-v2"

@@ -132,9 +132,10 @@ AI-05 (`Problem.traceId` and the `OBS-003-W3C-CORRELATION` contract delta) says 
 
 ## Found, not changed here
 
-- `TenantContextMiddleware` sets `application/problem+json`, then calls `WriteAsJsonAsync(value)`, which resets the
-  type to `application/json; charset=utf-8`. Its 400, 401, 403 and 503 problems have always gone out as JSON. The
-  body now carries `traceId`; the media type is left for a separate fix.
+- `TenantContextMiddleware` set `application/problem+json`, then called `WriteAsJsonAsync(value)`, which reset the
+  type to `application/json; charset=utf-8`; the public tracking 429 writer did the same. #244 fixed both (they pass
+  the media type to `WriteAsJsonAsync`); merged with this PR, the tenant context problem carries `traceId` and goes
+  out as `application/problem+json`, and the public tracking 429 stays uniform without `traceId`.
 - The rate limiter's 429 on GPS ingestion and hub negotiate still has an empty body. PR 2 gives it the
   `TooManyRequests` problem with `traceId`.
 - **SignalR long polling.** A private hub connection over long polling spans several HTTP requests: negotiate, the

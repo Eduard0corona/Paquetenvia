@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Organizations.Application.Auditing;
 using Organizations.Application.Session;
 using Paqueteria.Domain.Tenancy;
@@ -6,6 +7,8 @@ namespace Organizations.Endpoints.Tenancy;
 
 public sealed class TenantContextMiddleware(RequestDelegate next)
 {
+    private const string ProblemContentType = "application/problem+json";
+
     public async Task InvokeAsync(
         HttpContext httpContext,
         IOrganizationRequestSession session,
@@ -89,14 +92,19 @@ public sealed class TenantContextMiddleware(RequestDelegate next)
     private static Task WriteProblemAsync(HttpContext context, int statusCode, string title)
     {
         context.Response.StatusCode = statusCode;
-        context.Response.ContentType = "application/problem+json";
+        // The content type goes through WriteAsJsonAsync: the overload without it would reset the header to
+        // application/json; charset=utf-8. Null options keep the host's JSON options.
         // OBS-003: TraceIdentifier is the request's W3C trace id, the same value as the audit request_id.
-        return context.Response.WriteAsJsonAsync(new
-        {
-            type = "about:blank",
-            title,
-            status = statusCode,
-            traceId = context.TraceIdentifier,
-        }, context.RequestAborted);
+        return context.Response.WriteAsJsonAsync(
+            new
+            {
+                type = "about:blank",
+                title,
+                status = statusCode,
+                traceId = context.TraceIdentifier,
+            },
+            (JsonSerializerOptions?)null,
+            ProblemContentType,
+            context.RequestAborted);
     }
 }

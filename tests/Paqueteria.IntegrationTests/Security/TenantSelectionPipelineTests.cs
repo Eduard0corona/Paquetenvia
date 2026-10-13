@@ -1,5 +1,6 @@
 using System.Net;
 using System.Net.Http.Headers;
+using System.Text.Json;
 using Identity.Infrastructure.Mock;
 using Microsoft.AspNetCore.Mvc.Testing;
 
@@ -38,6 +39,7 @@ public sealed class TenantSelectionPipelineTests : IClassFixture<SecurityWebAppl
         using var response = await client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+        await AssertProblemAsync(response, "Invalid organization context.", 400);
     }
 
     [Fact]
@@ -49,6 +51,7 @@ public sealed class TenantSelectionPipelineTests : IClassFixture<SecurityWebAppl
         using var response = await client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
+        await AssertProblemAsync(response, "Forbidden.", 403);
     }
 
     [Fact]
@@ -86,6 +89,24 @@ public sealed class TenantSelectionPipelineTests : IClassFixture<SecurityWebAppl
         using var response = await client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+    }
+
+    /// <summary>
+    /// The tenant context problem goes out as exactly <c>application/problem+json</c> (AI-05), with exactly the members
+    /// <c>type</c>, <c>title</c>, <c>status</c> and the request's W3C trace id as <c>traceId</c> (OBS-003).
+    /// </summary>
+    private static async Task AssertProblemAsync(HttpResponseMessage response, string title, int status)
+    {
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.ToString());
+        using var document = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
+        var root = document.RootElement;
+        Assert.Equal(
+            ["status", "title", "traceId", "type"],
+            root.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
+        Assert.Equal("about:blank", root.GetProperty("type").GetString());
+        Assert.Equal(title, root.GetProperty("title").GetString());
+        Assert.Equal(status, root.GetProperty("status").GetInt32());
+        Assert.Matches("^[0-9a-f]{32}$", root.GetProperty("traceId").GetString());
     }
 
     private static HttpRequestMessage Authenticated(string path, string profile)

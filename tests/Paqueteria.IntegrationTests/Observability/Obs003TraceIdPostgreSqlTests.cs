@@ -79,8 +79,8 @@ public sealed class Obs003TraceIdPostgreSqlTests(PostgreSqlSecurityWebApplicatio
         using var response = await client.SendAsync(request);
 
         Assert.Equal(HttpStatusCode.Forbidden, response.StatusCode);
-        // The body is the AI-05 Problem; its media type is not asserted here (the middleware's WriteAsJsonAsync
-        // overrides the problem media type it sets, which predates OBS-003 and is reported separately).
+        // The body is the AI-05 Problem, sent as application/problem+json (#244).
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
         var body = await response.Content.ReadAsStringAsync();
         Assert.Contains("Invalid organization context.", body, StringComparison.Ordinal);
         var traceId = Obs003.ProblemTraceId(body);
