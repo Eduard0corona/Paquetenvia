@@ -1,4 +1,5 @@
 using System.Collections.Concurrent;
+using System.Diagnostics;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
@@ -203,6 +204,94 @@ public sealed class Sec004HeavyEndpointLimitsTests
         Assert.Equal(
             [(CsvOrderImportEndpoints.CommitRateLimitPolicy, 1L)],
             host.Summary.TakeSnapshot().Where(item => item.Rejected > 0));
+    }
+
+    [Fact]
+    public async Task The_shared_csv_window_admits_preview_and_commit_again_once_it_has_passed()
+    {
+        // AI-08 SEC-004 required_tests[0] ("admits again after its window") on the registry's own budget limiter.
+        await using var host = new LimitsFactory(
+            permitLimit: 100,
+            csvLimit: 1,
+            overrides: new Dictionary<string, string?> { ["RateLimits:CsvImport:WindowSeconds"] = "1" });
+        using var client = host.CreateClient();
+        const string dispatcher = MockIdentityProfiles.ActiveDispatcher;
+        Func<HttpRequestMessage> preview = () => Request("POST", "/api/v1/orders/csv/preview", dispatcher, NetworkA);
+        Func<HttpRequestMessage> commit = () => Request("POST", "/api/v1/orders/csv/commit", dispatcher, NetworkA);
+
+        // A preview spends the one permit of the shared window and the commit right after it meets the limit. A
+        // window boundary can fall between the two, so the pair is sent again until the commit is rejected.
+        HttpResponseMessage? rejected = null;
+        for (var attempt = 0; attempt < 5 && rejected is null; attempt++)
+        {
+            using var spent = await client.SendAsync(preview());
+            var answer = await client.SendAsync(commit());
+            if (answer.StatusCode == HttpStatusCode.TooManyRequests)
+            {
+                rejected = answer;
+            }
+            else
+            {
+                answer.Dispose();
+            }
+        }
+
+        using (rejected)
+        {
+            Assert.NotNull(rejected);
+            await AssertProblemAsync(rejected, retryAfter: "1");
+        }
+
+        // Once the window has passed, the commit is admitted again, and so is the preview after the next one.
+        using (var commitAgain = await AdmittedAfterTheWindowAsync(client, commit))
+        using (var previewAgain = await AdmittedAfterTheWindowAsync(client, preview))
+        {
+            Assert.NotEqual(HttpStatusCode.TooManyRequests, commitAgain.StatusCode);
+            Assert.NotEqual(HttpStatusCode.TooManyRequests, previewAgain.StatusCode);
+        }
+
+        // Every rejection was the shared window's (its owner's name); the in-flight rule rejected nothing.
+        Assert.Equal(
+            [CsvOrderImportEndpoints.RateLimitPolicy],
+            host.Summary.TakeSnapshot().Where(item => item.Rejected > 0).Select(item => item.Policy));
+    }
+
+    [Fact]
+    public async Task A_per_user_limit_admits_the_user_again_once_its_window_has_passed()
+    {
+        // AI-08 SEC-004 required_tests[0] ("admits again after its window") on a plain per-user fixed window.
+        await using var host = new LimitsFactory(
+            permitLimit: 1,
+            overrides: new Dictionary<string, string?> { ["RateLimits:OrderList:WindowSeconds"] = "1" });
+        using var client = host.CreateClient();
+        Func<HttpRequestMessage> list = () => Request("GET", "/api/v1/orders", MockIdentityProfiles.ActiveDispatcher, NetworkA);
+
+        // One permit per window: at most two reads find the limit, whichever window the first one landed in.
+        HttpResponseMessage? rejected = null;
+        for (var attempt = 0; attempt < 5 && rejected is null; attempt++)
+        {
+            var answer = await client.SendAsync(list());
+            if (answer.StatusCode == HttpStatusCode.TooManyRequests)
+            {
+                rejected = answer;
+            }
+            else
+            {
+                answer.Dispose();
+            }
+        }
+
+        using (rejected)
+        {
+            Assert.NotNull(rejected);
+            await AssertProblemAsync(rejected, retryAfter: "1");
+        }
+
+        using var again = await AdmittedAfterTheWindowAsync(client, list);
+        Assert.NotEqual(HttpStatusCode.TooManyRequests, again.StatusCode);
+        Assert.Equal(
+            [OrderEndpoints.ListRateLimitPolicy],
+            host.Summary.TakeSnapshot().Where(item => item.Rejected > 0).Select(item => item.Policy));
     }
 
     [Fact]
@@ -439,6 +528,31 @@ public sealed class Sec004HeavyEndpointLimitsTests
         }
 
         return request;
+    }
+
+    /// <summary>
+    /// Waits the one-second <c>Retry-After</c>, then sends <paramref name="request"/> until it is admitted. Retrying
+    /// within a 5 s deadline absorbs the limiter's replenishment tick (100 ms) and a slow host; a limit that never
+    /// admits again fails the test.
+    /// </summary>
+    private static async Task<HttpResponseMessage> AdmittedAfterTheWindowAsync(
+        HttpClient client,
+        Func<HttpRequestMessage> request)
+    {
+        await Task.Delay(TimeSpan.FromSeconds(1));
+        var waiting = Stopwatch.StartNew();
+        while (true)
+        {
+            var response = await client.SendAsync(request());
+            if (response.StatusCode != HttpStatusCode.TooManyRequests)
+            {
+                return response;
+            }
+
+            response.Dispose();
+            Assert.True(waiting.Elapsed < TimeSpan.FromSeconds(5), "The limit did not admit the request again after its window.");
+            await Task.Delay(TimeSpan.FromMilliseconds(100));
+        }
     }
 
     private static async Task AssertProblemAsync(HttpResponseMessage response, string retryAfter)

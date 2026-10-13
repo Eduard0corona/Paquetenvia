@@ -251,6 +251,13 @@ No web screen calls `createLocation` today.
   - one commit at a time (Q1). A first commit is held in flight; a second of the same user is 429 under
     `Orders.CsvImportCommit`. A preview of the same user and another user's commit pass. After the first answers, the
     user commits again;
+  - admitted again after the window (AI-08 SEC-004 `required_tests[0]`), with `WindowSeconds` 1:
+    - the shared CSV window (the registry's budget limiter): a preview spends it, the commit is 429 with
+      `Retry-After: 1`, and once the window has passed the commit and then the preview are admitted again;
+    - a plain per-user window (`Orders.List`): 429 with `Retry-After: 1`, then admitted again.
+
+    Each test waits the `Retry-After`, then retries every 100 ms for up to 5 s, and fails if the limit never admits
+    the request again. It repeats the first pair if a window boundary falls between its two requests;
   - sign-in (AuthCenter host):
     - 20 per minute per network, here 2;
     - a navigation gets the exact page with its headers;
@@ -309,6 +316,66 @@ No web screen calls `createLocation` today.
   - the response lists of `getOperationsQueueCounts`, `listAssignableDrivers` and the CSV operations;
   - PR 2's "existing limits keep their numbers" (now over its three policies);
   - PR 2's "every policy is used" (sign-in is mapped only with AuthCenter).
+
+## Residual risks
+
+- **Bulk assignment spends the driver-list budget.** `bulk-assignment-controller.ts` reads `listAssignableDrivers`
+  once per order of the batch: up to `bulkSelectionLimit` = 20 orders, each up to `maximumDriverPagesPerOrder` = 10
+  pages of 100 drivers. One 20-order bulk preview spends at least 20 of the 60 per minute of
+  `Dispatch.AssignableDrivers`. An owner decision on this is pending; no number changes here.
+- **Realtime refreshes spend the dashboard and counts budgets.** Besides the 30 s polling:
+  - the dashboard and the inbox reload on every realtime order event (`OrderStatusChanged`,
+    `OrderTimelineEventAdded`, `AssignmentChanged`, `RouteChanged`, `IncidentCreated`, `ExternalOfferChanged`), with a
+    250 ms trailing debounce;
+  - each of those reloads also reads `getOperationsQueueCounts`;
+  - the dashboard also reloads its list (not the counts) on `DriverLocationUpdated`, with 500 ms;
+  - an inbox reload reads one dashboard page per status of its queue (up to 4, "Requiere atención");
+  - the order detail reloads its dashboard row on the same events;
+  - the budgets are per user, so every tab the user has open spends the same 60 per minute.
+
+  A burst of events (a bulk assignment, a CSV commit) can therefore spend the 60 per minute of
+  `Reporting.OperationsDashboard` and `Reporting.QueueCounts`. An owner decision on this is pending; no number changes
+  here.
+- **Forward deploy of the driver app.** A phone still running the previous web build reads a photo 429 as rejected
+  evidence: the action needs attention (`EVIDENCE_REJECTED`) and the photo stays on the phone. That lasts until the
+  phone loads the new build:
+  - How the build reaches drivers: the service worker (`apps/web/public/sw.js`, unchanged here) serves `/driver/stops`
+    network first, and the new build's scripts have new hashed names. The next time the app is opened or reloaded
+    with network, it runs the new build. No service-worker update is involved.
+  - What stays old: a page left open keeps the old scripts until it is reloaded. Opening the app offline serves the
+    shell of the build last loaded online.
+  - What the operator does: after the deploy, ask drivers to close and reopen the app (or reload it) with network
+    before their next delivery. A driver who already sees a rejected photo waits a minute and retries it from the
+    notice. "Descartar" deletes the photo from the phone.
+- **Sign-in per network behind shared addresses.** The owner chose per client network (Q5): one IPv4 address, or one
+  IPv6 /64. Everyone behind one office NAT or one carrier-grade NAT address of a mobile network shares 20 sign-in
+  starts per minute:
+  - a shift start can lock out legitimate users for up to a minute;
+  - one user, or a script, on a shared address can block the others.
+
+  Event 4604 shows it as rejections under `Identity.SignIn`. The remedy is `RateLimits:SignIn:PermitLimit`, after an
+  owner decision.
+- **The client address depends on the routing.** The chosen pilot routing gives the API the real client address:
+  Container Apps rule-based routing, one Envoy hop, `KnownNetworks` `10.60.0.0/23` and `ForwardLimit=1`.
+  - The documented fallback, Next.js rewrites (`PAQUETENVIA_API_PROXY_ORIGIN`), adds a hop: Web reaches the API through
+    the API's internal ingress, which adds Web's address to `X-Forwarded-For`. Next.js's rewrite proxy forwards the
+    header unchanged.
+  - With `ForwardLimit=1`, the API would take that subnet address for every client, and every sign-in would share one
+    bucket.
+  - The fallback needs `Http__ForwardedHeaders__ForwardLimit=2`. The middleware stops at the first address outside
+    `KnownNetworks`, so a client cannot pass a forged address with it.
+  - `docs/operations/env-001-pilot/README.md` has the note next to the fallback row, and a post-deploy check (§6.1 step
+    10) that the API sees a client address outside the subnet.
+- **Metric names differ for a shared-window rejection.** When the shared CSV window rejects a commit:
+  - event 4604 and the `rate_limit.rejected` counter count it under `Orders.CsvImport`, the window's owner (the
+    lease's `RejectedBy` metadata);
+  - ASP.NET Core's `aspnetcore.rate_limiting.requests` tags it with the endpoint's policy, `Orders.CsvImportCommit`
+    (`aspnetcore.rate_limiting.result=endpoint_limiter`).
+
+  A one-commit-at-a-time rejection is `Orders.CsvImportCommit` in both. For PR 6 (Application Insights): 4604 says
+  which budget ran out, the framework metric which endpoint refused. Adding the two counts a rejection twice.
+- **CORS.** The REST CORS policy (`Http:Cors`) exposes no response headers, so a cross-origin client could not read
+  `Retry-After`. The pilot is same-origin (`Http:Cors:AllowedOrigins` is empty), so this does not apply.
 
 ## Verify locally
 
