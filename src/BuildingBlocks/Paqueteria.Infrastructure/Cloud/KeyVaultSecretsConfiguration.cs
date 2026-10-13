@@ -242,7 +242,7 @@ public sealed class AzureKeyVaultSecretReader : IKeyVaultSecretReader
             options.Transport = transport;
         }
 
-        _client = new SecretClient(vaultUri, credential, options);
+        _client = new SecretClient(vaultUri, credential, options.WithoutDistributedTracing());
     }
 
     public async Task<string> GetSecretValueAsync(string secretName, CancellationToken cancellationToken)

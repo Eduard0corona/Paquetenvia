@@ -12,6 +12,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Paqueteria.Application.Voice;
+using Paqueteria.Infrastructure.Observability;
 
 namespace Paqueteria.IntegrationTests.Drivers;
 
@@ -329,7 +330,9 @@ public sealed class DriverVoiceHttpTests : IClassFixture<DriverVoiceHttpWebAppli
         var report = Assert.Single(factory.Calls.Reports);
         Assert.Equal(
             new VoiceCallStatusReport(MockIdentityProfiles.ViewerOrganizationId, callRequestId, "CA" + new string('a', 32), "completed", 37),
-            report);
+            report with { RequestId = null });
+        // OBS-003: the webhook request's trace id goes to the audit row's request_id.
+        Assert.True(TraceCorrelation.IsTraceId(report.RequestId), report.RequestId);
         Assert.Equal(path, factory.Verifier.LastPathAndQuery);
         Assert.Contains("From", factory.Verifier.LastFieldNames);
 
@@ -400,7 +403,10 @@ public sealed class DriverVoiceHttpTests : IClassFixture<DriverVoiceHttpWebAppli
         Assert.Equal((recipient, organizationId, callRequestId), factory.Verifier.LastBridge);
         Assert.Equal(path, factory.Verifier.LastPathAndQuery);
         var (step, keypress) = Assert.Single(factory.Calls.Keypresses);
-        Assert.Equal(("driver", new VoiceKeypress(organizationId, callRequestId, DriverLegSid, true)), (step, keypress));
+        Assert.Equal(
+            ("driver", new VoiceKeypress(organizationId, callRequestId, DriverLegSid, true)),
+            (step, keypress with { RequestId = null }));
+        Assert.True(TraceCorrelation.IsTraceId(keypress.RequestId), keypress.RequestId);
 
         // No digit (a voicemail greeting or a timeout), an empty one or any other digit: hang up, nobody is dialed.
         foreach (var digits in new[] { null, "", "2", "#", "11" })
@@ -415,6 +421,8 @@ public sealed class DriverVoiceHttpTests : IClassFixture<DriverVoiceHttpWebAppli
 
         Assert.Equal(6, factory.Calls.Keypresses.Count);
         Assert.All(factory.Calls.Keypresses.Skip(1), entry => Assert.False(entry.Keypress.Confirmed));
+        // Each webhook request carries its own trace id.
+        Assert.Equal(6, factory.Calls.Keypresses.Select(entry => entry.Keypress.RequestId).Distinct(StringComparer.Ordinal).Count());
 
         // A signed but malformed key press is a 400 and reaches nothing.
         foreach (var malformed in new[]
@@ -478,7 +486,10 @@ public sealed class DriverVoiceHttpTests : IClassFixture<DriverVoiceHttpWebAppli
         }
 
         var (step, keypress) = Assert.Single(factory.Calls.Keypresses);
-        Assert.Equal(("recipient", new VoiceKeypress(organizationId, callRequestId, DriverLegSid, true)), (step, keypress));
+        Assert.Equal(
+            ("recipient", new VoiceKeypress(organizationId, callRequestId, DriverLegSid, true)),
+            (step, keypress with { RequestId = null }));
+        Assert.True(TraceCorrelation.IsTraceId(keypress.RequestId), keypress.RequestId);
 
         foreach (var digits in new[] { null, "", "0", "*" })
         {

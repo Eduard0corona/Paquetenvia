@@ -12,7 +12,8 @@ namespace Paqueteria.Infrastructure.Scheduling;
 /// <remarks>
 /// OBS-002: every cycle writes one <see cref="TelemetryEvents.ScheduledJobCycle"/> line with the fixed
 /// job name, <c>success</c> or <c>failure</c> and its duration. The exception itself is never logged
-/// here: jobs log their own bounded error class.
+/// here: jobs log their own bounded error class. OBS-003: every cycle runs in its own new root trace
+/// (<see cref="TraceCorrelation.StartJobCycle"/>); the wait between cycles runs in none.
 /// </remarks>
 public sealed class PeriodicJobScheduler(
     TimeProvider timeProvider,
@@ -32,19 +33,23 @@ public sealed class PeriodicJobScheduler(
 
         while (!cancellationToken.IsCancellationRequested)
         {
-            var started = timeProvider.GetTimestamp();
-            try
+            // OBS-003: each cycle is a new root trace; the job's lines and its ScheduledJobCycle line carry its id.
+            using (TraceCorrelation.StartJobCycle(job.Name))
             {
-                await job.RunOnceAsync(cancellationToken);
-                LogCycle(job.Name, ScheduledJobOutcomes.Success, started);
-            }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (Exception)
-            {
-                LogCycle(job.Name, ScheduledJobOutcomes.Failure, started);
+                var started = timeProvider.GetTimestamp();
+                try
+                {
+                    await job.RunOnceAsync(cancellationToken);
+                    LogCycle(job.Name, ScheduledJobOutcomes.Success, started);
+                }
+                catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+                {
+                    return;
+                }
+                catch (Exception)
+                {
+                    LogCycle(job.Name, ScheduledJobOutcomes.Failure, started);
+                }
             }
 
             try
