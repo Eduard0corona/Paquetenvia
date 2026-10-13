@@ -505,6 +505,215 @@ describe("cash collection at the door (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11)
   });
 });
 
+describe("dispose while start() still waits (session changed or ended, React StrictMode)", () => {
+  // Only the timers are fake: promises, setImmediate and the partition key's
+  // digest run for real.
+  const useFakeTimers = () =>
+    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "setInterval", "clearInterval"] });
+
+  it("stops after the partition key: no queue read, scheduler, listener, timer, lease or expiry", async () => {
+    useFakeTimers();
+    try {
+      const harness = startHarness();
+      // start() runs until its first wait (the partition key); dispose comes
+      // right then, as when the first StrictMode mount is unmounted.
+      const starting = harness.controller.start();
+      await harness.controller.dispose();
+      await starting;
+      await harness.settle();
+
+      expect.soft(harness.listOperations).not.toHaveBeenCalled();
+      harness.expectNothingOutlivedDispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("stops after the queue read: no scheduler, listener, timer, lease or expiry", async () => {
+    useFakeTimers();
+    try {
+      const harness = startHarness();
+      const reading = deferred();
+      const release = deferred();
+      harness.listOperations.mockImplementationOnce(async () => {
+        reading.resolve();
+        await release.promise;
+        return Object.freeze([...harness.queue.operations]);
+      });
+      const starting = harness.controller.start();
+      await reading.promise;
+      await harness.controller.dispose();
+      release.resolve();
+      await starting;
+      await harness.settle();
+
+      expect.soft(harness.listOperations).toHaveBeenCalledOnce();
+      harness.expectNothingOutlivedDispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("still starts, syncs and disposes as before when dispose comes after start", async () => {
+    useFakeTimers();
+    try {
+      const harness = startHarness();
+      await harness.controller.start();
+      await harness.settle();
+
+      // The same setup does all of it while alive: one scheduler, its two
+      // listeners, the lease, the 72-hour rule (with the notice) and the
+      // backoff timer of the other order's action.
+      expect(harness.schedulerFactory).toHaveBeenCalledOnce();
+      expect(harness.page.liveListeners()).toEqual(["online", "visibilitychange"]);
+      expect(harness.acquireLease).toHaveBeenCalled();
+      expect(harness.queue.operations).toEqual([harness.retry]);
+      expect(harness.controller.current.message).toBe(
+        driverOperationExpiredMessage(["CHECK_IN"]),
+      );
+      expect(vi.getTimerCount()).toBe(1);
+
+      await harness.controller.dispose();
+      expect(harness.page.liveListeners()).toEqual([]);
+      expect(vi.getTimerCount()).toBe(0);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+function deferred(): { readonly promise: Promise<void>; resolve(): void } {
+  let resolve: () => void = () => undefined;
+  const promise = new Promise<void>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve: () => resolve() };
+}
+
+/**
+ * A controller over a queue holding an action held for the driver past the
+ * OPS-003 window (a live scheduler takes the lease and drops it on its first
+ * pass) and, on another order, an action backing off (a live scheduler keeps
+ * a timer for it), with a real DriverSyncScheduler on a page whose listeners
+ * are counted.
+ */
+function startHarness() {
+  const page = trackedPage();
+  const stale = {
+    ...operation("CHECK_IN", 3),
+    status: "NEEDS_ATTENTION" as const,
+    safeError: "VERSION_CONFLICT" as const,
+  };
+  const retry = {
+    ...createDriverOfflineOperation({
+      partitionKey,
+      orderId: "77777777-7777-4777-8777-777777777777",
+      kind: "CHECK_IN",
+      expectedVersion: 2,
+      now: () => new Date("2026-07-30T11:00:00.000Z"),
+      randomUuid: () => replacementId,
+    }),
+    status: "RETRY_WAIT" as const,
+    attemptCount: 1,
+    nextAttemptAt: "2026-07-30T12:05:00.000Z",
+  };
+  const queue = new MemoryQueue([stale, retry]);
+  const listOperations = vi.spyOn(queue, "listOperations");
+  const acquireLease = vi.spyOn(queue, "acquireLease");
+  const deleteOperation = vi.spyOn(queue, "deleteOperation");
+  const refreshStops = vi.fn(async () => stopList([]));
+  const schedulerFactory = vi.fn(
+    (options: DriverSyncSchedulerOptions) =>
+      new DriverSyncScheduler({ ...options, window: page.window }),
+  );
+  const controller = new DriverOperationsController({
+    session,
+    queue,
+    api: {
+      transitionOrder: vi.fn(),
+      createProofUploadSession: vi.fn(),
+      finalizeProof: vi.fn(),
+      recordCodCollection: vi.fn(),
+      openFailedDeliveryIncident: vi.fn(),
+    } as DriverSyncApi,
+    refreshStops,
+    onAccessRevoked: vi.fn(),
+    schedulerFactory,
+    // Four days after the held action was captured.
+    now: () => new Date("2026-07-30T12:00:00.000Z"),
+    randomUuid: () => replacementId,
+  });
+  /** Lets anything still alive react: a macrotask, the connection and the page coming back, and 20 s of timers. */
+  const settle = async () => {
+    await new Promise<void>((done) => setImmediate(done));
+    page.wake();
+    await new Promise<void>((done) => setImmediate(done));
+    await vi.advanceTimersByTimeAsync(20_000);
+    await new Promise<void>((done) => setImmediate(done));
+  };
+  /** Soft: a leak reports every effect it had, not only the first. */
+  const expectNothingOutlivedDispose = () => {
+    expect.soft(schedulerFactory).not.toHaveBeenCalled();
+    expect.soft(page.liveListeners()).toEqual([]);
+    expect.soft(vi.getTimerCount()).toBe(0);
+    expect.soft(acquireLease).not.toHaveBeenCalled();
+    expect.soft(deleteOperation).not.toHaveBeenCalled();
+    expect.soft(refreshStops).not.toHaveBeenCalled();
+    expect.soft(queue.operations).toEqual([stale, retry]);
+  };
+  return {
+    controller,
+    queue,
+    page,
+    retry,
+    listOperations,
+    acquireLease,
+    schedulerFactory,
+    settle,
+    expectNothingOutlivedDispose,
+  };
+}
+
+interface TrackedPage {
+  readonly window: NonNullable<DriverSyncSchedulerOptions["window"]>;
+  /** The event types that still have a listener, on the window or its document. */
+  liveListeners(): string[];
+  /** `online` on the window and `visibilitychange` on the (visible) document. */
+  wake(): void;
+}
+
+function trackedPage(): TrackedPage {
+  const live: { readonly target: EventTarget; readonly type: string; readonly listener: unknown }[] = [];
+  const tracked = <T extends EventTarget>(target: T) =>
+    Object.assign(target, {
+      addEventListener(type: string, listener: EventListenerOrEventListenerObject | null) {
+        live.push({ target, type, listener });
+        EventTarget.prototype.addEventListener.call(target, type, listener);
+      },
+      removeEventListener(type: string, listener: EventListenerOrEventListenerObject | null) {
+        const index = live.findIndex(
+          (entry) => entry.target === target && entry.type === type && entry.listener === listener,
+        );
+        if (index >= 0) live.splice(index, 1);
+        EventTarget.prototype.removeEventListener.call(target, type, listener);
+      },
+    });
+  const document = tracked(
+    Object.assign(new EventTarget(), { visibilityState: "visible" as DocumentVisibilityState }),
+  );
+  const page = tracked(
+    Object.assign(new EventTarget(), { navigator: { onLine: true }, document }),
+  );
+  return {
+    window: page as unknown as TrackedPage["window"],
+    liveListeners: () => live.map((entry) => entry.type).sort(),
+    wake() {
+      page.dispatchEvent(new Event("online"));
+      document.dispatchEvent(new Event("visibilitychange"));
+    },
+  };
+}
+
 async function createHarness(
   initial: DriverOfflineOperation | readonly DriverOfflineOperation[],
   withProof = false,
