@@ -362,7 +362,7 @@ hours a month. Sized for 50–100 real deliveries.
 | PostgreSQL B1ms compute | 0.0187 per hour | 13.65 |
 | PostgreSQL storage 32 GB | 0.1265 per GB | 4.05 |
 | PostgreSQL backups (14 days) | free up to 100 % of provisioned storage | 0.00 |
-| API 0.5 vCPU / 1 GiB, always on | active rate 0.000026 per vCPU-s, 0.000003 per GiB-s (the outbox dispatchers poll every 250–500 ms, so the replica rarely qualifies for the idle rate) | 42.04 |
+| API 0.5 vCPU / 1 GiB, always on | active rate 0.000026 per vCPU-s, 0.000003 per GiB-s (the realtime outbox dispatchers still claim about twice a second while idle, SCL-007, so the replica rarely qualifies for the idle rate) | 42.04 |
 | Worker 0.25 vCPU / 0.5 GiB, always on | active rate (continuous polling) | 21.02 |
 | Web 0.25 vCPU / 0.5 GiB, min 1 | mostly idle rate (0.000003 per vCPU-s) with request bursts | ~7.00 |
 | Container Apps monthly free grant | 180,000 vCPU-s + 360,000 GiB-s | −5.76 |

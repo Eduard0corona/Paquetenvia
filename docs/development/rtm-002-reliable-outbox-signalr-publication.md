@@ -34,6 +34,11 @@ Hay dos loops, opciones y límites de concurrencia separados:
 - **location**: `platform.location_outbox_events`, batch 25, concurrencia 8,
   poll 500 ms, lease 120 s y máximo 5 intentos.
 
+Desde SCL-007 (`SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13`), el poll es la primera
+espera tras un claim vacío: cada claim vacío siguiente la duplica hasta 1 s en
+ambos lanes, y un claim con filas vuelve a reclamar de inmediato. Detalle en
+`docs/development/scl-007-adaptive-outbox-wait.md`.
+
 El tamaño enviado a cada función de claim es
 `min(BatchSize, MaximumConcurrency)`. Por tanto, un ciclo nunca toma más filas
 que slots que puede iniciar inmediatamente. La configuración reserva cinco
