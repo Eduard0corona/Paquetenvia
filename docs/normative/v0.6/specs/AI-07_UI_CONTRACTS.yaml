@@ -78,7 +78,18 @@ routes:
       refresh: fetched again whenever the dashboard list is fetched again (manual refresh, realtime event, reconnect,
         visibility, polling or filter change)
       failure: the indicators show "Sin dato" and the list keeps working; a response that breaks the contract is
-        discarded
+        discarded; a 429 is not a failure here - the counts shown stay and the whole screen waits (rate_limit)
+    # SEC-004 (owner answers Q9, Q11, Q14, Q16; panel_rate_limit holds the common rules).
+    rate_limit:
+      decision: SEC-004-PANEL-SCREENS-2026-10-13
+      operations: the operations dashboard and getOperationsQueueCounts, each with its own budget; a wait for either
+        pauses the whole screen with one message (Q16)
+      paused: 30 s polling, realtime reloads, the page becoming visible and the reload after "Publicar oferta externa";
+        "Actualizar" and "Cargar más" are disabled; a filter change is kept on screen and not sent
+      at_zero: the screen reloads once, by itself, with the filters on screen (list and counts); a session start that
+        met the wait starts once, by itself, realtime included
+      realtime: order notices (250 ms) and driver positions (500 ms, the list without the counts) are gathered into at
+        most one reload every 3 seconds (Q9)
     # UI-PHASE3-INBOX-2026-10-10: shown as "Tablero" in the app shell, after Bandeja; DISPATCHER and PLATFORM_ADMIN
     # land on /ops/inbox instead (VIEWER on /ops/orders, UI-PHASE3-ORDERS-LIST-2026-10-12), and
     # /ops/dashboard?view=positions opens the positions view directly.
@@ -162,6 +173,13 @@ routes:
       idempotency: one Idempotency-Key per confirmed assignment, reused for a retry of the same payload
       recovery: after success or a conflict the order and the list are fetched again; optimistic UI is never
         authoritative
+      # SEC-004, owner answer Q15 "La pide sola (Recommended)".
+      rate_limit:
+        decision: SEC-004-PANEL-SCREENS-2026-10-13
+        first_list: the list the picker asks for by itself is not read during the wait; the common message counts down
+          and at 0 the picker asks for it once, by itself
+        more: '"Cargar más repartidores" is disabled during the wait and re-enables itself; it is never sent by itself'
+        kept: the listed drivers, the chosen driver and the typed cost
     # UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05 (project owner, 2026-10-05): "Siguiente paso" shows only the actions
     # valid now, as the server computes them; the UI never duplicates the AI-04 state machine.
     next_step:
@@ -227,6 +245,15 @@ routes:
       - no description, evidence identifier, incident identifier or personal data
       recovery: refetched with the order; a failed read says the reason could not be read and never blocks
         "Siguiente paso"
+    # SEC-004 (owner answers Q9, Q11, Q14; panel_rate_limit holds the common rules): the order detail refreshes itself.
+    rate_limit:
+      decision: SEC-004-PANEL-SCREENS-2026-10-13
+      operations: the operations dashboard (the order's row); getOrder is not limited
+      paused: 30 s polling, realtime reloads, the page becoming visible and the read after a change made below
+        (assignment, next step); "Actualizar" is disabled
+      at_zero: the order is read once, by itself
+      realtime: order notices (250 ms) and driver positions (500 ms) are gathered into at most one read every 3 seconds
+        (Q9)
   /ops/routes:
     roles:
     - platform_admin
@@ -438,7 +465,8 @@ screen_contracts:
     - Entregadas sin cerrar (queues.delivered_not_closed) - dashboard status=DELIVERED
     - En ruta (queues.en_route) - IN_TRANSIT and DELIVERING, one dashboard query per status
     counts: each queue shows its getOperationsQueueCounts value, which covers every order of the organization and never
-      applies the chips (the screen says so); the queues show "Sin dato" when the counts fail and the list keeps working
+      applies the chips (the screen says so); the queues show "Sin dato" when the counts fail and the list keeps
+      working; a 429 on the counts keeps the counts shown and the whole inbox waits (rate_limit)
     merge: the queries of one queue are merged newest first by updated_at and order id, the dashboard order; a row is
       shown only once every query that still has pages reached it, so "Cargar más" never places an older row above a
       shown one nor skips one
@@ -612,9 +640,22 @@ screen_contracts:
       recovery: the inbox queue and the counts are read again after every run; the step lives in the batch panel, so a
         session or organization change drops it
     recovery:
-    - load, view change, refresh, assignment, realtime event (250 ms debounce), reconnect, visibility and 30 s polling
-      read the REST queries and the counts again; a reconnect resynchronizes from that read
+    - load, view change, refresh, assignment, realtime event (250 ms debounce, then at most one read every 3 seconds per
+      tab, SEC-004-RELOADS-AND-BULK-2026-10-13 Q9), reconnect, visibility and 30 s polling read the REST queries and the
+      counts again; a reconnect resynchronizes from that read
     - optimistic UI is never authoritative; a 401 or 403 clears the rows and stops the realtime hub
+    # SEC-004 (owner answers Q9, Q10, Q11, Q14, Q15, Q16; panel_rate_limit holds the common rules).
+    rate_limit:
+      decision: SEC-004-PANEL-SCREENS-2026-10-13
+      operations: the operations dashboard (one read per status of the queue) and getOperationsQueueCounts, each with
+        its own budget; a wait for either pauses the whole inbox with one message (Q16)
+      paused: 30 s polling, realtime reloads, the page becoming visible and the read after an assignment; "Actualizar"
+        and "Cargar más" are disabled; a queue or chip change is kept in the URL and on screen and not sent
+      at_zero: the inbox reads once, by itself, with the queue and chips on screen, and the counts with it
+      driver_picker: listAssignableDrivers, as in /ops/orders/:id assignment_picker.rate_limit (Q15)
+      bulk_assignment: listAssignableDrivers per order, unchanged (Q10); a 429 leaves that order "No fue posible cargar
+        los repartidores de esta orden. Intenta de nuevo." with "Reintentar" disabled until the wait ends (never read
+        again by itself); the batch shows the common message once; the orders not read yet are read after the wait
     privacy:
     - no browser persistence and no client logging; an organization switch clears rows, zones, counts, the selection
       and the batch
@@ -766,7 +807,14 @@ screen_contracts:
     - load fetches the REST collection or detail
     - refresh fetches the REST collection or detail
     - reconnect fetches the current route detail
-    - RouteChanged only triggers a REST refetch
+    - RouteChanged only triggers a REST refetch, gathered into at most one every 3 seconds per tab (the list once, and
+      the route shown when a gathered notice named it; SEC-004-RELOADS-AND-BULK-2026-10-13 Q9, "el panel")
+    # SEC-004 (owner answer Q13): "Agregar entrega" finds the order by its guía with listOrders.
+    rate_limit:
+      decision: SEC-004-PANEL-SCREENS-2026-10-13
+      operation: listOrders (the guía lookup of "Agregar entrega"); the routes have no limit
+      rule: the common message counts down under the guía; "Agregar entrega" is disabled and re-enables itself; the
+        typed guía stays and nothing is sent again by itself
     concurrency:
     - every mutation of an existing route sends the current expected_version
     - a version conflict discards speculative state and forces REST refetch
@@ -865,6 +913,13 @@ screen_contracts:
       time in America/Mazatlan, converted with that zone (never the browser's) to instants sent as service_window;
       both empty means the zone's schedule applies; one bound alone, from not before to, a span over 12 hours or a
       window already over is refused before sending; the order view shows the window in Mazatlan time
+    # SEC-004 (owner answer Q6; panel_rate_limit holds the common rules).
+    rate_limit:
+      decision: SEC-004-PANEL-SCREENS-2026-10-13
+      operation: createQuote ("Calcular precio")
+      rule: the common message counts down in step 3; "Calcular precio" is disabled (aria-disabled, like the other
+        wizard buttons) and re-enables itself; the draft stays and nothing is sent by itself; pressed again with the
+        same shipment it sends the same Idempotency-Key, and a changed shipment gets a new one
   driver_stop:
     offline_cache:
     - assigned stop minimum data
@@ -1304,6 +1359,14 @@ screen_contracts:
     privacy:
     - no browser persistence of the file, report or keys; a tenant switch clears all of them
     - no client logging of file contents or row values
+    # SEC-004 (owner answers Q1, Q6; panel_rate_limit holds the common rules).
+    rate_limit:
+      decision: SEC-004-PANEL-SCREENS-2026-10-13
+      operations: previewOrderCsv and commitOrderCsv share one budget and one wait (Q1), the refusal of a second commit
+        while one runs included
+      rule: the common message counts down; "Previsualizar" and "Confirmar" are both disabled and re-enable
+        themselves; the file, the report and the prohibited-goods tick stay and nothing is sent by itself; a commit
+        pressed again sends the same batch Idempotency-Key (the 429 came before the handler)
   incident_desk:
     release: MVP-1
     route: /ops/incidents
@@ -1402,6 +1465,13 @@ screen_contracts:
     - the COD reference is never echoed back after submission nor logged
     not_supported:
     - listing COD records across orders other than through the listOrders pending filter
+    # SEC-004 (owner answer Q14; panel_rate_limit holds the common rules).
+    rate_limit:
+      decision: SEC-004-PANEL-SCREENS-2026-10-13
+      operation: listOrders (the pending list)
+      rule: the list on screen stays and the common message counts down; "Actualizar lista" and "Cargar más" are
+        disabled, and the reload after a write waits; at 0 the list is read once, by itself (it does not reload by
+        itself otherwise); the order's collection actions are not limited
   # UI-PHASE3-DRIVERS-2026-10-11 (project owner, 2026-10-11): "Lista de consulta (Recommended)" for the dispatcher and
   # "Sí, con referencia DRV- (Recommended)" for Finance's payee picker.
   driver_roster:
@@ -1526,6 +1596,14 @@ screen_contracts:
     - FINANCE "Órdenes (lectura)" of the approved menu - the owner answered "No por ahora (Recommended)", so FINANCE
       keeps seeing only the COD-pending orders on its own screen and has no Órdenes item; widening its read access is
       a permission change that needs an ADR
+    # SEC-004 (owner answers Q11, Q14; panel_rate_limit holds the common rules).
+    rate_limit:
+      decision: SEC-004-PANEL-SCREENS-2026-10-13
+      operation: listOrders
+      paused: the page becoming visible or focused; "Actualizar" and "Cargar más" are disabled; a status, period or guía
+        change is kept on screen (the rows of the previous filters go, as before) and not sent
+      at_zero: the list is read once, by itself, with the filters on screen - unless "Cargar más" already loaded further
+        pages, which are not dropped; then nothing is read and only the buttons re-enable
   settlement_desk:
     release: MVP-1
     route: /finance/settlements
@@ -1571,6 +1649,12 @@ screen_contracts:
     - no browser persistence and no client logging; an organization switch clears settlements, payees and keys
     not_supported:
     - driver names (GATE-007); the CSV export keeps payee_id as AI-05 publishes it
+    # SEC-004 (owner answer Q6; panel_rate_limit holds the common rules).
+    rate_limit:
+      decision: SEC-004-PANEL-SCREENS-2026-10-13
+      operation: exportSettlementCsv ("Exportar CSV")
+      rule: the common message counts down; "Exportar CSV" is disabled and re-enables itself; the export is never sent
+        by itself; the other actions are not limited
 prototype_file: prototype/index.html
 meta:
   version: '0.6'
@@ -1579,6 +1663,57 @@ global_rules:
 - organization switcher uses /me/organization-contexts and sends X-Organization-Id
 - 404 screen is identical for missing and cross-tenant resources
 - POD offline queue stores upload metadata/idempotency key, never unencrypted PII in logs
+# SEC-004, the panel's answer to a 429 (phase 4 PR 3, panel part). Owner answers, literal in decision-log:
+# SEC-004-HEAVY-ENDPOINT-MAPPING-2026-10-12 Q6 "Mensaje común con espera (Recommended)";
+# SEC-004-RELOADS-AND-BULK-2026-10-13 Q9 "Espaciar recargas (Recommended)" and Q10 "Dejarlo en 60/min (Recommended)";
+# SEC-004-PANEL-SCREENS-2026-10-13 Q11 "Reintenta sola", Q12 "1 segundo", Q13 "Mensaje común", Q14 "Se pausan", Q15 "La
+# pide sola" and Q16 "Toda la pantalla" (each "(Recommended)"). Each screen's rate_limit entry says what applies there;
+# the driver app and /auth/login answer a 429 as screen_contracts.driver_stop.rate_limit and the /login route say.
+panel_rate_limit:
+  decisions:
+  - SEC-004-HEAVY-ENDPOINT-MAPPING-2026-10-12
+  - SEC-004-RELOADS-AND-BULK-2026-10-13
+  - SEC-004-PANEL-SCREENS-2026-10-13
+  message: Demasiadas solicitudes. Espera N segundos e intenta de nuevo.
+  message_at_one_second: Demasiadas solicitudes. Espera 1 segundo e intenta de nuevo.
+  countdown: N is the whole seconds of the 429's Retry-After, counting down once per second; without a Retry-After, or
+    with one that is not a positive whole number, N starts at 60, the window of every panel limit; never more than one
+    hour
+  accessibility: the visible countdown is a timer, read on request and never announced by itself; the application
+    shell announces the message once per wait, politely, with the seconds the server asked for
+  waits: one per limited operation, in the tab's memory only (another tab has its own); a wait never holds an unrelated
+    limit; every screen of the tab that calls the same operation waits with it (for example "Buscar guía" and Órdenes);
+    an organization switch keeps it, because the limits are per user
+  send_screens: (Q6, Q13) the buttons of the screen that send the limited operation are disabled during the wait and
+    re-enable themselves when N reaches 0, and the message disappears; what the person entered stays (file, report,
+    form fields, selection, typed guía); nothing is sent again by itself, a write never; pressed again with the same
+    submission it sends the same Idempotency-Key and payload (the 429 came before the handler, the rule of a request
+    without a valid answer), and a changed submission gets a new key
+  self_refreshing_screens: (Q11, Q14, Q16) the message appears with the countdown; every automatic reload pauses (30 s
+    polling, realtime, the page becoming visible or focused, the read after an action); "Actualizar" and "Cargar más"
+    are disabled; a filter, queue or search change is kept on screen without being sent; at 0 the screen reloads once,
+    by itself, with what is on screen then, the buttons re-enable and the message disappears; a wait for any operation
+    the screen reads pauses the whole screen with one message, and the counts shown before stay; a realtime reconnect
+    waits out the wait, then reads and resynchronizes as before
+  driver_lists: (Q10, Q15) the order's driver picker asks for its first list once, by itself, at 0; a bulk assignment
+    order that met the 429 keeps its "Reintentar", disabled until 0 and never sent by itself, and the orders not read
+    yet are read after the wait; the per-order read is unchanged
+  realtime_reloads: (Q9) a screen that reloads on realtime notices gathers them into at most one reload every 3 seconds
+    per tab - after its existing debounce, no sooner than 3 seconds after its previous reload of any kind; a notice
+    that arrives during the spacing is read by the reload that ends it, and the notices of a server wait by the reload
+    at 0; the 60 per minute limits do not change and a change shows up to 3 seconds later
+  screens:
+    /ops/dashboard: operations dashboard and getOperationsQueueCounts (refreshes itself; realtime)
+    /ops/inbox: operations dashboard and getOperationsQueueCounts (refreshes itself; realtime); listAssignableDrivers in
+      the driver picker and "Asignar seleccionadas…"
+    /ops/orders/:id: operations dashboard (refreshes itself; realtime); listAssignableDrivers in the assignment picker
+    /ops/orders: listOrders (refreshes itself)
+    /finance/cod: listOrders, the pending list (reloads once at 0)
+    /ops/orders/new: createQuote ("Calcular precio")
+    /ops/orders/import: previewOrderCsv and commitOrderCsv, one wait
+    /finance/settlements: exportSettlementCsv ("Exportar CSV")
+    /ops/routes: listOrders ("Agregar entrega"); realtime RouteChanged, not limited
+    app shell: listOrders ("Buscar guía")
 driver_location:
   batch_size: 1-20
   response: per-item accepted/duplicate/rejected

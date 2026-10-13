@@ -12,9 +12,10 @@ PR 3 ships in two pull requests. This one contains:
 - the per-minute log summary;
 - the driver app's wait.
 
-Next, in the panel part's own pull request:
+The panel part shipped in its own pull request (`docs/development/sec-004-panel-limits.md`,
+`SEC-004-PANEL-SCREENS-2026-10-13`):
 
-- the message and the button countdown on each limited screen, and their AI-07 entries;
+- the message and the countdown on each limited screen, and their AI-07 entries (owner answers Q6 and Q11 to Q16);
 - the realtime reload spacing (owner answer Q9): the panel gathers realtime notices and reloads at most once every
   3 seconds per tab. The 60 per minute limits do not change.
 
@@ -22,9 +23,9 @@ The driver app is in this one because, before it, the app classified a 429 on a 
 the sync scheduler turned that into rejected evidence: the photo held for the driver's attention. The photo limits
 cannot ship without it.
 
-Until the panel part merges, a panel screen that meets a limit shows its existing error for an unanswered request (for
-example "Sin respuesta válida del servidor. Puedes reintentar: se reenvía la misma solicitud sin duplicarla.") instead
-of the approved text.
+Before the panel part, a panel screen that met a limit showed its existing error for an unanswered request (for example
+"Sin respuesta válida del servidor. Puedes reintentar: se reenvía la misma solicitud sin duplicarla.") instead of the
+approved text.
 
 ## Owner decisions
 
@@ -194,8 +195,9 @@ reintenta sin mensaje" (Q6). In `apps/web/src/driver/offline/`:
 
 Owner answer Q6, "Mensaje común con espera":
 
-- **Panel** (the web part, next PR). "Demasiadas solicitudes. Espera N segundos e intenta de nuevo.", with N from
-  `Retry-After`. The button re-enables itself when N runs out.
+- **Panel** (the panel part, `docs/development/sec-004-panel-limits.md`). "Demasiadas solicitudes. Espera N segundos e
+  intenta de nuevo.", with N from `Retry-After`. The button re-enables itself when N runs out; the screens that refresh
+  themselves reload once when it does (Q11).
 - **Driver app** (this PR). The queue waits what the server says and retries without a message.
 - **`/auth/login`** (this PR). The page above.
 
@@ -207,6 +209,7 @@ Owner answer Q6, "Mensaje común con espera":
 | `/ops/dashboard`, `/ops/inbox`, the order detail | dashboard, `getOperationsQueueCounts` |
 | `/ops/orders`, `/finance/cod` (pending COD list) | `listOrders` |
 | order detail and inbox (driver picker, "Asignar seleccionadas…") | `listAssignableDrivers` |
+| top bar "Buscar guía", `/ops/routes` "Agregar entrega" (owner answer Q13) | `listOrders` |
 | driver app offline queue | `createProofUploadSession`, `finalizeProof` |
 
 No web screen calls `createLocation` today.
@@ -342,10 +345,10 @@ No web screen calls `createLocation` today.
   - the order detail reloads its dashboard row on the same events;
   - the budgets are per user, so every tab the user has open spends the same 60 per minute.
 
-  A burst of events (a bulk assignment, a CSV commit) can therefore spend the 60 per minute of
+  A burst of events (a bulk assignment, a CSV commit) could therefore spend the 60 per minute of
   `Reporting.OperationsDashboard` and `Reporting.QueueCounts`. The owner's decision (Q9, "Espaciar recargas") mitigates
-  it in the panel pull request: at most one reload every 3 seconds per tab, with the limits unchanged. Until that pull
-  request merges, bursts can still spend these budgets.
+  it in the panel part: at most one reload every 3 seconds per tab, with the limits unchanged
+  (`docs/development/sec-004-panel-limits.md`). Several tabs of one user still share the per-user budgets.
 - **Forward deploy of the driver app.** A phone still running the previous web build reads a photo 429 as rejected
   evidence: the action needs attention (`EVIDENCE_REJECTED`) and the photo stays on the phone. That lasts until the
   phone loads the new build:
