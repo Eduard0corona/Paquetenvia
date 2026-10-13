@@ -26,10 +26,22 @@ public sealed class TrackingTokenLogRedactionArchitectureTests
         RegexOptions.CultureInvariant);
 
     // Files that register a request-path log sink, each reviewed as served only behind the tracking redaction.
-    // Empty today. A new sink fails Request_path_log_sinks_are_reviewed_and_behind_the_tracking_redaction until it
-    // is reviewed and listed here with its reason; a stale entry fails it too.
+    // A new sink fails Request_path_log_sinks_are_reviewed_and_behind_the_tracking_redaction until it is reviewed and
+    // listed here with its reason; a stale entry fails it too.
     private static readonly IReadOnlyDictionary<string, string> ReviewedRequestPathSinks =
-        new Dictionary<string, string>(StringComparer.Ordinal);
+        new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["src/Paqueteria.Api/Observability/AzureMonitorTelemetryExport.cs"] =
+                "OBS-003 PR 6: OpenTelemetry traces and metrics to Application Insights, off by default and no log " +
+                "exporter. A request span keeps only TelemetryExportPolicy's allowlist (method, route template, status, " +
+                "organization pseudonym, role kind): never the path, query, headers or client address; metrics keep " +
+                "the route template (http.route), never a path. The API serves it behind the tracking redaction.",
+            ["src/Paqueteria.Api/Program.cs"] =
+                "calls AddAzureMonitorTelemetryExport with the API profile, next to AddRequestTargetRedaction",
+            ["src/Paqueteria.Worker/Program.cs"] =
+                "calls AddAzureMonitorTelemetryExport with the Worker profile, which does not listen to the hosting " +
+                "source: the Worker's only requests are the /health probes, and its metrics keep only route templates",
+        };
 
     [Theory]
     [InlineData("/api/v1/tracking/AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA",

@@ -53,6 +53,11 @@ carries `State.TraceId`, the random 32-hex W3C trace id. It is not a telemetry d
 it, and `TelemetryDimensions.Allowed` does not include it. The lane summary (4601) and the HTTP summary (4603) run
 outside any trace and never carry it. A scheduled job cycle (4602) carries the id of its own cycle.
 
+Since OBS-003 PR 6 (`obs-003-appinsights-export.md`), the API's lines inside a request with a selected organization
+also carry `State.OrganizationPseudonym` and `State.ActorRoleKind`. Neither is a telemetry dimension: the OBS-002
+events (4601–4604) are written outside requests, and no alert or workbook query reads them (guard P21 and
+`ObservabilityArchitectureTests`).
+
 ### Outbox lag: what is measured and what is not
 
 Invariant 3 forbids a direct `SELECT` on the outbox from runtime. No existing SECURITY DEFINER or

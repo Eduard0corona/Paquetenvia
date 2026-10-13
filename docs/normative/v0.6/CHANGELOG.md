@@ -1,5 +1,31 @@
 # Changelog
 
+## Exportación de trazas y métricas a Application Insights (OBS-003-APPINSIGHTS-EXPORT-2026-10-13, fase 4 PR 6) — 2026-10-13
+
+- Aplica `OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12` ("Application Insights (Recommended)") y
+  `OBS-003-TENANT-PSEUDONYM-2026-10-12` ("Seudónimo de empresa (Recommended)"), con dos respuestas literales del
+  project owner (2026-10-13), registradas en `decision-log.md` con su contexto y las opciones no elegidas:
+  - Q-PR6-1, qué ciclos se exportan: "Solo tareas programadas (Recommended)".
+  - Q-PR6-2, cómo se autentica el envío: "Llave en la conexión (Recommended)".
+- La API y el Worker exportan trazas y métricas de OpenTelemetry (nunca logs) con el exportador oficial de Azure
+  Monitor, sin paquetes nuevos. Apagado por omisión: la sección `TelemetryExport` se valida al arrancar y falla
+  cerrado; apagado, no se registra ningún exportador y nada sale del proceso.
+- Muestreo de 10 % por traza, fijo en código (`ParentBasedSampler(TraceIdRatioBasedSampler(0.10))`). Solo se exportan
+  las peticiones de la API (no `/health/*`) y los ciclos de las tareas programadas de ADR-034, con sus llamadas HTTP
+  salientes. Nunca las vueltas del outbox, la validación de fotos ni spans de base de datos.
+- Lista permitida de atributos de span y de etiquetas de métricas (la de OBS-002, con las de
+  `aspnetcore.rate_limiting.requests`). La propagación sigue sin hacer nada, también con la exportación encendida.
+- Seudónimo de empresa `v{versión}-<32 hex>` (HMAC con el secreto `paquetenvia-telemetry-pseudonym-key-1` que escribe
+  el owner) y tipo de rol del actor en los logs y la traza de las peticiones con empresa seleccionada; nunca en
+  métricas, eventos de OBS-002, alertas ni el libro. Llave sintética en Development y Testing; fuera de ellos la API y
+  el Worker no arrancan sin la llave.
+- Piloto: componente `appi-pv-pilot-<suffix>` sobre el mismo Log Analytics (mismo tope diario de 0.3 GB), con
+  `TelemetryExport__Enabled='false'` literal en `apps.bicep` (se enciende con un PR revisado); guardas P01, P06, P17,
+  P21 y P23 y la comprobación del secreto en el workflow. Riesgo anotado: quien obtenga la cadena de conexión puede
+  mandar telemetría falsa, no leerla, y esa telemetría cuenta contra el tope diario. Ninguna alerta nueva.
+- AI-08 OBS-003 registra lo implementado. Sin cambios en AI-04, AI-05, AI-06, AI-18, roles, permisos, migraciones ni
+  paquetes. Nota: `docs/development/obs-003-appinsights-export.md`.
+
 ## Espera adaptativa de los avisos en tiempo real (SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13, fase 4 PR 9) — 2026-10-13
 
 - Respuesta literal del project owner (2026-10-13), registrada en `decision-log.md` con su contexto y las opciones no

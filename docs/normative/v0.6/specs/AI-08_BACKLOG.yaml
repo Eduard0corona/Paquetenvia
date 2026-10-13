@@ -1588,7 +1588,7 @@ items:
   - PWA button and account form (Vitest)
   approval_gate: GATE-007
 - id: OBS-003
-  decision: PHASE4-PLATFORM-APPROVAL-2026-10-12, OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12 and OBS-003-TENANT-PSEUDONYM-2026-10-12 (project owner)
+  decision: PHASE4-PLATFORM-APPROVAL-2026-10-12, OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12, OBS-003-TENANT-PSEUDONYM-2026-10-12 and OBS-003-APPINSIGHTS-EXPORT-2026-10-13 (project owner)
   epic: Observability
   release: MVP-1
   title: Trazas y correlación con OpenTelemetry y Application Insights
@@ -1602,6 +1602,7 @@ items:
   - dependency admission entry and dependency PR through main for the OpenTelemetry and Azure Monitor packages (GOV-DEPENDENCY-ADMISSION-001, GOV-DEPENDENCY-ROUTE-001; phase 4 PR 4 and PR 5)
   - OpenTelemetry traces and metrics exported through the official Azure Monitor exporter to a workspace-based Application Insights in Mexico Central on the pilot Log Analytics workspace, off by default, with 10 % sampling (phase 4 PR 6)
   - a privacy allowlist of span attributes, and the pseudonymous organization code and actor role kind on traces and logs only (phase 4 PR 6)
+  - "the workspace-based component appi-pv-pilot-<suffix> in platform.bicep; its connection string, the literal TelemetryExport__Enabled='false' and the Key Vault mapping of the owner-written pseudonym secret paquetenvia-telemetry-pseudonym-key-1 for the API and the Worker in apps.bicep; guards P01, P06, P17, P21 and P23 and the workflow check that the secret exists (phase 4 PR 6)"
   acceptance_criteria:
   - 'DECIDED PHASE4-PLATFORM-APPROVAL-2026-10-12 (literal): "Sí, avanza con la fase 4 (Recommended)" - "Empiezo por OpenTelemetry y correlación, y por los límites de tasa en endpoints pesados, que son lo que más ayuda a operar el piloto."'
   - 'DECIDED OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12 (literal): "Application Insights (Recommended)" - "OpenTelemetry con el exportador oficial de Azure, en México Central, sobre el mismo Log Analytics con muestreo de 10 %. Aprox. 0–5 USD/mes; el peor caso del presupuesto no sube por el tope diario. Admite 7 paquetes nuevos y sube Azure.Core 1.61→1.63 (admisión explícita)."'
@@ -1615,6 +1616,12 @@ items:
   - 'DECIDED OBS-003-TENANT-PSEUDONYM-2026-10-12 (literal): "Seudónimo de empresa (Recommended)" - "Un código HMAC con llave en Key Vault (no el id real) solo en trazas y logs, y el actor solo como tipo de rol; nunca en métricas ni alertas."'
   - when there is an organization context, traces and logs carry the HMAC pseudonym of the organization and the actor role kind only; neither is ever a metric tag, an alert or workbook dimension or an entry of the OBS-002 TelemetryDimensions allowlist, which never gains them (AI-03 §18, AI-13 §10)
   - the pseudonym key is a Key Vault secret read at start with a key version, never stored in the database, logged or committed; Development and Testing use a synthetic key
+  - 'DECIDED OBS-003-APPINSIGHTS-EXPORT-2026-10-13, Q-PR6-1 (literal): "Solo tareas programadas (Recommended)" - "Cierres automáticos (cada 60 s), retención del outbox y limpiezas: unas 340 trazas al día, menos de 0.2 USD/mes. No se exportan las vueltas del outbox ni la validación de fotos; el trabajo del outbox llega con el PR 7, ligado a la petición que lo originó."'
+  - the only exported trace roots are API requests (never /health probes) and the ADR-034 scheduled job cycles, with their child spans; outbox dispatch cycles of the Worker and of the API realtime lanes, the proof-validation poll and database spans are never exported; every cycle still runs in its own trace for the logs
+  - 'DECIDED OBS-003-APPINSIGHTS-EXPORT-2026-10-13, Q-PR6-2 (literal): "Llave en la conexión (Recommended)" - "La cadena de conexión trae la llave de instrumentación; vive solo en el servidor (la web no la usa). Sin pasos nuevos para ti. Riesgo anotado: quien la obtenga puede mandar telemetría falsa, no leerla."'
+  - the API and the Worker send with the instrumentation key of the connection string, which reaches only their settings; residual risk recorded - whoever obtains it can send fake telemetry, not read it, and fake telemetry counts against the 0.3 GB daily cap of the pilot workspace
+  - the 10 % is ParentBasedSampler(TraceIdRatioBasedSampler(0.10)) fixed in code and decided per trace from the trace id; Live Metrics, Statsbeat, customer SDK stats, standard metrics, performance counters, offline storage and the resource metric stay off, so the configured ingestion endpoint is the only destination; the exported metrics keep only the OBS-002 metric tag allowlist, the tags of aspnetcore.rate_limiting.requests included
+  - in the pilot the export is turned on only by a reviewed change of the literal TelemetryExport__Enabled in apps.bicep; the settings file cannot set it, and the API and the Worker refuse to start outside Development and Testing without the pseudonym key
   - 'PENDING OWNER DECISION (blocks phase 4 PR 7): trace context through the outbox - an outbox column (AI-06/AI-18 change and migration), a member of the immutable payload, or none (the Worker starts a new trace per message); carrying it on to SignalR clients also meets AI-12 correlation_id, typed uuid optional'
   - 'PENDING OWNER DECISION: the alert e-mail address the owner sets at deploy (alertEmailAddress, still OWNER_DECISION_REQUIRED); no new alert rule on exported metrics is added without its own owner decision'
   required_tests:
@@ -1623,6 +1630,8 @@ items:
   - export off by default; with it on, sampling and the span attribute allowlist (test exporter)
   - architecture test proving the organization pseudonym and actor role kind never reach a metric tag, an OBS-002 event property or an alert or workbook query
   - fixed HMAC pseudonym vector and start failure without a key outside Development and Testing
+  - only API requests and scheduled job cycles are sampled, and the exported metric tags stay within the OBS-002 metric tag allowlist, rate-limiting tags included
+  - ENV-001 pilot guards fail closed on the Application Insights component, the export switch, its connection string and the pseudonym key mapping
   approval_gate: owner_technology_operations
 - id: SEC-004
   decision: PHASE4-PLATFORM-APPROVAL-2026-10-12 and SEC-004-RATE-LIMITS-2026-10-12 (project owner)

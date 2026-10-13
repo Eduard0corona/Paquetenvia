@@ -11,6 +11,7 @@ using Paqueteria.Infrastructure.Cloud;
 using Paqueteria.Infrastructure.DataProtection;
 using Paqueteria.Infrastructure.Messaging;
 using Paqueteria.Infrastructure.Observability;
+using Paqueteria.Hosting.Observability;
 
 // OBS-003: before anything builds an HTTP handler, so no inbound or outbound trace header is ever honored or sent.
 TraceCorrelation.ConfigureProcess();
@@ -23,6 +24,10 @@ builder.Logging.ClearProviders();
 builder.Logging.AddJsonConsole();
 // OBS-003: every job cycle and outbox dispatch cycle is a new W3C trace whose id is in its log lines.
 builder.Services.AddTraceCorrelation();
+// OBS-003 PR 6: the organization pseudonym key is validated at start (required outside Development and Testing), and
+// traces and metrics go to Application Insights only when TelemetryExport:Enabled turns the export on.
+builder.Services.AddTelemetryOrganizationPseudonym(builder.Configuration, builder.Environment);
+builder.AddAzureMonitorTelemetryExport(TelemetryExportProfile.Worker);
 builder.Services.AddPlatformDataProtection(builder.Configuration);
 builder.Services.AddOutboxRetention(builder.Configuration);
 builder.Services.AddCustodyInfrastructure(

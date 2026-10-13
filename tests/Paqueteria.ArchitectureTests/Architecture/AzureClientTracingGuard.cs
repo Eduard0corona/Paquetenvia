@@ -475,7 +475,8 @@ internal static partial class AzureClientTracingGuard
         @"(?<![\w.@])new(?:\s+(?:global::)?(?:[A-Za-z_]\w*\s*\.\s*)*[A-Za-z_]\w*\s*(?:<[^<>(){};]*(?:<[^<>(){};]*>[^<>(){};]*)*>)?)?\s*(?:\[\s*\])?\s*[({]")]
     private static partial Regex AnyConstructionPattern();
 
-    [GeneratedRegex(@"^\w*(?:Client|Credential)$|^KeyResolver$")]
+    // OBS-003 PR 6: the Azure Monitor exporters build their own Azure.Core pipeline from their options too.
+    [GeneratedRegex(@"^\w*(?:Client|Credential)$|^KeyResolver$|^AzureMonitor\w*Exporter$")]
     private static partial Regex AzureConstructionTypePattern();
 
     [GeneratedRegex(@"(?<type>(?:global::)?[A-Za-z_][\w.]*(?:<[^;{}()=]*>)?\??(?:\[\])*)\s+@?[A-Za-z_]\w*\s*=\s*$")]
