@@ -1,10 +1,12 @@
 using System.Globalization;
 using Identity.Application.Bootstrap;
 using Identity.Application.Session;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
+using Paqueteria.Infrastructure.Database.Pooling;
 
 namespace Identity.Infrastructure.Session;
 
@@ -15,7 +17,7 @@ namespace Identity.Infrastructure.Session;
 /// and counts cross the boundary, and the log never carries a key, subject, sid or ticket.
 /// </summary>
 public sealed partial class PostgreSqlBffSessionStore(
-    NpgsqlDataSource dataSource,
+    [FromKeyedServices(RuntimeDatabaseRole.Application)] NpgsqlDataSource dataSource,
     IOptions<IdentityBootstrapOptions> options,
     ILogger<PostgreSqlBffSessionStore> logger) : IBffSessionStore
 {

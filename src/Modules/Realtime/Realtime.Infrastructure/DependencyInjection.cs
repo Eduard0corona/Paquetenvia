@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Npgsql;
 using Orders.Application.Tracking;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Paqueteria.Infrastructure.Observability;
 using Realtime.Application.Authorization;
 using Realtime.Application.Configuration;
@@ -60,10 +61,8 @@ public static class DependencyInjection
                 "Realtime:Provider=SignalR requires the productive PostgreSQL public tracking projection.")
             .ValidateOnStart();
 
-        services.TryAddSingleton(serviceProvider => NpgsqlDataSource.Create(
-            serviceProvider.GetRequiredService<IConfiguration>().GetConnectionString("Paqueteria")
-            ?? throw new InvalidOperationException(
-                "A SignalR realtime provider requires a configured connection string.")));
+        // SCL-007: the API's one paqueteria_app pool, shared with every other API module.
+        services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Application);
         services.AddSingleton<DisabledRealtimeConnectionAuthorizer>();
         services.AddScoped<PostgreSqlRealtimeConnectionAuthorizer>();
         services.AddScoped<IRealtimeConnectionAuthorizer>(provider =>
@@ -122,8 +121,8 @@ public static class DependencyInjection
                 $"ConnectionStrings:{OutboxDispatcherOptions.ConnectionStringName} must be a valid connection string whose login differs from ConnectionStrings:Paqueteria and ConnectionStrings:PaqueteriaWorker.")
             .ValidateOnStart();
 
-        services.AddSingleton(_ => new RealtimeDispatcherConnectionFactory(
-            configuration.GetConnectionString(OutboxDispatcherOptions.ConnectionStringName) ?? string.Empty));
+        services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Realtime);
+        services.TryAddSingleton<RealtimeDispatcherConnectionFactory>();
         services.AddSingleton<IRealtimeOutboxStore, PostgreSqlRealtimeOutboxStore>();
         services.AddSingleton<IRealtimeOutboxEvidenceReader, PostgreSqlRealtimeOutboxEvidenceReader>();
         services.TryAddSingleton<IRealtimeOutboxFailureInjector, NoOpRealtimeOutboxFailureInjector>();

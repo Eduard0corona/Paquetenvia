@@ -1,3 +1,5 @@
+using Paqueteria.Infrastructure.Database.Pooling;
+
 namespace Paqueteria.Infrastructure.DataProtection;
 
 public enum DataProtectionProviderKind
@@ -58,7 +60,9 @@ public sealed class DataProtectionOptions
 
     /// <summary>
     /// The <c>ConnectionStrings</c> entry the key ring is read from. The API reads it with its
-    /// own least-privilege login and the Worker with the worker login.
+    /// own least-privilege login and the Worker with the worker login. SCL-007: it names the shared
+    /// pool of a runtime role, so only <c>Paqueteria</c> (with <see cref="RuntimeRole"/>
+    /// <c>paqueteria_app</c>) and <c>PaqueteriaWorker</c> (with <c>paqueteria_worker</c>) are accepted.
     /// </summary>
     public string ConnectionStringName { get; set; } = "Paqueteria";
 
@@ -88,6 +92,22 @@ public static class DataProtectionRuntimeRoles
         role is Application or Worker;
 }
 
+/// <summary>
+/// SCL-007: the key ring reads through the shared pool of the API or the Worker role, never another, and assumes that
+/// pool's own role: <c>Paqueteria</c> with <c>paqueteria_app</c>, or <c>PaqueteriaWorker</c> with
+/// <c>paqueteria_worker</c>. Any other pairing would give a process a second pool of the same login under another role.
+/// </summary>
+public static class DataProtectionConnectionNames
+{
+    public static bool TryGetRuntimePool(
+        string? connectionStringName,
+        string? runtimeRole,
+        out RuntimeDatabaseRole databaseRole) =>
+        RuntimeDatabaseRoles.TryFromConnectionStringName(connectionStringName, out databaseRole) &&
+        databaseRole is RuntimeDatabaseRole.Application or RuntimeDatabaseRole.Worker &&
+        string.Equals(RuntimeDatabaseRoles.PostgreSqlRole(databaseRole), runtimeRole, StringComparison.Ordinal);
+}
+
 public static class DataProtectionOptionsValidator
 {
     public static bool IsValid(DataProtectionOptions? options) =>
@@ -95,8 +115,8 @@ public static class DataProtectionOptionsValidator
         Enum.IsDefined(options.Provider) &&
         !string.IsNullOrWhiteSpace(options.ApplicationName) &&
         options.ApplicationName.Length is >= 3 and <= 100 &&
-        !string.IsNullOrWhiteSpace(options.ConnectionStringName) &&
         DataProtectionRuntimeRoles.IsCanonical(options.RuntimeRole) &&
+        DataProtectionConnectionNames.TryGetRuntimePool(options.ConnectionStringName, options.RuntimeRole, out _) &&
         options.KeyLifetimeDays is >= 7 and <= 3_650 &&
         options.CommandTimeoutSeconds is >= 1 and <= 60 &&
         options.KeyEncryption is not null &&

@@ -1,3 +1,4 @@
+using Paqueteria.Infrastructure.Database.Pooling;
 using Paqueteria.IntegrationTests.Security;
 using Realtime.Application.Dispatching;
 using Realtime.Infrastructure.Dispatching;
@@ -109,8 +110,9 @@ public sealed class RealtimeOutboxEvidencePostgreSqlTests(
         Guid assignmentId,
         Guid? organizationId = null)
     {
-        await using var connections = new RealtimeDispatcherConnectionFactory(
-            database.RealtimeConnectionString);
+        await using var realtimePool = RuntimeDataSource.Create(
+            RuntimeDatabaseRole.Realtime, database.RealtimeConnectionString, maximumPoolSize: 4);
+        var connections = new RealtimeDispatcherConnectionFactory(realtimePool);
         var reader = new PostgreSqlRealtimeOutboxEvidenceReader(connections);
         return await reader.ReadAssignmentAsync(
             organizationId ?? PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId,

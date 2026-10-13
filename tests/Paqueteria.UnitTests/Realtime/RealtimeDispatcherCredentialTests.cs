@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Realtime.Application.Configuration;
 using Realtime.Infrastructure;
 using Realtime.Infrastructure.Dispatching;
@@ -104,7 +105,9 @@ public sealed class RealtimeDispatcherCredentialTests
     [Fact]
     public async Task The_connection_factory_names_the_realtime_connection_when_it_is_missing()
     {
-        await using var connections = new RealtimeDispatcherConnectionFactory(string.Empty);
+        await using var realtimePool = RuntimeDataSource.Create(
+            RuntimeDatabaseRole.Realtime, string.Empty, maximumPoolSize: 4);
+        var connections = new RealtimeDispatcherConnectionFactory(realtimePool);
 
         var failure = await Assert.ThrowsAsync<InvalidOperationException>(
             () => connections.OpenConnectionAsync(CancellationToken.None).AsTask());

@@ -1,13 +1,15 @@
 using Identity.Application.Bootstrap;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
+using Paqueteria.Infrastructure.Database.Pooling;
 
 namespace Identity.Infrastructure.Bootstrap;
 
 public sealed class PostgreSqlIdentityContextResolver(
-    NpgsqlDataSource dataSource,
+    [FromKeyedServices(RuntimeDatabaseRole.Application)] NpgsqlDataSource dataSource,
     IOptions<IdentityBootstrapOptions> options,
     ILogger<PostgreSqlIdentityContextResolver> logger) : IIdentityContextResolver
 {

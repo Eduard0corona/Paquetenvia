@@ -11,9 +11,9 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
-using Npgsql;
 using Identity.Infrastructure.Persistence;
 using Microsoft.EntityFrameworkCore;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Paqueteria.Infrastructure.Tenancy;
 
 namespace Identity.Infrastructure;
@@ -46,10 +46,8 @@ public static class DependencyInjection
         services.AddSingleton<MockIdentityContextResolver>();
         services.AddSingleton<DisabledIdentityContextResolver>();
         services.AddScoped<PostgreSqlIdentityContextResolver>();
-        services.TryAddSingleton(serviceProvider => NpgsqlDataSource.Create(
-            serviceProvider.GetRequiredService<IConfiguration>().GetConnectionString("Paqueteria")
-            ?? throw new InvalidOperationException(
-                "A PostgreSQL identity bootstrap provider requires a configured connection string.")));
+        // SCL-007: the API's one paqueteria_app pool, shared with every other API module.
+        services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Application);
         // BFF-SESSION-TABLE-SHAPE: resolved only when AuthCenter:SessionStore=PostgreSql.
         services.AddSingleton<IBffSessionStore, PostgreSqlBffSessionStore>();
         services.AddScoped<IIdentityContextResolver>(serviceProvider =>
@@ -79,7 +77,7 @@ public static class DependencyInjection
             services.TryAddScoped<TenantSaveChangesGuardInterceptor>();
             services.AddDbContext<IdentityDbContext>((serviceProvider, options) =>
                 options.UseNpgsql(
-                        serviceProvider.GetRequiredService<NpgsqlDataSource>(),
+                        serviceProvider.GetRuntimeDataSource(RuntimeDatabaseRole.Application),
                         postgres =>
                         {
                             postgres.MigrationsAssembly(typeof(IdentityDbContext).Assembly.FullName);

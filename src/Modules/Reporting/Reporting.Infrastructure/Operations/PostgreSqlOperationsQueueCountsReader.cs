@@ -1,8 +1,10 @@
 using System.Globalization;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
 using Paqueteria.Domain.Tenancy;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Reporting.Application.Operations;
 
 namespace Reporting.Infrastructure.Operations;
@@ -14,7 +16,7 @@ namespace Reporting.Infrastructure.Operations;
 /// operator. Read only: no row lock, no write.
 /// </summary>
 internal sealed class PostgreSqlOperationsQueueCountsReader(
-    NpgsqlDataSource dataSource,
+    [FromKeyedServices(RuntimeDatabaseRole.Application)] NpgsqlDataSource dataSource,
     IOptions<OperationsDashboardOptions> options,
     IOperationsDashboardTelemetry telemetry,
     TimeProvider timeProvider) : IOperationsQueueCountsReader

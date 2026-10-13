@@ -6,24 +6,6 @@ using NpgsqlTypes;
 namespace Custody.Infrastructure.Cleanup;
 
 /// <summary>
-/// Owns the Worker-login pool of the OPS-003 jobs, apart from the tenant-scoped data sources the
-/// modules register. It is created on first use, so a disabled job never needs the connection string.
-/// </summary>
-internal sealed class OperationalCleanupDataSource(string connectionString) : IAsyncDisposable
-{
-    private readonly Lazy<NpgsqlDataSource> _dataSource = new(() => NpgsqlDataSource.Create(
-        !string.IsNullOrWhiteSpace(connectionString)
-            ? connectionString
-            : throw new InvalidOperationException(
-                $"ConnectionStrings:{OperationalCleanupOptions.WorkerConnectionStringName} is required when OperationalCleanup is enabled.")));
-
-    public NpgsqlDataSource Value => _dataSource.Value;
-
-    public ValueTask DisposeAsync() =>
-        _dataSource.IsValueCreated ? _dataSource.Value.DisposeAsync() : ValueTask.CompletedTask;
-}
-
-/// <summary>
 /// Invokes the OPS-003-CLEANUP-ROLE functions (including the BFF session purge) as
 /// <c>paqueteria_worker</c>, which holds only EXECUTE on them. No tenant context is set and no tenant,
 /// key or session identifier is sent or read back: each

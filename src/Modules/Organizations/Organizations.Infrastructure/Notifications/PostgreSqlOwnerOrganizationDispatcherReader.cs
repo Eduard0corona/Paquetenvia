@@ -1,22 +1,19 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
 using NpgsqlTypes;
 using Organizations.Application.Notifications;
+using Paqueteria.Infrastructure.Database.Pooling;
 
 namespace Organizations.Infrastructure.Notifications;
 
-internal sealed class OrganizationsNotificationConnectionFactory(string connectionString) : IAsyncDisposable
+/// <summary>SCL-007: the Worker's one <c>paqueteria_worker</c> pool, shared with every other Worker module.</summary>
+internal sealed class OrganizationsNotificationConnectionFactory(
+    [FromKeyedServices(RuntimeDatabaseRole.Worker)] RuntimeDataSource pool)
 {
-    private readonly NpgsqlDataSource _dataSource = NpgsqlDataSource.Create(
-        !string.IsNullOrWhiteSpace(connectionString)
-            ? connectionString
-            : "Host=127.0.0.1;Database=disabled;Username=disabled;Password=disabled");
-
     public ValueTask<NpgsqlConnection> OpenAsync(CancellationToken cancellationToken) =>
-        _dataSource.OpenConnectionAsync(cancellationToken);
-
-    public ValueTask DisposeAsync() => _dataSource.DisposeAsync();
+        pool.OpenConnectionAsync(cancellationToken);
 }
 
 internal sealed class PostgreSqlOwnerOrganizationDispatcherReader(
@@ -62,8 +59,8 @@ public static class NotificationAudienceDependencyInjection
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        services.AddSingleton(_ => new OrganizationsNotificationConnectionFactory(
-            configuration.GetConnectionString("PaqueteriaWorker") ?? string.Empty));
+        services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Worker);
+        services.TryAddSingleton<OrganizationsNotificationConnectionFactory>();
         services.AddSingleton<IOwnerOrganizationDispatcherReader, PostgreSqlOwnerOrganizationDispatcherReader>();
         return services;
     }

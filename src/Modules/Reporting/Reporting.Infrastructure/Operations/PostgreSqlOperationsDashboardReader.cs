@@ -1,14 +1,16 @@
 using System.Globalization;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
 using Paqueteria.Domain.Tenancy;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Reporting.Application.Operations;
 
 namespace Reporting.Infrastructure.Operations;
 
 internal sealed class PostgreSqlOperationsDashboardReader(
-    NpgsqlDataSource dataSource,
+    [FromKeyedServices(RuntimeDatabaseRole.Application)] NpgsqlDataSource dataSource,
     IOptions<OperationsDashboardOptions> options,
     IOperationsDashboardTelemetry telemetry) : IOperationsDashboardReader
 {

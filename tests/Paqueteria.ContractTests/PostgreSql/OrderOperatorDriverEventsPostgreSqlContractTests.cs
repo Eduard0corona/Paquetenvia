@@ -1,5 +1,6 @@
 using Orders.Domain;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Realtime.Infrastructure.Dispatching;
 
 namespace Paqueteria.ContractTests.PostgreSql;
@@ -30,7 +31,9 @@ public sealed partial class OrderAttemptCustodyPostgreSqlContractTests
             Assert.Equal(world.DriverId.ToString("D"), driver);
             Assert.Equal(world.AssignmentId.ToString("D"), assignment);
 
-            await using var connections = new RealtimeDispatcherConnectionFactory(fixture.RealtimeConnectionString);
+            await using var realtimePool = RuntimeDataSource.Create(
+                RuntimeDatabaseRole.Realtime, fixture.RealtimeConnectionString, maximumPoolSize: 4);
+            var connections = new RealtimeDispatcherConnectionFactory(realtimePool);
             var evidence = new PostgreSqlRealtimeOutboxEvidenceReader(connections);
             Assert.True(await evidence.IsDriverAudienceAuthorizedAsync(
                 world.Scenario.OrganizationId, world.Scenario.OrderId, world.AssignmentId, world.DriverId, default));

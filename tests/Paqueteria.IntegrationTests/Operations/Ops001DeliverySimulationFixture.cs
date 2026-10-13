@@ -66,11 +66,14 @@ public sealed class Ops001DeliverySimulationFixture : IAsyncLifetime
         int port = 0)
     {
         var configuration = CreateApplicationConfiguration(data);
+        // SCL-007: each runtime pool carries its own application name, so Ops001ConnectionSampler can count it.
         return new RealtimeKestrelWebApplicationFactory(
-            Database.ApplicationConnectionString,
+            NamedPool(Database.ApplicationConnectionString, Ops001ConnectionSampler.ApplicationPool),
             authorizationRecorder ?? new RealtimeAuthorizationRecorder(),
             port,
-            realtimeConnectionString,
+            realtimeConnectionString is null
+                ? null
+                : NamedPool(realtimeConnectionString, Ops001ConnectionSampler.RealtimePool),
             failureInjector,
             logProvider,
             configurationOverrides: configuration,
@@ -81,7 +84,9 @@ public sealed class Ops001DeliverySimulationFixture : IAsyncLifetime
     {
         var settings = Storage.CreateProofStorageConfiguration()
             .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.Ordinal);
-        settings["ConnectionStrings:Paqueteria"] = Database.WorkerConnectionString;
+        settings["ConnectionStrings:Paqueteria"] = NamedPool(
+            Database.WorkerConnectionString,
+            Ops001ConnectionSampler.ProofWorkerPool);
         settings["ProofStorage:MaximumConcurrency"] = "1";
 
         var builder = Host.CreateApplicationBuilder(new HostApplicationBuilderSettings
@@ -96,6 +101,9 @@ public sealed class Ops001DeliverySimulationFixture : IAsyncLifetime
             builder.Environment);
         return builder.Build();
     }
+
+    private static string NamedPool(string connectionString, string applicationName) =>
+        new NpgsqlConnectionStringBuilder(connectionString) { ApplicationName = applicationName }.ConnectionString;
 
     internal async Task BootstrapAsync(
         Ops001ScenarioData data,
