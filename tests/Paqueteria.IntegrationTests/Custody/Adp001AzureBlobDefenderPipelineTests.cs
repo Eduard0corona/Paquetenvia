@@ -229,6 +229,9 @@ public sealed class Adp001AzureBlobDefenderPipelineTests :
             .AddInMemoryCollection(new Dictionary<string, string?>
             {
                 ["ConnectionStrings:Paqueteria"] = connectionString,
+                // SCL-007: the proof validation worker runs on the Worker's one paqueteria_worker pool, read from
+                // ConnectionStrings:PaqueteriaWorker as in the Worker host.
+                ["ConnectionStrings:PaqueteriaWorker"] = worker ? connectionString : null,
                 ["ProofStorage:Provider"] = "AzureBlob",
                 ["ProofStorage:ThreatScanner"] = "DefenderForStorage",
                 ["ProofStorage:AzureBlob:ServiceUri"] = "https://paquetenviatest.blob.core.windows.net",
