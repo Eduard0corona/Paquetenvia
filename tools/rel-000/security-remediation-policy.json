@@ -908,6 +908,292 @@
       "require_sharp_runtime_smoke": true,
       "prohibited_prereleases": true,
       "manual_lockfile_edits_allowed": false
+    },
+    {
+      "id": "SEC-2026-12-SIGNALR-CRYPTOGRAPHY",
+      "mode": "SECURITY_REMEDIATION",
+      "authorized_base_sha": "fbc77db841a5ea32598b48d98a2ad95df0c28d6c",
+      "authorized_source_branch": "fix/security-2026-12-signalr-common",
+      "tracked_issue": 260,
+      "tracked_issue_title": "SEC-2026-12: remediate SignalR.Common, Cryptography.Pkcs and Cryptography.Xml NuGet advisories",
+      "issue_advisories": {
+        "260": [
+          "GHSA-334f-vvp4-7g6p",
+          "GHSA-846f-f764-76mx",
+          "GHSA-2fmv-rv2c-59x7",
+          "GHSA-r955-8q5j-3h83"
+        ]
+      },
+      "expected_base_advisories": [
+        "GHSA-334f-vvp4-7g6p",
+        "GHSA-846f-f764-76mx",
+        "GHSA-2fmv-rv2c-59x7",
+        "GHSA-r955-8q5j-3h83",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "expected_base_packages": {
+        "GHSA-334f-vvp4-7g6p": "Microsoft.AspNetCore.SignalR.Common",
+        "GHSA-846f-f764-76mx": "System.Security.Cryptography.Pkcs",
+        "GHSA-2fmv-rv2c-59x7": "System.Security.Cryptography.Pkcs",
+        "GHSA-r955-8q5j-3h83": "System.Security.Cryptography.Xml",
+        "GHSA-vfj7-8cjw-p6xm": "braces"
+      },
+      "expected_base_severities": {
+        "GHSA-334f-vvp4-7g6p": "high",
+        "GHSA-846f-f764-76mx": "high",
+        "GHSA-2fmv-rv2c-59x7": "moderate",
+        "GHSA-r955-8q5j-3h83": "high",
+        "GHSA-vfj7-8cjw-p6xm": "high"
+      },
+      "expected_base_totals": {
+        "total": 5,
+        "critical": 0,
+        "high": 4,
+        "moderate": 1,
+        "low": 0
+      },
+      "expected_branch_totals": {
+        "total": 1,
+        "critical": 0,
+        "high": 1,
+        "moderate": 0,
+        "low": 0
+      },
+      "expected_cves": {
+        "GHSA-334f-vvp4-7g6p": "CVE-2026-70159",
+        "GHSA-846f-f764-76mx": "CVE-2026-84008",
+        "GHSA-2fmv-rv2c-59x7": "CVE-2026-70162",
+        "GHSA-r955-8q5j-3h83": "CVE-2026-96958"
+      },
+      "nuget_affected_range": ">=10.0.0 <10.0.13",
+      "nuget_first_patched_version": "10.0.13",
+      "allowed_direct_packages": [
+        "Microsoft.AspNetCore.SignalR.Client"
+      ],
+      "allowed_dependency_files": [
+        "Directory.Packages.props",
+        "tests/Paqueteria.ArchitectureTests/packages.lock.json",
+        "tests/Paqueteria.ContractTests/packages.lock.json",
+        "tests/Paqueteria.IntegrationTests/packages.lock.json",
+        "tools/Paqueteria.DatabaseMigrator/packages.lock.json"
+      ],
+      "required_dependency_files": [
+        "Directory.Packages.props",
+        "tests/Paqueteria.ArchitectureTests/packages.lock.json",
+        "tests/Paqueteria.ContractTests/packages.lock.json",
+        "tests/Paqueteria.IntegrationTests/packages.lock.json",
+        "tools/Paqueteria.DatabaseMigrator/packages.lock.json"
+      ],
+      "allowed_non_dependency_files": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/pr-validation.yml",
+        "docs/development/rel-000-internal-release.md",
+        "docs/normative/v0.6/CHANGELOG.md",
+        "docs/normative/v0.6/CHECKSUMS_SHA256.txt",
+        "docs/normative/v0.6/MANIFEST.json",
+        "docs/normative/v0.6/decision-log.md",
+        "tests/Paqueteria.ArchitectureTests/SyntheticEnvironmentArchitectureTests.cs",
+        "tests/fixtures/rel-000/security-tracking.json",
+        "tools/rel-000/rel000.py",
+        "tools/rel-000/security-remediation-policy.json",
+        "tools/rel-000/test_rel000.py"
+      ],
+      "expected_central_version_changes": {
+        "Microsoft.AspNetCore.SignalR.Client": {
+          "from": "10.0.10",
+          "to": "10.0.13"
+        }
+      },
+      "expected_central_version_additions": [
+        {
+          "id": "System.Security.Cryptography.Pkcs",
+          "version": "10.0.13",
+          "before": "Testcontainers.PostgreSql"
+        },
+        {
+          "id": "System.Security.Cryptography.Xml",
+          "version": "10.0.13",
+          "before": "Testcontainers.PostgreSql"
+        }
+      ],
+      "central_package_transitive_pinning_required": true,
+      "expected_nuget_package_moves": {
+        "Microsoft.AspNetCore.Connections.Abstractions": {
+          "from_version": "10.0.10",
+          "from_content_hash": "oXFVxDMZeUSCVGRyZsZAIJIrKVNayMstMfBrNOkPWJvxePziwmTGfx3+HPlf5bnwYxt6oq/FKduCoTIXXMNf1A==",
+          "to_version": "10.0.13",
+          "to_content_hash": "l/1VmXALhXxdTWG+41N25xigbAXZx/43c6cVw+mXxLH6KCKO25P3c53MLK5w5ua0GCr2RdZhN/xsUwCG7v9N1w==",
+          "pinned_centrally": false,
+          "lock_files": [
+            "tests/Paqueteria.IntegrationTests/packages.lock.json"
+          ]
+        },
+        "Microsoft.AspNetCore.Http.Connections.Client": {
+          "from_version": "10.0.10",
+          "from_content_hash": "85adEQWKkB+d0fevCrToFlN99hhPfBPT7ZluCzrakxp8u63kKuA/5Wt9gRs0x6AMDOW6rOOJhh2TnCKlPeGq6g==",
+          "to_version": "10.0.13",
+          "to_content_hash": "r9hlU+te+QWFJlUCt2C22TDKY3oMER8ayC7Qzeq6yJ5toHBKcSqshhyyaLKK1jgBuyNi4ejly0wE8ANV8TyfWQ==",
+          "pinned_centrally": false,
+          "lock_files": [
+            "tests/Paqueteria.IntegrationTests/packages.lock.json"
+          ]
+        },
+        "Microsoft.AspNetCore.Http.Connections.Common": {
+          "from_version": "10.0.10",
+          "from_content_hash": "hPuO+G0LWlO3kQDispgYjJrj2J5D1n8QdLugnTM4Q51D+quliennt+bH6S87iOVhcsXI+ve2k0K0vd9VcHtnag==",
+          "to_version": "10.0.13",
+          "to_content_hash": "L3NCYBsvQIcSS+qu6TemunsNGEDk29hLchifeBcg7kcriAwfKJSUPyF34zVzFTfsgnza531SMynbNr7g1tcq0Q==",
+          "pinned_centrally": false,
+          "lock_files": [
+            "tests/Paqueteria.IntegrationTests/packages.lock.json"
+          ]
+        },
+        "Microsoft.AspNetCore.SignalR.Client": {
+          "from_version": "10.0.10",
+          "from_content_hash": "g4MtTk+83S4phUGVvilHgKWa0gfX9qhnRQGIaeq7Kgz3MIAHkPt1h9XnlK3bRTPcsDVFuKhb7rKAtFvxl7NtDQ==",
+          "to_version": "10.0.13",
+          "to_content_hash": "17fMUI5gkRwR9qXXTELd5OChcFn3lkgWpiblaaELQ45zOL7VuU7HJYAYnMk+Irjf2jpRxHT7b0imy+NVIFyoYQ==",
+          "pinned_centrally": false,
+          "lock_files": [
+            "tests/Paqueteria.IntegrationTests/packages.lock.json"
+          ]
+        },
+        "Microsoft.AspNetCore.SignalR.Client.Core": {
+          "from_version": "10.0.10",
+          "from_content_hash": "1y+34HyOpeSUkkKKaQdXARnYtQLObre7GJoPK3TYbQJYe5GqXamL17WuEroX7EBDWzmTCylSc8QNMXXerGiirw==",
+          "to_version": "10.0.13",
+          "to_content_hash": "zfCQ0/J/rATKKcpwcpQYFz8sxhvrzgGyblsATcfxqSCibRkPFmDZcFmfD0UfLi38q+VDMpwEVuzOCO3TpRy99Q==",
+          "pinned_centrally": false,
+          "lock_files": [
+            "tests/Paqueteria.IntegrationTests/packages.lock.json"
+          ]
+        },
+        "Microsoft.AspNetCore.SignalR.Common": {
+          "from_version": "10.0.10",
+          "from_content_hash": "X0bTYSNXyLeOHbS4HbF1x4aXFUxgu35CyUgAuCJGpZcRz2wwftRbeJ6v17wlUm7Dzvbbo5Dvff5arwY2tDHYBg==",
+          "to_version": "10.0.13",
+          "to_content_hash": "Rd6v57QqwW7Uayx0//qsf6J8MGcdw4Lw3Bq3dfT33KWnydaf0HsXoBxHQze/EowSsYQUx2yi9+PWCob9A9GuFw==",
+          "pinned_centrally": false,
+          "lock_files": [
+            "tests/Paqueteria.IntegrationTests/packages.lock.json"
+          ]
+        },
+        "Microsoft.AspNetCore.SignalR.Protocols.Json": {
+          "from_version": "10.0.10",
+          "from_content_hash": "n/O6U+WCOurES0EmsMfd//S8QerLv1/n8tswbuH9s4JV45oM2xj0xXu+fSfIh+pzUD00MUh8PY7utlOWF53KWQ==",
+          "to_version": "10.0.13",
+          "to_content_hash": "8TvhozBxdbcmS+4S4mb2FN2ls5NU99zwapQAUIse8oWV7CwvUTq0bBJ5/0+0B0JW9wnrxBpMrJ6jkivnG+f7fg==",
+          "pinned_centrally": false,
+          "lock_files": [
+            "tests/Paqueteria.IntegrationTests/packages.lock.json"
+          ]
+        },
+        "Microsoft.Extensions.DependencyInjection": {
+          "from_version": "10.0.10",
+          "from_content_hash": "ANyvsgkNBRvcJh2XLgn8veGmajf+8m0AbKK+HPWdRL1yraSNVVSmQhFntLtdz/C795jxqqup+k05cs/3jZQPOA==",
+          "to_version": "10.0.13",
+          "to_content_hash": "4tnWU9vrU/A8NwYe9Z6wvieZ0EBb/uM82LAT+edNhdepOBWREZ7M7mzb941EIDPJaeOFdbVrDd5+7s9e89U6bQ==",
+          "pinned_centrally": false,
+          "lock_files": [
+            "tests/Paqueteria.IntegrationTests/packages.lock.json"
+          ]
+        },
+        "Microsoft.Extensions.DependencyInjection.Abstractions": {
+          "from_version": "10.0.10",
+          "from_content_hash": "z/2xXlFw2aLGjHyEm6E0tQ+In6VfzQzTrtArbQ2c0TQE16ZbyDCMGPvaUT9I0s8rgy9sRWlU2P9waW37qV04qA==",
+          "to_version": "10.0.13",
+          "to_content_hash": "G2GrGWNAPZBsii2F6AU8n+JT2tC1/I0Ml/e9ZyNCgPjf3hZqronP7o0X91aAynCmVeae8KkSIUNXXeXCNRmdVQ==",
+          "pinned_centrally": false,
+          "lock_files": [
+            "tests/Paqueteria.IntegrationTests/packages.lock.json"
+          ]
+        },
+        "Microsoft.Extensions.Features": {
+          "from_version": "10.0.10",
+          "from_content_hash": "4Zdm7n1vxXAXpHOhGQVpGd5KCdcI1EWk66ilgdrDt2I+928ND+u/F+EVrzYi9pmRR+XeAE47kjuVEmkP0b0mBw==",
+          "to_version": "10.0.13",
+          "to_content_hash": "7xLogOKNBYYWbUUEMOPfuirfcYG8iBNQ4TOc3aUzJpiRD7tyQqzYWhDPXAk2kOuJTd7ImcGtdT1HEQTC9VljuQ==",
+          "pinned_centrally": false,
+          "lock_files": [
+            "tests/Paqueteria.IntegrationTests/packages.lock.json"
+          ]
+        },
+        "Microsoft.Extensions.Logging": {
+          "from_version": "10.0.10",
+          "from_content_hash": "Tf6z5HsL0VDYRTfvsoNrTGHGheCwkTsZBA2FFh5ATJUbkAwug+FFNISJK2gjpUNemlAOoWllAK52HOWCjto3EQ==",
+          "to_version": "10.0.13",
+          "to_content_hash": "fqbiPy4nUp4H2XHKAVQXKN2y3T2h4cFIx1DAAgE6iY9OHkN/OA1cKFi+geJKRWGuX6pS5SFbsjIPWHJqrxE0eg==",
+          "pinned_centrally": false,
+          "lock_files": [
+            "tests/Paqueteria.IntegrationTests/packages.lock.json"
+          ]
+        },
+        "Microsoft.Extensions.Logging.Abstractions": {
+          "from_version": "10.0.10",
+          "from_content_hash": "zkFxGYUvdxAvIKTyXHrmW+Sux53D4SezD9dMyZ6hrwwzPQJNuwCRy1f5W7AvYTqacEGhWF2XderRQG1OvbV8og==",
+          "to_version": "10.0.13",
+          "to_content_hash": "aSZEhEig4fvNiw2zs8Z6NyDlniKtq6YjcF3DyHuqTEHcZ2VKA/6itMPZ+dW+yWABWExlDcQwwdbqX1Rcb7W8WQ==",
+          "pinned_centrally": false,
+          "lock_files": [
+            "tests/Paqueteria.IntegrationTests/packages.lock.json"
+          ]
+        },
+        "Microsoft.Extensions.Options": {
+          "from_version": "10.0.10",
+          "from_content_hash": "srnhnk7nE8krBiIXp71LvBmKBtraBONWSRzdjJgRv1Ko9Mp8IVNqv4vIS9hGeVteBig8aQkva9ZG+sC+o5sVcA==",
+          "to_version": "10.0.13",
+          "to_content_hash": "tmMJgdrE4uhf1JcNs9CV9moAHW+hmDuvgMiPpnQxarKaUxqI2eN33sYK5S4l9Uw+rG9PJvlm4qPxMhvolTDTaQ==",
+          "pinned_centrally": false,
+          "lock_files": [
+            "tests/Paqueteria.IntegrationTests/packages.lock.json"
+          ]
+        },
+        "Microsoft.Extensions.Primitives": {
+          "from_version": "10.0.10",
+          "from_content_hash": "5wu/GrYVd8mG2DVUw3vFJzF+O336TyTGg/Kmcgw9bfwYhCoFiV5lR5QeEmKecJyrW4W54nMfD3p3589E8a7czQ==",
+          "to_version": "10.0.13",
+          "to_content_hash": "ZjTwxzhiw2TMEzIbUDkMF0dfDB2I4NQgIfKD0ELu9/5Mk+SRGdKZcD0/lvBrRCAPo6KN2r0BW86MRancoyJkoA==",
+          "pinned_centrally": false,
+          "lock_files": [
+            "tests/Paqueteria.IntegrationTests/packages.lock.json"
+          ]
+        },
+        "System.Security.Cryptography.Pkcs": {
+          "from_version": "10.0.10",
+          "from_content_hash": "KG8t5RHczdgB3IWvRndpI0nE1DSo7ikDYSDbITxfgRFyIvnYiKzuPjaZOsPnwFQ1aOGUl9sEulJul9wlHLEUoA==",
+          "to_version": "10.0.13",
+          "to_content_hash": "a+EovgC1fBnwdlQ6cn3j4JFBfKqiFaFvoAhjisOoSvazLAcIznaBzPQP0oYnvccmeXfqUH1KebVZOxSeH6rMaw==",
+          "pinned_centrally": true,
+          "lock_files": [
+            "tests/Paqueteria.ArchitectureTests/packages.lock.json",
+            "tests/Paqueteria.ContractTests/packages.lock.json",
+            "tests/Paqueteria.IntegrationTests/packages.lock.json",
+            "tools/Paqueteria.DatabaseMigrator/packages.lock.json"
+          ]
+        },
+        "System.Security.Cryptography.Xml": {
+          "from_version": "10.0.10",
+          "from_content_hash": "Mz6Y+s+uMQKj1H2BUF0OhlmaOQkLgSG34/IrUaBDirYBQ6bgwcFvO/XtXWcoDlBLFoFB0uKqDNhybHOd+fQK1A==",
+          "to_version": "10.0.13",
+          "to_content_hash": "v6/GHhLaHkuN/ISgbKzBeyC7TP7S6Qm/dVyKA+p0ay9nlJyLif+spozjAGclY/FRIv2TC+KNQCo7dSNmupvWtQ==",
+          "pinned_centrally": true,
+          "lock_files": [
+            "tests/Paqueteria.ArchitectureTests/packages.lock.json",
+            "tests/Paqueteria.ContractTests/packages.lock.json",
+            "tests/Paqueteria.IntegrationTests/packages.lock.json",
+            "tools/Paqueteria.DatabaseMigrator/packages.lock.json"
+          ]
+        }
+      },
+      "expected_lockfile_sha256": {
+        "tests/Paqueteria.ArchitectureTests/packages.lock.json": "721851cc67c0143de64c8becde520a8aa1bd8600f7f5bfecaec0a046c7110227",
+        "tests/Paqueteria.ContractTests/packages.lock.json": "4dcebb919b01449ab8a4322269e5f304327fb0a992b45ca60ad4f9586efcd4f9",
+        "tests/Paqueteria.IntegrationTests/packages.lock.json": "0f53fafc14a3cda892ad290132bb9cc2321a1acdbfb9b73ceb1a84692888d508",
+        "tools/Paqueteria.DatabaseMigrator/packages.lock.json": "449408681f22439f37d969abfa18bcba56d4441ed55a422e2b63a073dc3e1925"
+      },
+      "require_sharp_runtime_smoke": false,
+      "prohibited_prereleases": true,
+      "manual_lockfile_edits_allowed": false
     }
   ]
 }

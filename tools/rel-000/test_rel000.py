@@ -3945,23 +3945,25 @@ class BaselinePackageGraphLockfileTests(unittest.TestCase):
             path for path in all_changed if Path(path).name == "packages.lock.json"
         )
         # The permanent MVP-0 freeze is baseline + owner-admitted packages
-        # (GOV-DEPENDENCY-ADMISSION-001). ACTIVE and MERGED admissions both count;
-        # anything else still fails closed.
-        admissions = rel000.load_remediation_policy(
-            REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH
-        )["dependency_admissions"]
+        # (GOV-DEPENDENCY-ADMISSION-001) + the exact NuGet graphs that owner-authorized
+        # security remediations moved (SEC-2026-12). ACTIVE and MERGED entries both
+        # count; anything else still fails closed.
+        policy = rel000.load_remediation_policy(REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH)
+        admissions = policy["dependency_admissions"]
+        nuget_remediations = rel000.security_remediation_nuget_graphs(policy)
         lockfiles, usage = rel000.package_graph_lockfile_diff(
             REPOSITORY_ROOT,
             self.baseline,
             all_changed,
             admissions,
+            nuget_remediations,
         )
         self.assertTrue(changed_lockfiles)
         self.assertEqual(changed_lockfiles, lockfiles)
         self.assertEqual(
             lockfiles,
             rel000.validate_baseline_package_graph_lockfile_diff(
-                REPOSITORY_ROOT, self.baseline, all_changed, admissions
+                REPOSITORY_ROOT, self.baseline, all_changed, admissions, nuget_remediations
             ),
         )
         catalog = rel000.admitted_package_catalog(admissions)
@@ -3971,7 +3973,7 @@ class BaselinePackageGraphLockfileTests(unittest.TestCase):
             self.assertTrue(rel000.usage_admission_id(package, catalog, amendments))
             self.assertTrue(set(files).issubset(changed_lockfiles))
         central = rel000.validate_admitted_central_packages(
-            REPOSITORY_ROOT, self.baseline, admissions
+            REPOSITORY_ROOT, self.baseline, admissions, nuget_remediations
         )
         self.assertEqual(
             rel000.CENTRAL_PACKAGES_PATH in all_changed, central["changed"]
@@ -3984,7 +3986,10 @@ class BaselinePackageGraphLockfileTests(unittest.TestCase):
             self.assertEqual(
                 lockfiles,
                 rel000.validate_baseline_package_graph_lockfile_diff(
-                    REPOSITORY_ROOT, self.baseline, all_changed
+                    REPOSITORY_ROOT,
+                    self.baseline,
+                    all_changed,
+                    nuget_remediations=nuget_remediations,
                 ),
             )
 
@@ -5944,6 +5949,7 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
             {
                 rel000.WEB_TRANSITIVE_REMEDIATION_ID,
                 rel000.BRACES_KNOWN_ADVISORY_ID,
+                rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID,
             },
             {item["id"] for item in policy["active_remediations"]},
         )
@@ -8723,6 +8729,881 @@ class NextSharpSourcemapRemediationPolicyTests(unittest.TestCase):
                 self.assertIn(
                     "github.head_ref == 'fix/security-2026-11-next-sharp-source-map' "
                     "&& 'SEC-2026-11-NEXT-SHARP-SOURCEMAP'",
+                    workflow,
+                )
+
+
+class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
+    """SEC-2026-12: the SignalR.Common, Cryptography.Pkcs and Cryptography.Xml advisories.
+
+    The first NuGet-only security remediation since the MVP-0 freeze. The owner admitted an
+    exact graph (2026-10-13): the SignalR client to 10.0.13, transitive pinning repo-wide,
+    and Xml and Pkcs pinned to 10.0.13. The 14 SignalR packages move in the integration
+    tests only; Xml and Pkcs move in four lock files and become CentralTransitive.
+    """
+
+    ISSUE = "260"
+    KNOWN_ADVISORY = "GHSA-vfj7-8cjw-p6xm"
+    INTEGRATION_LOCK = "tests/Paqueteria.IntegrationTests/packages.lock.json"
+    MIGRATOR_LOCK = "tools/Paqueteria.DatabaseMigrator/packages.lock.json"
+    MVP0_BASELINE = "988926c7892af98015be2be9559682f156b2748b"
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-signalr-cryptography-tests-")
+        self.root = Path(self.temp.name)
+        self.policy_path = REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH
+        self.policy_value = json.loads(self.policy_path.read_text(encoding="utf-8"))
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def policy(self):
+        return rel000.load_remediation_policy(self.policy_path)
+
+    def authorization(self):
+        return copy.deepcopy(
+            next(
+                item
+                for item in self.policy_value["active_remediations"]
+                if item["id"] == rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID
+            )
+        )
+
+    def base_file(self, relative: str) -> bytes:
+        return subprocess.check_output(
+            ["git", "show", f"{self.authorization()['authorized_base_sha']}:{relative}"],
+            cwd=REPOSITORY_ROOT,
+        )
+
+    def target_file(self, relative: str) -> bytes:
+        # The remediation is active, so its graph is the checkout's (as SEC-2026-11 did while
+        # PR #206 was open). Once a later change moves the graph, pin validated_target_sha
+        # and replay that commit instead.
+        return (REPOSITORY_ROOT / relative).read_bytes()
+
+    def dependency_repo(self):
+        """A repository at the authorized base files, then the remediation's files on top.
+
+        The web lockfile is committed unchanged, so the braces accepted known advisory can
+        be resolved against the same repository.
+        """
+
+        authorization = self.authorization()
+        root = Path(tempfile.mkdtemp(prefix="repo-", dir=self.root))
+        files = [*authorization["required_dependency_files"], "apps/web/pnpm-lock.yaml"]
+        for relative in files:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(self.base_file(relative))
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "rel000@example.invalid"], cwd=root, check=True
+        )
+        subprocess.run(["git", "config", "user.name", "REL-000 Tests"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        for relative in authorization["required_dependency_files"]:
+            (root / relative).write_bytes(self.target_file(relative))
+        return root, base, authorization
+
+    def validate_dependency(self, root, base, authorization=None):
+        return rel000.validate_dependency_diff(
+            root,
+            base,
+            rel000.SECURITY_REMEDIATION,
+            authorization or self.authorization(),
+        )
+
+    @staticmethod
+    def rewrite(path: Path, old: str, new: str) -> None:
+        text = path.read_text(encoding="utf-8")
+        assert old in text, old
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+    @staticmethod
+    def edit_lock(path: Path, mutate) -> None:
+        """Mutate a lockfile and write it back exactly as NuGet formats it."""
+
+        value = json.loads(path.read_text(encoding="utf-8"))
+        mutate(value["dependencies"]["net10.0"])
+        path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+    def policy_with(self, mutate) -> Path:
+        value = copy.deepcopy(self.policy_value)
+        for item in value["active_remediations"]:
+            if item["id"] == rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID:
+                mutate(item)
+        path = self.root / "policy.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return path
+
+    @staticmethod
+    def nuget_advisory(advisory_id, package, severity, path_count):
+        """One advisory exactly as sanitize-audit records a NuGet finding."""
+
+        return {
+            "advisory_id": advisory_id.upper(),
+            "package": package,
+            "installed_versions": ["10.0.10"],
+            "severity": severity,
+            "affected_range": "10.0.10",
+            "patched_range": "consult-advisory",
+            "direct_or_transitive": "transitive",
+            "dependency_path_count": path_count,
+            "fix_available": False,
+            "fix_compatibility": "requires_compatibility_assessment",
+        }
+
+    def braces_advisory(self):
+        return {
+            "advisory_id": self.KNOWN_ADVISORY,
+            "package": "braces",
+            "installed_versions": ["3.0.3"],
+            "severity": "high",
+            "affected_range": "<=3.0.3",
+            "patched_range": ">=3.0.4",
+            "direct_or_transitive": "transitive",
+            "dependency_path_count": 1,
+            "fix_available": True,
+            "fix_compatibility": "requires_compatibility_assessment",
+        }
+
+    def base_advisories(self):
+        """The sanitized base audit of fbc77db: NuGet (contract and integration) plus braces."""
+
+        return [
+            self.nuget_advisory(
+                "GHSA-2fmv-rv2c-59x7", "System.Security.Cryptography.Pkcs", "moderate", 2
+            ),
+            self.nuget_advisory(
+                "GHSA-334f-vvp4-7g6p", "Microsoft.AspNetCore.SignalR.Common", "high", 1
+            ),
+            self.nuget_advisory(
+                "GHSA-846f-f764-76mx", "System.Security.Cryptography.Pkcs", "high", 2
+            ),
+            self.nuget_advisory(
+                "GHSA-r955-8q5j-3h83", "System.Security.Cryptography.Xml", "high", 2
+            ),
+            self.braces_advisory(),
+        ]
+
+    @staticmethod
+    def audit(advisories):
+        values = copy.deepcopy(advisories)
+        totals = {
+            key: sum(item["severity"] == key for item in values)
+            for key in ("critical", "high", "moderate", "low")
+        }
+        totals["total"] = len(values)
+        return {
+            "format_version": "paquetenvia-rel000-audit-v1",
+            "command_executed": True,
+            "command_exit_code": 1 if values else 0,
+            "parse_succeeded": True,
+            "totals": totals,
+            "affected_packages": sorted({item["package"] for item in values}),
+            "advisories": values,
+        }
+
+    def known_issue(self, **changes):
+        braces = next(
+            item
+            for item in self.policy_value["active_remediations"]
+            if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+        )
+        issue = {
+            "number": 180,
+            "state": "OPEN",
+            "title": braces["tracked_issue_title"],
+            "url": "https://github.com/example/issues/180",
+            "tracked_advisory_ids": [self.KNOWN_ADVISORY.upper()],
+        }
+        issue.update(changes)
+        return issue
+
+    def tracking(self, state="OPEN", tracked=None, known_issues=None):
+        authorization = self.authorization()
+        return {
+            "number": 260,
+            "state": state,
+            "title": authorization["tracked_issue_title"],
+            "url": "https://github.com/example/issues/260",
+            "tracked_advisory_ids": sorted(
+                value.upper()
+                for value in (
+                    authorization["issue_advisories"][self.ISSUE] if tracked is None else tracked
+                )
+            ),
+            # CI always attaches the SEC-2026-08 related Issue; SEC-2026-12 ignores it.
+            "related_issue": {
+                "number": 40,
+                "state": "CLOSED",
+                "title": "SEC-2026-08: remediate transitive SSH.NET advisory",
+                "url": "https://github.com/example/issues/40",
+                "tracked_advisory_ids": ["GHSA-Q939-RPR3-3284"],
+            },
+            "known_advisory_issues": [self.known_issue()] if known_issues is None else known_issues,
+        }
+
+    @staticmethod
+    def issue5():
+        return {
+            "number": 5,
+            "state": "CLOSED",
+            "title": "Sharp historical remediation",
+            "url": "https://github.com/example/issues/5",
+            "tracked_advisory_ids": [rel000.ISSUE5_ADVISORY],
+        }
+
+    def accepted(self, root, base, tracking=None):
+        return rel000.resolve_accepted_known_advisories(
+            root,
+            base,
+            self.policy(),
+            tracking if tracking is not None else self.tracking(),
+            self.audit(self.base_advisories()),
+            self.audit([self.braces_advisory()]),
+            self.authorization(),
+        )
+
+    def security(self, tracking=None, base=None, branch=None, accepted=None):
+        tracking = tracking if tracking is not None else self.tracking()
+        base = base if base is not None else self.audit(self.base_advisories())
+        branch = branch if branch is not None else self.audit([self.braces_advisory()])
+        if accepted is None:
+            root, base_sha, _ = self.dependency_repo()
+            accepted = self.accepted(root, base_sha)
+        return rel000.validate_issue_and_audit(
+            self.issue5(),
+            tracking,
+            base,
+            branch,
+            {
+                "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
+                "vulnerable_lock_versions": [],
+            },
+            rel000.SECURITY_REMEDIATION,
+            self.authorization(),
+            accepted,
+        )
+
+    def test_policy_loads_and_mode_requires_exact_branch_id_and_base(self):
+        policy = self.policy()
+        authorization = self.authorization()
+        self.assertEqual(
+            "fix/security-2026-12-signalr-common", authorization["authorized_source_branch"]
+        )
+        self.assertEqual(
+            "fbc77db841a5ea32598b48d98a2ad95df0c28d6c", authorization["authorized_base_sha"]
+        )
+        self.assertEqual(
+            rel000.SECURITY_REMEDIATION,
+            rel000.resolve_rel000_mode(
+                policy, authorization["authorized_source_branch"], authorization["id"]
+            ),
+        )
+        self.assertIsNotNone(
+            rel000.validate_mode_authorization(
+                rel000.SECURITY_REMEDIATION,
+                policy,
+                authorization["authorized_source_branch"],
+                authorization["authorized_base_sha"],
+                authorization["id"],
+            )
+        )
+        self.assert_reason(
+            "REMEDIATION_ID_REQUIRED",
+            lambda: rel000.resolve_rel000_mode(policy, authorization["authorized_source_branch"]),
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(policy, "feature/other", authorization["id"]),
+        )
+
+    def test_wrong_base_sha_is_rejected(self):
+        authorization = self.authorization()
+        self.assert_reason(
+            "SECURITY_REMEDIATION_BASE_MISMATCH",
+            lambda: rel000.validate_mode_authorization(
+                rel000.SECURITY_REMEDIATION,
+                self.policy(),
+                authorization["authorized_source_branch"],
+                "0" * 40,
+                authorization["id"],
+            ),
+        )
+
+    def test_authorization_is_exact_and_tampering_is_rejected(self):
+        authorization = self.authorization()
+        self.assertEqual(
+            [*authorization["issue_advisories"][self.ISSUE], self.KNOWN_ADVISORY],
+            authorization["expected_base_advisories"],
+        )
+        moves = authorization["expected_nuget_package_moves"]
+        self.assertEqual(16, len(moves))
+        self.assertEqual(
+            14,
+            sum(move["lock_files"] == [self.INTEGRATION_LOCK] for move in moves.values()),
+        )
+        self.assertEqual(
+            {"System.Security.Cryptography.Pkcs", "System.Security.Cryptography.Xml"},
+            {package for package, move in moves.items() if move["pinned_centrally"]},
+        )
+        self.assertEqual(
+            {("10.0.10", "10.0.13")},
+            {(move["from_version"], move["to_version"]) for move in moves.values()},
+        )
+        mutations = [
+            lambda item: item.update(tracked_issue=205),
+            lambda item: item.update(tracked_issue_title="SEC-2026-12: something else"),
+            lambda item: item["issue_advisories"][self.ISSUE].append(self.KNOWN_ADVISORY),
+            lambda item: item["issue_advisories"][self.ISSUE].pop(),
+            lambda item: item["expected_base_advisories"].pop(),
+            lambda item: item["expected_base_packages"].update(
+                {"GHSA-334f-vvp4-7g6p": "Microsoft.AspNetCore.SignalR.Client"}
+            ),
+            lambda item: item["expected_base_severities"].update(
+                {"GHSA-2fmv-rv2c-59x7": "high"}
+            ),
+            lambda item: item["expected_base_totals"].update(high=3, total=4),
+            lambda item: item["expected_branch_totals"].update(high=0, total=0),
+            lambda item: item["expected_cves"].update({"GHSA-r955-8q5j-3h83": "CVE-2026-0000"}),
+            lambda item: item.update(nuget_first_patched_version="10.0.14"),
+            lambda item: item["allowed_direct_packages"].append("System.Security.Cryptography.Xml"),
+            lambda item: item["allowed_dependency_files"].append(
+                "src/Paqueteria.Api/packages.lock.json"
+            ),
+            lambda item: item["required_dependency_files"].pop(),
+            lambda item: item["allowed_non_dependency_files"].append(
+                "src/Paqueteria.Api/Program.cs"
+            ),
+            lambda item: item["expected_central_version_changes"][
+                "Microsoft.AspNetCore.SignalR.Client"
+            ].update(to="10.0.14"),
+            lambda item: item["expected_central_version_additions"].pop(),
+            lambda item: item["expected_central_version_additions"][0].update(
+                before="xunit"
+            ),
+            lambda item: item.update(central_package_transitive_pinning_required=False),
+            lambda item: item["expected_nuget_package_moves"].pop(
+                "Microsoft.Extensions.Primitives"
+            ),
+            lambda item: item["expected_nuget_package_moves"][
+                "System.Security.Cryptography.Xml"
+            ].update(to_content_hash="A" * 86 + "=="),
+            lambda item: item["expected_nuget_package_moves"][
+                "Microsoft.AspNetCore.SignalR.Common"
+            ]["lock_files"].append("tests/Paqueteria.ContractTests/packages.lock.json"),
+            lambda item: item["expected_nuget_package_moves"][
+                "Microsoft.AspNetCore.SignalR.Client"
+            ].update(pinned_centrally=True),
+            lambda item: item["expected_lockfile_sha256"].update({self.MIGRATOR_LOCK: "x"}),
+            lambda item: item["expected_lockfile_sha256"].pop(self.MIGRATOR_LOCK),
+            lambda item: item.update(related_tracked_issue=40),
+            lambda item: item.update(require_sharp_runtime_smoke=True),
+            lambda item: item.update(target_sharp_version="0.35.5"),
+            lambda item: item.update(manual_lockfile_edits_allowed=True),
+        ]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(mutation=index):
+                path = self.policy_with(mutate)
+                self.assert_reason(
+                    "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+                )
+
+    def test_nuget_graph_fields_belong_only_to_this_exact_authorization(self):
+        authorization = self.authorization()
+        for field in rel000.NUGET_REMEDIATION_GRAPH_FIELDS:
+            # Neither another active authorization nor a retired one may carry them.
+            for target in (
+                rel000.WEB_TRANSITIVE_REMEDIATION_ID,
+                rel000.BRACES_KNOWN_ADVISORY_ID,
+                rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID,
+            ):
+                with self.subTest(field=field, target=target):
+                    value = copy.deepcopy(self.policy_value)
+                    for item in [*value["historical_remediations"], *value["active_remediations"]]:
+                        if item["id"] == target:
+                            item[field] = copy.deepcopy(authorization[field])
+                    path = self.root / "policy.json"
+                    path.write_text(json.dumps(value), encoding="utf-8")
+                    self.assert_reason(
+                        "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+                    )
+        # Retired, the entry still declares exactly this graph (the permanent check reads
+        # it), so a historical copy with any other move fails closed as well.
+        retired = copy.deepcopy(authorization)
+        retired["status"] = "MERGED"
+        retired["expected_nuget_package_moves"]["Microsoft.Extensions.Options"][
+            "to_version"
+        ] = "10.0.14"
+        value = copy.deepcopy(self.policy_value)
+        value["active_remediations"] = [
+            item
+            for item in value["active_remediations"]
+            if item["id"] != rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID
+        ]
+        value["historical_remediations"].append(retired)
+        path = self.root / "retired.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        self.assert_reason(
+            "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+        )
+        retired["expected_nuget_package_moves"] = copy.deepcopy(
+            authorization["expected_nuget_package_moves"]
+        )
+        path.write_text(json.dumps(value), encoding="utf-8")
+        self.assertEqual(
+            [rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID],
+            [
+                item["id"]
+                for item in rel000.security_remediation_nuget_graphs(
+                    rel000.load_remediation_policy(path)
+                )
+            ],
+        )
+
+    def test_exact_generated_dependency_graph_is_accepted(self):
+        root, base, authorization = self.dependency_repo()
+        result = self.validate_dependency(root, base, authorization)
+        self.assertEqual("AUTHORIZED_SECURITY_REMEDIATION", result["dependency_diff_against_base"])
+        self.assertEqual(authorization["required_dependency_files"], result["changed_dependency_files"])
+        self.assertEqual(authorization["expected_lockfile_sha256"], result["nuget_lockfile_sha256"])
+        self.assertEqual({"10.0.13"}, set(result["nuget_versions"].values()))
+        self.assertTrue(result["central_package_transitive_pinning"])
+        self.assertFalse(result["dependency_workspace_changed"])
+
+    def test_file_outside_allowlist_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        path = root / "src/Paqueteria.Api/Program.cs"
+        path.parent.mkdir(parents=True)
+        path.write_text("// drift\n", encoding="utf-8")
+        self.assert_reason(
+            "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        # Another lockfile is a dependency file outside the authorization.
+        root, base, authorization = self.dependency_repo()
+        path = root / "src/Paqueteria.Api/packages.lock.json"
+        path.parent.mkdir(parents=True)
+        path.write_text('{"version": 2, "dependencies": {"net10.0": {}}}\n', encoding="utf-8")
+        self.assert_reason(
+            "UNAUTHORIZED_DEPENDENCY_FILE_CHANGED",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_every_authorized_dependency_file_must_change(self):
+        root, base, authorization = self.dependency_repo()
+        (root / self.MIGRATOR_LOCK).write_bytes(self.base_file(self.MIGRATOR_LOCK))
+        self.assert_reason(
+            "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_central_manifest_drift_is_rejected(self):
+        pinning = rel000.CENTRAL_TRANSITIVE_PINNING_LINE
+        signalr = '<PackageVersion Include="Microsoft.AspNetCore.SignalR.Client" Version="10.0.13" />'
+        pkcs = '    <PackageVersion Include="System.Security.Cryptography.Pkcs" Version="10.0.13" />\n'
+        xml = '    <PackageVersion Include="System.Security.Cryptography.Xml" Version="10.0.13" />\n'
+        for old, new in (
+            # The client stays vulnerable, or jumps past the authorized patch.
+            (signalr, signalr.replace("10.0.13", "10.0.10")),
+            (signalr, signalr.replace("10.0.13", "10.0.14")),
+            # Transitive pinning is dropped or turned off.
+            (f"    {pinning}\n", ""),
+            (pinning, pinning.replace(">true<", ">false<")),
+            # A pin is dropped, kept vulnerable, reordered or joined by another one.
+            (xml, ""),
+            (xml, xml.replace("10.0.13", "10.0.10")),
+            (pkcs + xml, xml + pkcs),
+            (xml, xml + '    <PackageVersion Include="System.Text.Json" Version="10.0.13" />\n'),
+            # NuGet audit suppression is outside the exact edits.
+            (f"    {pinning}\n", f"    {pinning}\n    <NuGetAuditMode>direct</NuGetAuditMode>\n"),
+        ):
+            with self.subTest(old=old, new=new):
+                root, base, authorization = self.dependency_repo()
+                self.rewrite(root / rel000.CENTRAL_PACKAGES_PATH, old, new)
+                self.assert_reason(
+                    "NUGET_CENTRAL_VERSION_CHANGE_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+
+    def test_lock_change_outside_the_authorized_graph_is_rejected(self):
+        def unrelated(nodes):
+            nodes["Npgsql"]["contentHash"] = "A" * 86 + "=="
+
+        def stale_edge(nodes):
+            nodes["Microsoft.AspNetCore.SignalR.Client"]["dependencies"][
+                "Microsoft.AspNetCore.SignalR.Client.Core"
+            ] = "10.0.10"
+
+        def other_hash(nodes):
+            nodes["Microsoft.AspNetCore.SignalR.Common"]["contentHash"] = "A" * 86 + "=="
+
+        def not_pinned(nodes):
+            nodes["System.Security.Cryptography.Xml"]["type"] = "Transitive"
+            del nodes["System.Security.Cryptography.Xml"]["requested"]
+
+        def vulnerable_pkcs(nodes):
+            base = json.loads(self.base_file(self.INTEGRATION_LOCK))
+            nodes["System.Security.Cryptography.Pkcs"] = base["dependencies"]["net10.0"][
+                "System.Security.Cryptography.Pkcs"
+            ]
+
+        def added(nodes):
+            nodes["System.Text.Json"] = {
+                "type": "Transitive",
+                "resolved": "10.0.13",
+                "contentHash": "A" * 86 + "==",
+            }
+
+        for name, mutate, package in (
+            ("unrelated node", unrelated, "Npgsql"),
+            ("stale edge", stale_edge, "Microsoft.AspNetCore.SignalR.Client"),
+            ("other content hash", other_hash, "Microsoft.AspNetCore.SignalR.Common"),
+            ("Xml not pinned", not_pinned, "System.Security.Cryptography.Xml"),
+            ("vulnerable Pkcs retained", vulnerable_pkcs, "System.Security.Cryptography.Pkcs"),
+            ("added package", added, "System.Text.Json"),
+        ):
+            with self.subTest(case=name):
+                root, base, authorization = self.dependency_repo()
+                self.edit_lock(root / self.INTEGRATION_LOCK, mutate)
+                failure = self.assert_reason(
+                    "NUGET_LOCK_GRAPH_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+                self.assertEqual(package, failure.details["package"])
+                self.assertEqual(self.INTEGRATION_LOCK, failure.details["file"])
+
+    def test_signalr_packages_never_move_outside_the_integration_tests(self):
+        root, base, authorization = self.dependency_repo()
+
+        def move_signalr(nodes):
+            nodes["Microsoft.Extensions.Primitives"] = {
+                "type": "Transitive",
+                "resolved": "10.0.13",
+                "contentHash": authorization["expected_nuget_package_moves"][
+                    "Microsoft.Extensions.Primitives"
+                ]["to_content_hash"],
+            }
+
+        self.edit_lock(root / self.MIGRATOR_LOCK, move_signalr)
+        failure = self.assert_reason(
+            "NUGET_LOCK_GRAPH_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        self.assertEqual(self.MIGRATOR_LOCK, failure.details["file"])
+
+    def test_generated_lockfile_drift_is_rejected(self):
+        # Same graph, other bytes: only the generated file is accepted.
+        root, base, authorization = self.dependency_repo()
+        path = root / self.MIGRATOR_LOCK
+        path.write_bytes(path.read_bytes() + b"\n")
+        self.assert_reason(
+            "LOCKFILE_GENERATED_GRAPH_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        root, base, authorization = self.dependency_repo()
+        authorization["expected_lockfile_sha256"][self.INTEGRATION_LOCK] = "0" * 64
+        self.assert_reason(
+            "LOCKFILE_GENERATED_GRAPH_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_prerelease_target_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        authorization["expected_nuget_package_moves"]["System.Security.Cryptography.Xml"][
+            "to_version"
+        ] = "10.0.13-rc.1"
+        self.assert_reason(
+            "PRERELEASE_DEPENDENCY_REJECTED",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_base_must_be_the_authorized_vulnerable_graph(self):
+        authorization = self.authorization()
+        moves = authorization["expected_nuget_package_moves"]
+        base_lock = json.loads(self.base_file(self.MIGRATOR_LOCK))
+        self.assertEqual(
+            json.loads(self.target_file(self.MIGRATOR_LOCK)),
+            rel000.nuget_remediation_expected_lock(self.MIGRATOR_LOCK, base_lock, moves),
+        )
+        for name, mutate in (
+            ("other start", lambda nodes: nodes["System.Security.Cryptography.Pkcs"].update(resolved="10.0.9")),
+            ("other hash", lambda nodes: nodes["System.Security.Cryptography.Xml"].update(contentHash="x")),
+            ("already central", lambda nodes: nodes["System.Security.Cryptography.Xml"].update(type="CentralTransitive", requested="[10.0.10, )")),
+            ("missing", lambda nodes: nodes.pop("System.Security.Cryptography.Pkcs")),
+        ):
+            with self.subTest(case=name):
+                tampered = copy.deepcopy(base_lock)
+                mutate(tampered["dependencies"]["net10.0"])
+                self.assert_reason(
+                    "BASE_LOCK_GRAPH_UNEXPECTED",
+                    lambda: rel000.nuget_remediation_expected_lock(
+                        self.MIGRATOR_LOCK, tampered, moves
+                    ),
+                )
+        base_props = self.base_file(rel000.CENTRAL_PACKAGES_PATH).decode("utf-8")
+        self.assertEqual(
+            self.target_file(rel000.CENTRAL_PACKAGES_PATH).decode("utf-8").splitlines(),
+            rel000.nuget_remediation_expected_props(base_props, authorization),
+        )
+        signalr = '"Microsoft.AspNetCore.SignalR.Client" Version="10.0.10"'
+        for old, new in (
+            (signalr, signalr.replace("10.0.10", "10.0.9")),
+            (
+                "</ManagePackageVersionsCentrally>",
+                "</ManagePackageVersionsCentrally>\n    " + rel000.CENTRAL_TRANSITIVE_PINNING_LINE,
+            ),
+            ('Include="Testcontainers.PostgreSql"', 'Include="Testcontainers.MsSql"'),
+            ('Include="xunit"', 'Include="System.Security.Cryptography.Xml"'),
+        ):
+            with self.subTest(old=old):
+                self.assertIn(old, base_props)
+                self.assert_reason(
+                    "BASE_CENTRAL_PACKAGES_UNEXPECTED",
+                    lambda: rel000.nuget_remediation_expected_props(
+                        base_props.replace(old, new, 1), authorization
+                    ),
+                )
+
+    def test_permanent_graph_admits_exactly_this_remediation(self):
+        """The MVP-0 freeze accepts these exact moves, and nothing near them."""
+
+        policy = self.policy()
+        authorization = self.authorization()
+        moves = authorization["expected_nuget_package_moves"]
+        graphs = rel000.security_remediation_nuget_graphs(policy)
+        self.assertEqual([rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID], [item["id"] for item in graphs])
+        # Undoing the exact moves restores every authorized base lockfile and the manifest.
+        for relative in rel000.SIGNALR_CRYPTOGRAPHY_LOCK_FILES:
+            with self.subTest(lock=relative):
+                self.assertEqual(
+                    json.loads(self.base_file(relative)),
+                    rel000.nuget_remediation_reverted_lock(
+                        relative, json.loads(self.target_file(relative)), moves
+                    ),
+                )
+        self.assertEqual(
+            self.base_file(rel000.CENTRAL_PACKAGES_PATH).decode("utf-8"),
+            rel000.nuget_remediation_reverted_props(
+                self.target_file(rel000.CENTRAL_PACKAGES_PATH).decode("utf-8"), authorization
+            ),
+        )
+        # A node that is not exactly at its target is never undone, so the freeze judges it.
+        current = json.loads(self.target_file(self.INTEGRATION_LOCK))
+        current["dependencies"]["net10.0"]["Microsoft.Extensions.Logging"]["contentHash"] = "x"
+        reverted = rel000.nuget_remediation_reverted_lock(self.INTEGRATION_LOCK, current, moves)
+        self.assertEqual(
+            "x", reverted["dependencies"]["net10.0"]["Microsoft.Extensions.Logging"]["contentHash"]
+        )
+        self.assertEqual(
+            "10.0.10",
+            reverted["dependencies"]["net10.0"]["Microsoft.Extensions.Options"]["resolved"],
+        )
+        # A manifest missing any one edit is left as it is.
+        props = self.target_file(rel000.CENTRAL_PACKAGES_PATH).decode("utf-8")
+        partial = props.replace(f"    {rel000.CENTRAL_TRANSITIVE_PINNING_LINE}\n", "")
+        self.assertEqual(
+            partial, rel000.nuget_remediation_reverted_props(partial, authorization)
+        )
+        # Against the MVP-0 baseline, the checkout passes only with the remediation graph.
+        admissions = policy["dependency_admissions"]
+        self.assert_reason(
+            "BASELINE_CENTRAL_PACKAGES_CHANGED",
+            lambda: rel000.validate_admitted_central_packages(
+                REPOSITORY_ROOT, self.MVP0_BASELINE, admissions
+            ),
+        )
+        self.assertTrue(
+            rel000.validate_admitted_central_packages(
+                REPOSITORY_ROOT, self.MVP0_BASELINE, admissions, graphs
+            )["changed"]
+        )
+
+    def test_real_audits_and_issue_are_pending_merge_with_braces_accepted(self):
+        authorization = self.authorization()
+        result = self.security()
+        self.assertEqual(rel000.SECURITY_REMEDIATION, result["mode"])
+        self.assertEqual("REMEDIATED_PENDING_MERGE", result["dependency_security_status"])
+        self.assertEqual(
+            "BLOCKED_BY_SECURITY_REMEDIATION_MERGE_AND_OWNER_DECISION",
+            result["release_candidate_status"],
+        )
+        self.assertEqual(
+            [
+                ("Issue #5", "CLOSED", 1, "REMEDIATED"),
+                ("Issue #260", "OPEN", 4, "REMEDIATED_PENDING_MERGE"),
+                ("Issue #180", "OPEN", 1, "ACCEPTED_KNOWN_ADVISORY"),
+            ],
+            [
+                (item["id"], item["state"], item["tracked_advisories"], item["remediation_status"])
+                for item in result["known_security_issues"]
+            ],
+        )
+        self.assertEqual([self.KNOWN_ADVISORY], result["remaining_advisory_ids"])
+        self.assertEqual(
+            sorted(value.upper() for value in authorization["issue_advisories"][self.ISSUE]),
+            result["removed_advisory_ids"],
+        )
+        self.assertEqual(
+            {"Issue #260"}, {item["tracking_issue"] for item in result["remediated_advisories"]}
+        )
+        self.assertEqual(
+            {"total": 1, "critical": 0, "high": 1, "moderate": 0, "low": 0},
+            result["branch_totals"],
+        )
+        self.assertIsNone(result["related_security_issue"])
+        rel000.assert_redacted(result["accepted_known_advisories"])
+
+    def test_sanitized_nuget_audit_matches_the_authorized_baseline(self):
+        """sanitize-audit merges the contract and integration findings as CI produces them."""
+
+        def project(name, packages):
+            return {
+                "version": 1,
+                "parameters": "--vulnerable --include-transitive",
+                "sources": ["https://api.nuget.org/v3/index.json"],
+                "projects": [
+                    {
+                        "path": f"tests/{name}/{name}.csproj",
+                        "frameworks": [
+                            {"framework": "net10.0", "transitivePackages": packages}
+                        ],
+                    }
+                ],
+            }
+
+        def package(package_id, *advisories):
+            return {
+                "id": package_id,
+                "resolvedVersion": "10.0.10",
+                "vulnerabilities": [
+                    {"severity": severity, "advisoryurl": f"https://github.com/advisories/{value}"}
+                    for value, severity in advisories
+                ],
+            }
+
+        crypto = [
+            package(
+                "System.Security.Cryptography.Pkcs",
+                ("GHSA-846f-f764-76mx", "High"),
+                ("GHSA-2fmv-rv2c-59x7", "Moderate"),
+            ),
+            package("System.Security.Cryptography.Xml", ("GHSA-r955-8q5j-3h83", "High")),
+        ]
+        signalr = package("Microsoft.AspNetCore.SignalR.Common", ("GHSA-334f-vvp4-7g6p", "High"))
+        paths = {
+            "pnpm": {"advisories": {}},
+            "contract": project("Paqueteria.ContractTests", crypto),
+            "integration": project("Paqueteria.IntegrationTests", [signalr, *crypto]),
+        }
+        for name, value in paths.items():
+            (self.root / f"{name}.json").write_text(json.dumps(value), encoding="utf-8")
+        output = self.root / "base-audit.json"
+        rel000.sanitize_audit(
+            self.root / "pnpm.json",
+            output,
+            True,
+            1,
+            [self.root / "contract.json", self.root / "integration.json"],
+        )
+        sanitized = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(self.base_advisories()[:-1], sanitized["advisories"])
+        authorization = self.authorization()
+        nuget_ids = {item["advisory_id"].lower() for item in sanitized["advisories"]}
+        self.assertEqual(
+            {value.lower() for value in authorization["issue_advisories"][self.ISSUE]}, nuget_ids
+        )
+
+    def test_retained_advisory_is_rejected_or_blocks(self):
+        pkcs = self.base_advisories()[0]
+        self.assert_reason(
+            "BRANCH_AUDIT_NOT_ZERO",
+            lambda: self.security(branch=self.audit([self.braces_advisory(), pkcs])),
+        )
+        # A retained advisory that replaces braces in the totals still blocks the gate.
+        signalr = self.base_advisories()[1]
+        self.assertEqual(
+            "BLOCKED", self.security(branch=self.audit([signalr]))["dependency_security_status"]
+        )
+
+    def test_base_audit_must_match_the_authorized_baseline(self):
+        self.assert_reason(
+            "BASE_AUDIT_UNEXPECTED",
+            lambda: self.security(base=self.audit(self.base_advisories()[1:])),
+        )
+        advisories = self.base_advisories()
+        by_id = {item["advisory_id"]: item for item in advisories}
+        # Swapping the two Pkcs severities keeps every total; only the exact mapping catches it.
+        by_id["GHSA-846F-F764-76MX"]["severity"] = "moderate"
+        by_id["GHSA-2FMV-RV2C-59X7"]["severity"] = "high"
+        self.assert_reason(
+            "BASE_ADVISORY_SEVERITIES_UNEXPECTED",
+            lambda: self.security(base=self.audit(advisories)),
+        )
+        advisories = self.base_advisories()
+        advisories[1]["package"] = "Microsoft.AspNetCore.SignalR.Core"
+        self.assert_reason(
+            "BASE_AFFECTED_PACKAGES_UNEXPECTED",
+            lambda: self.security(base=self.audit(advisories)),
+        )
+
+    def test_tracking_issue_must_be_open_exact_and_not_cite_braces(self):
+        self.assert_reason(
+            "ADDITIONAL_SECURITY_ISSUE_STATE_INVALID",
+            lambda: self.security(tracking=self.tracking(state="CLOSED")),
+        )
+        tracked = self.authorization()["issue_advisories"][self.ISSUE]
+        for ids in (
+            tracked[1:],
+            [*tracked, self.KNOWN_ADVISORY],
+            [*tracked, "GHSA-aaaa-bbbb-cccc"],
+        ):
+            with self.subTest(ids=ids):
+                self.assert_reason(
+                    "ADDITIONAL_SECURITY_TRACKING_INVALID",
+                    lambda: self.security(tracking=self.tracking(tracked=ids)),
+                )
+        root, base, _ = self.dependency_repo()
+        self.assert_reason(
+            "KNOWN_ADVISORY_ISSUE_STATE_INVALID",
+            lambda: self.accepted(
+                root, base, self.tracking(known_issues=[self.known_issue(state="CLOSED")])
+            ),
+        )
+
+    def test_sharp_runtime_smoke_is_not_required(self):
+        self.assertEqual(
+            {"executed": False, "status": "NOT_REQUIRED"},
+            rel000.validate_sharp_runtime_smoke(
+                None, rel000.SECURITY_REMEDIATION, self.authorization()
+            ),
+        )
+
+    def test_fixture_and_both_workflows_bind_issue_branch_and_remediation(self):
+        fixture = json.loads(
+            (REPOSITORY_ROOT / "tests/fixtures/rel-000/security-tracking.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            260, fixture["remediation_issues"][rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID]
+        )
+        self.assertEqual({rel000.BRACES_KNOWN_ADVISORY_ID: 180}, fixture["known_advisory_issues"])
+        for name in ("ci.yml", "pr-validation.yml"):
+            workflow = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            with self.subTest(workflow=name):
+                self.assertIn(
+                    "github.head_ref == 'fix/security-2026-12-signalr-common' "
+                    "&& 'SEC-2026-12-SIGNALR-CRYPTOGRAPHY'",
                     workflow,
                 )
 
