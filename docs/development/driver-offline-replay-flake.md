@@ -79,9 +79,26 @@ corrección de la app; las que no navegan antes de ir offline no la tienen.
   `next dev`, siempre, por el doble montaje de StrictMode), su scheduler queda escuchando `online` con la partición
   anterior. No envía nada (su lectura de confirmación responde `cancelled`), pero puede tomar el lease un momento y
   aplicar la regla de 72 h a una acción ya retenida sin que la pantalla lo avise. Con esta corrección la página
-  activa ya no pierde su pedido por ese lease.
+  activa ya no pierde su pedido por ese lease. Corregido después; ver la sección siguiente.
 
 ## Rollback
 
 Revertir el commit. La app vuelve a descartar el pedido cuando el lease está ocupado; las pruebas Playwright que
 navegan antes de ir offline vuelven a ser intermitentes.
+
+## Seguimiento: `start()` ya no arranca un scheduler después de `dispose()`
+
+Severidad **MAJOR** (AI-01 §7, operación), sin cambio normativo ni de reglas visibles. `start()` espera dos veces
+antes de crear el scheduler (la clave de la partición y la lectura de la cola en IndexedDB) y no miraba `disposed`
+después de ninguna: si `dispose()` llegaba en medio, encontraba el scheduler todavía en `null`, y `start()` lo creaba
+y arrancaba después, sin nadie que lo liberara. Ahora `start()` regresa después de cada espera si el controlador ya
+fue liberado. Antes de esas esperas no se crea nada que pueda sobrevivir a `dispose()` (la partición es solo una
+clave), y entre la última comprobación y `scheduler.start()` no hay ninguna espera, así que un `dispose()` posterior
+siempre encuentra el scheduler y lo libera (listeners, timers y lease, como antes). Pruebas en
+`driver-operations-controller.test.ts` ("dispose while start() still waits"), con un `DriverSyncScheduler` real, una
+página que cuenta sus listeners y timers falsos: liberado durante cada espera, no se crea scheduler, no queda
+listener `online` ni `visibilitychange`, no queda timer, no se toma el lease y la acción retenida de más de 72 h
+sigue en la cola, aun después de `online`, `visibilitychange` y 20 s de timers. Sin la corrección fallan las dos con
+todo eso (scheduler creado, los dos listeners, un timer, el lease tomado dos veces y la acción descartada); una
+tercera prueba confirma que, sin liberar durante el arranque, el mismo escenario sincroniza y libera como antes.
+Rollback: revertir el commit; vuelve la fuga en el arranque (en `next dev`, en cada carga).
