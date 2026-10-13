@@ -322,6 +322,173 @@ describe("driver sync scheduler", () => {
   });
 });
 
+/**
+ * docs/development/driver-offline-replay-flake.md: a page that goes away
+ * mid-pass (a reload, a closed or discarded tab) leaves the partition lease
+ * active for its 15 seconds. A sync asked for meanwhile must not be lost.
+ */
+describe("a sync lease left by a page that went away", () => {
+  const start = new Date("2026-07-26T12:00:30.000Z");
+
+  it("replays the queue on its own after the connection returns, once that lease expires", async () => {
+    vi.useFakeTimers({ now: start });
+    try {
+      const queue = new MemoryQueue([operation("CHECK_IN", orderA, 3, 1)]);
+      // The page before an offline reload took the lease and went away mid-pass.
+      queue.lease = { ownerId: "page-that-went-away", expiresAt: start.getTime() + 15_000 };
+      const page = fakePage({ online: false });
+      const { scheduler, transitionOrder } = leaseScheduler(queue, page);
+
+      scheduler.start();
+      await vi.advanceTimersByTimeAsync(2_000);
+      page.goOnline();
+      await vi.advanceTimersByTimeAsync(0);
+      // That lease is still active: nothing is sent yet.
+      expect(transitionOrder).not.toHaveBeenCalled();
+      expect(queue.operations).toHaveLength(1);
+
+      // No reload, visibility change or "Sincronizar ahora" follows: the
+      // request made when the connection returned runs once the lease expired.
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(transitionOrder).toHaveBeenCalledOnce();
+      expect(queue.operations).toEqual([]);
+      expect(queue.lease).toBeNull();
+      await scheduler.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("never sends while another page keeps its lease and sends once that page releases it", async () => {
+    vi.useFakeTimers({ now: start });
+    try {
+      const queue = new MemoryQueue([operation("CHECK_IN", orderA, 3, 1)]);
+      queue.lease = { ownerId: "other-tab", expiresAt: start.getTime() + 15_000 };
+      const page = fakePage({ online: true });
+      const { scheduler, transitionOrder } = leaseScheduler(queue, page);
+
+      scheduler.start();
+      await vi.advanceTimersByTimeAsync(10_000);
+      // The other tab is still at work and renews its lease.
+      queue.lease = { ownerId: "other-tab", expiresAt: Date.now() + 15_000 };
+      await vi.advanceTimersByTimeAsync(10_000);
+      expect(transitionOrder).not.toHaveBeenCalled();
+
+      queue.lease = null;
+      await vi.advanceTimersByTimeAsync(15_000);
+      expect(transitionOrder).toHaveBeenCalledOnce();
+      expect(queue.operations).toEqual([]);
+      await scheduler.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("waits while the page is hidden and syncs when it is shown again", async () => {
+    vi.useFakeTimers({ now: start });
+    try {
+      const queue = new MemoryQueue([operation("CHECK_IN", orderA, 3, 1)]);
+      queue.lease = { ownerId: "page-that-went-away", expiresAt: start.getTime() + 15_000 };
+      const page = fakePage({ online: true });
+      const { scheduler, transitionOrder } = leaseScheduler(queue, page);
+
+      scheduler.start();
+      await vi.advanceTimersByTimeAsync(0);
+      page.hide();
+      await vi.advanceTimersByTimeAsync(60_000);
+      expect(transitionOrder).not.toHaveBeenCalled();
+
+      page.show();
+      await vi.advanceTimersByTimeAsync(0);
+      expect(transitionOrder).toHaveBeenCalledOnce();
+      expect(queue.operations).toEqual([]);
+      await scheduler.dispose();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/** A CHECK_IN of orderA at version 3 that REST shows applied once it is sent. */
+function leaseScheduler(queue: DriverOfflineQueue, page: FakePage) {
+  let applied = false;
+  const transitionOrder = vi.fn(async () => {
+    applied = true;
+    return { id: orderA, status: "AT_PICKUP" as const, version: 4 };
+  });
+  const scheduler = new DriverSyncScheduler({
+    partition,
+    queue,
+    api: {
+      transitionOrder,
+      createProofUploadSession: vi.fn(),
+      finalizeProof: vi.fn(),
+      recordCodCollection: vi.fn(),
+      openFailedDeliveryIncident: vi.fn(),
+    },
+    refreshStops: async () =>
+      stopList([
+        {
+          order_id: orderA,
+          aggregate_version: applied ? 4 : 3,
+          order_public_id: "ORD_A",
+          stop_type: "PICKUP",
+          status: applied ? "AT_PICKUP" : "ASSIGNED",
+          address_summary: "Zona A",
+          details_available: true,
+          contact_short_name: null,
+          contact_full_name: null,
+          zone_name: null,
+          service_window: null,
+          cod: null,
+          navigation: syntheticNavigation,
+        },
+      ]),
+    onQueueChanged: vi.fn(),
+    onAccessRevoked: vi.fn(),
+    now: () => new Date(),
+    randomUuid: () => "99999999-9999-4999-8999-999999999999",
+    window: page.window,
+  });
+  return { scheduler, transitionOrder };
+}
+
+interface FakePage {
+  readonly window: NonNullable<ConstructorParameters<typeof DriverSyncScheduler>[0]["window"]>;
+  goOnline(): void;
+  hide(): void;
+  show(): void;
+}
+
+/** The browser events the scheduler listens to: `online` and `visibilitychange`. */
+function fakePage(options: { readonly online: boolean }): FakePage {
+  const events = new EventTarget();
+  const document = Object.assign(new EventTarget(), {
+    visibilityState: "visible" as DocumentVisibilityState,
+  });
+  const navigator = { onLine: options.online };
+  return {
+    window: {
+      addEventListener: events.addEventListener.bind(events),
+      removeEventListener: events.removeEventListener.bind(events),
+      navigator,
+      document,
+    } as unknown as FakePage["window"],
+    goOnline() {
+      navigator.onLine = true;
+      events.dispatchEvent(new Event("online"));
+    },
+    hide() {
+      document.visibilityState = "hidden";
+      document.dispatchEvent(new Event("visibilitychange"));
+    },
+    show() {
+      document.visibilityState = "visible";
+      document.dispatchEvent(new Event("visibilitychange"));
+    },
+  };
+}
+
 describe("confirmation reads that cannot be trusted (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11)", () => {
   it("keeps the queued action and ends the pass when the confirmation read cannot answer", async () => {
     const queued = operation("CHECK_IN", orderA, 3, 1);
@@ -1011,6 +1178,12 @@ class MemoryQueue implements DriverOfflineQueue {
   public operations: DriverOfflineOperation[];
   public clearCount = 0;
   public leaseAvailable = true;
+  /**
+   * The partition lease as IndexedDbDriverOfflineQueue keeps it: one owner
+   * and an expiry; another owner takes it only once it expired or was
+   * released.
+   */
+  public lease: { ownerId: string; expiresAt: number } | null = null;
   public renewCount = 0;
   public releaseCount = 0;
 
@@ -1079,17 +1252,41 @@ class MemoryQueue implements DriverOfflineQueue {
     this.operations = [];
   }
 
-  public async acquireLease(): Promise<boolean> {
-    return this.leaseAvailable;
-  }
-
-  public async renewLease(): Promise<boolean> {
-    this.renewCount += 1;
+  public async acquireLease(
+    _partition: DriverCachePartition,
+    ownerId: string,
+    now: Date,
+    durationMilliseconds: number,
+  ): Promise<boolean> {
+    if (!this.leaseAvailable) return false;
+    if (
+      this.lease !== null &&
+      this.lease.ownerId !== ownerId &&
+      this.lease.expiresAt > now.getTime()
+    ) {
+      return false;
+    }
+    this.lease = { ownerId, expiresAt: now.getTime() + durationMilliseconds };
     return true;
   }
 
-  public async releaseLease(): Promise<void> {
+  public async renewLease(
+    _partition: DriverCachePartition,
+    ownerId: string,
+    now: Date,
+    durationMilliseconds: number,
+  ): Promise<boolean> {
+    this.renewCount += 1;
+    if (this.lease !== null && this.lease.ownerId !== ownerId) return false;
+    this.lease = { ownerId, expiresAt: now.getTime() + durationMilliseconds };
+    return true;
+  }
+
+  public async releaseLease(
+    _partition: DriverCachePartition,
+    ownerId: string,
+  ): Promise<void> {
     this.releaseCount += 1;
-    return;
+    if (this.lease?.ownerId === ownerId) this.lease = null;
   }
 }

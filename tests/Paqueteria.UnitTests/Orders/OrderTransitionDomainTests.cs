@@ -609,7 +609,8 @@ public sealed class OrderTransitionDomainTests
         "OCCASIONAL",
         new MoneyResult("MXN", 100),
         null,
-        null);
+        null,
+        new DateTimeOffset(2026, 10, 1, 17, 0, 0, TimeSpan.Zero));
 
     private static OrderTransitionGuardContext BaseGuardContext(OrderStatus source, OrderStatus target) => new()
     {

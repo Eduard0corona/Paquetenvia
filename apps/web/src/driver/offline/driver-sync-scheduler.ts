@@ -76,8 +76,9 @@ export interface DriverSyncSchedulerOptions {
    */
   readonly onOperationExpired?: (operation: DriverOfflineOperation) => void;
   /**
-   * Called when a sync pass (manual, `online`, visibility or backoff timer)
-   * holds the lease and starts, so expiry notices can be grouped per pass.
+   * Called when a sync pass (manual, `online`, visibility, backoff timer or
+   * lease retry) holds the lease and starts, so expiry notices can be grouped
+   * per pass.
    */
   readonly onSyncPassStarted?: () => void;
   readonly telemetry?: DriverSyncTelemetry;
@@ -205,7 +206,10 @@ export class DriverSyncScheduler {
       this.now(),
       this.leaseMilliseconds,
     );
-    if (!acquired) return;
+    if (!acquired) {
+      this.scheduleLeaseRetry();
+      return;
+    }
     this.options.onSyncPassStarted?.();
 
     // Logout, a lost lease or a confirmation read that could not answer
@@ -989,6 +993,32 @@ export class DriverSyncScheduler {
       this.timer = null;
       void this.requestSync(false);
     }, delay);
+  }
+
+  /**
+   * Another page holds the partition's lease. It may be a page that went away
+   * mid-pass (a reload, a closed or discarded tab), whose lease stays until it
+   * expires, so the sync asked for (for example by `online`) is not dropped:
+   * it is asked again after one lease duration. Every page writes its lease
+   * for that duration, so by then the lease seen here has expired, or a page
+   * still at work renewed it and this one looks again later. Like the
+   * backoff, it waits while the page is hidden or offline; `visibilitychange`
+   * and `online` ask again (docs/development/driver-offline-replay-flake.md).
+   */
+  private scheduleLeaseRetry(): void {
+    this.clearTimer();
+    if (
+      this.disposed ||
+      this.pauseCount > 0 ||
+      !this.isVisible() ||
+      !this.isOnline()
+    ) {
+      return;
+    }
+    this.timer = setTimeout(() => {
+      this.timer = null;
+      void this.requestSync(false);
+    }, this.leaseMilliseconds);
   }
 
   private publishQueue(

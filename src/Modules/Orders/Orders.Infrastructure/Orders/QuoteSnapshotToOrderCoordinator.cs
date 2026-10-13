@@ -339,7 +339,12 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             var replay = ReadCompletedResponse(idempotency);
             if (replay is not null)
             {
-                return replay;
+                return replay.CreatedAt == default
+                    ? replay with
+                    {
+                        CreatedAt = await ReadCreatedAtAsync(connection, transaction, replay.Id, cancellationToken),
+                    }
+                    : replay;
             }
         }
         else
@@ -840,6 +845,28 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         return result;
     }
 
+    /// <summary>
+    /// ORD-ORDER-CREATED-AT-2026-10-12: a response stored before Order.created_at existed lacks it, so its replay reads
+    /// the creation instant of the order it created, in this same tenant transaction. created_at never changes, so the
+    /// replay answers what the original response would carry now. A row that cannot be read fails closed.
+    /// </summary>
+    private async Task<DateTimeOffset> ReadCreatedAtAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid orderId,
+        CancellationToken cancellationToken)
+    {
+        await using var command = CreateCommand(
+            connection,
+            transaction,
+            "SELECT created_at FROM orders.orders WHERE id=@id");
+        command.Parameters.Add(P("id", NpgsqlDbType.Uuid, orderId));
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken);
+        return await reader.ReadAsync(cancellationToken)
+            ? reader.GetFieldValue<DateTimeOffset>(0)
+            : throw new OrderServiceUnavailableException("The idempotency resource is inconsistent.");
+    }
+
     private async Task InsertIdempotencyReservationAsync(
         NpgsqlConnection connection,
         NpgsqlTransaction transaction,
@@ -1204,6 +1231,9 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         new MoneyResult(order.Currency, order.TotalCents),
         order.ClaimWindowEndsAt,
         order.FinalizedAt,
+        // ORD-ORDER-CREATED-AT-2026-10-12: the value the row holds; timestamptz keeps microseconds, so the creation
+        // instant is truncated exactly as PostgreSQL stores it and createOrder answers what every later read returns.
+        UtcMicrosecondPrecision.Normalize(order.CreatedAt.ToUniversalTime()),
         order.ServiceWindowFrom is { } from && order.ServiceWindowTo is { } to
             ? new OrderServiceWindow(from, to)
             : null);
@@ -1230,6 +1260,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
                 new MoneyResult(currency, reader.GetInt64(16)),
                 reader.IsDBNull(17) ? null : reader.GetFieldValue<DateTimeOffset>(17),
                 reader.IsDBNull(18) ? null : reader.GetFieldValue<DateTimeOffset>(18),
+                reader.GetFieldValue<DateTimeOffset>(19),
                 ReadServiceWindow(reader, 20, 21)),
             reader.GetFieldValue<DateTimeOffset>(19));
     }

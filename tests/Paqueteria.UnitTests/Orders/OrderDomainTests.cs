@@ -350,7 +350,8 @@ public sealed class OrderDomainTests
     private static OrderResult Result() => new(
         OrderId, "ORD_AAAAAAAAAAAAAAAAAAAAAA", OrganizationId, null, "DRAFT",
         new MoneyResult("MXN", 3_000_000_000L), 1, Guid.NewGuid(), Guid.NewGuid(), "SAME_DAY",
-        QuoteId, Guid.NewGuid(), null, "OCCASIONAL", new MoneyResult("MXN", 3_000_000_000L), null, null);
+        QuoteId, Guid.NewGuid(), null, "OCCASIONAL", new MoneyResult("MXN", 3_000_000_000L), null, null,
+        new DateTimeOffset(2026, 10, 12, 17, 4, 5, TimeSpan.Zero));
 
     private sealed class CountingPublicIdGenerator : IOrderPublicIdGenerator
     {
