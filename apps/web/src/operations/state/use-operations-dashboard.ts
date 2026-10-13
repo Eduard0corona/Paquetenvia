@@ -132,6 +132,8 @@ export function useOperationsDashboard(
   // SEC-004: a session start that met the server's wait starts again, by itself, when it ends.
   const startTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const startSessionRef = useRef<() => Promise<void>>(async () => undefined);
+  // The start that runs when the wait ends reads the filters on screen (Q14): one may have been chosen meanwhile.
+  const resumeAfterWaitRef = useRef(false);
   // A reconnect waiting out the server's wait stops waiting on a session change or unmount.
   const waitAbortRef = useRef(new AbortController());
   const clearTimers = useCallback(() => {
@@ -294,6 +296,8 @@ export function useOperationsDashboard(
   }, [performLoad, reloads]);
 
   const startSession = useCallback(async () => {
+    const resumingAfterWait = resumeAfterWaitRef.current;
+    resumeAfterWaitRef.current = false;
     await clearForSessionChange();
     const session = readOperationsSession();
     sessionRef.current = session;
@@ -312,7 +316,9 @@ export function useOperationsDashboard(
       startTimerRef.current = setTimeout(
         () => {
           startTimerRef.current = null;
-          if (sessionRef.current === session) void startSessionRef.current();
+          if (sessionRef.current !== session) return;
+          resumeAfterWaitRef.current = true;
+          void startSessionRef.current();
         },
         Math.max(1, rateLimitWaits.millisecondsLeft(dashboardRateLimit)),
       );
@@ -327,7 +333,9 @@ export function useOperationsDashboard(
     abortRef.current = controller;
     try {
       const [dashboard, availableContexts] = await Promise.all([
-        api.list({}, controller.signal),
+        // After a server wait, the filters on screen: one chosen while the wait held the start is read now (owner
+        // answer Q14). Any other start reads the first page without filters, as before.
+        api.list(resumingAfterWait ? { ...filtersRef.current, cursor: undefined } : {}, controller.signal),
         api.organizationContexts(controller.signal),
       ]);
       if (sessionRef.current !== session) return;
@@ -395,7 +403,7 @@ export function useOperationsDashboard(
         setAccessUnavailable(true);
         setItems([]);
         itemsRef.current = [];
-      } else if (isRateLimited(caught)) {
+      } else if (isRateLimited(caught) && rateLimitWaits.isWaiting(dashboardRateLimit)) {
         // SEC-004: the common message counts down; the screen starts once, by itself, when the wait ends.
         setError(null);
         startAfterWait();

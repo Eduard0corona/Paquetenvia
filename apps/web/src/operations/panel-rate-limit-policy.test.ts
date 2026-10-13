@@ -55,7 +55,12 @@ describe("SEC-004 panel limits in the sources", () => {
     // A session start that met the wait starts once, by itself, when it ends (realtime included).
     expect(dashboard).toContain("if (rateLimitWaits.isWaiting(dashboardRateLimit)) {\n      startAfterWait();");
     // A first read that met the 429 starts the session again at 0 too, so realtime starts (#253 review note).
-    expect(dashboard).toMatch(/isRateLimited\(caught\)\) \{[^}]*setError\(null\);\s*startAfterWait\(\);\s*return;/);
+    expect(dashboard).toMatch(
+      /isRateLimited\(caught\) && rateLimitWaits\.isWaiting\(dashboardRateLimit\)\) \{[^}]*setError\(null\);\s*startAfterWait\(\);\s*return;/,
+    );
+    // That start reads the filters on screen (a status chosen during the wait, Q14); the browser test
+    // OperationsDashboardRateLimitPwaPlaywrightTests checks it end to end.
+    expect(dashboard).toContain("api.list(resumingAfterWait ? { ...filtersRef.current, cursor: undefined } : {}, controller.signal)");
     // Until then the screen has no API, so polling and visibility read nothing and the start runs once.
     expect(dashboard).toMatch(/const startAfterWait = \(\) => \{\s*apiRef\.current = null;/);
     expect(dashboard).not.toContain("scheduleRefresh");

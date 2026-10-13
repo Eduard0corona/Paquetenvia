@@ -889,28 +889,48 @@ describe("route planner under SEC-004 (owner answers Q9, Q13)", () => {
     const { controller, api } = await limitedPlanner();
     const lists = () => api.calls.filter((call) => call === "list").length;
     const shownReads = () => api.calls.filter((call) => call === `get ${routeA.id}`).length;
-    // Ten notices in one second: the first is read at once, the other nine together 3 s after it.
+    // The start read the list at t = 0: ten notices in the next second are read together 3 s after it.
     for (let notice = 0; notice < 10; notice += 1) {
       controller.notice(notice % 2 === 0 ? routeB.id : routeA.id);
       await vi.advanceTimersByTimeAsync(100);
     }
-    expect(lists()).toBe(1);
-    expect(shownReads()).toBe(0);
+    expect(lists()).toBe(0);
     await vi.advanceTimersByTimeAsync(1_999);
-    expect(lists()).toBe(1);
+    expect(lists()).toBe(0);
     await vi.advanceTimersByTimeAsync(1);
-    expect(lists()).toBe(2);
+    expect(lists()).toBe(1);
     // The route shown was named by one of the gathered notices: it is read once, with the list.
     expect(shownReads()).toBe(1);
     // One more right after: read when the spacing ends, not lost.
     await vi.advanceTimersByTimeAsync(1_000);
     controller.notice(routeB.id);
     await vi.advanceTimersByTimeAsync(1_999);
-    expect(lists()).toBe(2);
+    expect(lists()).toBe(1);
     await vi.advanceTimersByTimeAsync(1);
-    expect(lists()).toBe(3);
+    expect(lists()).toBe(2);
     expect(shownReads()).toBe(1);
     controller.stop();
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("counts every read of the list for the spacing, 'Actualizar' included (AI-07: any reload)", async () => {
+    const { controller, api } = await limitedPlanner();
+    const lists = () => api.calls.filter((call) => call === "list").length;
+    await vi.advanceTimersByTimeAsync(10_000);
+    // A quiet period: the first notice is read at once.
+    controller.notice(routeB.id);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(lists()).toBe(1);
+    await vi.advanceTimersByTimeAsync(10_000);
+    // "Actualizar" reads the list; a notice right after it waits 3 s from that read.
+    await controller.refresh();
+    expect(lists()).toBe(2);
+    await vi.advanceTimersByTimeAsync(500);
+    controller.notice(routeB.id);
+    await vi.advanceTimersByTimeAsync(2_499);
+    expect(lists()).toBe(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(lists()).toBe(3);
+    controller.stop();
   });
 });

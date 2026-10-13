@@ -92,8 +92,13 @@ export class ScreenReloads<Kind extends string> {
     return false;
   }
 
-  /** A read of the screen met a 429 (the API client recorded its wait): the screen reloads once when it ends. */
+  /**
+   * A read of the screen met a 429 (the API client recorded its wait): the screen reloads once when it ends. Without a
+   * running wait for the screen's operations nothing is kept, so a 429 that is not this screen's limit can never make
+   * it reload in a loop.
+   */
   public rateLimited(kind: Kind): void {
+    if (!this.waiting) return;
     this.request(kind, 0, false);
   }
 

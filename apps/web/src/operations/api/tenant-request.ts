@@ -133,7 +133,7 @@ export function createTenantRequester(
       clearTimeout(timer);
     }
     if (!response.ok && !(request.passThroughStatuses ?? []).includes(response.status)) {
-      const failure = await classifyFailure(response);
+      const failure = await classifyFailure(response, request.rateLimit);
       if (failure.category === "rate_limited" && request.rateLimit !== undefined)
         rateLimitWaits.record(request.rateLimit, failure.retryAfterSeconds);
       throw failure;
@@ -163,7 +163,15 @@ export async function readJson(
   }
 }
 
-export async function classifyFailure(response: Response): Promise<TenantApiError> {
+/**
+ * The failure of a non-2xx answer. A 429 is `rate_limited` only for a limited operation (`rateLimit`, SEC-004), whose
+ * wait the requester records; any other operation keeps reading a 429 as `unavailable`, as before SEC-004, so a screen
+ * never waits for a limit it has no wait for.
+ */
+export async function classifyFailure(
+  response: Response,
+  rateLimit?: RateLimitedOperation,
+): Promise<TenantApiError> {
   const body = await readProblem(response);
   const code =
     typeof body?.code === "string" && problemCodePattern.test(body.code)
@@ -186,7 +194,9 @@ export async function classifyFailure(response: Response): Promise<TenantApiErro
     case 422:
       return new TenantApiError("invalid", code);
     case 429:
-      return new TenantApiError("rate_limited", null, false, readRetryAfterSeconds(response.headers));
+      return rateLimit === undefined
+        ? new TenantApiError("unavailable")
+        : new TenantApiError("rate_limited", null, false, readRetryAfterSeconds(response.headers));
     default:
       return new TenantApiError("unavailable");
   }

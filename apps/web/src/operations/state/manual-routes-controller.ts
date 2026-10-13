@@ -393,7 +393,6 @@ export class ManualRoutesController extends ExternalStore<ManualRoutesState> {
     const api = this.api;
     if (api === null) return;
     const generation = this.generation;
-    this.realtime.reloaded();
     try {
       await this.readRoutes(api);
       const selected = this.getSnapshot().selected;
@@ -490,6 +489,9 @@ export class ManualRoutesController extends ExternalStore<ManualRoutesState> {
 
   /** Every page of listRoutes, one after another; only the newest read of the session is shown. */
   private async readRoutes(api: RoutesApi): Promise<readonly ManualRoute[]> {
+    // Every read of the list counts for the 3-second spacing of the RouteChanged notices (AI-07 panel_rate_limit
+    // realtime_reloads: "no sooner than 3 seconds after its previous reload of any kind").
+    this.realtime.reloaded();
     const generation = this.generation;
     const listGeneration = ++this.listGeneration;
     const routes: ManualRoute[] = [];

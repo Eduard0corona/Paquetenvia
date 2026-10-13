@@ -103,7 +103,7 @@ export function OrderSearchBox({ session }: { readonly session: OperationsSessio
         placeholder="Buscar guía (ORD_…)"
         maxLength={64}
         value={value}
-        aria-describedby={message !== null ? messageId : waiting ? rateLimitId : undefined}
+        aria-describedby={waiting ? rateLimitId : message !== null ? messageId : undefined}
         onChange={(event) => {
           setValue(event.currentTarget.value);
           setMessage(null);
@@ -112,12 +112,13 @@ export function OrderSearchBox({ session }: { readonly session: OperationsSessio
       <button type="submit" className="btn btnSecondary" aria-disabled={busy || waiting}>
         {busy ? "Buscando…" : "Buscar"}
       </button>
-      {message !== null && (
+      {/* While "Buscar" waits, its countdown is what the search says (owner answer Q13), wherever the wait started. */}
+      {message !== null && !waiting && (
         <p id={messageId} className="appSearchMessage" role="status" aria-live="polite">
           {message}
         </p>
       )}
-      {message === null && <RateLimitNoticeView {...rateLimit} className="appSearchMessage" id={rateLimitId} />}
+      <RateLimitNoticeView {...rateLimit} className="appSearchMessage" id={rateLimitId} />
     </form>
   );
 }

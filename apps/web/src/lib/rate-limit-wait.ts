@@ -92,17 +92,20 @@ export class RateLimitWaits {
     return this.millisecondsLeft(operations) > 0;
   }
 
-  /** The newest wait of the tab while it lasts (any operation), for the one announcement; null when none runs. */
+  /**
+   * The most recently recorded wait of the tab (any operation) while it lasts, for the one announcement; null once it
+   * ended, even if an older, longer wait still runs: that one was announced already, and announcing it again would
+   * say the seconds it asked for, not the seconds left.
+   */
   public newest(): RateLimitWait | null {
-    const now = this.clock();
     let newest: RateLimitWait | null = null;
     for (const wait of this.waits.values()) {
-      if (wait.until > now && (newest === null || wait.sequence > newest.sequence)) newest = wait;
+      if (newest === null || wait.sequence > newest.sequence) newest = wait;
     }
-    return newest;
+    return newest !== null && newest.until > this.clock() ? newest : null;
   }
 
-  /** For tests and sign-out: forgets every wait. */
+  /** Forgets every wait (tests start from an empty store). */
   public clear(): void {
     this.waits.clear();
     this.notify();

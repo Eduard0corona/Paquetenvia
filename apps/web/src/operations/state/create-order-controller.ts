@@ -546,11 +546,20 @@ export function confirmationFailureView(
         return { ...describeFailure(error, transitionReturnUrl(orderId)), certainty: "draft" };
       case "network":
       case "unavailable":
+      // transitionOrder has no rate limit, so its 429 is "unavailable"; were it ever limited, it would read the same.
+      case "rate_limited":
         return { ...describeFailure(error, transitionReturnUrl(orderId)), certainty: "unknown" };
       case "not_found":
       case "invalid":
         return { message: "No recibimos una respuesta válida de la confirmación.", stepUpHref: null, certainty: "unknown" };
+      default:
+        return unhandledCategory(error.category);
     }
   }
   return { message: "No fue posible confirmar la orden.", stepUpHref: null, certainty: "unknown" };
+}
+
+/** Compile-time exhaustiveness: a new TenantApiError category must be handled above. */
+function unhandledCategory(category: never): never {
+  throw new Error(`Unhandled failure category ${String(category)}.`);
 }

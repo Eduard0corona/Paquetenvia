@@ -77,8 +77,10 @@ describe("SEC-004 panel wait store", () => {
     expect(listener).toHaveBeenCalledTimes(2);
     expect(waits.newest()?.seconds).toBe(2);
     vi.advanceTimersByTime(2_000);
-    // The newest one ended; the older, longer one still runs.
-    expect(waits.newest()?.seconds).toBe(60);
+    // The newest one ended: the older, longer one still runs, but it was announced already, with seconds no longer
+    // left, so nothing is named.
+    expect(waits.isWaiting(["dashboard"])).toBe(true);
+    expect(waits.newest()).toBeNull();
     unsubscribe();
     waits.clear();
     expect(listener).toHaveBeenCalledTimes(2);

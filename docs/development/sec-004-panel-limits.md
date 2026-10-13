@@ -57,6 +57,11 @@ screen: `/ops/dashboard`, `work_inbox`, `/ops/orders/:id` and its `assignment_pi
 
 - The API clients record the wait when a 429 arrives (`createTenantRequester` with the request's `rateLimit`, and
   `createOperationsApi`), and throw `rate_limited` with `retryAfterSeconds`.
+- Only a request tagged with a limited operation reads a 429 as `rate_limited`. Every other operation keeps reading
+  it as `unavailable`, as before SEC-004. A screen therefore never waits for a limit it has no wait for. `ScreenReloads`
+  also ignores a `rate_limited` read when no wait runs for the screen. Either way, a 429 from an untagged operation
+  can never make a screen reload in a loop. Examples: `getOrder` on the order detail, `organizationContexts` at the
+  dashboard's start, `transitionOrder` in the wizard's confirmation.
 - A screen waits for the operations it calls. A wait never holds an unrelated limit; every screen of the tab that calls
   the same operation waits with it (the server would only answer the same 429). An organization switch keeps the
   waits, because the limits are per user. Another tab has its own.
@@ -94,7 +99,7 @@ screen: `/ops/dashboard`, `work_inbox`, `/ops/orders/:id` and its `assignment_pi
 
 | Screen | Waits | Held | At 0 |
 | --- | --- | --- | --- |
-| `/ops/dashboard` | `dashboard`, `queue_counts` | polling, realtime, visibility, the read after "Publicar oferta externa"; "Actualizar", "Cargar más"; a filter change is kept | the list and the counts, once; a session start that met the wait starts once, realtime included |
+| `/ops/dashboard` | `dashboard`, `queue_counts` | polling, realtime, visibility, the read after "Publicar oferta externa"; "Actualizar", "Cargar más"; a filter change is kept | the list and the counts, once; a session start that met the wait starts once, realtime included, reading the filters on screen |
 | `/ops/inbox` | `dashboard`, `queue_counts` | polling, realtime, visibility, the read after an assignment; "Actualizar", "Cargar más"; a queue or chip change is kept | the queue (with the view on screen) and the counts, once |
 | `/ops/orders/:id` | `dashboard` | polling, realtime, visibility, the read after a change below; "Actualizar" | the order, once |
 | `/ops/orders` | `order_list` | visibility and focus; "Actualizar", "Cargar más"; a status, period or guía change is kept (its rows go at once, as before) | the first page once, unless "Cargar más" loaded further pages: then nothing is read and only the buttons re-enable |
@@ -131,7 +136,8 @@ Screens:
 - `/ops/inbox` (driver positions are ignored there, as before).
 - `/ops/orders/:id` (both kinds reload the order and its dashboard row).
 - `/ops/routes`: `RouteChanged` reads the routes, which have no limit. Q9 says "el panel", so it is spaced too: the
-  list once, and the route shown when a gathered notice named it.
+  list once, and the route shown when a gathered notice named it. Every read of the list counts for the spacing:
+  start, "Actualizar", a reconnect, the read after a change and the notices.
 
 **Reconnect.** The mandatory resynchronization after a realtime reconnect still runs, and it is never spaced. During a
 server wait it first waits the wait out, then reads, so it does not meet the same 429 and drop the hub.
@@ -156,12 +162,19 @@ server wait it first waits the wait out, then reads, so it does not meet the sam
 - **A 429 on the counts keeps the counts shown.** Before, a failed counts read showed "Sin dato". Q16 pauses the whole
   screen, so the counts stay with the list until both are read at 0.
 - **Initial read during a wait.** A screen opened while its wait runs sends nothing and reads once at 0. The dashboard
-  starts its session, realtime included, at 0.
+  starts its session, realtime included, at 0. Until then it holds no API, so polling and visibility read nothing.
+  That start reads the filters on screen. Any other start (first load, organization switch) reads the first page
+  without filters, as before.
 - **Driver picker text while waiting.** "Cargando repartidores…" is hidden while the common message shows.
 - **Bulk assignment.** The common message is shown once for the batch, above the rows. The failed row keeps its
   existing text.
-- **429 of an operation outside the list.** It never happens today. It would be classified `rate_limited` and shown as
-  the common text, without a countdown.
+- **429 of an operation outside the list.** It stays `unavailable`, with that operation's existing text, as before
+  SEC-004. The wizard's confirmation also gained an exhaustive check: a new failure category cannot fall through to
+  its generic text.
+- **"Buscar" in the top bar.** Whenever a `listOrders` wait disables it, the countdown shows next to the search (Q13),
+  wherever the wait started. It replaces a "No encontramos esa guía" still on screen.
+- **The announcement.** It names only the newest wait of the tab. When that wait ends first, an older, longer wait is
+  not announced again: it was already announced, and its N would be stale.
 
 ## Tests
 
@@ -190,7 +203,11 @@ vitest (`cd apps/web && pnpm test`):
   - each of the ten limited calls is `rate_limited` with its `Retry-After` and records only its own wait;
   - 60 s without a usable header;
   - `retryable` (the key rule);
-  - an unlimited operation records nothing.
+  - a 429 of `getOrder`, `organizationContexts` or `transitionOrder` stays `unavailable` with no wait, and the
+    confirmation keeps its unanswered-request text;
+  - every failure category of the confirmation is handled.
+- `screen-reloads.test.ts` also checks that a 429 which left no wait for the screen never keeps a reload, so it cannot
+  loop.
 - Controllers:
   - `inbox-controller.test.ts`:
     - a 429 keeps the rows;
@@ -227,7 +244,8 @@ vitest (`cd apps/web && pnpm test`):
     "Reintentar" is refused during it and works after it.
   - `manual-routes-controller.test.ts`:
     - "Agregar entrega" keeps the guía, has no message of its own and is held during the wait;
-    - `RouteChanged` notices are gathered and none is lost.
+    - `RouteChanged` notices are gathered and none is lost;
+    - every read of the list counts for the spacing, "Actualizar" included.
   - `queue-counts-loader.test.ts` (a 429 keeps the counts) and `order-transition-controller.test.ts` ("Buscar guía"
     tells a 429 apart).
 - Screens:
@@ -240,6 +258,12 @@ vitest (`cd apps/web && pnpm test`):
   - every limited screen shows the countdown and holds its buttons;
   - AI-07 and the decision-log row agree with the code.
 - Changed: `manual-routes-page-policy.test.ts` (the hook sends `RouteChanged` to the gatherer).
+- Browser:
+  `OperationsDashboardRateLimitPwaPlaywrightTests.A_status_chosen_during_the_wait_is_read_when_the_dashboard_starts_at_zero`.
+  1. The dashboard's first read answers 429 with `Retry-After: 2`.
+  2. "Actualizar" is held and the filters stay usable.
+  3. A status chosen during the wait is not sent.
+  4. At 0 the dashboard starts once, by itself, and that read carries `status=DELIVERED`.
 - Browser:
   `OrdersListPwaPlaywrightTests.Orders_list_waits_out_a_429_with_the_countdown_and_reads_once_by_itself`.
   1. The first `listOrders` answers 429 with `Retry-After: 2`.
@@ -261,13 +285,19 @@ vitest (`cd apps/web && pnpm test`):
   wait longer than the server needs. That is the price of never sending too early.
 - **Two countdowns on one page** ("Buscar guía" and "Órdenes", "Cobros pendientes" or "Agregar entrega") while
   `listOrders` waits. Both controls are held for the same reason, and the message is announced once.
+- **The end-of-wait reload is not spaced.** It runs at 0 and carries the realtime notices gathered during the wait. If
+  the screen read less than 3 seconds before, it reads again at 0; that can only happen with a `Retry-After` under
+  3 s, and the API always sends 60.
+- **A reconnect during a wait** waits it out, then runs the mandatory resynchronization and the held reload back to
+  back: two reads at 0 instead of one. The resynchronization is mandatory, and the held reload keeps the Q11 rule.
 
 ## Verify locally
 
 ```bash
 cd apps/web && pnpm test && pnpm typecheck && pnpm lint
 python3 docs/normative/v0.6/tools/validate_contracts.py
-dotnet test tests/Paqueteria.IntegrationTests -c Release --filter "FullyQualifiedName~OrdersListPwaPlaywright"
+dotnet test tests/Paqueteria.IntegrationTests -c Release \
+  --filter "FullyQualifiedName~OrdersListPwaPlaywright|FullyQualifiedName~OperationsDashboardRateLimitPwaPlaywright"
 dotnet test tests/Paqueteria.ArchitectureTests -c Release --filter "FullyQualifiedName~SyntheticEnvironment"
 ```
 

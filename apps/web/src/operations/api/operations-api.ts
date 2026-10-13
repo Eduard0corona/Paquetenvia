@@ -135,7 +135,7 @@ export function createOperationsApi(
       }
       throwIfAborted(combined);
       if (!response.ok) {
-        const failure = classify(response);
+        const failure = classify(response, rateLimit);
         // SEC-004: every screen that reads the operation shows the wait and sends nothing until it ends.
         if (failure.category === "rate_limited" && rateLimit !== undefined)
           rateLimitWaits.record(rateLimit, failure.retryAfterSeconds);
@@ -317,9 +317,16 @@ function assertUuid(value: string): void {
     throw new OperationsApiError("invalid");
 }
 
-function classify(response: Response): OperationsApiError {
+/**
+ * A 429 is `rate_limited` only for a limited operation (the dashboard and the queue counts, SEC-004), whose wait the
+ * caller records; any other read or write keeps reading it as `unavailable`, as before SEC-004.
+ */
+function classify(response: Response, rateLimit?: RateLimitedOperation): OperationsApiError {
   const status = response.status;
-  if (status === 429) return new OperationsApiError("rate_limited", readRetryAfterSeconds(response.headers));
+  if (status === 429)
+    return rateLimit === undefined
+      ? new OperationsApiError("unavailable")
+      : new OperationsApiError("rate_limited", readRetryAfterSeconds(response.headers));
   if (status === 401) return new OperationsApiError("unauthorized");
   if (status === 403) return new OperationsApiError("forbidden");
   if (status === 404) return new OperationsApiError("not_found");

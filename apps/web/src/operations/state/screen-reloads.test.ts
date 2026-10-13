@@ -137,6 +137,17 @@ describe("SEC-004 server wait on a screen that refreshes itself (owner answers Q
     expect(reloads).toEqual(["location"]);
   });
 
+  it("never loops on a 429 that left no wait for the screen (an operation outside the limited list)", async () => {
+    const { gate, reloads, waits } = screen();
+    waits.record("order_list", 60);
+    gate.rateLimited("realtime");
+    gate.rateLimited("realtime");
+    expect(gate.hasPending).toBe(false);
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(reloads).toEqual([]);
+  });
+
   it("is not held by an unrelated limit", () => {
     const { gate, waits } = screen();
     waits.record("order_list", 60);

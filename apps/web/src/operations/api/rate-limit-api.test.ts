@@ -10,6 +10,8 @@ import { createOrderActionsApi } from "./order-actions-api";
 import { createOrderListApi } from "./order-list-api";
 import { createOrdersApi } from "./orders-api";
 import { TenantApiError } from "./tenant-request";
+import { nextStepActions } from "../contracts/order-transitions";
+import { confirmationFailureView } from "../state/create-order-controller";
 
 const base = "https://api.synthetic.test";
 const session: OperationsSession = {
@@ -93,10 +95,35 @@ describe("SEC-004: a 429 of a limited panel operation", () => {
     expect(new TenantApiError("conflict").retryable).toBe(false);
   });
 
-  it("records nothing for an operation outside the limited list", async () => {
+  it("reads a 429 of an operation outside the limited list as before (unavailable), with no wait", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(tooManyRequests("2")));
-    const error = (await createOperationsApi(base, session).getOrder(orderId).catch((caught: unknown) => caught)) as OperationsApiError;
-    expect(error.category).toBe("rate_limited");
+    // getOrder (order detail, with the dashboard row) and organizationContexts (dashboard start) are not limited.
+    const read = (await createOperationsApi(base, session).getOrder(orderId).catch((caught: unknown) => caught)) as OperationsApiError;
+    expect(read.category).toBe("unavailable");
+    expect(read.retryAfterSeconds).toBeNull();
+    const contexts = (await createOperationsApi(base, session)
+      .organizationContexts()
+      .catch((caught: unknown) => caught)) as OperationsApiError;
+    expect(contexts.category).toBe("unavailable");
+    // transitionOrder (the wizard's confirmation, "Siguiente paso") is not limited either.
+    const [cancel] = nextStepActions([{ target_status: "CANCELLED", required_metadata: [] }]);
+    const write = (await createOrderActionsApi(base, session)
+      .transitionOrder(orderId, cancel, "Motivo", 3, false, "transition-key")
+      .catch((caught: unknown) => caught)) as TenantApiError;
+    expect(write.category).toBe("unavailable");
+    expect(confirmationFailureView(write, orderId)).toMatchObject({
+      message: "Sin respuesta válida del servidor. Puedes reintentar: se reenvía la misma solicitud sin duplicarla.",
+      certainty: "unknown",
+    });
     expect(rateLimitWaits.newest()).toBeNull();
+  });
+
+  it("handles every failure category of a confirmation, so a new one cannot fall through", () => {
+    // Unreachable today (transitionOrder is not limited); were it limited, the common text (Q6), state unknown.
+    expect(confirmationFailureView(new TenantApiError("rate_limited", null, false, 60), orderId)).toEqual({
+      message: "Demasiadas solicitudes. Espera 60 segundos e intenta de nuevo.",
+      stepUpHref: null,
+      certainty: "unknown",
+    });
   });
 });
