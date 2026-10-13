@@ -457,6 +457,15 @@ descritas abajo. El PR #124 se fusionó en `main` el 2026-09-27 y llegó a `deve
 MAIN_BACKSYNC (#134); desde entonces su `status` es `MERGED`: los paquetes y las enmiendas
 siguen admitidos y la rama deja de abrir PRs a `main`.
 
+La tercera admisión es `OBS-003-OPENTELEMETRY` (PR #247, rama `deps/obs-003-opentelemetry`):
+`Azure.Monitor.OpenTelemetry.Exporter` 1.10.0 y `OpenTelemetry.Extensions.Hosting` 1.19.1
+directos en la API y el Worker, sus 10 transitivos exactos (5 `Microsoft.Extensions.*` solo en el
+lock de ArchitectureTests) y 6 subidas encadenadas sobre paquetes de ADP-001-AZURE (Azure.Core
+1.61.0 → 1.63.0 y las cinco que arrastra), con la admisión explícita del owner
+(`OBS-003-DEPENDENCY-ADMISSION-2026-10-13`). El PR #247 se fusionó en `main` el 2026-10-13 y
+llegó a `development` por MAIN_BACKSYNC (#249); desde entonces su `status` es `MERGED`: los
+paquetes y las subidas siguen admitidos y la rama deja de abrir PRs a `main`.
+
 ### Enmiendas exactas del baseline (GOV-DEPENDENCY-ADMISSION-001, ADP-001)
 
 Algunas restauraciones cambian nodos del baseline de forma inevitable. Una admisión puede
