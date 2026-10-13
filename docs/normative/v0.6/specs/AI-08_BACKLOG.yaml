@@ -1692,7 +1692,7 @@ items:
   expected_outputs:
   - one NpgsqlDataSource per database role in each process (paqueteria_app in the API, paqueteria_worker in the Worker, and the API realtime dispatchers' paqueteria_realtime with its own login, RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12) shared by every module, instead of 22 separate pools (phase 4 PR 8, SCL-007-POOL-PER-ROLE-2026-10-13)
   - a connection budget - the configured maximum pool sizes of every process stay below the pilot PostgreSQL B1ms connection limit (about 50) with headroom for the migrator, maintenance and administration (phase 4 PR 8)
-  - adaptive outbox wait - a dispatcher claims again at once while its batches come back full and backs off while they come back empty, up to a maximum idle wait, instead of a fixed 250-500 ms poll (phase 4 PR 9)
+  - adaptive outbox wait - a dispatcher claims again at once while its batches come back full and backs off while they come back empty, up to a maximum idle wait, instead of a fixed 250-500 ms poll (phase 4 PR 9); applied to the API's realtime outbox dispatchers (business and location lanes, SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13) - a claim that returns work, a full or a partial batch, is followed by the next claim at once and starts the wait over; after an empty claim the lane waits its poll interval and doubles the wait after each further empty claim up to 1 s (business 250 ms, 500 ms, 1 s; location 500 ms, 1 s); idle claims drop from about 6 to about 2 per second; the Worker's pollers keep their fixed intervals
   acceptance_criteria:
   - 'DECIDED PHASE4-PLATFORM-APPROVAL-2026-10-12: one connection pool per role and adaptive outbox wait are part of phase 4'
   - every tenant query still runs inside an explicit transaction with set_config(..., true) after BEGIN and current_org_ids as uuid[]; no session-level state survives a return to the shared pool; the TEN-002 pooled-connection regression passes on the shared pools
@@ -1702,13 +1702,16 @@ items:
   - the migrator jobs (pg-migrate-connection), the restore drill and the tools keep their own credentials outside the runtime pools; paqueteria_bootstrap, paqueteria_maintenance and the other executor roles stay NOLOGIN and are reached only by EXECUTE through the runtime pools
   - the adaptive wait uses only the existing claim, settle and requeue functions under lease_token; no new SQL and no direct outbox access
   - business and location lanes keep independent waits, and each lane keeps its per-minute OBS-002 OutboxLaneSummary heartbeat while idle
-  - 'PENDING OWNER DECISION (blocks phase 4 PR 9): the maximum idle wait of each lane; it must keep the per-minute OBS-002 heartbeat, the AI-15 oldest_outbox_age_seconds warning (60 s) and, for the realtime lanes, the AI-15 event_delivery_p95_seconds warning (2 s)'
+  - 'DECIDED SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13 (project owner, "1 segundo en ambos (Recommended)"): the maximum idle wait is 1 s on the business and the location lane; it must keep the per-minute OBS-002 heartbeat, the AI-15 oldest_outbox_age_seconds warning (60 s) and, for the realtime lanes, the AI-15 event_delivery_p95_seconds warning (2 s)'
+  - the maximum idle wait is configuration validated at start (Realtime:OutboxDispatcher:Business:MaximumIdleWaitMilliseconds and Realtime:OutboxDispatcher:Location:MaximumIdleWaitMilliseconds, default 1000); a value below the lane's PollIntervalMilliseconds, above 1000 = half the AI-15 event_delivery_p95_seconds warning (the other half is kept for the claim, the evidence reads, the publish and the settle) or not a number refuses the start of the API
+  - an idle realtime lane claims at least once a second, so its OBS-002 OutboxLaneSummary is still written once a minute and a ready row waits at most 1 s more for its claim; the OBS-002 MaxClaimAgeMs (now - min(available_at), read when the claim returns) includes that wait
   - 'PENDING OWNER DECISION: an Azure Monitor metric alert on PostgreSQL connections (threshold against AI-15 connection_pool_utilization 0.8/0.95, monthly cost against PILOT-BUDGET-ACCEPT-98-108) and the alert e-mail address the owner sets at deploy'
   required_tests:
   - architecture test - one data source per role, resolved by every module
   - pooled-connection tenant context regression on the shared pools (PostgreSQL)
   - connection count within the budget during the OPS-001 synthetic workflow
   - adaptive wait backoff, reset on work, heartbeat while idle and cancellation (fake clock)
+  - a realtime notice committed after an idle period reaches a SignalR client within the AI-15 event_delivery_p95_seconds warning (PostgreSQL)
   approval_gate: owner_technology_operations
 - id: OPS-005
   decision: PHASE4-PLATFORM-APPROVAL-2026-10-12 (project owner)

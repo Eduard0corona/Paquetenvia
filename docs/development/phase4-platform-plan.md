@@ -235,16 +235,21 @@ Lo aplicado está en `docs/development/scl-007-pool-per-role.md` (`SCL-007-POOL-
 
 ### PR 9: espera adaptativa del outbox (SCL-007)
 
+Lo aplicado está en `docs/development/scl-007-adaptive-outbox-wait.md` (`SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13`):
+los despachadores de tiempo real de la API esperan 250 ms, 500 ms y luego 1 s (negocio) o 500 ms y luego 1 s
+(ubicación) mientras no hay trabajo; los pollers del Worker no cambian.
+
 - Mientras los lotes regresan llenos, el despachador vuelve a reclamar de inmediato. Mientras regresan vacíos, espera
   cada vez más, hasta una espera máxima. Al encontrar trabajo, vuelve a empezar.
 - Solo usa las funciones existentes de claim, settle y requeue con `lease_token`: sin SQL nuevo ni acceso directo al
   outbox.
 - Los lanes de negocio y de ubicación conservan esperas independientes.
-- Pendiente del owner: la espera máxima de cada lane. Debe cumplir tres cosas:
+- El owner decidió la espera máxima el 2026-10-13: "1 segundo en ambos (Recommended)". Cumple las tres cosas que se
+  pedían:
   - mantener el latido por minuto de `OutboxLaneSummary` (OBS-002);
   - quedar muy debajo del aviso `oldest_outbox_age_seconds` de AI-15 (60 s);
   - en los lanes de tiempo real, respetar el aviso `event_delivery_p95_seconds` de AI-15 (2 s).
-- `MaxClaimAgeMs` va a incluir esa espera.
+- `MaxClaimAgeMs` incluye esa espera: se mide al volver el claim, como `now - min(available_at)`.
 - Pruebas: espera progresiva, reinicio al haber trabajo, latido en reposo y cancelación (reloj falso).
 
 ### PR 10: pruebas de punta a punta de la plataforma (OPS-005)

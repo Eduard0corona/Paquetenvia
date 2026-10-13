@@ -105,6 +105,12 @@ public sealed partial class PilotApiStartupConfigurationTests
         var dispatcher = api.Services.GetRequiredService<IOptions<OutboxDispatcherOptions>>().Value;
 
         Assert.Equal(OutboxDispatcherProviderKind.PostgreSql, dispatcher.Provider);
+        // SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13: the pilot waits 250 ms (business) or 500 ms (location) after an empty
+        // claim, doubling up to 1 s on both lanes.
+        Assert.Equal(250, dispatcher.Business.PollIntervalMilliseconds);
+        Assert.Equal(1_000, dispatcher.Business.MaximumIdleWaitMilliseconds);
+        Assert.Equal(500, dispatcher.Location.PollIntervalMilliseconds);
+        Assert.Equal(1_000, dispatcher.Location.MaximumIdleWaitMilliseconds);
     }
 
     [Fact]

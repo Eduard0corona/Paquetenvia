@@ -14,9 +14,13 @@ namespace Paqueteria.Infrastructure.Observability;
 /// <remarks>
 /// It never reads the outbox: the claim age is measured on the rows the approved claim functions
 /// already returned (<c>now - min(available_at)</c> of each claimed batch), which is the time the
-/// oldest ready message waited. A backlog that is never claimed shows up as a missing summary or as
-/// loop failures, not as an age. The dispatcher loop drives <see cref="ReportIfDue"/>, so a blocked
-/// loop stops its heartbeat instead of reporting zeros.
+/// oldest ready message waited. <c>now</c> is read after the claim returns, on the host's
+/// <see cref="TimeProvider"/>, so the age includes the dispatcher's wait between claims: on the
+/// realtime lanes, the SCL-007 adaptive idle wait of up to 1 s
+/// (SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13). A backlog that is never claimed shows up as a missing
+/// summary or as loop failures, not as an age. The dispatcher loop drives <see cref="ReportIfDue"/>,
+/// so a blocked loop stops its heartbeat instead of reporting zeros; a realtime lane calls it at least
+/// once per idle wait.
 /// </remarks>
 public sealed class OutboxLaneMonitor(ILogger<OutboxLaneMonitor> logger, TimeProvider timeProvider)
 {
