@@ -24,7 +24,10 @@ internal sealed class DataProtectionHealthCheck(
             return HealthCheckResult.Healthy("data_protection_local_keyring");
         }
 
-        if (!RuntimeDatabaseRoles.TryFromConnectionStringName(options.Value.ConnectionStringName, out var databaseRole) ||
+        if (!DataProtectionConnectionNames.TryGetRuntimePool(
+                options.Value.ConnectionStringName,
+                options.Value.RuntimeRole,
+                out var databaseRole) ||
             services.GetKeyedService<RuntimeDataSource>(databaseRole) is not { } dataSource)
         {
             return HealthCheckResult.Unhealthy("data_protection_keyring_unconfigured");

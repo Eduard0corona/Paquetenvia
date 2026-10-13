@@ -35,7 +35,13 @@ Three pools, 24 connections at most.
 - `RuntimeDataSource` is the pool of one role. It is built on first use, so a host with a disabled provider never needs
   the connection string. Then it fails closed: `ConnectionStrings:<name> is required by the <role> connection pool.`
   It replaces any `Maximum Pool Size` of the connection string with the configured size. A `Minimum Pool Size` above
-  that size refuses to build, and the error does not echo the connection string.
+  that size refuses to build, and so does a connection string that does not parse
+  (`ConnectionStrings:<name> is not a valid connection string.`); neither error echoes the connection string.
+- Whatever the connection string or a plugin says, every pool is built with `Pooling=true` (no unbounded physical
+  connections), `Multiplexing=false` (one command per connection, so `set_config` and `SET LOCAL ROLE` stay on the
+  transaction's connection), `Include Error Detail=false` (server detail carries row values, which can be personal data,
+  into exceptions and logs) and `Max Auto Prepare=0` (a prepared statement is session state that outlives the lease).
+  The settings are forced rather than refused, the same way as the size.
 - `AddRuntimeDataSource(configuration, role)` is the only registration. The first call registers the role's
   `RuntimeDataSource`, and its `NpgsqlDataSource`, as keyed singletons (key: the role). Every later call reuses them.
   A process therefore holds one pool per role, whatever the order in which it composes its modules.
@@ -53,7 +59,7 @@ Every module asks for the role it runs as:
 | Custody | `paqueteria_app` in the API; `paqueteria_worker` with the proof validation worker | the role follows `addValidationWorker` |
 | Realtime outbox dispatchers | `paqueteria_realtime` | `RealtimeDispatcherConnectionFactory` over the keyed pool |
 | Notifications, Dispatch lifecycle lane, Orders jobs, Identity and Organizations audience readers, OPS-003 cleanup, OPS-004 retention | `paqueteria_worker` | the module's connection factory over the keyed pool |
-| Data Protection | the pool named by `DataProtection:ConnectionStringName` (`Paqueteria` in the API, `PaqueteriaWorker` in the Worker) | the keyed pool; any other name fails the start |
+| Data Protection | the pool named by `DataProtection:ConnectionStringName`, paired with `DataProtection:RuntimeRole`: `Paqueteria` with `paqueteria_app` (API) or `PaqueteriaWorker` with `paqueteria_worker` (Worker) | the keyed pool; any other name or pairing registers no pool and fails the start |
 
 No `NpgsqlDataSource` is registered without a key, so a consumer that does not name its role cannot be built.
 
@@ -143,7 +149,13 @@ They keep their own credentials and are out of scope:
   it, and dropping it is a later cleanup.
 - A Worker module whose connection string is missing fails closed with the named error. Before, it fell back to a
   placeholder host (`Database=disabled`).
-- `DataProtection:ConnectionStringName` accepts only `Paqueteria` and `PaqueteriaWorker`.
+- `DataProtection:ConnectionStringName` accepts only `Paqueteria` with `DataProtection:RuntimeRole` `paqueteria_app`,
+  and `PaqueteriaWorker` with `paqueteria_worker`. Before, either canonical role could be paired with either name, so a
+  Worker configured with `Paqueteria` would have built a second pool on its `ConnectionStrings:Paqueteria` entry. Both
+  `appsettings.json` and both ScaleReady profiles already use the allowed pairs.
+- A connection string can no longer turn pooling off, multiplex, include server error detail or auto-prepare. The
+  pilot's runtime secrets (`deploy-azure-pilot.yml`) set none of them; only test connection strings to closed ports set
+  `Pooling=false`, and they still fail the same way.
 - The `paqueteria_app` pool maps PostGIS types (NetTopologySuite) for every API module. Only Locations and Drivers
   read or write geometry through EF Core; the others read none.
 
@@ -159,11 +171,19 @@ connections are not runtime pools and are not counted. The peaks are written to 
 
 - Unit (`Scl007RuntimeDataSourceTests`): budget arithmetic and defaults; each invalid size, an excessive sum and a
   non-numeric value fail the start; repeated registrations share one pool per role; the configured size replaces the
-  connection string's; a missing connection string fails closed on first use, naming only its entry; plugins reach only
-  their role's pool, once; role names; Data Protection connection names.
+  connection string's; `Pooling=false`, `Multiplexing=true`, `Include Error Detail=true` and `Max Auto Prepare` (alone,
+  combined, or set by a plugin) are overridden; a missing or unparseable connection string fails closed on first use,
+  naming only its entry; plugins reach only their role's pool, once; role names; each Data Protection name and role
+  pairing, and a mispaired Worker key ring registers no second pool and fails the start.
 - Architecture (`Scl007PoolPerRoleArchitectureTests`): no runtime code builds a pool or a connection (only the pooling
-  folder and the migrator side may); every runtime EF Core context uses a shared role pool; nothing registers or
-  resolves an unkeyed pool; every injected pool names its role.
+  folder and the migrator's baseline deployer may). The guard reads the source (including target-typed `new`,
+  qualified names and object initializers) and the compiled IL of every catalogued assembly: any constructor of
+  `NpgsqlConnection`, `NpgsqlDataSourceBuilder`, `NpgsqlSlimDataSourceBuilder` or `RuntimeDataSource`,
+  `NpgsqlDataSource.Create`, `NpgsqlConnection.GlobalTypeMapper`, `RuntimeDataSource.Create` and every EF Core
+  `UseNpgsql` not given a data source, in lambdas and async methods too. A design-time factory is exempt only in a file
+  named `*DbContextFactory.cs` (plus `PlatformEvolutionDbContext.cs`, listed by name) and only for the connection string
+  it gives EF Core. Fixtures prove each bypass form is caught. Every runtime EF Core context uses a shared role pool;
+  nothing registers or resolves an unkeyed pool; every injected pool names its role.
 - Integration (`Scl007PoolPerRoleCompositionTests`): the real API holds exactly the `paqueteria_app` and
   `paqueteria_realtime` pools, the real Worker exactly the `paqueteria_worker` pool, with no unkeyed data source; every
   EF Core context of each host uses that one pool; the sizes replace the pilot secrets' `Maximum Pool Size=5`; a size
@@ -178,6 +198,21 @@ connections are not runtime pools and are not counted. The peaks are written to 
   `connection_pool_utilization` (0.8 warning, 0.95 critical), and its monthly cost with PILOT-BUDGET-ACCEPT-98-108.
 - The sizes are a starting point inside the budget. Pool waits or exhaustion seen in the pilot are a reason to revisit
   them within the 24.
+
+## Residual risks
+
+No action in this PR; each is written here so the pilot can watch it.
+
+- Revision changes can briefly hold two sets of pools (see "Connection budget"); two full sets would exceed the 35 user
+  connections.
+- OPS-001 does not sample the real Worker pool. Its proof worker composes Custody the way the API does, so the
+  connection count covers the API's `paqueteria_app` and `paqueteria_realtime` pools and that worker, not the Worker
+  host's `paqueteria_worker` pool under load.
+- No readiness check covers the shape of the `paqueteria_app` login (membership, NOINHERIT, NOBYPASSRLS), unlike the
+  realtime and Worker logins. This predates the PR; a login without the membership still fails at its first
+  `SET LOCAL ROLE`, but other drift of its attributes is not reported by readiness.
+- Each process now has less pool capacity than before: the modules of a process compete for one pool of 10 (or 4)
+  instead of holding several pools of 5. Pool waits under load are the signal to revisit the sizes within the 24.
 
 ## Rollback
 

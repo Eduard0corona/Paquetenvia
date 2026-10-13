@@ -233,18 +233,92 @@ public sealed class Scl007RuntimeDataSourceTests
     }
 
     [Theory]
-    [InlineData("Paqueteria", true)]
-    [InlineData("PaqueteriaWorker", true)]
-    [InlineData("PaqueteriaRealtime", false)]
-    [InlineData("PaqueteriaKeyRing", false)]
-    [InlineData("", false)]
-    public void The_key_ring_reads_only_through_the_api_or_worker_role_pool(string connectionStringName, bool valid)
+    [InlineData("Paqueteria", "paqueteria_app", true)]
+    [InlineData("PaqueteriaWorker", "paqueteria_worker", true)]
+    [InlineData("Paqueteria", "paqueteria_worker", false)]
+    [InlineData("PaqueteriaWorker", "paqueteria_app", false)]
+    [InlineData("PaqueteriaRealtime", "paqueteria_app", false)]
+    [InlineData("PaqueteriaRealtime", "paqueteria_worker", false)]
+    [InlineData("PaqueteriaKeyRing", "paqueteria_app", false)]
+    [InlineData("", "paqueteria_app", false)]
+    public void The_key_ring_reads_only_through_the_pool_of_its_own_runtime_role(
+        string connectionStringName,
+        string runtimeRole,
+        bool valid)
     {
         Assert.Equal(valid, DataProtectionOptionsValidator.IsValid(new DataProtectionOptions
         {
             Provider = DataProtectionProviderKind.PostgreSql,
             ConnectionStringName = connectionStringName,
+            RuntimeRole = runtimeRole,
         }));
+        Assert.Equal(
+            valid,
+            DataProtectionConnectionNames.TryGetRuntimePool(connectionStringName, runtimeRole, out var role));
+        if (valid)
+        {
+            Assert.Equal(runtimeRole, RuntimeDatabaseRoles.PostgreSqlRole(role));
+        }
+    }
+
+    [Fact]
+    public void A_mispaired_key_ring_in_the_worker_registers_no_second_pool_and_fails_the_start()
+    {
+        // An environment override of the Worker's ConnectionStringName alone would otherwise build a paqueteria_app
+        // keyed pool on the Worker login next to the paqueteria_worker one.
+        var services = Services(new()
+        {
+            ["DataProtection:Provider"] = "PostgreSql",
+            ["DataProtection:ConnectionStringName"] = "Paqueteria",
+            ["DataProtection:RuntimeRole"] = "paqueteria_worker",
+            ["ConnectionStrings:Paqueteria"] = Unreachable,
+            ["ConnectionStrings:PaqueteriaWorker"] = Unreachable,
+        });
+        services.AddLogging();
+        services.AddPlatformDataProtection(services.Configuration());
+
+        Assert.DoesNotContain(services, descriptor => descriptor.ServiceType == typeof(RuntimeDataSource));
+        using var provider = services.BuildServiceProvider();
+        var failure = Assert.Throws<OptionsValidationException>(
+            () => provider.GetRequiredService<IOptions<DataProtectionOptions>>().Value);
+        Assert.Contains("DataProtection contains an invalid bounded option.", failure.Failures);
+    }
+
+    [Theory]
+    [InlineData("Pooling=false")]
+    [InlineData("Multiplexing=true")]
+    [InlineData("Include Error Detail=true")]
+    [InlineData("Max Auto Prepare=20")]
+    [InlineData("Pooling=false;Multiplexing=true;Include Error Detail=true;Max Auto Prepare=20;Maximum Pool Size=99")]
+    public async Task The_connection_string_cannot_unbound_multiplex_expose_detail_or_auto_prepare_the_pool(
+        string setting)
+    {
+        await using var pool = RuntimeDataSource.Create(
+            RuntimeDatabaseRole.Worker,
+            $"{Unreachable};{setting}",
+            maximumPoolSize: 7,
+            builder => builder.ConnectionStringBuilder.Pooling = false);
+
+        var built = new NpgsqlConnectionStringBuilder(pool.DataSource.ConnectionString);
+
+        Assert.True(built.Pooling);
+        Assert.Equal(7, built.MaxPoolSize);
+        Assert.False(built.Multiplexing);
+        Assert.False(built.IncludeErrorDetail);
+        Assert.Equal(0, built.MaxAutoPrepare);
+    }
+
+    [Fact]
+    public async Task An_unparseable_connection_string_fails_closed_naming_only_its_entry()
+    {
+        await using var pool = RuntimeDataSource.Create(
+            RuntimeDatabaseRole.Realtime,
+            "Host=127.0.0.1;Port=scl007-not-a-port;Password=scl007-not-a-secret",
+            maximumPoolSize: 2);
+
+        var failure = Assert.Throws<InvalidOperationException>(() => pool.DataSource);
+
+        Assert.Equal("ConnectionStrings:PaqueteriaRealtime is not a valid connection string.", failure.Message);
     }
 
     private static DatabasePoolOptions ResolveOptions(Dictionary<string, string?> settings)

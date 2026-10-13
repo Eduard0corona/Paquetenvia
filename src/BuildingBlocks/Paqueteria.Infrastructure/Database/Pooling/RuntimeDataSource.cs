@@ -33,7 +33,10 @@ public sealed class RuntimeDataSource : IAsyncDisposable, IDisposable
 
     public RuntimeDatabaseRole Role { get; }
 
-    /// <summary>The <c>Maximum Pool Size</c> the pool is built with, whatever the connection string says.</summary>
+    /// <summary>
+    /// The <c>Maximum Pool Size</c> the pool is built with, whatever the connection string says. The connection string
+    /// cannot turn pooling off, multiplex, include server error detail or auto-prepare either.
+    /// </summary>
     public int MaximumPoolSize { get; }
 
     public bool IsCreated => _dataSource.IsValueCreated;
@@ -88,23 +91,49 @@ public sealed class RuntimeDataSource : IAsyncDisposable, IDisposable
                 $"ConnectionStrings:{name} is required by the {RuntimeDatabaseRoles.PostgreSqlRole(role)} connection pool.");
         }
 
-        var settings = new NpgsqlConnectionStringBuilder(connectionString)
+        NpgsqlConnectionStringBuilder settings;
+        try
         {
-            MaxPoolSize = maximumPoolSize,
-        };
+            settings = new NpgsqlConnectionStringBuilder(connectionString);
+        }
+        catch (Exception exception) when (exception is ArgumentException or FormatException or InvalidCastException)
+        {
+            // The parser's message may quote a value of the string; only the entry is named.
+            throw new InvalidOperationException($"ConnectionStrings:{name} is not a valid connection string.");
+        }
+
         if (settings.MinPoolSize > maximumPoolSize)
         {
             throw new InvalidOperationException(
                 $"ConnectionStrings:{name} sets a Minimum Pool Size above the {DatabasePoolOptions.SectionName} maximum of its pool.");
         }
 
+        Enforce(settings, maximumPoolSize);
         var builder = new NpgsqlDataSourceBuilder(settings.ConnectionString);
         foreach (var plugin in plugins)
         {
             plugin(builder);
         }
 
+        // A plugin only maps types; whatever it touched, the pool keeps the enforced settings.
+        Enforce(builder.ConnectionStringBuilder, maximumPoolSize);
         return builder.Build();
+    }
+
+    /// <summary>
+    /// The settings every runtime pool has whatever its connection string says: a real pool capped at the budgeted
+    /// size (<c>Pooling=false</c> would open unbounded physical connections), no multiplexing (one command per
+    /// connection, so a transaction's <c>set_config</c> and <c>SET LOCAL ROLE</c> stay on its own connection), no
+    /// server error detail (it carries row values, which can be personal data, into exceptions and logs) and no
+    /// automatic preparation (a prepared statement is session state that outlives the lease).
+    /// </summary>
+    private static void Enforce(NpgsqlConnectionStringBuilder settings, int maximumPoolSize)
+    {
+        settings.Pooling = true;
+        settings.MaxPoolSize = maximumPoolSize;
+        settings.Multiplexing = false;
+        settings.IncludeErrorDetail = false;
+        settings.MaxAutoPrepare = 0;
     }
 }
 

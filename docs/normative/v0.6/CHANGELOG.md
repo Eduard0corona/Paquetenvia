@@ -12,13 +12,15 @@
 - Presupuesto validado al arrancar (`DatabasePools`): 10 + 4 + 10 = 24 conexiones como máximo; cada tamaño entre 1 y 24
   y la suma hasta 24 = piso((50 − 15 reservadas por Azure) × 0.70) de las conexiones de usuario del B1ms (AZR-001-INV-014).
   Quedan 11 para el migrador, el mantenimiento y la administración. El `Maximum Pool Size` de la cadena de conexión se
-  reemplaza; un valor inválido impide arrancar la API o el Worker.
+  reemplaza, y cada pool se arma siempre con `Pooling=true`, `Multiplexing=false`, `Include Error Detail=false` y
+  `Max Auto Prepare=0`, diga lo que diga la cadena; un valor inválido impide arrancar la API o el Worker.
 - Sigue igual: transacción explícita con `set_config(..., true)` y `SET LOCAL ROLE` después de `BEGIN`; cada pool se
   autentica con un solo login `NOBYPASSRLS` de su rol; las comprobaciones de readiness siguen fallando ante un rol mal
   formado; el `pooling_contract` de AI-15 no cambia y PgBouncer sigue detrás de GATE-014. Pruebas en PostgreSQL real:
   ningún estado de sesión sobrevive entre préstamos, también con `No Reset On Close=true`.
 - La validación de pruebas del Worker lee `ConnectionStrings:PaqueteriaWorker` (el piloto ya le da el mismo secreto con
-  los dos nombres). `DataProtection:ConnectionStringName` solo acepta `Paqueteria` y `PaqueteriaWorker`.
+  los dos nombres). `DataProtection:ConnectionStringName` solo acepta `Paqueteria` con `DataProtection:RuntimeRole`
+  `paqueteria_app` y `PaqueteriaWorker` con `paqueteria_worker`.
 - Pendiente del owner: la alerta de métrica de Azure Monitor sobre conexiones de PostgreSQL y su correo.
 - AI-08 SCL-007 registra el rol de tiempo real, el presupuesto y las credenciales que quedan fuera. Sin cambios en AI-04,
   AI-05, AI-06, AI-13, AI-15, AI-18, AI-24, roles, permisos, migraciones, secretos, Bicep ni paquetes. Nota:

@@ -48,9 +48,13 @@ public static class DependencyInjection
             .AddCheck<DataProtectionHealthCheck>("data_protection_keyring", tags: ["ready"]);
 
         // SCL-007: the key ring uses the process's one pool of its runtime role (paqueteria_app in the API,
-        // paqueteria_worker in the Worker); an unknown connection name fails the start validation above.
+        // paqueteria_worker in the Worker); an unknown connection name, or one paired with another role, registers no
+        // pool and fails the start validation above.
         if (options.Provider != DataProtectionProviderKind.PostgreSql ||
-            !RuntimeDatabaseRoles.TryFromConnectionStringName(options.ConnectionStringName, out var databaseRole))
+            !DataProtectionConnectionNames.TryGetRuntimePool(
+                options.ConnectionStringName,
+                options.RuntimeRole,
+                out var databaseRole))
         {
             return services;
         }
