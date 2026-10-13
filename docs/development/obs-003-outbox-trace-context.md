@@ -41,6 +41,10 @@ The value has the shape of a W3C `traceparent` of version 00 and nothing else:
   value to that exact shape, with neither id all zero. The runtime writes and parses the same pattern
   (`OutboxTraceContext.Pattern`).
 - NULL means no context: rows written before the column existed, or written outside any W3C activity.
+- Once written, it never changes: the AI-06 content guards (`platform.protect_outbox_content()` and
+  `platform.protect_location_outbox_content()`, the `BEFORE UPDATE` triggers of both tables) compare it with the
+  content, so an UPDATE that changes it fails like one that changes the payload. No lifecycle function sets it; this is
+  defence in depth.
 - The value is a random identifier of a trace, not of a person or an organization, like the trace id in the logs
   (PR 1).
 
@@ -85,9 +89,18 @@ the row (no RETURNING, no read back). Outside a trace it writes NULL.
 - **Chains.** The lifecycle reactor writes its row while processing a claimed message, so its `Activity.Current` is
   the message's activity: the follow-up row carries the same trace id.
 
-`OutboxTraceContextArchitectureTests` fails when a runtime INSERT into either outbox table, or a SQL function in any
-migration that inserts into one, does not write the column; when a claim reader does not read it or a consumer does
-not process in it; and when payload, SignalR or notification delivery code names it.
+`OutboxTraceContextArchitectureTests` fails when:
+
+- a runtime INSERT into either outbox table does not write the column;
+- the latest definition of any SQL function (AI-06, then the Up SQL every EF migration of every lane actually runs, in
+  migration order) inserts into either table without naming the column. The table may be qualified or not (resolved
+  through `search_path`), quoted or not, and an INSERT without a column list counts as missing. Two self-tests feed it a
+  later redefinition without the column and an unqualified INSERT, and both are caught;
+- a claim reader does not read the column or a consumer does not process in it;
+- payload, SignalR or notification delivery code names it.
+
+The PostgreSQL contract test checks the same on the installed catalog: every function in `pg_proc` whose body inserts
+into either table names the column in each INSERT's column list.
 
 ## Claim functions
 
@@ -130,19 +143,27 @@ followed and remote parents dropped:
 
 - a message whose producing trace was sampled (a sampled API request or scheduled job cycle) is exported as a child span
   of that trace, named after its lane, with no attribute (`TelemetryExportPolicy` allows none for it);
+- the message's own children go out with it. The main case is the outgoing HTTP call of a notification to its provider
+  (WhatsApp Cloud API, Azure Communication Services e-mail), under the PR 6 allowlist: method, server address and port,
+  status and error type, never the URL, query, headers or body. Before PR 7 these calls ran under dispatch cycles, which
+  are never exported;
 - a message whose producing trace was not sampled, or that has no stored context, is never exported;
 - a message's span is never a root, so it never reaches the ratio sampler on its own;
 - dispatch cycles stay dropped.
 
 So Application Insights shows the message's processing inside the request that caused it, at the request's own 10 %.
-The cost follows the sampled requests: each sampled request that writes outbox rows adds one span per row it wrote. GPS
-batches write one location row per position, so a sampled GPS request adds up to 20 spans.
+The cost follows the sampled requests. Each sampled request that writes outbox rows adds one span per row it wrote,
+plus that message's outgoing HTTP calls, usually one provider call for a notification. GPS batches write one location
+row per position, so a sampled GPS request adds up to 20 spans. All of it stays within the 10 % sampling and the pilot's
+0.3 GB daily cap.
 
 ## AI-03 §18 and AI-12
 
-AI-03 §18 ("Toda petición/job/evento debe llevar `trace_id`, `correlation_id`, ...") holds as written: the `trace_id`
-of an event is now the trace id of the request or job that produced it, and `correlation_id` keeps its meaning (PR 1
-made the W3C trace id the single identifier of logs, audit rows and problems). No wording change.
+AI-03 §18 ("Toda petición/job/evento debe llevar `trace_id`, `correlation_id`, tenant y actor técnico redactado")
+needs no wording change for the two identifiers this PR covers. The `trace_id` of an event is now the trace id of the
+request or job that produced it, and `correlation_id` keeps its meaning (PR 1 made the W3C trace id the single
+identifier of logs, audit rows and problems). The tenant pseudonym and the actor role kind are not delivered here: the
+Worker's per-message lines still lack the pseudonym, an open question below.
 
 AI-12 does not change. The trace context never reaches a SignalR message: the realtime envelope is built from the
 AI-12 fields only, and the Notifications templates render only their allowed variables.
@@ -165,7 +186,7 @@ ContainerAppConsoleLogs_CL
 
 | Lane | Step | Up | Down |
 | --- | --- | --- | --- |
-| Dispatch | `20261013000100_AddOutboxTraceContext` | adds (or adopts) both columns and checks; grants the operator outbox executor `INSERT (trace_parent)`; installs the definer body that stores `app.trace_parent` | refuses while the Notifications step is recorded; restores the published definer; revokes the grant; drops both checks and columns |
+| Dispatch | `20261013000100_AddOutboxTraceContext` | adds (or adopts) both columns and checks; installs the content guards that compare the column; grants the operator outbox executor `INSERT (trace_parent)`; installs the definer body that stores `app.trace_parent` | refuses while the Notifications step is recorded; restores the published content guards (before the column is dropped) and the published definer; revokes the grant; drops both checks and columns |
 | Notifications | `20261013000200_CarryOutboxTraceContext` | requires the column; installs the emitter and expansion bodies that copy the originating context | restores the published NTF-001 bodies |
 
 - The outbox tables belong to no module (AI-03 §8). The Dispatch lane carries the column because it is the earliest
@@ -178,11 +199,12 @@ ContainerAppConsoleLogs_CL
 - AI-18 keeps the published executor `GRANT INSERT (...)` statement, which the published Dispatch step verifies
   exactly, and documents the added grant; `DatabaseBaselineAssertions` expects it once the Dispatch step is recorded
   (recorded history decides, like every E-002 reader).
-- Each function body is the published one plus reviewed edits (`FunctionEdits`, `EmitEdits`, `ExpandEdits`), applied
-  exactly once; unit tests revert the edits and compare with the published text byte for byte.
+- Each function body is the published one plus reviewed edits (`FunctionEdits`, `EmitEdits`, `ExpandEdits`,
+  `ContentGuardEdits`), applied exactly once; unit tests revert the edits and compare with the published text byte for
+  byte, and check that AI-06 declares exactly the installed content guards.
 - `OutboxTraceContextPostgreSqlContractTests` runs Up, Down and Up again on PostgreSQL and compares the catalog (columns,
-  checks, triggers, indexes, table and column grants, every function of schema `security` with owner, ACL,
-  configuration and body, and the ACL of schema `security`) at each step.
+  checks, triggers, indexes, table and column grants, every function of schemas `security` and `platform` with owner,
+  ACL, configuration and body, and the ACL of schema `security`) at each step.
 
 ### Rollback
 
@@ -198,9 +220,9 @@ Every outbox row stays. The trace context of existing rows is lost with the colu
 - Worker audit rows (`PostgreSqlAssignmentLifecycleReactor`, `ProofValidationProcessor`) still write
   `request_id = NULL` (PR 1). They could write the message's trace id now. That changes audit evidence, so it needs the
   owner.
-- The Worker's per-message log lines do not carry the organization pseudonym (PR 6 left the Worker without it). A
-  message has an owner organization, so they could. That widens OBS-003-TENANT-PSEUDONYM-2026-10-12, so it needs the
-  owner.
+- The Worker's per-message log lines do not carry the organization pseudonym or the actor role kind (PR 6 left the
+  Worker without them), which AI-03 §18 asks for when there is an organization context. A message has an owner
+  organization, so they could. That widens OBS-003-TENANT-PSEUDONYM-2026-10-12, so it needs the owner.
 
 ## Tests
 
@@ -209,15 +231,19 @@ Every outbox row stays. The trace context of existing rows is lost with the colu
   producer's trace, the realtime lane publishing in the producer's trace with an envelope of AI-12 fields only, and no
   trace member on any payload, envelope or notification type.
 - `tests/Paqueteria.UnitTests/Operations/Obs003OutboxTraceContextMigrationTests.cs`: the CHECK is the runtime pattern and
-  AI-06's; each function differs from the published one only by its reviewed edits; the one added executor grant.
-- `tests/Paqueteria.ArchitectureTests/OutboxTraceContextArchitectureTests.cs`: no producer, claim reader or consumer is
-  missed, and the value never reaches payload, SignalR or notification code.
+  AI-06's; each function and content guard differs from the published one only by its reviewed edits; the one added
+  executor grant.
+- `tests/Paqueteria.ArchitectureTests/OutboxTraceContextArchitectureTests.cs`: no producer (runtime INSERT or latest SQL
+  function definition), claim reader or consumer is missed, with self-tests for a later redefinition and an unqualified
+  INSERT; the value never reaches payload, SignalR or notification code.
 - `tests/Paqueteria.ContractTests/PostgreSql/OutboxTraceContextPostgreSqlContractTests.cs`: columns, checks and
-  privileges; the exact shape on both tables; every claim function returns it and the lifecycle and purge leave it; the
-  Notifications writers copy it and no payload carries it; Up, Down and Up again with an identical catalog.
+  privileges; every installed function that inserts into an outbox table names the column; the exact shape on both
+  tables; every claim function returns it, the lifecycle and purge leave it and the content guards refuse changing it;
+  the Notifications writers copy it and no payload carries it; Up, Down and Up again with an identical catalog.
 - `tests/Paqueteria.ContractTests/PostgreSql/DispatchOutboxTraceContextPostgreSqlContractTests.cs`: a real assignment
   stores the producing trace through the owner INSERT and through the operator definer, and NULL outside a trace.
 - `tests/Paqueteria.ContractTests/PostgreSql/EfOutboxInsertContractTests.cs`: the EF model writes the column.
 - `tests/Paqueteria.IntegrationTests/Observability/Obs003TelemetryExportTests.cs`: with the PR 6 pipeline and a test
-  exporter, a message span is exported exactly when its producing trace was sampled, as a child with no attribute;
-  dispatch cycles, messages without a context and remote parents never are.
+  exporter, a message span is exported exactly when its producing trace was sampled, as a child with no attribute, and
+  its outgoing HTTP call goes out with it with only the allowlisted method; dispatch cycles, messages without a context
+  and remote parents never are.

@@ -372,8 +372,11 @@ public sealed class Obs003TelemetryExportTests
             stored.Add((traceParent, job.TraceId.ToHexString(), job.SpanId.ToHexString(), job.Recorded));
         }
 
-        // Consumers: each claimed message inside its lane's dispatch cycle, as a child of the stored context.
+        // Consumers: each claimed message inside its lane's dispatch cycle, as a child of the stored context. The
+        // message's provider call (WhatsApp Cloud API, e-mail) is an outgoing HTTP child of the message.
+        using var outgoing = new ActivitySource(TelemetryExportPolicy.OutgoingHttpActivitySourceName);
         var cycles = new HashSet<string>(StringComparer.Ordinal);
+        var messageSpans = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var message in stored)
         {
             using var cycle = TraceCorrelation.StartOutboxDispatchCycle(OutboxLanes.Notifications);
@@ -384,6 +387,10 @@ public sealed class Obs003TelemetryExportTests
             Assert.Equal(message.SpanId, processing.ParentSpanId.ToHexString());
             Assert.Equal(message.Sampled, processing.Recorded);
             processing.SetTag("messaging.message.id", "synthetic-message-id");
+            messageSpans[message.TraceId] = processing.SpanId.ToHexString();
+            using var send = outgoing.StartActivity("System.Net.Http.HttpRequestOut", ActivityKind.Client);
+            send?.SetTag("http.request.method", "POST");
+            send?.SetTag("url.full", "https://graph.facebook.invalid/v20.0/synthetic-sender-id/messages");
         }
 
         // Rows written before the column or outside any trace: the message stays in the dispatch cycle's trace.
@@ -432,6 +439,20 @@ public sealed class Obs003TelemetryExportTests
             Assert.Equal(ActivityKind.Consumer, item.Kind);
             Assert.Empty(item.Tags);
             Assert.Equal(sampled.Single(message => message.TraceId == item.TraceId).SpanId, item.ParentSpanId);
+        });
+
+        // The message's provider call goes out with it, under the PR 6 allowlist (method only, never the URL), and only
+        // inside a sampled producing trace.
+        var calls = collector.Items
+            .Where(item => item.Source == TelemetryExportPolicy.OutgoingHttpActivitySourceName && messageSpans.ContainsKey(item.TraceId))
+            .ToArray();
+        Assert.Equal(
+            sampled.Select(item => item.TraceId).Order(StringComparer.Ordinal),
+            calls.Select(item => item.TraceId).Order(StringComparer.Ordinal));
+        Assert.All(calls, item =>
+        {
+            Assert.Equal(messageSpans[item.TraceId], item.ParentSpanId);
+            Assert.Equal(["http.request.method=POST"], item.Tags);
         });
         Assert.DoesNotContain(collector.Items, item => cycles.Contains(item.TraceId) || withoutContext.Contains(item.TraceId));
         Assert.DoesNotContain(collector.Items, item => item.Operation == "Obs003.RemoteControl");

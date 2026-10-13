@@ -10,8 +10,9 @@ namespace Paqueteria.Infrastructure.Observability;
 public sealed record TelemetryExportProfile(string ServiceName, IReadOnlyList<string> TraceSources, IReadOnlyList<string> Meters)
 {
     /// <summary>
-    /// The API: its requests (hosting), their outgoing HTTP calls, and the application source (the API runs no ADR-034
-    /// job; its two realtime outbox lanes are dispatch cycles, never exported).
+    /// The API: its requests (hosting), their outgoing HTTP calls, and the application source. The API runs no ADR-034
+    /// job; the dispatch cycles of its two realtime outbox lanes are never exported, but each message they process is a
+    /// child of the trace that wrote it (OBS-003 PR 7), exported when that trace was sampled.
     /// </summary>
     public static TelemetryExportProfile Api { get; } = new(
         "paqueteria-api",
@@ -19,8 +20,10 @@ public sealed record TelemetryExportProfile(string ServiceName, IReadOnlyList<st
         TelemetryExportPolicy.ExportedMeters);
 
     /// <summary>
-    /// The Worker: its ADR-034 scheduled job cycles and their outgoing HTTP calls. Its only inbound requests are the
-    /// platform probes on <c>/health/*</c>, so it does not listen to the hosting source.
+    /// The Worker: its ADR-034 scheduled job cycles, the outbox messages it processes inside a sampled producing trace
+    /// (OBS-003 PR 7: notifications and the dispatch lifecycle; the cycles themselves never), and the outgoing HTTP calls
+    /// of both, such as a notification's WhatsApp or e-mail provider call. Its only inbound requests are the platform
+    /// probes on <c>/health/*</c>, so it does not listen to the hosting source.
     /// </summary>
     public static TelemetryExportProfile Worker { get; } = new(
         "paqueteria-worker",
@@ -41,7 +44,8 @@ public sealed record TelemetryExportProfile(string ServiceName, IReadOnlyList<st
 /// cycles, polling loops (proof validation), activities without a parent and contexts that came from outside are never
 /// exported. Children follow their parent's decision. OBS-003 PR 7: the processing of one outbox message
 /// (<see cref="TraceCorrelation.OutboxMessageOperation"/>) is a child of the trace that wrote the message, so it is
-/// exported exactly when that trace was sampled, with no attribute; it is never a root that can be sampled.
+/// exported exactly when that trace was sampled, with no attribute; it is never a root that can be sampled. Its outgoing
+/// HTTP calls (a notification's provider call) are its children and go out with it, under the same allowlist.
 /// </para>
 /// <para>
 /// Span attributes are an allowlist per source, checked again when the span ends (<see cref="PrepareForExport"/>):

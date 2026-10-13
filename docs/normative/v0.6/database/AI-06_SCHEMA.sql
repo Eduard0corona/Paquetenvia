@@ -1261,6 +1261,9 @@ CREATE POLICY location_outbox_tenant ON platform.location_outbox_events USING (s
 CREATE POLICY idempotency_tenant ON platform.idempotency_keys USING (security.app_allowed_org(owner_org_id)) WITH CHECK (security.app_allowed_org(owner_org_id));
 
 -- Immutable content defense -----------------------------------------------------
+-- OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13: both content guards also compare trace_parent, so the stored producing
+-- trace context is as immutable as the content (the Dispatch lane step 20261013000100_AddOutboxTraceContext installs
+-- the same bodies where this baseline predates them; no lifecycle function sets the column).
 CREATE OR REPLACE FUNCTION platform.reject_runtime_mutation() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -1282,9 +1285,9 @@ CREATE TRIGGER audit_logs_append_only BEFORE UPDATE OR DELETE ON platform.audit_
 CREATE OR REPLACE FUNCTION platform.protect_outbox_content() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
-  IF (NEW.owner_org_id,NEW.tenant_context,NEW.topic,NEW.aggregate_type,NEW.aggregate_id,NEW.aggregate_version,NEW.payload,NEW.priority,NEW.created_at)
+  IF (NEW.owner_org_id,NEW.tenant_context,NEW.topic,NEW.aggregate_type,NEW.aggregate_id,NEW.aggregate_version,NEW.payload,NEW.priority,NEW.created_at,NEW.trace_parent)
      IS DISTINCT FROM
-     (OLD.owner_org_id,OLD.tenant_context,OLD.topic,OLD.aggregate_type,OLD.aggregate_id,OLD.aggregate_version,OLD.payload,OLD.priority,OLD.created_at) THEN
+     (OLD.owner_org_id,OLD.tenant_context,OLD.topic,OLD.aggregate_type,OLD.aggregate_id,OLD.aggregate_version,OLD.payload,OLD.priority,OLD.created_at,OLD.trace_parent) THEN
     RAISE EXCEPTION 'outbox event content is immutable' USING ERRCODE='42501';
   END IF;
   RETURN NEW;
@@ -1295,9 +1298,9 @@ CREATE TRIGGER outbox_content_immutable BEFORE UPDATE ON platform.outbox_events
 CREATE OR REPLACE FUNCTION platform.protect_location_outbox_content() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
-  IF (NEW.owner_org_id,NEW.driver_position_id,NEW.topic,NEW.payload,NEW.created_at)
+  IF (NEW.owner_org_id,NEW.driver_position_id,NEW.topic,NEW.payload,NEW.created_at,NEW.trace_parent)
      IS DISTINCT FROM
-     (OLD.owner_org_id,OLD.driver_position_id,OLD.topic,OLD.payload,OLD.created_at) THEN
+     (OLD.owner_org_id,OLD.driver_position_id,OLD.topic,OLD.payload,OLD.created_at,OLD.trace_parent) THEN
     RAISE EXCEPTION 'location outbox event content is immutable' USING ERRCODE='42501';
   END IF;
   RETURN NEW;

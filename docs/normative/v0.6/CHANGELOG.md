@@ -18,10 +18,16 @@
 - Migraciones: `20261013000100_AddOutboxTraceContext` (Dispatch) y `20261013000200_CarryOutboxTraceContext`
   (Notifications), con ida, vuelta e ida probadas en PostgreSQL y el catálogo idéntico; la vuelta va primero en
   Notifications y Dispatch la rechaza en otro orden. Ninguna fila se reescribe.
+- Las protecciones de contenido de AI-06 (`platform.protect_outbox_content()` y
+  `platform.protect_location_outbox_content()`) también comparan `trace_parent`: ningún UPDATE la cambia. El paso de
+  Dispatch las instala y su vuelta restaura las publicadas antes de quitar la columna.
 - Las funciones de claim devuelven la columna sin cambios (devuelven la fila completa). El Worker y los lanes de tiempo
   real de la API procesan cada mensaje en su propia actividad, hija del contexto guardado: sus logs llevan la traza de
   la petición original. Los ciclos de despacho siguen siendo su propia traza y nunca se exportan; con la exportación
-  encendida, el mensaje se exporta solo si la traza de origen se muestreó, sin atributos.
+  encendida, el mensaje se exporta solo si la traza de origen se muestreó, sin atributos, junto con sus llamadas
+  HTTP salientes (la del proveedor de una notificación) bajo la lista permitida de PR 6.
+- AI-03 §18 no cambia para `trace_id` y `correlation_id`. Quedan pendientes del owner (AI-08 OBS-003): el seudónimo de
+  empresa y el tipo de rol en las líneas por mensaje del Worker, y el trace id en sus filas de auditoría.
 - Sin cambios en AI-03, AI-04, AI-05, AI-12, AI-13 ni AI-24, en el contenido de los eventos, en los mensajes de SignalR
   ni en las notificaciones. AI-08 OBS-003 registra la decisión. Nota: `docs/development/obs-003-outbox-trace-context.md`.
 

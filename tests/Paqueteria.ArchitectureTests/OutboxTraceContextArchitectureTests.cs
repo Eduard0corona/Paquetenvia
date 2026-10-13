@@ -1,5 +1,9 @@
+using System.Reflection;
 using System.Text.RegularExpressions;
 using Dispatch.Infrastructure.Persistence.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.EntityFrameworkCore.Migrations.Operations;
+using Notifications.Infrastructure.Persistence.Migrations;
 using Paqueteria.ArchitectureTests.Architecture;
 
 namespace Paqueteria.ArchitectureTests;
@@ -118,21 +122,24 @@ public sealed partial class OutboxTraceContextArchitectureTests
     [Fact]
     public void Every_sql_function_that_writes_an_outbox_row_carries_a_trace_context()
     {
-        // Every function body, in every migration, that inserts into a platform outbox table.
-        var writers = Directory.EnumerateFiles(TestRepository.GetPath("src"), "*.cs", SearchOption.AllDirectories)
-            .Where(file => file.Contains($"{Path.DirectorySeparatorChar}Migrations{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
-            .SelectMany(file => FunctionsWritingOutbox(File.ReadAllText(file)))
-            .ToHashSet(StringComparer.Ordinal);
+        // The SQL every migration actually runs (its Up operations, in migration order, after the AI-06 baseline), and
+        // the latest definition of every function in it: a later redefinition replaces the earlier one.
+        var latest = LatestFunctionDefinitions(BaselineAndMigrationUpSql());
+        var (writers, missing) = OutboxWriters(latest);
         Assert.Equal(SqlProducers.Keys.Order(StringComparer.Ordinal), writers.Order(StringComparer.Ordinal));
-        var schema = File.ReadAllText(TestRepository.GetPath("docs/normative/v0.6/database/AI-06_SCHEMA.sql"));
-        Assert.Empty(OutboxInserts(schema));
+        Assert.Empty(missing);
 
         // The current definer writes the caller's context; the Notifications writers copy the originating row's.
+        Assert.StartsWith(AddOutboxTraceContext.OutboxFunctionSql, latest["security.append_operator_order_outbox"], StringComparison.Ordinal);
+        Assert.StartsWith(CarryOutboxTraceContext.EmitSql, latest["security.emit_notification_status_changed"], StringComparison.Ordinal);
+        Assert.StartsWith(CarryOutboxTraceContext.ExpandSql, latest["security.expand_order_created_notifications"], StringComparison.Ordinal);
         Assert.Contains("last_error,created_at,processed_at,trace_parent)", AddOutboxTraceContext.OutboxFunctionSql, StringComparison.Ordinal);
-        var notifications = File.ReadAllText(TestRepository.GetPath(SqlProducers["security.emit_notification_status_changed"]));
-        Assert.Equal(2, Regex.Count(notifications, Regex.Escape("payload,priority,status,attempts,available_at,created_at,trace_parent)")));
-        Assert.Contains("p_occurred_at,p_occurred_at,v_trace_parent);", notifications, StringComparison.Ordinal);
-        Assert.Contains("p_occurred_at,p_occurred_at,v_source.trace_parent);", notifications, StringComparison.Ordinal);
+        Assert.Contains("p_occurred_at,p_occurred_at,v_trace_parent);", CarryOutboxTraceContext.EmitSql, StringComparison.Ordinal);
+        Assert.Contains("p_occurred_at,p_occurred_at,v_source.trace_parent);", CarryOutboxTraceContext.ExpandSql, StringComparison.Ordinal);
+
+        // The content guards keep the column as immutable as the content.
+        Assert.Contains("NEW.created_at,NEW.trace_parent)", latest["platform.protect_outbox_content"], StringComparison.Ordinal);
+        Assert.Contains("NEW.created_at,NEW.trace_parent)", latest["platform.protect_location_outbox_content"], StringComparison.Ordinal);
 
         // The migrator applies both steps as the latest of their lanes.
         var coordinator = File.ReadAllText(TestRepository.GetPath("tools/Paqueteria.DatabaseMigrator/ModuleMigrationCoordinator.cs"));
@@ -227,14 +234,157 @@ public sealed partial class OutboxTraceContextArchitectureTests
         }
     }
 
-    private static IEnumerable<string> FunctionsWritingOutbox(string source)
+    [Fact]
+    public void The_sql_writer_check_catches_a_later_redefinition_without_the_trace_context()
     {
-        foreach (Match insert in OutboxInsertPattern().Matches(source))
+        // A later migration that redefines the emitter with an outbox INSERT that does not name trace_parent.
+        var latest = LatestFunctionDefinitions(
+        [
+            CarryOutboxTraceContext.UpSql,
+            """
+            CREATE OR REPLACE FUNCTION security.emit_notification_status_changed(p_owner_org_id uuid)
+            RETURNS void LANGUAGE plpgsql SECURITY DEFINER AS $fn$
+            BEGIN
+              INSERT INTO platform.outbox_events(id,owner_org_id,topic) VALUES (gen_random_uuid(),p_owner_org_id,'x');
+            END
+            $fn$;
+            """,
+        ]);
+        var (writers, missing) = OutboxWriters(latest);
+        Assert.Contains("security.emit_notification_status_changed", writers);
+        Assert.Equal(["security.emit_notification_status_changed"], missing);
+    }
+
+    [Fact]
+    public void The_sql_writer_check_catches_unqualified_quoted_and_listless_outbox_inserts()
+    {
+        var latest = LatestFunctionDefinitions(
+        [
+            """
+            CREATE FUNCTION security.synthetic_unqualified() RETURNS void LANGUAGE sql AS $fn$
+              INSERT INTO outbox_events(id,topic) VALUES (gen_random_uuid(),'x');
+            $fn$;
+            CREATE FUNCTION security.synthetic_listless() RETURNS void LANGUAGE sql AS $fn$
+              INSERT INTO platform.location_outbox_events SELECT * FROM platform.location_outbox_events;
+            $fn$;
+            CREATE OR REPLACE FUNCTION "security"."synthetic_quoted"() RETURNS void LANGUAGE sql AS $fn$
+              INSERT INTO "platform"."location_outbox_events" (id,trace_parent) VALUES (gen_random_uuid(),NULL);
+            $fn$;
+            CREATE FUNCTION synthetic_unscoped() RETURNS void LANGUAGE sql AS $fn$
+              SELECT 1;
+            $fn$;
+            """,
+            "INSERT INTO platform.outbox_events(id) VALUES (gen_random_uuid());",
+        ]);
+        var (writers, missing) = OutboxWriters(latest);
+        Assert.Equal(
+            ["(top level of SQL 2)", "security.synthetic_listless", "security.synthetic_quoted", "security.synthetic_unqualified"],
+            writers.Order(StringComparer.Ordinal));
+        Assert.Equal(
+            ["(top level of SQL 2)", "security.synthetic_listless", "security.synthetic_unqualified"],
+            missing.Order(StringComparer.Ordinal));
+        Assert.True(latest.ContainsKey("synthetic_unscoped"));
+    }
+
+    /// <summary>
+    /// The AI-06 baseline followed by the Up SQL of every EF migration of every lane, in migration id order: what
+    /// installs the current definition of each function. Every source file that declares a migration is accounted for.
+    /// </summary>
+    private static IReadOnlyList<string> BaselineAndMigrationUpSql()
+    {
+        var separator = Path.DirectorySeparatorChar;
+        var sources = Directory.EnumerateFiles(TestRepository.GetPath("src"), "*.cs", SearchOption.AllDirectories)
+            .Where(file => file.Contains($"{separator}Migrations{separator}", StringComparison.Ordinal) &&
+                           !file.Contains($"{separator}bin{separator}", StringComparison.Ordinal) &&
+                           !file.Contains($"{separator}obj{separator}", StringComparison.Ordinal) &&
+                           File.ReadAllText(file).Contains("[Migration(", StringComparison.Ordinal))
+            .ToArray();
+        var migrations = sources
+            .Select(ProjectAssemblyName)
+            .Distinct(StringComparer.Ordinal)
+            .SelectMany(name => Assembly.Load(new AssemblyName(name)).GetTypes())
+            .Where(type => !type.IsAbstract && typeof(Migration).IsAssignableFrom(type) &&
+                           type.GetCustomAttribute<MigrationAttribute>() is not null)
+            .Select(type =>
+            {
+                var migration = (Migration)Activator.CreateInstance(type, nonPublic: true)!;
+                migration.ActiveProvider = "Npgsql.EntityFrameworkCore.PostgreSQL";
+                return (
+                    Id: type.GetCustomAttribute<MigrationAttribute>()!.Id,
+                    Sql: string.Join("\n", migration.UpOperations.OfType<SqlOperation>().Select(operation => operation.Sql)));
+            })
+            .OrderBy(migration => migration.Id, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(sources.Length, migrations.Length);
+        return
+        [
+            File.ReadAllText(TestRepository.GetPath("docs/normative/v0.6/database/AI-06_SCHEMA.sql")),
+            .. migrations.Select(migration => migration.Sql),
+        ];
+    }
+
+    /// <summary>The assembly of the project that holds <paramref name="file"/> (named after its .csproj).</summary>
+    private static string ProjectAssemblyName(string file)
+    {
+        for (var directory = new FileInfo(file).Directory; directory is not null; directory = directory.Parent)
         {
-            var function = FunctionHeaderPattern().Matches(source[..insert.Index]).LastOrDefault();
-            Assert.True(function is not null, "an outbox INSERT in a migration must be inside a function body");
-            yield return function!.Groups["name"].Value;
+            var project = directory.EnumerateFiles("*.csproj").SingleOrDefault();
+            if (project is not null)
+            {
+                return Path.GetFileNameWithoutExtension(project.Name);
+            }
         }
+
+        throw new InvalidOperationException($"{file} belongs to no project");
+    }
+
+    /// <summary>
+    /// The latest definition of every function in <paramref name="orderedSql"/>: from its CREATE [OR REPLACE] FUNCTION
+    /// header to the next header of the same script. Statements before the first header of a script are kept as
+    /// "(top level of SQL n)", so an outbox INSERT outside any function is reported too.
+    /// </summary>
+    private static Dictionary<string, string> LatestFunctionDefinitions(IReadOnlyList<string> orderedSql)
+    {
+        var latest = new Dictionary<string, string>(StringComparer.Ordinal);
+        for (var script = 0; script < orderedSql.Count; script++)
+        {
+            var sql = orderedSql[script];
+            var headers = FunctionHeaderPattern().Matches(sql).ToArray();
+            var prefix = sql[..(headers.Length == 0 ? sql.Length : headers[0].Index)];
+            if (OutboxInsertPattern().IsMatch(prefix))
+            {
+                latest[$"(top level of SQL {script + 1})"] = prefix;
+            }
+
+            for (var index = 0; index < headers.Length; index++)
+            {
+                var end = index + 1 < headers.Length ? headers[index + 1].Index : sql.Length;
+                var name = headers[index].Groups["name"].Value.Replace("\"", string.Empty, StringComparison.Ordinal);
+                latest[Regex.Replace(name, @"\s+", string.Empty).ToLowerInvariant()] = sql[headers[index].Index..end];
+            }
+        }
+
+        return latest;
+    }
+
+    /// <summary>
+    /// The definitions that insert into either outbox table, and those with an INSERT whose column list does not name
+    /// trace_parent (or that has no column list).
+    /// </summary>
+    private static (IReadOnlyList<string> Writers, IReadOnlyList<string> Missing) OutboxWriters(
+        IReadOnlyDictionary<string, string> definitions)
+    {
+        var writers = definitions.Where(definition => OutboxInsertPattern().IsMatch(definition.Value))
+            .Select(definition => definition.Key)
+            .ToArray();
+        var missing = writers.Where(name => OutboxInsertPattern().Matches(definitions[name]).Any(insert =>
+            {
+                var rest = definitions[name][(insert.Index + insert.Length)..].TrimStart();
+                return !rest.StartsWith('(') ||
+                       !Regex.IsMatch(rest[..(rest.IndexOf(')', StringComparison.Ordinal) + 1)], @"\btrace_parent\b");
+            }))
+            .ToArray();
+        return (writers, missing);
     }
 
     private static IEnumerable<string> RuntimeSources() =>
@@ -251,10 +401,11 @@ public sealed partial class OutboxTraceContextArchitectureTests
     private static string Relative(string file) =>
         Path.GetRelativePath(TestRepository.Root, file).Replace(Path.DirectorySeparatorChar, '/');
 
-    [GeneratedRegex(@"INSERT\s+INTO\s+platform\.(?:location_)?outbox_events\b", RegexOptions.IgnoreCase)]
+    // Qualified or not (search_path), quoted or not.
+    [GeneratedRegex(@"INSERT\s+INTO\s+(?:""?platform""?\s*\.\s*)?""?(?:location_)?outbox_events""?(?![A-Za-z0-9_])", RegexOptions.IgnoreCase)]
     private static partial Regex OutboxInsertPattern();
 
-    [GeneratedRegex(@"CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?<name>[a-z_]+\.[a-z_]+)\(", RegexOptions.IgnoreCase)]
+    [GeneratedRegex(@"CREATE\s+(?:OR\s+REPLACE\s+)?FUNCTION\s+(?<name>(?:""?[A-Za-z_][A-Za-z0-9_]*""?\s*\.\s*)?""?[A-Za-z_][A-Za-z0-9_]*""?)\s*\(", RegexOptions.IgnoreCase)]
     private static partial Regex FunctionHeaderPattern();
 
     // A set-returning claim call (the Notifications store passes the claim function's name as {function}).

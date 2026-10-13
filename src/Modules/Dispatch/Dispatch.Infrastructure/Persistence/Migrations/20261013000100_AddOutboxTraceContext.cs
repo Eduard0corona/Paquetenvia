@@ -22,6 +22,10 @@ namespace Dispatch.Infrastructure.Persistence.Migrations;
 /// transaction-local setting <c>app.trace_parent</c> exactly like it reads <c>app.current_org_ids</c> and
 /// <c>app.current_user_id</c>. Its signature, owner, ACL, <c>SECURITY DEFINER</c> and <c>search_path</c> are kept, so
 /// an application version that predates this step keeps calling it during a deploy (the column then stays NULL).</item>
+/// <item>The AI-06 content guards <c>platform.protect_outbox_content()</c> and
+/// <c>platform.protect_location_outbox_content()</c> (owned by <c>paqueteria_migrator</c>) also compare
+/// <c>trace_parent</c>, by the reviewed edits in <see cref="ContentGuardEdits"/>: the stored context is as immutable as
+/// the content. No lifecycle function sets it; this is defence in depth.</item>
 /// </list>
 /// AI-06 declares both columns and checks on fresh installations; this step adopts them there (refusing any other shape)
 /// and creates them on installations whose baseline predates the decision. The outbox tables belong to no module
@@ -33,9 +37,9 @@ namespace Dispatch.Infrastructure.Persistence.Migrations;
 /// </summary>
 /// <remarks>
 /// Rollback refuses while the Notifications lane step <c>20261013000200_CarryOutboxTraceContext</c> is recorded (its
-/// functions write the column). Otherwise it restores the published function body, revokes the column grant and drops
-/// both CHECK constraints and both columns; every outbox row stays, without its trace context. Roll the application back
-/// first: this version writes the column.
+/// functions write the column). Otherwise it restores the published content guards and definer body, revokes the column
+/// grant and drops both CHECK constraints and both columns; every outbox row stays, without its trace context. Roll the
+/// application back first: this version writes the column.
 /// </remarks>
 [DbContext(typeof(DispatchDbContext))]
 [Migration(MigrationId)]
@@ -104,6 +108,59 @@ public sealed class AddOutboxTraceContext : Migration
         (sql, edit) => ReplaceOnce(sql, edit.Published, edit.Replacement));
 
     private const string OutboxFunctionSignature = AddOperatorOwnerOutboxExecutor.OutboxFunctionSignature;
+
+    /// <summary>
+    /// The published AI-06 content guard of <c>platform.outbox_events</c> (owned by <c>paqueteria_migrator</c>), byte for
+    /// byte; Down reinstalls it.
+    /// </summary>
+    public const string PublishedOutboxContentGuardSql =
+        """
+        CREATE OR REPLACE FUNCTION platform.protect_outbox_content() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+          IF (NEW.owner_org_id,NEW.tenant_context,NEW.topic,NEW.aggregate_type,NEW.aggregate_id,NEW.aggregate_version,NEW.payload,NEW.priority,NEW.created_at)
+             IS DISTINCT FROM
+             (OLD.owner_org_id,OLD.tenant_context,OLD.topic,OLD.aggregate_type,OLD.aggregate_id,OLD.aggregate_version,OLD.payload,OLD.priority,OLD.created_at) THEN
+            RAISE EXCEPTION 'outbox event content is immutable' USING ERRCODE='42501';
+          END IF;
+          RETURN NEW;
+        END $$;
+        """;
+
+    /// <summary>The published AI-06 content guard of <c>platform.location_outbox_events</c>, byte for byte.</summary>
+    public const string PublishedLocationOutboxContentGuardSql =
+        """
+        CREATE OR REPLACE FUNCTION platform.protect_location_outbox_content() RETURNS trigger
+        LANGUAGE plpgsql AS $$
+        BEGIN
+          IF (NEW.owner_org_id,NEW.driver_position_id,NEW.topic,NEW.payload,NEW.created_at)
+             IS DISTINCT FROM
+             (OLD.owner_org_id,OLD.driver_position_id,OLD.topic,OLD.payload,OLD.created_at) THEN
+            RAISE EXCEPTION 'location outbox event content is immutable' USING ERRCODE='42501';
+          END IF;
+          RETURN NEW;
+        END $$;
+        """;
+
+    /// <summary>
+    /// The only differences from the published content guards: the stored trace context is as immutable as the content
+    /// (defence in depth; no lifecycle function ever sets it). Same names, trigger, owner and language.
+    /// </summary>
+    public static IReadOnlyList<(string Published, string Replacement)> ContentGuardEdits { get; } = Array.AsReadOnly(new[]
+    {
+        ("NEW.created_at)\n", "NEW.created_at,NEW.trace_parent)\n"),
+        ("OLD.created_at) THEN\n", "OLD.created_at,OLD.trace_parent) THEN\n"),
+    });
+
+    /// <summary>The content guard of <c>platform.outbox_events</c> this step installs (AI-06 declares the same text).</summary>
+    public static string OutboxContentGuardSql { get; } = ContentGuardEdits.Aggregate(
+        PublishedOutboxContentGuardSql,
+        (sql, edit) => ReplaceOnce(sql, edit.Published, edit.Replacement));
+
+    /// <summary>The content guard of <c>platform.location_outbox_events</c> this step installs (AI-06 declares the same text).</summary>
+    public static string LocationOutboxContentGuardSql { get; } = ContentGuardEdits.Aggregate(
+        PublishedLocationOutboxContentGuardSql,
+        (sql, edit) => ReplaceOnce(sql, edit.Published, edit.Replacement));
 
     private static string GrantArray(IEnumerable<string> grants) =>
         "ARRAY[" + string.Join(",", grants.Select(static grant => "'" + grant + "'")) + "]";
@@ -211,6 +268,16 @@ public sealed class AddOutboxTraceContext : Migration
         END
         $obs003_trace_adoption$;
 
+        -- The content guards keep the stored trace context as immutable as the content; their owner, the migrator,
+        -- replaces them.
+
+        """,
+        OutboxContentGuardSql,
+        "\n\n",
+        LocationOutboxContentGuardSql,
+        """
+
+
         -- The definer writes the column of the rows it inserts; no SELECT, UPDATE or DELETE on it.
         GRANT INSERT (trace_parent) ON platform.outbox_events TO paqueteria_operator_outbox_executor;
 
@@ -241,12 +308,27 @@ public sealed class AddOutboxTraceContext : Migration
              OR (SELECT count(*) FROM pg_constraint
                  WHERE conrelid IN ('platform.outbox_events'::regclass,'platform.location_outbox_events'::regclass)
                    AND conname IN ('{{OutboxConstraint}}','{{LocationOutboxConstraint}}')
-                   AND pg_get_constraintdef(oid)='{{ConstraintDefinition.Replace("'", "''", StringComparison.Ordinal)}}') <> 2 THEN
-            RAISE EXCEPTION 'OBS-003-OUTBOX-TRACE-CONTEXT up: the trace_parent columns or checks differ from the contract';
+                   AND pg_get_constraintdef(oid)='{{ConstraintDefinition.Replace("'", "''", StringComparison.Ordinal)}}') <> 2
+             OR {{ContentGuardsCountSql}} <> 2 THEN
+            RAISE EXCEPTION 'OBS-003-OUTBOX-TRACE-CONTEXT up: the trace_parent columns, checks or content guards differ from the contract';
           END IF;
         END
         $obs003_trace_columns$;
         """);
+
+    /// <summary>
+    /// The number of the two content guards that are owned by <c>paqueteria_migrator</c> and compare the trace context
+    /// (2 after Up, 0 after Down).
+    /// </summary>
+    private const string ContentGuardsCountSql =
+        """
+        (SELECT count(*) FROM pg_proc
+                 WHERE oid IN ('platform.protect_outbox_content()'::regprocedure,
+                               'platform.protect_location_outbox_content()'::regprocedure)
+                   AND proowner='paqueteria_migrator'::regrole
+                   AND position('NEW.trace_parent' IN prosrc) > 0
+                   AND position('OLD.trace_parent' IN prosrc) > 0)
+        """;
 
     /// <summary>
     /// Rollback, after the Notifications lane step is rolled back: the published definer, its published grants, and both
@@ -273,6 +355,15 @@ public sealed class AddOutboxTraceContext : Migration
         END
         $obs003_trace_downgrade$;
 
+        -- The published content guards first: they must not name the column once it is dropped.
+
+        """,
+        PublishedOutboxContentGuardSql,
+        "\n\n",
+        PublishedLocationOutboxContentGuardSql,
+        """
+
+
         GRANT CREATE ON SCHEMA security TO paqueteria_operator_outbox_executor;
         RESET ROLE;
         SET ROLE paqueteria_operator_outbox_executor;
@@ -293,15 +384,21 @@ public sealed class AddOutboxTraceContext : Migration
 
         """,
         VerifySql("down", AddOperatorOwnerOutboxExecutor.ExecutorColumnGrants, traceBody: false),
-        """
+        $$"""
 
         DO $obs003_trace_columns_dropped$
         BEGIN
           IF EXISTS (
             SELECT 1 FROM information_schema.columns
             WHERE table_schema='platform' AND table_name IN ('outbox_events','location_outbox_events')
-              AND column_name='trace_parent') THEN
-            RAISE EXCEPTION 'OBS-003-OUTBOX-TRACE-CONTEXT down: a trace_parent column is still present';
+              AND column_name='trace_parent')
+             OR {{ContentGuardsCountSql}} <> 0
+             OR EXISTS (
+               SELECT 1 FROM pg_proc
+               WHERE oid IN ('platform.protect_outbox_content()'::regprocedure,
+                             'platform.protect_location_outbox_content()'::regprocedure)
+                 AND (proowner<>'paqueteria_migrator'::regrole OR position('trace_parent' IN prosrc) > 0)) THEN
+            RAISE EXCEPTION 'OBS-003-OUTBOX-TRACE-CONTEXT down: a trace_parent column or content guard is still present';
           END IF;
         END
         $obs003_trace_columns_dropped$;
@@ -317,7 +414,7 @@ public sealed class AddOutboxTraceContext : Migration
         if (index < 0 || sql.IndexOf(published, index + published.Length, StringComparison.Ordinal) >= 0)
         {
             throw new InvalidOperationException(
-                $"The published operator outbox definer must contain '{published.Trim()}' exactly once.");
+                $"The published SQL (operator outbox definer or AI-06 content guard) must contain '{published.Trim()}' exactly once.");
         }
 
         return string.Concat(sql.AsSpan(0, index), replacement, sql.AsSpan(index + published.Length));

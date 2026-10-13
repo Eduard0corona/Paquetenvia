@@ -84,6 +84,46 @@ public sealed class OutboxTraceContextPostgreSqlContractTests(PostgreSqlContract
                AND (SELECT prosrc FROM pg_proc WHERE oid=to_regprocedure('{CarryOutboxTraceContext.ExpandSignature}')) LIKE '%v_source.trace_parent%'
                AND (SELECT prosrc FROM pg_proc WHERE oid=to_regprocedure('{AddOperatorOwnerOutboxExecutor.OutboxFunctionSignature}')) LIKE '%app.trace_parent%'
             """));
+
+        // The installed catalog, not the migration sources: every function of any schema whose body inserts into either
+        // outbox table (qualified or not, quoted or not) names trace_parent in each INSERT's column list.
+        var inserts = new List<(string Function, string? Columns)>();
+        await using (var command = new NpgsqlCommand(
+            """
+            SELECT n.nspname || '.' || p.proname, m[1]
+            FROM pg_proc p
+            JOIN pg_namespace n ON n.oid=p.pronamespace
+            CROSS JOIN LATERAL regexp_matches(
+              p.prosrc,
+              'insert\s+into\s+(?:"?platform"?\s*\.\s*)?"?(?:location_)?outbox_events"?(?![a-z0-9_])\s*(\([^)]*\))?',
+              'gi') AS m
+            ORDER BY 1, 2
+            """,
+            connection))
+        await using (var reader = await command.ExecuteReaderAsync())
+        {
+            while (await reader.ReadAsync())
+            {
+                inserts.Add((reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1)));
+            }
+        }
+
+        Assert.Equal(
+            [
+                "security.append_operator_order_outbox",
+                "security.emit_notification_status_changed",
+                "security.expand_order_created_notifications",
+            ],
+            inserts.Select(insert => insert.Function).Distinct().Order(StringComparer.Ordinal));
+        Assert.All(inserts, insert => Assert.Matches(@"\btrace_parent\b", insert.Columns ?? string.Empty));
+
+        // The content guards compare the column like the content.
+        Assert.Equal(2L, await ScalarAsync<long>(connection, null,
+            """
+            SELECT count(*) FROM pg_proc
+            WHERE oid IN ('platform.protect_outbox_content()'::regprocedure,'platform.protect_location_outbox_content()'::regprocedure)
+              AND position('NEW.trace_parent' IN prosrc) > 0 AND position('OLD.trace_parent' IN prosrc) > 0
+            """));
     }
 
     [PostgreSqlContractFact]
@@ -211,6 +251,21 @@ public sealed class OutboxTraceContextPostgreSqlContractTests(PostgreSqlContract
             "SELECT status FROM platform.outbox_events WHERE id=@id", P("id", unrouted)));
         Assert.Equal(TraceD, await TraceOfAsync(connection, transaction, "platform.outbox_events", unrouted));
 
+        // The content guards refuse any change of the stored context, on both tables, even to the superuser.
+        foreach (var (table, id, message) in new[]
+                 {
+                     ("platform.outbox_events", unrouted, "outbox event content is immutable"),
+                     ("platform.location_outbox_events", location, "location outbox event content is immutable"),
+                 })
+        {
+            await ExecuteAsync(connection, transaction, "SAVEPOINT guard");
+            var guarded = await Assert.ThrowsAsync<PostgresException>(() => ExecuteAsync(connection, transaction,
+                $"UPDATE {table} SET trace_parent=@trace WHERE id=@id", P("trace", TraceF), P("id", id)));
+            Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, guarded.SqlState);
+            Assert.Equal(message, guarded.MessageText);
+            await ExecuteAsync(connection, transaction, "ROLLBACK TO SAVEPOINT guard");
+        }
+
         // The generic claim (unused by the runtime) returns it too.
         var generic = Guid.NewGuid();
         await AsAppAsync(connection, transaction, user, org);
@@ -330,7 +385,8 @@ public sealed class OutboxTraceContextPostgreSqlContractTests(PostgreSqlContract
             Assert.Contains("column:location_outbox_events.trace_parent:text:nullable:-", installed);
             Assert.Contains("column:outbox_events.trace_parent:text:nullable:-", installed);
             Assert.Contains("column-acl:outbox_events.trace_parent:paqueteria_operator_outbox_executor:INSERT:false", installed);
-            Assert.Equal(3, installed.Count(line => line.StartsWith("function:", StringComparison.Ordinal) && line.EndsWith(":trace", StringComparison.Ordinal)));
+            // The definer, the two Notifications writers and the two content guards name the column.
+            Assert.Equal(5, installed.Count(line => line.StartsWith("function:", StringComparison.Ordinal) && line.EndsWith(":trace", StringComparison.Ordinal)));
 
             await using var dispatch = CreateDispatchContext(connection);
             await using var notifications = CreateNotificationsContext(connection);
@@ -403,8 +459,8 @@ public sealed class OutboxTraceContextPostgreSqlContractTests(PostgreSqlContract
 
     /// <summary>
     /// The catalog both lane steps touch: both tables' columns, checks, triggers, indexes and grants, every function of
-    /// schema security (owner, SECURITY DEFINER, configuration, ACL, body and whether it names the trace context) and
-    /// the ACL of schema security.
+    /// schemas security and platform, the content guards included (owner, SECURITY DEFINER, configuration, ACL, body and
+    /// whether it names the trace context), and the ACL of schema security.
     /// </summary>
     private static async Task<string[]> CatalogAsync(NpgsqlConnection connection)
     {
@@ -444,7 +500,7 @@ public sealed class OutboxTraceContextPostgreSqlContractTests(PostgreSqlContract
                              FROM aclexplode(p.proacl) acl), '-') || ':' ||
                    md5(p.prosrc) || ':' || CASE WHEN p.prosrc LIKE '%trace_parent%' THEN 'trace' ELSE 'plain' END
             FROM pg_proc p JOIN pg_namespace n ON n.oid=p.pronamespace
-            WHERE n.nspname='security'
+            WHERE n.nspname IN ('security','platform')
             UNION ALL
             SELECT 'schema-acl:security:' || CASE WHEN acl.grantee=0 THEN 'PUBLIC' ELSE pg_get_userbyid(acl.grantee) END || ':' ||
                    acl.privilege_type || ':' || acl.is_grantable::text

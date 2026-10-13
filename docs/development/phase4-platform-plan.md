@@ -215,7 +215,8 @@ dígitos hexadecimales.
 
 AI-03 §18 pide `trace_id` y `correlation_id` en cada evento. Con "ninguno", cada evento lleva su propia traza, pero no
 la de la petición que lo originó. Con la columna, el `trace_id` de cada evento es el de la petición o tarea que lo
-produjo, y §18 se cumple tal como está.
+produjo, y §18 no necesita cambio para `trace_id` y `correlation_id`. El seudónimo de empresa en las líneas por
+mensaje del Worker queda pendiente del owner (AI-08 OBS-003).
 
 ### PR 8: un pool de conexiones por rol (SCL-007)
 

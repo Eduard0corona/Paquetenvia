@@ -65,6 +65,38 @@ public sealed partial class Obs003OutboxTraceContextMigrationTests
     }
 
     [Fact]
+    public void The_content_guards_keep_the_trace_context_immutable_and_down_restores_the_published_ones()
+    {
+        var schema = File.ReadAllText(TestPath("docs/normative/v0.6/database/AI-06_SCHEMA.sql"));
+        foreach (var (published, installed) in new[]
+                 {
+                     (AddOutboxTraceContext.PublishedOutboxContentGuardSql, AddOutboxTraceContext.OutboxContentGuardSql),
+                     (AddOutboxTraceContext.PublishedLocationOutboxContentGuardSql, AddOutboxTraceContext.LocationOutboxContentGuardSql),
+                 })
+        {
+            // AI-06 declares exactly the installed guard; reverting the two reviewed edits gives the published one.
+            Assert.Equal(1, Regex.Count(schema, Regex.Escape(installed)));
+            Assert.DoesNotContain(published, schema, StringComparison.Ordinal);
+            Assert.Equal(
+                published,
+                AddOutboxTraceContext.ContentGuardEdits.Aggregate(
+                    installed, (sql, edit) => sql.Replace(edit.Replacement, edit.Published, StringComparison.Ordinal)));
+            Assert.Contains("NEW.trace_parent)", installed, StringComparison.Ordinal);
+            Assert.Contains("OLD.trace_parent) THEN", installed, StringComparison.Ordinal);
+            Assert.StartsWith("CREATE OR REPLACE FUNCTION platform.", installed, StringComparison.Ordinal);
+
+            // Up installs the guard after the column exists; Down restores the published one before dropping it.
+            var up = AddOutboxTraceContext.UpSql;
+            Assert.True(
+                up.IndexOf("ADD COLUMN IF NOT EXISTS trace_parent", StringComparison.Ordinal) < up.IndexOf(installed, StringComparison.Ordinal));
+            var down = AddOutboxTraceContext.DownSql;
+            Assert.DoesNotContain(installed, down, StringComparison.Ordinal);
+            Assert.True(down.IndexOf(published, StringComparison.Ordinal) is >= 0 and var at &&
+                        at < down.IndexOf("DROP COLUMN", StringComparison.Ordinal));
+        }
+    }
+
+    [Fact]
     public void The_executor_gains_exactly_one_insert_grant_owned_by_the_lane_step()
     {
         Assert.Equal(["platform.outbox_events.trace_parent:INSERT"], AddOutboxTraceContext.AddedExecutorColumnGrants);
