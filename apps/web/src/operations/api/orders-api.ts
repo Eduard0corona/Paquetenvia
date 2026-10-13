@@ -22,6 +22,7 @@ export function createOrdersApi(baseUrl: string, session: OperationsSession): Or
       const response = await send({
         method: "POST",
         path: "/api/v1/quotes",
+        rateLimit: "quote",
         body,
         idempotencyKey,
         signal,

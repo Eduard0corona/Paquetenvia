@@ -213,6 +213,58 @@ public sealed partial class OrdersListPwaPlaywrightTests(DriverStopsNextServerFi
         Assert.Empty(console);
     }
 
+    /// <summary>
+    /// SEC-004-PANEL-SCREENS-2026-10-13, owner answers Q11 "Reintenta sola", Q12 "1 segundo", Q13 "Mensaje común" and
+    /// Q14 "Se pausan": listOrders answers 429 with Retry-After: 2. "Órdenes" counts down with the common message,
+    /// announced once, holds "Actualizar" (and the top bar's "Buscar", the same limit), sends nothing during the wait,
+    /// and reads the list once, by itself, when it ends.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "OperationsDashboardPwa")]
+    public async Task Orders_list_waits_out_a_429_with_the_countdown_and_reads_once_by_itself()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync(new BrowserNewContextOptions
+        {
+            ViewportSize = new ViewportSize { Width = 1280, Height = 900 },
+        });
+        var page = await context.NewPageAsync();
+        page.SetDefaultTimeout(20_000);
+        var console = Capture(page);
+        var api = await InstallAsync(page, "DISPATCHER");
+        api.TooManyRequests = 1;
+
+        await page.GotoAsync(new Uri(server.BaseAddress, "/ops/orders").AbsoluteUri);
+        var countdown = page.Locator("main").GetByRole(AriaRole.Timer);
+        await countdown.GetByText(TooManyRequestsText(2), new() { Exact = true }).WaitForAsync();
+        Assert.Single(api.Queries);
+        var refresh = page.GetByRole(AriaRole.Button, new() { Name = "Actualizar", Exact = true });
+        Assert.True(await refresh.IsDisabledAsync());
+        Assert.Equal("true", await page.Locator("form.appSearch button[type=submit]").GetAttributeAsync("aria-disabled"));
+        // Announced once, politely, by the shell; the countdown itself is a timer, never a live region.
+        Assert.Equal(TooManyRequestsText(2), (await page.Locator("p.srOnly[role=status]").InnerTextAsync()).Trim());
+        Assert.Null(await countdown.GetAttributeAsync("aria-live"));
+
+        await countdown.GetByText(TooManyRequestsText(1), new() { Exact = true }).WaitForAsync();
+        Assert.Single(api.Queries);
+        Assert.Equal(TooManyRequestsText(2), (await page.Locator("p.srOnly[role=status]").InnerTextAsync()).Trim());
+
+        // At 0 the list is read once, by itself; the message goes and the buttons come back.
+        await ExpectGuidesAsync(page, Orders[0].Guide, Orders[1].Guide);
+        Assert.Equal(2, api.Queries.Count);
+        Assert.Equal(0, await page.GetByRole(AriaRole.Timer).CountAsync());
+        Assert.False(await refresh.IsDisabledAsync());
+        Assert.Equal("false", await page.Locator("form.appSearch button[type=submit]").GetAttributeAsync("aria-disabled"));
+        await Task.Delay(2_500);
+        Assert.Equal(2, api.Queries.Count);
+        Assert.Empty(console);
+    }
+
+    private static string TooManyRequestsText(int seconds) => seconds == 1
+        ? "Demasiadas solicitudes. Espera 1 segundo e intenta de nuevo."
+        : $"Demasiadas solicitudes. Espera {seconds} segundos e intenta de nuevo.";
+
     /// <summary>The application's own console output; resource errors of the aborted realtime hub are the browser's.</summary>
     private static ConcurrentQueue<string> Capture(IPage page)
     {
@@ -365,6 +417,9 @@ public sealed partial class OrdersListPwaPlaywrightTests(DriverStopsNextServerFi
         internal List<string> Organizations { get; } = [];
         internal bool Forbid { get; set; }
 
+        /// <summary>SEC-004: the next reads answered 429 with Retry-After: 2, as the API's limiter does.</summary>
+        internal int TooManyRequests { get; set; }
+
         /// <summary>Answers each Order with created_at, as the API will once it adds the field.</summary>
         internal bool SendCreatedAt { get; set; }
 
@@ -384,6 +439,32 @@ public sealed partial class OrdersListPwaPlaywrightTests(DriverStopsNextServerFi
             if (Forbid)
             {
                 await ProblemAsync(route, 403);
+                return;
+            }
+
+            if (TooManyRequests > 0)
+            {
+                TooManyRequests -= 1;
+                await route.FulfillAsync(new RouteFulfillOptions
+                {
+                    Status = 429,
+                    ContentType = "application/problem+json",
+                    // The test API is another origin, so it exposes Retry-After as a cross-origin API would have to
+                    // (the pilot is same-origin, where the header is always readable).
+                    Headers = new Dictionary<string, string>
+                    {
+                        ["Retry-After"] = "2",
+                        ["Cache-Control"] = "no-store",
+                        ["Access-Control-Expose-Headers"] = "Retry-After",
+                    },
+                    Body = JsonSerializer.Serialize(new
+                    {
+                        type = "about:blank",
+                        title = "Too Many Requests",
+                        status = 429,
+                        traceId = new string('0', 32),
+                    }),
+                });
                 return;
             }
 

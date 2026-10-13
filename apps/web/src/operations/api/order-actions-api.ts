@@ -90,6 +90,8 @@ export function createOrderActionsApi(baseUrl: string, session: OperationsSessio
         path: "/api/v1/orders",
         search: new URLSearchParams({ public_id: normalized }),
         signal,
+        // SEC-004: "Buscar guía" and "Agregar entrega" are listOrders, so they spend and wait with the order list.
+        rateLimit: "order_list",
       });
       if (response.status !== 200) throw new TenantApiError("invalid");
       return (await readJson(response, (body) => parseOrderSearchPage(body, normalized))) as string | null;

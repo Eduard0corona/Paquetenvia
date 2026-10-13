@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RateLimitWaits } from "../../lib/rate-limit-wait";
 import type { OrderActionsApi } from "../api/order-actions-api";
 import type { OrdersApi } from "../api/orders-api";
 import {
@@ -27,6 +28,7 @@ import {
   CreateOrderController,
   orderNotCreatedMessage,
   priceChangedWhileQuotingMessage,
+  quoteRateLimit,
 } from "./create-order-controller";
 import { PendingSubmissions } from "./pending-submissions";
 
@@ -51,6 +53,7 @@ function setup(
     readonly acceptanceVersions?: AcceptanceVersions | null;
     readonly transitionOrder?: TransitionOrder;
     readonly now?: () => Date;
+    readonly waits?: RateLimitWaits;
   } = {},
 ) {
   let current: OperationsSession | null = session(orgA);
@@ -80,6 +83,7 @@ function setup(
       loadRole: async (active) => roles[active.organizationId] ?? null,
       acceptanceVersions: options.acceptanceVersions === undefined ? configuredVersions : options.acceptanceVersions,
       now: options.now ?? (() => new Date("2026-09-28T17:00:00Z")),
+      waits: options.waits,
     },
     pending,
   );
@@ -809,5 +813,72 @@ describe("low price authorization (LOW-PRICE-MANUAL-AUTH-2026-10-02)", () => {
     controller.next();
     await controller.requestQuote();
     expect(controller.getSnapshot().stepUpHref).toBe("/login?mfa=required&return_url=%2Fops%2Forders%2Fnew");
+  });
+});
+
+describe("'Calcular precio' under the SEC-004 limit (owner answer Q6)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(new Date("2026-10-13T12:00:00Z"));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("keeps the draft and the key on a 429, sends nothing during the wait and never by itself", async () => {
+    expect(quoteRateLimit).toEqual(["quote"]);
+    const waits = new RateLimitWaits();
+    let limited = true;
+    const createQuote = vi.fn<OrdersApi["createQuote"]>(async () => {
+      if (limited) {
+        waits.record("quote", 2);
+        throw new TenantApiError("rate_limited", null, false, 2);
+      }
+      return parseQuote(quoteResponse());
+    });
+    const { controller } = setup({ [orgA]: "DISPATCHER" }, { createQuote }, { waits });
+    await controller.start();
+    fillShipment(controller);
+    controller.next();
+    controller.next();
+    const draftBefore = controller.getSnapshot().draft;
+    await controller.requestQuote();
+    expect(controller.getSnapshot()).toMatchObject({ step: "service", busy: null, quote: null, message: null, stepUpHref: null });
+    expect(controller.getSnapshot().draft).toEqual(draftBefore);
+    const firstKey = createQuote.mock.calls[0][1];
+
+    limited = false;
+    await controller.requestQuote();
+    expect(createQuote).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(createQuote).toHaveBeenCalledOnce();
+
+    // Pressed again with the same shipment: the same key (the handler never ran).
+    await controller.requestQuote();
+    expect(createQuote).toHaveBeenCalledTimes(2);
+    expect(createQuote.mock.calls[1][1]).toBe(firstKey);
+    expect(controller.getSnapshot().quote).not.toBeNull();
+  });
+
+  it("gives a changed shipment a new key after the wait", async () => {
+    const waits = new RateLimitWaits();
+    let limited = true;
+    const createQuote = vi.fn<OrdersApi["createQuote"]>(async () => {
+      if (limited) {
+        waits.record("quote", 1);
+        throw new TenantApiError("rate_limited", null, false, 1);
+      }
+      return parseQuote(quoteResponse());
+    });
+    const { controller } = setup({ [orgA]: "DISPATCHER" }, { createQuote }, { waits });
+    await controller.start();
+    fillShipment(controller);
+    controller.next();
+    controller.next();
+    await controller.requestQuote();
+    limited = false;
+    controller.updatePackage(0, { weightGrams: "750" });
+    await vi.advanceTimersByTimeAsync(1_000);
+    await controller.requestQuote();
+    expect(createQuote).toHaveBeenCalledTimes(2);
+    expect(createQuote.mock.calls[1][1]).not.toBe(createQuote.mock.calls[0][1]);
   });
 });

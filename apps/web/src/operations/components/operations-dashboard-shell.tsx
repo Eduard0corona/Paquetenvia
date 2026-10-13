@@ -13,11 +13,16 @@ import { DateTime } from "../../components/ui/date-time";
 import { EmptyState } from "../../components/ui/empty-state";
 import { PageHeader } from "../../components/ui/page-header";
 import { StatusGroupChip } from "../../components/ui/status-badge";
-import { useOperationsDashboard } from "../state/use-operations-dashboard";
+import { RateLimitNoticeView, useRateLimitWait } from "../../components/ui/rate-limit-notice";
+import { dashboardRateLimit, useOperationsDashboard } from "../state/use-operations-dashboard";
 
 export function OperationsDashboardShell() {
   const state = useOperationsDashboard();
   const { confirm, dialog } = useConfirmDialog();
+  // SEC-004 (owner answers Q11, Q14, Q16): during the server's wait for the dashboard or the counts the screen sends
+  // nothing, "Actualizar" and "Cargar más" are disabled, and it reloads once by itself when the wait ends.
+  const rateLimit = useRateLimitWait(dashboardRateLimit);
+  const waiting = rateLimit.secondsLeft > 0;
   // UI-PHASE3-INBOX-2026-10-10: the view lives in the URL and is read while rendering, so a deep link
   // (/ops/dashboard?view=positions, "Mapa de posiciones" in the inbox) opens the positions view without
   // painting the list first, and a later navigation with another query shows the view it names.
@@ -62,7 +67,7 @@ export function OperationsDashboardShell() {
               type="button"
               className="btn btnSecondary"
               onClick={state.refresh}
-              disabled={state.loading || state.accessUnavailable}
+              disabled={state.loading || state.accessUnavailable || waiting}
             >
               Actualizar
             </button>
@@ -83,6 +88,7 @@ export function OperationsDashboardShell() {
           {state.error}
         </p>
       )}
+      <RateLimitNoticeView {...rateLimit} />
 
 
       <section className="opsSummary" aria-label="Resumen operativo">
@@ -177,7 +183,7 @@ export function OperationsDashboardShell() {
           type="button"
           className="btn btnSecondary"
           onClick={state.loadMore}
-          disabled={state.loadingMore}
+          disabled={state.loadingMore || waiting}
         >
           {state.loadingMore ? "Cargando…" : "Cargar más"}
         </button>

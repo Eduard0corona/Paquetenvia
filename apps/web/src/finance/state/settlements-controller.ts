@@ -12,7 +12,8 @@ import {
 } from "../../operations/state/authoritative-refresh-coordinator";
 import { ExternalStore } from "../../operations/state/external-store";
 import { PendingSubmissions } from "../../operations/state/pending-submissions";
-import { describeFailure } from "../../operations/state/tenant-error-messages";
+import { describeFailure, isRateLimited } from "../../operations/state/tenant-error-messages";
+import { rateLimitWaits, type RateLimitedOperation, type RateLimitWaits } from "../../lib/rate-limit-wait";
 import type { SettlementCsv, SettlementsApi } from "../api/settlements-api";
 import {
   actionsForStatus,
@@ -140,7 +141,12 @@ export interface SettlementsDependencies {
   readonly download: (csv: SettlementCsv) => void;
   /** Settlement to reopen after returning from the MFA step-up. */
   readonly initialSelection?: () => string | null;
+  /** SEC-004: the tab's server waits (tests pass their own). */
+  readonly waits?: RateLimitWaits;
 }
+
+/** SEC-004: exportSettlementCsv, 10 per minute per user. */
+export const settlementExportRateLimit: readonly RateLimitedOperation[] = ["settlement_export"];
 
 const initialState: SettlementsState = {
   phase: "no_session",
@@ -427,10 +433,15 @@ export class SettlementsController extends ExternalStore<SettlementsState> {
       api.void(selected.id, payload, key, signal), selected.id);
   }
 
+  /**
+   * SEC-004 (owner answer Q6): during the server's wait after a 429 nothing is sent and "Exportar CSV" stays disabled;
+   * the export is never sent again by itself.
+   */
   public async exportCsv(): Promise<void> {
     const api = this.api;
     const selected = this.actionTarget();
     if (api === null || selected === null || this.getSnapshot().busy) return;
+    if ((this.dependencies.waits ?? rateLimitWaits).isWaiting(settlementExportRateLimit)) return;
     const generation = this.generation;
     this.update({ busy: true, errors: [], message: null, stepUpHref: null });
     try {
@@ -507,6 +518,11 @@ export class SettlementsController extends ExternalStore<SettlementsState> {
   }
 
   private fail(error: unknown, settlementId: string | null = null): void {
+    if (isRateLimited(error)) {
+      // SEC-004: the common message counts down next to the button; nothing of its own.
+      this.update({ message: null, stepUpHref: null });
+      return;
+    }
     const view = describeFailure(
       error,
       settlementReturnUrl(settlementId),

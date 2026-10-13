@@ -1,4 +1,6 @@
 import { buildStepUpPromptHref } from "../../auth/step-up";
+import { rateLimitFallbackSeconds, rateLimitMessage } from "../../lib/rate-limit-wait";
+import { OperationsApiError } from "../api/operations-api";
 import { TenantApiError } from "../api/tenant-request";
 
 export interface FailureView {
@@ -56,5 +58,18 @@ export function describeFailure(
           "Sin respuesta válida del servidor. Puedes reintentar: se reenvía la misma solicitud sin duplicarla.",
         stepUpHref: null,
       };
+    case "rate_limited":
+      // SEC-004 (owner answers Q6, Q12). The limited screens show it through RateLimitNotice, counting down, and set
+      // no message of their own (isRateLimited); this static text is only for a 429 elsewhere.
+      return { message: rateLimitMessage(error.retryAfterSeconds ?? rateLimitFallbackSeconds), stepUpHref: null };
   }
+}
+
+/**
+ * SEC-004: a 429 of a limited operation. The API client already recorded its wait; the screen shows the common
+ * message with the countdown (RateLimitNotice) and keeps its buttons disabled until it ends, so it sets no message of
+ * its own and keeps what is on screen.
+ */
+export function isRateLimited(error: unknown): error is TenantApiError | OperationsApiError {
+  return (error instanceof TenantApiError || error instanceof OperationsApiError) && error.category === "rate_limited";
 }

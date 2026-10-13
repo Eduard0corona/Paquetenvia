@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RateLimitWaits } from "../../lib/rate-limit-wait";
 import { TenantApiError } from "../../operations/api/tenant-request";
 import type { OperationsSession } from "../../operations/session/operations-session";
 import { PendingSubmissions } from "../../operations/state/pending-submissions";
@@ -10,6 +11,7 @@ import {
   maximumPayeePages,
   payeeLabel,
   SettlementsController,
+  settlementExportRateLimit,
   settlementMfaHint,
   visibleSettlementActions,
 } from "./settlements-controller";
@@ -25,6 +27,7 @@ function setup(
   roles: Record<string, string>,
   overrides: Partial<SettlementsApi> = {},
   initialSelection: string | null = null,
+  waits?: RateLimitWaits,
 ) {
   let current: OperationsSession | null = {
     organizationId: orgA,
@@ -52,6 +55,7 @@ function setup(
       loadRole: async (session) => roles[session.organizationId] ?? null,
       download,
       initialSelection: () => initialSelection,
+      waits,
     },
     pending,
   );
@@ -471,5 +475,43 @@ describe("payee picker and DRV- names (UI-PHASE3-DRIVERS-2026-10-11)", () => {
   it("asks a PLATFORM_ADMIN for MFA on every settlement operation, the payee list included", () => {
     expect(settlementMfaHint("PLATFORM_ADMIN", [])).toBe("Operar liquidaciones requiere verificar tu identidad (MFA).");
     expect(settlementMfaHint("FINANCE", [])).toBeNull();
+  });
+});
+
+describe("settlement export under the SEC-004 limit (owner answer Q6)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-13T12:00:00Z"));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  it("shows no message of its own on a 429, holds 'Exportar CSV' during the wait and never exports by itself", async () => {
+    expect(settlementExportRateLimit).toEqual(["settlement_export"]);
+    const waits = new RateLimitWaits();
+    let limited = true;
+    const exportCsv = vi.fn<SettlementsApi["exportCsv"]>(async () => {
+      if (limited) {
+        waits.record("settlement_export", 2);
+        throw new TenantApiError("rate_limited", null, false, 2);
+      }
+      return { filename: `settlement-${settlementId}.csv`, content: new Blob(["x"]) };
+    });
+    const { controller, download } = setup({ [orgA]: "FINANCE" }, { exportCsv }, null, waits);
+    await controller.start();
+    await controller.select(settlementId);
+    await controller.exportCsv();
+    expect(controller.getSnapshot()).toMatchObject({ busy: false, message: null, stepUpHref: null });
+    expect(controller.getSnapshot().selected?.id).toBe(settlementId);
+
+    limited = false;
+    await controller.exportCsv();
+    expect(exportCsv).toHaveBeenCalledOnce();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(exportCsv).toHaveBeenCalledOnce();
+    expect(download).not.toHaveBeenCalled();
+
+    await controller.exportCsv();
+    expect(exportCsv).toHaveBeenCalledTimes(2);
+    expect(download).toHaveBeenCalledOnce();
   });
 });

@@ -10,8 +10,10 @@ import type { ManualRoute, ManualRouteDetail, ManualRoutePage } from "../contrac
 import { normalizePublicIdInput, orderNotFoundMessage } from "../contracts/order-transitions";
 import type { OperationsSession } from "../session/operations-session";
 import { ExternalStore } from "./external-store";
-import { orderSearchFailedMessage } from "./order-search";
-import { describeFailure } from "./tenant-error-messages";
+import { orderSearchFailedMessage, orderSearchRateLimit } from "./order-search";
+import { ScreenReloads, type ReloadTimers } from "./screen-reloads";
+import { describeFailure, isRateLimited } from "./tenant-error-messages";
+import { rateLimitWaits, type RateLimitWaits } from "../../lib/rate-limit-wait";
 
 /**
  * UI-PHASE3-ROUTES-NO-IDS-2026-10-12 (project owner, 2026-10-12, "Sí, todo (Recommended)": "Mensaje por motivo y
@@ -115,6 +117,10 @@ export interface ManualRoutesDependencies {
   readonly readQuery: () => URLSearchParams;
   /** Idempotency-Key source: a fresh key for every change, as the screen always did. */
   readonly randomUuid?: () => string;
+  /** SEC-004: the tab's server waits (tests pass their own). */
+  readonly waits?: RateLimitWaits;
+  /** The clock and timers of the realtime spacing (tests pass fake ones). */
+  readonly timers?: Partial<ReloadTimers>;
 }
 
 export type RouteMutation = "create" | "add" | "remove" | "reorder";
@@ -157,10 +163,35 @@ export class ManualRoutesController extends ExternalStore<ManualRoutesState> {
   private readonly guideFailures = new Set<string>();
   private guideQueue: string[] = [];
   private guideWorker: GuideWorker | null = null;
+  /**
+   * SEC-004-RELOADS-AND-BULK-2026-10-13, owner answer Q9 ("el panel"): RouteChanged notices are gathered into at most
+   * one read every 3 seconds. The routes have no limit, so no server wait pauses them.
+   */
+  private readonly realtime: ScreenReloads<"routes">;
+  private changedRoutes = new Set<string>();
 
   public constructor(private readonly dependencies: ManualRoutesDependencies) {
     super(initialState);
     this.randomUuid = dependencies.randomUuid ?? (() => crypto.randomUUID());
+    this.realtime = new ScreenReloads({
+      operations: [],
+      timers: dependencies.timers,
+      reload: () => void this.readChangedRoutes(),
+    });
+  }
+
+  /** A RouteChanged notice: read with the others of the same 3 seconds (owner answer Q9). */
+  public notice(routeId: string): void {
+    if (this.api === null) return;
+    this.changedRoutes.add(routeId);
+    this.realtime.notice("routes");
+  }
+
+  /** The gathered notices: the list once, and the route shown when one of them named it. */
+  private async readChangedRoutes(): Promise<void> {
+    const changed = this.changedRoutes;
+    this.changedRoutes = new Set();
+    await this.readAfterNotices(changed);
   }
 
   /**
@@ -274,6 +305,8 @@ export class ManualRoutesController extends ExternalStore<ManualRoutesState> {
   public async addStop(): Promise<void> {
     const route = this.getSnapshot().selected;
     if (route === null) return;
+    // SEC-004 (owner answer Q13): "Agregar entrega" stays disabled during the server's wait for listOrders.
+    if ((this.dependencies.waits ?? rateLimitWaits).isWaiting(orderSearchRateLimit)) return;
     const api = this.begin();
     if (api === null) return;
     const generation = this.generation;
@@ -288,7 +321,9 @@ export class ManualRoutesController extends ExternalStore<ManualRoutesState> {
       try {
         orderId = await api.findOrderIdByPublicId(publicId, this.abort.signal);
       } catch (error: unknown) {
-        if (generation === this.generation) this.update({ notice: lookupFailure(error, this.returnUrl(route.id)) });
+        // SEC-004 (owner answer Q13): a 429 shows the common message with its countdown; the typed guía stays.
+        if (generation === this.generation)
+          this.update({ notice: isRateLimited(error) ? null : lookupFailure(error, this.returnUrl(route.id)) });
         return;
       }
       if (generation !== this.generation) return;
@@ -351,12 +386,18 @@ export class ManualRoutesController extends ExternalStore<ManualRoutesState> {
 
   /** RouteChanged only asks for REST: the list, and the route when it is the one shown. */
   public async routeChanged(routeId: string): Promise<void> {
+    await this.readAfterNotices(new Set([routeId]));
+  }
+
+  private async readAfterNotices(changed: ReadonlySet<string>): Promise<void> {
     const api = this.api;
     if (api === null) return;
     const generation = this.generation;
+    this.realtime.reloaded();
     try {
       await this.readRoutes(api);
-      if (this.getSnapshot().selected?.id === routeId) await this.loadDetail(api, routeId, generation);
+      const selected = this.getSnapshot().selected;
+      if (selected !== null && changed.has(selected.id)) await this.loadDetail(api, selected.id, generation);
     } catch {
       if (generation === this.generation) this.update({ notice: warn(routesRealtimeFailedMessage) });
     }
@@ -582,6 +623,8 @@ export class ManualRoutesController extends ExternalStore<ManualRoutesState> {
 
   private reset(): void {
     this.generation += 1;
+    this.realtime.cancel();
+    this.changedRoutes = new Set();
     this.abort.abort();
     this.abort = new AbortController();
     this.targetRouteId = null;

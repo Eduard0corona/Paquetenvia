@@ -35,6 +35,25 @@ import {
   RefreshScopeChangedError,
   type RefreshRequirement,
 } from "./authoritative-refresh-coordinator";
+import { ScreenReloads } from "./screen-reloads";
+import { isRateLimited } from "./tenant-error-messages";
+import {
+  rateLimitWaits,
+  sleepUntilWaitEnds,
+  type RateLimitedOperation,
+} from "../../lib/rate-limit-wait";
+
+/**
+ * SEC-004: the dashboard reads two limited operations, each with its own budget (owner answer Q3). A wait for
+ * either pauses the whole screen with one message (owner answer Q16, "Toda la pantalla").
+ */
+export const dashboardRateLimit: readonly RateLimitedOperation[] = ["dashboard", "queue_counts"];
+const countsRateLimit: readonly RateLimitedOperation[] = ["queue_counts"];
+
+/** An order notice reloads the list and the counts; a driver-position notice only the list. */
+type DashboardReload = "realtime" | "location";
+const strongerReload = (left: DashboardReload, right: DashboardReload): DashboardReload =>
+  left === "realtime" || right === "realtime" ? "realtime" : "location";
 
 type ConnectionState =
   | "Sin sesión"
@@ -103,18 +122,25 @@ export function useOperationsDashboard(
     new AuthoritativeRefreshCoordinator<OperationsDashboardResponse>(),
   );
   const refreshScopeRef = useRef(0);
-  const operationsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const locationTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const seenCursorsRef = useRef(new Set<string>());
   const nextCursorRef = useRef<string | null>(null);
+  // Owner answers Q9 (at most one realtime reload every 3 seconds), Q11, Q14 and Q16 (nothing is read during the
+  // server's wait; the screen reloads once when it ends). Its reload is set from an effect below.
+  const [reloads] = useState(
+    () => new ScreenReloads<DashboardReload>({ operations: dashboardRateLimit, stronger: strongerReload }),
+  );
+  // SEC-004: a session start that met the server's wait starts again, by itself, when it ends.
+  const startTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const startSessionRef = useRef<() => Promise<void>>(async () => undefined);
+  // A reconnect waiting out the server's wait stops waiting on a session change or unmount.
+  const waitAbortRef = useRef(new AbortController());
   const clearTimers = useCallback(() => {
-    if (operationsTimerRef.current !== null)
-      clearTimeout(operationsTimerRef.current);
-    if (locationTimerRef.current !== null)
-      clearTimeout(locationTimerRef.current);
-    operationsTimerRef.current = null;
-    locationTimerRef.current = null;
-  }, []);
+    reloads.cancel();
+    if (startTimerRef.current !== null) clearTimeout(startTimerRef.current);
+    startTimerRef.current = null;
+    waitAbortRef.current.abort();
+    waitAbortRef.current = new AbortController();
+  }, [reloads]);
 
   const clearForSessionChange = useCallback(async () => {
     refreshScopeRef.current += 1;
@@ -139,11 +165,19 @@ export function useOperationsDashboard(
 
   // The counts are fetched again with every replacing list load except a
   // driver-position refresh, which never changes an order status or queue.
+  // SEC-004 (owner answer Q16): a 429 on the counts pauses the whole screen, which reads everything once when the
+  // wait ends; the counts on screen stay meanwhile.
   const refreshQueueCounts = useCallback(() => {
     const api = apiRef.current;
     if (api === null) return;
-    void queueCountsLoader.load((signal) => api.queueCounts(signal));
-  }, [queueCountsLoader]);
+    if (rateLimitWaits.isWaiting(countsRateLimit)) {
+      reloads.rateLimited("realtime");
+      return;
+    }
+    void queueCountsLoader.load((signal) => api.queueCounts(signal)).then((outcome) => {
+      if (outcome === "rate_limited" && apiRef.current === api) reloads.rateLimited("realtime");
+    });
+  }, [queueCountsLoader, reloads]);
 
   const performLoad = useCallback(
     async (
@@ -160,6 +194,11 @@ export function useOperationsDashboard(
         (requirement === "normal" && document.hidden)
       )
         return null;
+      // SEC-004 (owner answers Q11, Q14, Q16): during the server's wait nothing is sent, whatever asked (polling,
+      // realtime, visibility, "Actualizar", "Cargar más", a filter change); the screen reloads once, by itself, with
+      // the filters on screen when it ends. A realtime reconnect waits it out first (resynchronize).
+      const reload: DashboardReload = trigger === "location" ? "location" : "realtime";
+      if (requirement === "normal" && !reloads.admit(reload)) return null;
 
       try {
         return await refreshCoordinatorRef.current.request({
@@ -170,6 +209,7 @@ export function useOperationsDashboard(
             apiRef.current === api,
           execute: async (signal) => {
             telemetry.refreshTriggered(trigger);
+            reloads.reloaded();
             if (mode === "replace") setLoading(true);
             else setLoadingMore(true);
             try {
@@ -231,6 +271,10 @@ export function useOperationsDashboard(
             await connectionRef.current?.stop().catch(() => undefined);
             connectionRef.current = null;
           }
+        } else if (isRateLimited(caught)) {
+          // SEC-004: the common message counts down, the rows stay, and the screen reloads once when it ends.
+          setError(null);
+          reloads.rateLimited(reload);
         } else {
           setError("No fue posible actualizar las operaciones.");
         }
@@ -238,21 +282,16 @@ export function useOperationsDashboard(
         return null;
       }
     },
-    [queueCountsLoader, refreshQueueCounts, telemetry],
+    [queueCountsLoader, refreshQueueCounts, reloads, telemetry],
   );
 
-  const scheduleRefresh = useCallback(
-    (delay: number, trigger: string) => {
-      const ref = delay === 500 ? locationTimerRef : operationsTimerRef;
-      if (ref.current !== null) clearTimeout(ref.current);
-      ref.current = setTimeout(() => {
-        ref.current = null;
-        seenCursorsRef.current.clear();
-        void performLoad("replace", trigger);
-      }, delay);
-    },
-    [performLoad],
-  );
+  // The gathered realtime reload, and the one reload when the server's wait ends.
+  useEffect(() => {
+    reloads.setReload((kind) => {
+      seenCursorsRef.current.clear();
+      void performLoad("replace", kind);
+    });
+  }, [performLoad, reloads]);
 
   const startSession = useCallback(async () => {
     await clearForSessionChange();
@@ -264,9 +303,26 @@ export function useOperationsDashboard(
       return;
     }
     setActiveOrganizationId(session.organizationId);
+    setConnection("Conectando");
+    // SEC-004 (owner answer Q11): during the server's wait the screen sends nothing and starts once, by itself, when
+    // it ends (the realtime connection with it). Until then it has no API, so polling and visibility read nothing.
+    const startAfterWait = () => {
+      apiRef.current = null;
+      if (startTimerRef.current !== null) clearTimeout(startTimerRef.current);
+      startTimerRef.current = setTimeout(
+        () => {
+          startTimerRef.current = null;
+          if (sessionRef.current === session) void startSessionRef.current();
+        },
+        Math.max(1, rateLimitWaits.millisecondsLeft(dashboardRateLimit)),
+      );
+    };
+    if (rateLimitWaits.isWaiting(dashboardRateLimit)) {
+      startAfterWait();
+      return;
+    }
     const api = createOperationsApi(apiBaseUrl, session);
     apiRef.current = api;
-    setConnection("Conectando");
     const controller = new AbortController();
     abortRef.current = controller;
     try {
@@ -283,12 +339,17 @@ export function useOperationsDashboard(
       setLastUpdated(new Date(dashboard.generated_at));
       telemetry.lookupCompleted("rest");
       refreshQueueCounts();
+      // Owner answer Q9: the notices are gathered into at most one reload every 3 seconds, after the existing
+      // debounces (250 ms for an order, 500 ms for a driver position).
       const realtime = createOperationsDashboardRealtime(apiBaseUrl, session, {
-        refreshOperations: () => scheduleRefresh(250, "realtime"),
-        refreshLocation: () => scheduleRefresh(500, "location"),
+        refreshOperations: () => reloads.notice("realtime", 250),
+        refreshLocation: () => reloads.notice("location", 500),
         resynchronize: async () => {
           if (readOperationsSession() !== session)
             throw new Error("Session changed.");
+          // SEC-004: the mandatory read waits out the server's wait instead of meeting the same 429.
+          await sleepUntilWaitEnds(rateLimitWaits, dashboardRateLimit, waitAbortRef.current.signal);
+          if (sessionRef.current !== session) throw new Error("Session changed.");
           const response = await performLoad(
             "replace",
             "reconnect",
@@ -334,6 +395,11 @@ export function useOperationsDashboard(
         setAccessUnavailable(true);
         setItems([]);
         itemsRef.current = [];
+      } else if (isRateLimited(caught)) {
+        // SEC-004: the common message counts down; the screen starts once, by itself, when the wait ends.
+        setError(null);
+        startAfterWait();
+        return;
       } else {
         setError("Operaciones no está disponible.");
       }
@@ -346,9 +412,12 @@ export function useOperationsDashboard(
     clearForSessionChange,
     performLoad,
     refreshQueueCounts,
-    scheduleRefresh,
+    reloads,
     telemetry,
   ]);
+  useEffect(() => {
+    startSessionRef.current = startSession;
+  }, [startSession]);
 
   useEffect(() => {
     const initial = window.setTimeout(() => void startSession(), 0);

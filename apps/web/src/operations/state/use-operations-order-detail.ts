@@ -23,6 +23,16 @@ import {
   RefreshScopeChangedError,
   type RefreshRequirement,
 } from "./authoritative-refresh-coordinator";
+import { ScreenReloads } from "./screen-reloads";
+import { isRateLimited } from "./tenant-error-messages";
+import {
+  rateLimitWaits,
+  sleepUntilWaitEnds,
+  type RateLimitedOperation,
+} from "../../lib/rate-limit-wait";
+
+/** SEC-004: the order detail reads its dashboard row (Reporting.OperationsDashboard); getOrder is not limited. */
+export const orderDetailRateLimit: readonly RateLimitedOperation[] = ["dashboard"];
 
 interface OrderDetailRefreshResult {
   readonly detail: OperationsOrderDetail;
@@ -58,7 +68,11 @@ export function useOperationsOrderDetail(
   const apiRef = useRef<OperationsDashboardApi | null>(null);
   const sessionRef = useRef<OperationsSession | null>(null);
   const connectionRef = useRef<ManagedRealtimeConnection | null>(null);
-  const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // Owner answers Q9 (at most one realtime reload every 3 seconds), Q11 and Q14 (nothing is read during the
+  // server's wait; the order is read once when it ends). Its reload is set from an effect below.
+  const [reloads] = useState(() => new ScreenReloads<"realtime">({ operations: orderDetailRateLimit }));
+  // A reconnect waiting out the server's wait stops waiting on a session change or unmount.
+  const waitAbortRef = useRef(new AbortController());
   const refreshCoordinatorRef = useRef(
     new AuthoritativeRefreshCoordinator<OrderDetailRefreshResult>(),
   );
@@ -71,6 +85,9 @@ export function useOperationsOrderDetail(
       requirement: RefreshRequirement = "normal",
     ): Promise<OrderDetailRefreshResult | null> => {
       const scope = refreshScopeRef.current;
+      // SEC-004: during the server's wait nothing is sent, whatever asked (polling, realtime, visibility,
+      // "Actualizar", a change from the panels below); the order is read once, by itself, when it ends.
+      if (requirement === "normal" && !reloads.admit("realtime")) return null;
       try {
         return await refreshCoordinatorRef.current.request({
           requirement,
@@ -79,6 +96,7 @@ export function useOperationsOrderDetail(
             sessionRef.current === session &&
             apiRef.current === api,
           execute: async (signal) => {
+            reloads.reloaded();
             setLoading(true);
             try {
               const [detail, page] = await Promise.all([
@@ -129,6 +147,10 @@ export function useOperationsOrderDetail(
             await connectionRef.current?.stop().catch(() => undefined);
             connectionRef.current = null;
           }
+        } else if (isRateLimited(caught)) {
+          // SEC-004: the common message counts down, the order stays, and it is read once when the wait ends.
+          setError(null);
+          reloads.rateLimited("realtime");
         } else {
           setError("No fue posible actualizar la orden.");
         }
@@ -136,26 +158,24 @@ export function useOperationsOrderDetail(
         return null;
       }
     },
-    [orderId],
+    [orderId, reloads],
   );
 
-  const schedule = useCallback(
-    (delay: number) => {
-      if (timerRef.current !== null) clearTimeout(timerRef.current);
-      timerRef.current = setTimeout(() => {
-        timerRef.current = null;
-        const api = apiRef.current;
-        const session = sessionRef.current;
-        if (api !== null && session !== null) void load(api, session);
-      }, delay);
-    },
-    [load],
-  );
+  // The gathered realtime reload, and the one reload when the server's wait ends.
+  useEffect(() => {
+    reloads.setReload(() => {
+      const api = apiRef.current;
+      const session = sessionRef.current;
+      if (api !== null && session !== null) void load(api, session);
+    });
+  }, [load, reloads]);
 
   const start = useCallback(async () => {
     refreshScopeRef.current += 1;
     refreshCoordinatorRef.current.cancel();
-    if (timerRef.current !== null) clearTimeout(timerRef.current);
+    reloads.cancel();
+    waitAbortRef.current.abort();
+    waitAbortRef.current = new AbortController();
     await connectionRef.current?.stop().catch(() => undefined);
     connectionRef.current = null;
     setOrder(null);
@@ -176,11 +196,16 @@ export function useOperationsOrderDetail(
     setConnectionState("Conectando");
     await load(api, session);
     if (sessionRef.current !== session || blockedRef.current) return;
+    // Owner answer Q9: the notices are gathered into at most one reload every 3 seconds, after the existing
+    // debounces (250 ms for an order, 500 ms for a driver position; both read the order and its dashboard row).
     const realtime = createOperationsDashboardRealtime(apiBaseUrl, session, {
-      refreshOperations: () => schedule(250),
-      refreshLocation: () => schedule(500),
+      refreshOperations: () => reloads.notice("realtime", 250),
+      refreshLocation: () => reloads.notice("realtime", 500),
       resynchronize: async () => {
         if (readOperationsSession() !== session) throw new Error("Session changed.");
+        // SEC-004: the mandatory read waits out the server's wait instead of meeting the same 429.
+        await sleepUntilWaitEnds(rateLimitWaits, orderDetailRateLimit, waitAbortRef.current.signal);
+        if (sessionRef.current !== session) throw new Error("Session changed.");
         const result = await load(api, session, "mandatory-reconnect");
         if (result === null) throw new Error("Session changed.");
         return {
@@ -208,7 +233,7 @@ export function useOperationsOrderDetail(
     } catch {
       setConnectionState("Sin conexión");
     }
-  }, [apiBaseUrl, load, schedule]);
+  }, [apiBaseUrl, load, reloads]);
 
   useEffect(() => {
     const initial = window.setTimeout(() => void start(), 0);
@@ -239,10 +264,11 @@ export function useOperationsOrderDetail(
   useEffect(
     () => () => {
       refreshCoordinatorRef.current.cancel();
-      if (timerRef.current !== null) clearTimeout(timerRef.current);
+      reloads.cancel();
+      waitAbortRef.current.abort();
       void connectionRef.current?.stop();
     },
-    [],
+    [reloads],
   );
 
   return {

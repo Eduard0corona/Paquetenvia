@@ -5,6 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { clientApiBaseUrl } from "../../lib/api-base-url";
 import { useConfirmDialog } from "../../components/confirm-dialog";
 import { Field } from "../../components/ui/field";
+import { RateLimitNoticeView, useRateLimitWait } from "../../components/ui/rate-limit-notice";
 import { createAssignmentApi } from "../api/assignment-api";
 import { createOperationsApi } from "../api/operations-api";
 import {
@@ -21,6 +22,7 @@ import {
   subscribeToOperationsSession,
 } from "../session/operations-session";
 import {
+  assignableDriversRateLimit,
   DriverAssignmentController,
   initialDriverAssignmentState,
   type DriverAssignmentState,
@@ -55,6 +57,10 @@ export function OperationsDriverAssignment({
   const [inputError, setInputError] = useState<string | null>(null);
   /** The confirmed outcome stays visible after the refetched order hides the picker. */
   const [done, setDone] = useState<string | null>(null);
+  // SEC-004 (owner answer Q15): during the server's wait for listAssignableDrivers the list is not read and "Cargar
+  // más repartidores" is disabled; the first list is read once by itself when the wait ends.
+  const rateLimit = useRateLimitWait(assignableDriversRateLimit);
+  const waiting = rateLimit.secondsLeft > 0;
   const controllerRef = useRef<DriverAssignmentController | null>(null);
   const onOrderChangedRef = useRef(onOrderChanged);
   const { confirm, dialog } = useConfirmDialog();
@@ -138,7 +144,8 @@ export function OperationsDriverAssignment({
         Elige a un repartidor de tu flota y escribe el costo de la asignación. Solo puedes elegir a
         quien cumple hoy los requisitos para esta orden.
       </p>
-      {state.kind === "loading" && <p className="live" aria-live="polite">Cargando repartidores…</p>}
+      <RateLimitNoticeView {...rateLimit} />
+      {state.kind === "loading" && !waiting && <p className="live" aria-live="polite">Cargando repartidores…</p>}
       {state.kind === "ready" && drivers.length === 0 && (
         <p className="emptyState">
           <strong>No hay repartidores propios registrados.</strong>
@@ -213,7 +220,10 @@ export function OperationsDriverAssignment({
               <button
                 type="button"
                 className="btn btnSecondary"
-                onClick={() => void controllerRef.current?.loadMore()}
+                aria-disabled={waiting}
+                onClick={() => {
+                  if (!waiting) void controllerRef.current?.loadMore();
+                }}
               >
                 {state.busy === "loading-more" ? "Cargando…" : "Cargar más repartidores"}
               </button>

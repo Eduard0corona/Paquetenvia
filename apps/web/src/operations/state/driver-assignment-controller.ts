@@ -1,7 +1,18 @@
 import type { AssignmentApi } from "../api/assignment-api";
 import { TenantApiError } from "../api/tenant-request";
 import type { AssignableDriver } from "../contracts/assignable-driver";
-import { describeFailure } from "./tenant-error-messages";
+import { ScreenReloads, type ReloadTimers } from "./screen-reloads";
+import { describeFailure, isRateLimited } from "./tenant-error-messages";
+import { type RateLimitedOperation, type RateLimitWaits } from "../../lib/rate-limit-wait";
+
+/** SEC-004: listAssignableDrivers, 60 per minute per user (shared by the picker and "Asignar seleccionadas…"). */
+export const assignableDriversRateLimit: readonly RateLimitedOperation[] = ["assignable_drivers"];
+
+/** SEC-004: the tab's server waits and the timers of the read when one ends (tests pass their own). */
+export interface DriverListWaitOptions {
+  readonly waits?: RateLimitWaits;
+  readonly timers?: Partial<ReloadTimers>;
+}
 
 /**
  * UI-PHASE2-DRIVER-PICKER-2026-10-05: the order detail's "Asignar repartidor" panel.
@@ -12,6 +23,11 @@ import { describeFailure } from "./tenant-error-messages";
  * successful assignment, or a conflict, the order detail refetches REST (`onOrderChanged`);
  * the panel never shows an assignment the server has not confirmed. Nothing is stored in the
  * browser and nothing is logged.
+ *
+ * SEC-004, owner answer Q15 "La pide sola": during the server's wait after a 429 nothing is
+ * read; the first list (the one the panel asks for by itself) is read once, by itself, when the
+ * wait ends, and "Cargar más repartidores" stays disabled until then. The listed drivers, the
+ * chosen one and the typed cost stay.
  */
 export interface DriverAssignmentState {
   readonly kind: "loading" | "ready" | "unavailable";
@@ -54,6 +70,7 @@ export class DriverAssignmentController {
   private disposed = false;
   private generation = 0;
   private pending: PendingAssignment | null = null;
+  private readonly reloads: ScreenReloads<"list">;
 
   public constructor(
     private readonly api: AssignmentApi,
@@ -61,7 +78,16 @@ export class DriverAssignmentController {
     private readonly onChange: (state: DriverAssignmentState) => void,
     private readonly onOrderChanged: () => void,
     private readonly randomUuid: () => string = () => crypto.randomUUID(),
-  ) {}
+    limits: DriverListWaitOptions = {},
+  ) {
+    this.reloads = new ScreenReloads({
+      operations: assignableDriversRateLimit,
+      spacing: 0,
+      waits: limits.waits,
+      timers: limits.timers,
+      reload: () => void this.load(),
+    });
+  }
 
   public get current(): DriverAssignmentState {
     return this.state;
@@ -72,19 +98,26 @@ export class DriverAssignmentController {
     if (this.disposed) return;
     const generation = ++this.generation;
     this.set({ ...this.state, kind: this.state.drivers.length === 0 ? "loading" : this.state.kind, busy: "idle" });
+    // SEC-004 (Q15): during the server's wait nothing is read; the list is read once when it ends.
+    if (!this.reloads.admit("list")) return;
     try {
       const page = await this.api.listAssignableDrivers(this.orderId);
       if (!this.isCurrent(generation)) return;
       this.set({ ...this.state, kind: "ready", drivers: page.items, nextCursor: page.next_cursor });
     } catch (error: unknown) {
       if (!this.isCurrent(generation)) return;
+      if (isRateLimited(error)) {
+        // The common message counts down in the panel; what it shows stays until the list is read again.
+        this.reloads.rateLimited("list");
+        return;
+      }
       this.set({ ...initialDriverAssignmentState, kind: "unavailable", ...this.listFailure(error) });
     }
   }
 
   public async loadMore(): Promise<void> {
     const cursor = this.state.nextCursor;
-    if (this.disposed || cursor === null || this.state.busy !== "idle") return;
+    if (this.disposed || cursor === null || this.state.busy !== "idle" || this.reloads.waiting) return;
     const generation = ++this.generation;
     this.set({ ...this.state, busy: "loading-more" });
     try {
@@ -99,7 +132,9 @@ export class DriverAssignmentController {
       });
     } catch (error: unknown) {
       if (!this.isCurrent(generation)) return;
-      this.set({ ...this.state, busy: "idle", success: false, ...this.listFailure(error) });
+      // SEC-004 (Q15): "Cargar más repartidores" re-enables itself when the wait ends; it is not sent again by itself.
+      if (isRateLimited(error)) this.set({ ...this.state, busy: "idle" });
+      else this.set({ ...this.state, busy: "idle", success: false, ...this.listFailure(error) });
     }
   }
 
@@ -151,6 +186,7 @@ export class DriverAssignmentController {
     this.disposed = true;
     this.generation += 1;
     this.pending = null;
+    this.reloads.cancel();
   }
 
   private listFailure(error: unknown): Pick<DriverAssignmentState, "message" | "stepUpHref"> {

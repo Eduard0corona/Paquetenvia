@@ -3,7 +3,9 @@ import { canListPendingCod, canPerform, requiresMfa } from "../../operations/con
 import type { OperationsSession } from "../../operations/session/operations-session";
 import { ExternalStore } from "../../operations/state/external-store";
 import { PendingSubmissions } from "../../operations/state/pending-submissions";
-import { describeFailure } from "../../operations/state/tenant-error-messages";
+import { ScreenReloads, type ReloadTimers } from "../../operations/state/screen-reloads";
+import { describeFailure, isRateLimited } from "../../operations/state/tenant-error-messages";
+import type { RateLimitedOperation, RateLimitWaits } from "../../lib/rate-limit-wait";
 import type { CodApi } from "../api/cod-api";
 import {
   buildRecordCodBody,
@@ -18,6 +20,9 @@ import {
 } from "../contracts/cod";
 
 export const codPath = "/finance/cod";
+
+/** SEC-004: the pending list is listOrders, so it spends and waits with the order list (120 per minute per user). */
+export const codPendingRateLimit: readonly RateLimitedOperation[] = ["order_list"];
 
 export function codReturnUrl(orderId: string | null): string {
   return orderId !== null && isCanonicalUuid(orderId) ? `${codPath}?order=${orderId}` : codPath;
@@ -57,6 +62,9 @@ export interface CodDependencies {
   readonly loadRole: (session: OperationsSession, signal: AbortSignal) => Promise<string | null>;
   /** Order to reopen after returning from the MFA step-up. */
   readonly initialOrder?: () => string | null;
+  /** SEC-004: the tab's server waits and the timers of the read when one ends (tests pass their own). */
+  readonly waits?: RateLimitWaits;
+  readonly timers?: Partial<ReloadTimers>;
 }
 
 const initialState: CodState = {
@@ -94,6 +102,11 @@ export class CodController extends ExternalStore<CodState> {
   private pendingToken = 0;
   private controller: AbortController | null = null;
   private readonly pending: PendingSubmissions;
+  /**
+   * SEC-004 (owner answers Q11 and Q14): during the server's wait the pending list is not read, whatever asked; it is
+   * read once, by itself, when the wait ends (the list does not reload by itself otherwise).
+   */
+  private readonly reloads: ScreenReloads<"pending">;
 
   public constructor(
     private readonly dependencies: CodDependencies,
@@ -101,6 +114,13 @@ export class CodController extends ExternalStore<CodState> {
   ) {
     super(initialState);
     this.pending = pending;
+    this.reloads = new ScreenReloads({
+      operations: codPendingRateLimit,
+      spacing: 0,
+      waits: dependencies.waits,
+      timers: dependencies.timers,
+      reload: () => void this.loadPending(),
+    });
   }
 
   public async start(): Promise<void> {
@@ -109,6 +129,7 @@ export class CodController extends ExternalStore<CodState> {
     this.controller?.abort();
     this.controller = new AbortController();
     this.pending.clear();
+    this.reloads.cancel();
     const session = this.dependencies.readSession();
     this.session = session;
     this.api = session === null ? null : this.dependencies.createApi(session);
@@ -156,6 +177,9 @@ export class CodController extends ExternalStore<CodState> {
     if (api === null || state.phase !== "ready" || !state.canListPending) return;
     const cursor = more ? state.pendingCursor : null;
     if (more && cursor === null) return;
+    // SEC-004: "Actualizar lista" and "Cargar más" are disabled during the server's wait; any read then is kept for
+    // the one reload when it ends.
+    if (!this.reloads.admit("pending")) return;
     const generation = this.generation;
     const token = ++this.pendingToken;
     const isLatest = () => generation === this.generation && token === this.pendingToken;
@@ -171,6 +195,11 @@ export class CodController extends ExternalStore<CodState> {
       });
     } catch (error) {
       if (!isLatest()) return;
+      if (isRateLimited(error)) {
+        // SEC-004: the list on screen stays; the common message counts down and it is read once when the wait ends.
+        this.reloads.rateLimited("pending");
+        return;
+      }
       if (!more) this.update({ pending: null, pendingCursor: null });
       this.fail(error, null);
     } finally {
@@ -222,6 +251,7 @@ export class CodController extends ExternalStore<CodState> {
     this.generation += 1;
     this.controller?.abort();
     this.pending.clear();
+    this.reloads.cancel();
   }
 
   public async load(orderId: string): Promise<void> {

@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RateLimitWaits } from "../../lib/rate-limit-wait";
 import type { CsvImportApi } from "../api/csv-import-api";
 import { TenantApiError } from "../api/tenant-request";
 import {
@@ -16,7 +17,7 @@ import {
   syntheticDigest,
 } from "../contracts/ui-001-screens.fixtures";
 import type { OperationsSession } from "../session/operations-session";
-import { CsvImportController } from "./csv-import-controller";
+import { CsvImportController, csvImportRateLimit } from "./csv-import-controller";
 import { PendingSubmissions } from "./pending-submissions";
 
 const file = () => new Blob(["quote_id,payer_type,terms_version\n"]);
@@ -195,5 +196,90 @@ describe("CSV import tenant switch", () => {
     resolve(parseCsvImportPreview(previewResponse()));
     await inFlight;
     expect(context.controller.getSnapshot().preview).toBeNull();
+  });
+});
+
+describe("CSV import under the SEC-004 limit (owner answers Q1, Q6)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-13T12:00:00Z"));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  function limitedImport() {
+    const waits = new RateLimitWaits();
+    const state = { limited: 0 };
+    const limit = () => {
+      waits.record("csv_import", state.limited);
+      return new TenantApiError("rate_limited", null, false, state.limited);
+    };
+    const api: CsvImportApi = {
+      preview: vi.fn(async () => {
+        if (state.limited > 0) throw limit();
+        return parseCsvImportPreview(previewResponse());
+      }),
+      commit: vi.fn(async () => {
+        if (state.limited > 0) throw limit();
+        return { kind: "committed" as const, commit: parseCsvImportCommit(commitResponse()) };
+      }),
+    };
+    const controller = new CsvImportController({
+      readSession: () => bearerSession(orgA),
+      createApi: () => api,
+      loadRole: async () => "DISPATCHER",
+      waits,
+    });
+    return { controller, api, waits, state };
+  }
+
+  it("shares one wait between preview and commit (one budget)", () => {
+    expect(csvImportRateLimit).toEqual(["csv_import"]);
+  });
+
+  it("keeps the file, the report and the batch key on a 429, sends nothing during the wait and never by itself", async () => {
+    const env = limitedImport();
+    await env.controller.start();
+    await env.controller.selectFile(file());
+    await env.controller.preview();
+    const preview = env.controller.getSnapshot().preview;
+    expect(preview).not.toBeNull();
+
+    env.state.limited = 2;
+    await env.controller.commit(true);
+    expect(env.api.commit).toHaveBeenCalledTimes(1);
+    const firstKey = vi.mocked(env.api.commit).mock.calls[0][2];
+    expect(env.controller.getSnapshot()).toMatchObject({ busy: false, message: null, stepUpHref: null, preview, commit: null });
+    expect(env.controller.getSnapshot().fileBytes).not.toBeNull();
+
+    // Both buttons are held: neither a second commit nor a new preview is sent during the wait.
+    env.state.limited = 0;
+    await env.controller.commit(true);
+    await env.controller.preview();
+    expect(env.api.commit).toHaveBeenCalledTimes(1);
+    expect(env.api.preview).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(env.api.commit).toHaveBeenCalledTimes(1);
+
+    // Pressed again after the wait: the same Idempotency-Key, since the handler never ran.
+    await env.controller.commit(true);
+    expect(env.api.commit).toHaveBeenCalledTimes(2);
+    expect(vi.mocked(env.api.commit).mock.calls[1][2]).toBe(firstKey);
+    expect(env.controller.getSnapshot().commit).not.toBeNull();
+  });
+
+  it("re-enables the preview when the wait ends", async () => {
+    const env = limitedImport();
+    await env.controller.start();
+    await env.controller.selectFile(file());
+    env.state.limited = 1;
+    await env.controller.preview();
+    expect(env.controller.getSnapshot()).toMatchObject({ message: null, preview: null });
+    env.state.limited = 0;
+    await env.controller.preview();
+    expect(env.api.preview).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1_000);
+    await env.controller.preview();
+    expect(env.api.preview).toHaveBeenCalledTimes(2);
+    expect(env.controller.getSnapshot().preview).not.toBeNull();
   });
 });

@@ -39,7 +39,11 @@ import type { OperationsSession } from "../session/operations-session";
 import { ExternalStore } from "./external-store";
 import { transitionReturnUrl } from "./order-transition-controller";
 import { PendingSubmissions } from "./pending-submissions";
-import { describeFailure } from "./tenant-error-messages";
+import { describeFailure, isRateLimited } from "./tenant-error-messages";
+import { rateLimitWaits, type RateLimitedOperation, type RateLimitWaits } from "../../lib/rate-limit-wait";
+
+/** SEC-004: createQuote, 60 per minute per user. */
+export const quoteRateLimit: readonly RateLimitedOperation[] = ["quote"];
 
 export const createOrderPath = "/ops/orders/new";
 
@@ -108,6 +112,8 @@ export interface CreateOrderDependencies {
   /** Owner-set terms/privacy versions from the server; `null` blocks confirmation. */
   readonly acceptanceVersions: AcceptanceVersions | null;
   readonly now?: () => Date;
+  /** SEC-004: the tab's server waits (tests pass their own). */
+  readonly waits?: RateLimitWaits;
 }
 
 const wizardStart = {
@@ -278,11 +284,19 @@ export class CreateOrderController extends ExternalStore<CreateOrderState> {
   // -------------------------------------------------------------------------
   // Requests
 
-  /** Step 3: createQuote for the current shipment. */
+  /**
+   * Step 3: createQuote for the current shipment.
+   *
+   * SEC-004 (owner answer Q6): during the server's wait after a 429 nothing is sent and "Calcular precio" stays
+   * disabled; the draft stays, and nothing is sent again by itself. Pressing it again with the same shipment sends the
+   * same Idempotency-Key (the 429 came before the handler: the existing rule for a request without a valid answer); a
+   * changed shipment gets a new one.
+   */
   public async requestQuote(): Promise<void> {
     const api = this.api;
     const state = this.getSnapshot();
     if (api === null || !state.canQuote || state.busy !== null || state.outcome !== null) return;
+    if ((this.dependencies.waits ?? rateLimitWaits).isWaiting(quoteRateLimit)) return;
     const quoteDraft = quoteDraftOf(state.draft, state.canAuthorizeLowPrice);
     const errors = quoteDraftErrors(quoteDraft);
     if (errors.length > 0) {
@@ -311,6 +325,11 @@ export class CreateOrderController extends ExternalStore<CreateOrderState> {
     } catch (error) {
       if (generation !== this.generation) return;
       this.settleUnlessRetryable("quote", error);
+      if (isRateLimited(error)) {
+        // SEC-004: the common message counts down next to the button; nothing of its own.
+        this.update({ busy: null, message: null, stepUpHref: null });
+        return;
+      }
       const view = describeFailure(
         error,
         createOrderPath,

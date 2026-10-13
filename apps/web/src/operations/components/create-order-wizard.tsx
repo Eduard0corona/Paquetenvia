@@ -23,8 +23,9 @@ import {
   type OrderWizardStep,
 } from "../contracts/order-wizard";
 import { maximumServiceWindowHours } from "../contracts/service-window";
-import type { CreateOrderController, CreateOrderState } from "../state/create-order-controller";
+import { quoteRateLimit, type CreateOrderController, type CreateOrderState } from "../state/create-order-controller";
 import { Feedback } from "../../components/ui/feedback";
+import { RateLimitNoticeView, useRateLimitWait } from "../../components/ui/rate-limit-notice";
 import { Field, type FieldControlProps } from "../../components/ui/field";
 import { Money } from "../../components/ui/money";
 import { OrderSummary, payerLabels } from "./create-order-summary";
@@ -54,6 +55,11 @@ export function CreateOrderWizard({
   const index = wizardStepIndex(state.step);
   const step = orderWizardSteps[index];
   const busy = state.busy !== null;
+  // SEC-004 (owner answer Q6): during the server's wait for createQuote "Calcular precio" stays disabled (the draft
+  // stays and nothing is sent by itself); it re-enables itself when the wait ends.
+  const rateLimit = useRateLimitWait(quoteRateLimit);
+  const quoting = state.step === "service" && state.quote === null;
+  const quoteWaiting = quoting && rateLimit.secondsLeft > 0;
 
   const run = async (action: () => void | Promise<void>) => {
     const before = controller.getSnapshot();
@@ -109,6 +115,7 @@ export function CreateOrderWizard({
             message={state.message}
             stepUpHref={state.stepUpHref}
           />
+          {quoting && <RateLimitNoticeView {...rateLimit} />}
           {state.step === "where" && <WhereStep state={state} controller={controller} />}
           {state.step === "what" && <WhatStep state={state} controller={controller} />}
           {state.step === "service" && <ServiceStep state={state} controller={controller} />}
@@ -133,7 +140,7 @@ export function CreateOrderWizard({
                 id={state.step === "service" ? quoteButtonId : undefined}
                 type="submit"
                 className="btn btnPrimary opsWizardPrimary"
-                aria-disabled={busy}
+                aria-disabled={busy || quoteWaiting}
                 disabled={state.step === "confirm" && !versionsConfigured}
               >
                 {primary.label}

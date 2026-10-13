@@ -45,6 +45,7 @@ export function createAssignmentApi(baseUrl: string, session: OperationsSession)
         path: `/api/v1/orders/${encodeURIComponent(orderId)}/assignable-drivers`,
         search,
         signal,
+        rateLimit: "assignable_drivers",
       });
       if (response.status !== 200) throw new TenantApiError("invalid");
       return (await readJson(response, parseAssignableDriverPage)) as AssignableDriverPage;

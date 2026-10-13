@@ -1,4 +1,5 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RateLimitWaits } from "../../lib/rate-limit-wait";
 import { OperationsApiError } from "../api/operations-api";
 import { buildOperationsDashboardSearch } from "../api/operations-api";
 import { defaultInboxView, type InboxView } from "../contracts/inbox";
@@ -12,6 +13,7 @@ import type { OperationsQueueCounts } from "../contracts/queue-counts";
 import type { OperationsSession } from "../session/operations-session";
 import {
   InboxController,
+  inboxRateLimit,
   inboxLoadFailedMessage,
   inboxPaginationFailedMessage,
   type InboxApi,
@@ -362,5 +364,177 @@ describe("work inbox controller (UI-PHASE3-INBOX-2026-10-10)", () => {
     controller.stop();
     expect(controller.getSnapshot().phase).toBe("no_session");
     expect(controller.getSnapshot().rows).toEqual([]);
+  });
+});
+
+/** SEC-004: the API's 429 (the client records the wait before throwing, as operations-api does). */
+function tooManyRequests(waits: RateLimitWaits, operation: "dashboard" | "queue_counts", seconds: number): Promise<never> {
+  waits.record(operation, seconds);
+  return Promise.reject(new OperationsApiError("rate_limited", seconds));
+}
+
+describe("work inbox under the SEC-004 limits (owner answers Q9, Q11, Q14, Q16)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-13T12:00:00Z"));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  function limitedInbox(answers: Record<string, () => Promise<OperationsDashboardResponse>>) {
+    const waits = new RateLimitWaits();
+    const api = new FakeApi(answers);
+    const controller = new InboxController(
+      { readSession: () => session, createApi: () => api, isHidden: () => false, waits },
+      defaultInboxView,
+    );
+    return { waits, api, controller };
+  }
+
+  it("reads the dashboard and the counts, each with its own wait", () => {
+    expect(inboxRateLimit).toEqual(["dashboard", "queue_counts"]);
+  });
+
+  it("keeps the rows on a 429, sends nothing during the wait and reads once, by itself, when it ends", async () => {
+    const ready = row(10, "READY_FOR_PICKUP");
+    let limited = false;
+    const { waits, api, controller } = limitedInbox({
+      "unassigned=true": () => (limited ? tooManyRequests(waits, "dashboard", 2) : Promise.resolve(page([ready]))),
+    });
+    await controller.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.requests).toHaveLength(1);
+
+    limited = true;
+    await controller.refresh("manual");
+    expect(api.requests).toHaveLength(2);
+    expect(controller.getSnapshot()).toMatchObject({ phase: "ready", error: null, rows: [ready] });
+
+    // Polling, the page becoming visible, "Actualizar", the assignment refresh and realtime notices: nothing is sent.
+    limited = false;
+    await controller.refresh("polling");
+    await controller.refresh("visibility");
+    await controller.refresh("manual");
+    await controller.refresh("assignment");
+    controller.notice();
+    controller.notice();
+    await controller.loadMore();
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(api.requests).toHaveLength(2);
+
+    // At 0: exactly one read, and the counts with it.
+    const countsBefore = api.countRequests;
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.requests).toHaveLength(3);
+    expect(api.countRequests).toBe(countsBefore + 1);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(api.requests).toHaveLength(3);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("pauses the whole inbox when only the counts meet the limit, keeping the counts shown (Q16)", async () => {
+    const ready = row(11, "READY_FOR_PICKUP");
+    const { waits, api, controller } = limitedInbox({ "unassigned=true": () => Promise.resolve(page([ready])) });
+    await controller.start();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(controller.getSnapshot().counts?.queues.unassigned).toBe(1);
+
+    api.countAnswer = () => tooManyRequests(waits, "queue_counts", 3);
+    await controller.refresh("manual");
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.requests).toHaveLength(2);
+    expect(controller.getSnapshot()).toMatchObject({ countsUnavailable: false, error: null });
+    expect(controller.getSnapshot().counts?.queues.unassigned).toBe(1);
+
+    api.countAnswer = () => Promise.resolve(counts(4));
+    await controller.refresh("polling");
+    controller.notice();
+    await vi.advanceTimersByTimeAsync(2_999);
+    expect(api.requests).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.requests).toHaveLength(3);
+    expect(controller.getSnapshot().counts?.queues.unassigned).toBe(4);
+  });
+
+  it("keeps a queue or filter change during the wait and reads it once the wait ends (Q14)", async () => {
+    const ready = row(12, "READY_FOR_PICKUP");
+    const sameDay = row(13, "READY_FOR_PICKUP", { service_type: "SAME_DAY" });
+    const { waits, api, controller } = limitedInbox({
+      "unassigned=true": () => Promise.resolve(page([ready])),
+      "service_type=SAME_DAY&unassigned=true": () => Promise.resolve(page([sameDay])),
+    });
+    await controller.start();
+    await vi.advanceTimersByTimeAsync(0);
+    waits.record("dashboard", 5);
+
+    controller.setView({ ...defaultInboxView, serviceType: "SAME_DAY" });
+    await vi.advanceTimersByTimeAsync(4_999);
+    expect(api.requests).toEqual(["unassigned=true"]);
+    expect(controller.getSnapshot().view.serviceType).toBe("SAME_DAY");
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.requests).toEqual(["unassigned=true", "service_type=SAME_DAY&unassigned=true"]);
+    expect(controller.getSnapshot().rows).toEqual([sameDay]);
+  });
+
+  it("gathers realtime notices into at most one read every 3 seconds, losing none (Q9)", async () => {
+    const ready = row(14, "READY_FOR_PICKUP");
+    const { api, controller } = limitedInbox({ "unassigned=true": () => Promise.resolve(page([ready])) });
+    await controller.start();
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(5_000);
+
+    // A bulk assignment: 30 notices in 1.5 s.
+    for (let notice = 0; notice < 30; notice += 1) {
+      controller.notice();
+      await vi.advanceTimersByTimeAsync(50);
+    }
+    expect(api.requests).toHaveLength(2);
+    // The notices after the first read are read 3 s after it (t = 8250 ms).
+    await vi.advanceTimersByTimeAsync(1_749);
+    expect(api.requests).toHaveLength(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(api.requests).toHaveLength(3);
+    // One more notice right after: read 3 s after the previous read, not lost.
+    await vi.advanceTimersByTimeAsync(100);
+    controller.notice();
+    await vi.advanceTimersByTimeAsync(2_800);
+    expect(api.requests).toHaveLength(3);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(api.requests).toHaveLength(4);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(api.requests).toHaveLength(4);
+  });
+
+  it("lets a realtime reconnect wait out the server's wait, then resynchronize as before", async () => {
+    const ready = row(15, "READY_FOR_PICKUP");
+    const { waits, api, controller } = limitedInbox({ "unassigned=true": () => Promise.resolve(page([ready])) });
+    await controller.start();
+    await vi.advanceTimersByTimeAsync(0);
+    waits.record("dashboard", 2);
+    let snapshot: unknown = null;
+    void controller.resynchronize().then((value) => (snapshot = value));
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(api.requests).toHaveLength(1);
+    expect(snapshot).toBeNull();
+    await vi.advanceTimersByTimeAsync(1);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(api.requests).toHaveLength(2);
+    expect(snapshot).toEqual({ aggregate_versions: { [ready.order_id]: 1 } });
+  });
+
+  it("leaves no timer behind when the screen stops during the wait", async () => {
+    const ready = row(16, "READY_FOR_PICKUP");
+    const { waits, api, controller } = limitedInbox({ "unassigned=true": () => Promise.resolve(page([ready])) });
+    await controller.start();
+    await vi.advanceTimersByTimeAsync(0);
+    waits.record("dashboard", 30);
+    await controller.refresh("polling");
+    controller.notice();
+    controller.stop();
+    expect(vi.getTimerCount()).toBe(0);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(api.requests).toHaveLength(1);
   });
 });

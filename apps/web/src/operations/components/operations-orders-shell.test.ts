@@ -193,3 +193,32 @@ describe("Órdenes screen", () => {
     expect(OrderListRow({ row, href: null, onOpen }).props.onClick).toBeUndefined();
   });
 });
+
+describe("Órdenes during the SEC-004 wait (owner answers Q11, Q14)", () => {
+  it("shows the countdown, holds 'Actualizar' and 'Cargar más', keeps the rows and leaves the filters usable", () => {
+    const markup = renderToStaticMarkup(
+      createElement(OrderListScreen, {
+        state: state({ rows: [row], nextCursor: "c1" }),
+        rateLimit: { secondsLeft: 37 },
+        onViewChange: () => undefined,
+        onGuideChange: () => undefined,
+        onRefresh: () => undefined,
+        onLoadMore: () => undefined,
+        onOpen: () => undefined,
+      }),
+    );
+    expect(markup).toContain(
+      '<p class="notice noticeWarn" role="timer">Demasiadas solicitudes. Espera 37 segundos e intenta de nuevo.</p>',
+    );
+    expect(markup).toMatch(/<button type="button" class="btn btnSecondary" disabled="">Actualizar<\/button>/);
+    expect(markup).toMatch(/<button type="button" class="btn btnSecondary opsOrdersMore" aria-disabled="true">Cargar más<\/button>/);
+    expect(markup).toContain(row.public_id);
+    expect(markup).not.toMatch(/<select[^>]*disabled/);
+  });
+
+  it("shows nothing of the wait once it ends", () => {
+    const markup = render(state({ rows: [row], nextCursor: "c1" }));
+    expect(markup).not.toContain("Demasiadas solicitudes");
+    expect(markup).toMatch(/<button type="button" class="btn btnSecondary">Actualizar<\/button>/);
+  });
+});

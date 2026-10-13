@@ -28,8 +28,13 @@ import {
 import { normalizePublicIdInput, orderNotFoundMessage } from "../contracts/order-transitions";
 import { orderStatusGroupIds, orderStatusGroups, statusesInGroup } from "../contracts/status-groups";
 import { operationsOrderHref } from "../routing/operations-routing";
-import type { OrderListState } from "../state/order-list-controller";
 import { useOrderList } from "../state/use-order-list";
+import { orderListRateLimit, type OrderListState } from "../state/order-list-controller";
+import {
+  RateLimitNoticeView,
+  useRateLimitWait,
+  type RateLimitWaitView,
+} from "../../components/ui/rate-limit-notice";
 
 /**
  * UI-PHASE3-ORDERS-LIST-2026-10-12 ("Sí, lista de órdenes"): every order of the selected organization, newest first,
@@ -41,9 +46,12 @@ export function OperationsOrdersShell() {
   const router = useRouter();
   const view = parseOrderListView(useSearchParams());
   const { state, controller } = useOrderList(view);
+  // SEC-004 (owner answers Q11, Q14): the server's wait for listOrders.
+  const rateLimit = useRateLimitWait(orderListRateLimit);
   return (
     <OrderListScreen
       state={state}
+      rateLimit={rateLimit}
       onViewChange={(next) => {
         // The controller takes the new filters at once (so a second change builds on the first) and the URL
         // follows in place, without a new history entry; back and forward still restore a list.
@@ -60,6 +68,11 @@ export function OperationsOrdersShell() {
 
 export interface OrderListScreenProps {
   readonly state: OrderListState;
+  /**
+   * SEC-004 (owner answers Q11, Q14): during the server's wait the common message counts down, "Actualizar" and
+   * "Cargar más" are disabled, a filter change is kept without being sent, and the list is read once when it ends.
+   */
+  readonly rateLimit?: RateLimitWaitView;
   readonly onViewChange: (view: OrderListView) => void;
   readonly onGuideChange: (publicId: string | null) => void;
   readonly onRefresh: () => void;
@@ -70,6 +83,7 @@ export interface OrderListScreenProps {
 /** The whole screen for one state; pure, so every state can be rendered and checked on its own. */
 export function OrderListScreen({
   state,
+  rateLimit = { secondsLeft: 0 },
   onViewChange,
   onGuideChange,
   onRefresh,
@@ -77,6 +91,7 @@ export function OrderListScreen({
   onOpen,
 }: OrderListScreenProps) {
   const blocked = state.phase === "no_session" || state.phase === "access_unavailable";
+  const waiting = rateLimit.secondsLeft > 0;
   const filtered = hasOrderListFilters(state.view);
   const summaryRef = useRef<HTMLParagraphElement>(null);
   // "Cargar más" leaves the page with the last page: focus goes to the summary instead of the document body.
@@ -103,7 +118,7 @@ export function OrderListScreen({
               type="button"
               className="btn btnSecondary"
               onClick={onRefresh}
-              disabled={state.phase !== "ready" || state.loading}
+              disabled={state.phase !== "ready" || state.loading || waiting}
             >
               Actualizar
             </button>
@@ -131,6 +146,7 @@ export function OrderListScreen({
               {state.error}
             </p>
           )}
+          <RateLimitNoticeView {...rateLimit} />
 
           {!state.canOpenDetail && (
             <p className="pageNote">El detalle de cada orden lo abren despacho y administración; tu rol consulta la lista.</p>
@@ -155,13 +171,13 @@ export function OrderListScreen({
             </p>
           )}
           {state.nextCursor !== null && (
-            // aria-disabled keeps the button focused while the next page loads.
+            // aria-disabled keeps the button focused while the next page loads (or the server's wait lasts).
             <button
               type="button"
               className="btn btnSecondary opsOrdersMore"
-              aria-disabled={state.loadingMore}
+              aria-disabled={state.loadingMore || waiting}
               onClick={() => {
-                if (state.loadingMore) return;
+                if (state.loadingMore || waiting) return;
                 focusSummaryWhenPaged.current = true;
                 onLoadMore();
               }}
