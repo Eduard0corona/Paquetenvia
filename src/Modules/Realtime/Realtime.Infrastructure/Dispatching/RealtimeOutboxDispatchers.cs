@@ -84,6 +84,8 @@ internal sealed class BusinessOutboxDispatcher(
                     var wait = idle.After(messages.Count);
                     if (messages.Count == 0)
                     {
+                        // SCL-007: the batch duration measures the iteration's work, never the wait.
+                        batch.Dispose();
                         await Task.Delay(wait, timeProvider, stoppingToken);
                         continue;
                     }
@@ -109,6 +111,7 @@ internal sealed class BusinessOutboxDispatcher(
                         "realtime_outbox_message_failed lane={Lane} error_class={ErrorClass}",
                         "business",
                         "DATABASE_TRANSIENT");
+                    batch.Dispose();
                     await Task.Delay(idle.Shortest, timeProvider, stoppingToken);
                 }
             }
@@ -200,6 +203,8 @@ internal sealed class LocationOutboxDispatcher(
                     var wait = idle.After(messages.Count);
                     if (messages.Count == 0)
                     {
+                        // SCL-007: the batch duration measures the iteration's work, never the wait.
+                        batch.Dispose();
                         await Task.Delay(wait, timeProvider, stoppingToken);
                         continue;
                     }
@@ -225,6 +230,7 @@ internal sealed class LocationOutboxDispatcher(
                         "realtime_outbox_message_failed lane={Lane} error_class={ErrorClass}",
                         "location",
                         "DATABASE_TRANSIENT");
+                    batch.Dispose();
                     await Task.Delay(idle.Shortest, timeProvider, stoppingToken);
                 }
             }

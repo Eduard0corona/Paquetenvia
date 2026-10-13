@@ -1,5 +1,6 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
+using System.Diagnostics.Metrics;
 using System.Reflection;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -345,6 +346,55 @@ public sealed class Scl007AdaptiveOutboxWaitTests
         Assert.Equal(1_000L, summary.Values["MaxClaimAgeMs"]);
     }
 
+    [Fact]
+    public async Task The_batch_duration_measures_the_claim_and_never_the_wait_after_it()
+    {
+        var recorded = new ConcurrentQueue<(string? Lane, double Milliseconds)>();
+        using var listener = new MeterListener
+        {
+            InstrumentPublished = (instrument, meterListener) =>
+            {
+                if (instrument.Meter.Name == "Paquetenvia.Realtime.Outbox" &&
+                    instrument.Name == "realtime.outbox.batch_duration")
+                {
+                    meterListener.EnableMeasurementEvents(instrument);
+                }
+            },
+        };
+        listener.SetMeasurementEventCallback<double>((_, value, tags, _) =>
+        {
+            string? lane = null;
+            foreach (var tag in tags)
+            {
+                if (tag.Key == "lane")
+                {
+                    lane = tag.Value as string;
+                }
+            }
+
+            recorded.Enqueue((lane, value));
+        });
+        listener.Start();
+        await using var run = new DispatcherRun();
+        // Each claim takes 5 ms; the waits after the empty ones are 250, 500 and 1000 ms, then 250 ms after the work.
+        run.Store.ClaimCost = TimeSpan.FromMilliseconds(5);
+        run.Store.Script("business", 0, 0, 0, 1, 0);
+        await run.StartAsync("business");
+
+        await run.Clock.StepAsync(1, 3);
+
+        Assert.Equal(
+            [250, 500, 1_000, 250],
+            run.Clock.Requested.Select(wait => (int)wait.TotalMilliseconds));
+        // Five iterations: four empty claims and one claim with a row. Each records its claim (5 ms), never its wait.
+        Assert.Equal(5, recorded.Count);
+        Assert.All(recorded, measurement =>
+        {
+            Assert.Equal("business", measurement.Lane);
+            Assert.Equal(5d, measurement.Milliseconds);
+        });
+    }
+
     private static OutboxDispatcherOptions Resolve(Dictionary<string, string?> overrides)
     {
         var settings = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
@@ -372,7 +422,7 @@ public sealed class Scl007AdaptiveOutboxWaitTests
     /// <summary>The two realtime dispatchers, as the API composes them, over a scripted store and a manual clock.</summary>
     private sealed class DispatcherRun : IAsyncDisposable
     {
-        private readonly RealtimeOutboxTelemetry _telemetry = new();
+        private readonly RealtimeOutboxTelemetry _telemetry;
         private readonly IOptions<OutboxDispatcherOptions> _options = Options.Create(new OutboxDispatcherOptions
         {
             Provider = OutboxDispatcherProviderKind.PostgreSql,
@@ -380,6 +430,7 @@ public sealed class Scl007AdaptiveOutboxWaitTests
 
         public DispatcherRun()
         {
+            _telemetry = new RealtimeOutboxTelemetry(Clock);
             Store = new ScriptedRealtimeOutboxStore(Clock);
             Lanes = new OutboxLaneMonitor(LaneLog, Clock);
         }
@@ -479,11 +530,30 @@ public sealed class Scl007AdaptiveOutboxWaitTests
             }
         }
 
+        public override long TimestampFrequency => TimeSpan.TicksPerSecond;
+
         public override DateTimeOffset GetUtcNow()
         {
             lock (_gate)
             {
                 return _now;
+            }
+        }
+
+        /// <summary>Durations measured on this clock pass only when a test moves it.</summary>
+        public override long GetTimestamp() => GetUtcNow().UtcTicks;
+
+        /// <summary>Moves the clock without elapsing a wait: the time a claim takes while its loop is not waiting.</summary>
+        public void Spend(TimeSpan duration)
+        {
+            lock (_gate)
+            {
+                if (_timers.Any(timer => timer.DueAt <= _now + duration))
+                {
+                    throw new InvalidOperationException("Spending this long would skip a pending wait.");
+                }
+
+                _now += duration;
             }
         }
 
@@ -594,7 +664,7 @@ public sealed class Scl007AdaptiveOutboxWaitTests
     /// Rows carry a topic no lane knows, so the real processor settles each one DEAD through this store at once; each
     /// row became ready when the lane's previous claim returned, so its claim age is the wait that preceded the claim.
     /// </summary>
-    internal sealed class ScriptedRealtimeOutboxStore(TimeProvider clock) : IRealtimeOutboxStore
+    internal sealed class ScriptedRealtimeOutboxStore(ManualClock clock) : IRealtimeOutboxStore
     {
         public const int Fail = -1;
 
@@ -610,6 +680,9 @@ public sealed class Scl007AdaptiveOutboxWaitTests
             Claims(lane).Select(at => (int)(at - start).TotalMilliseconds).ToArray();
 
         public int Settled(string lane) => _settled.GetValueOrDefault(lane);
+
+        /// <summary>How long each claim takes on the manual clock (zero unless a test sets it).</summary>
+        public TimeSpan ClaimCost { get; set; }
 
         public Task<IReadOnlyList<ClaimedBusinessOutboxMessage>> ClaimBusinessAsync(
             string workerId,
@@ -695,6 +768,11 @@ public sealed class Scl007AdaptiveOutboxWaitTests
 
         private (DateTimeOffset Now, DateTimeOffset ReadyAt, int Count) Next(string lane)
         {
+            if (ClaimCost > TimeSpan.Zero)
+            {
+                clock.Spend(ClaimCost);
+            }
+
             var now = clock.GetUtcNow();
             var claims = Claims(lane);
             var readyAt = claims.IsEmpty ? now : claims.Last();

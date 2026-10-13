@@ -143,8 +143,13 @@ proves it: a row that became ready right after an empty claim and was taken by t
   through its existing cancellation branch.
 - The dispatchers read the time from the host's `TimeProvider` (`TimeProvider.System`, registered by
   `AddOutboxLaneMonitor`), both for the wait and for the stale requeue schedule. Tests use a manual clock.
-- As before, the wait runs inside the cycle's trace (OBS-003) and inside `realtime.outbox.batch_duration`. An idle
-  iteration therefore now measures up to 1 s there, instead of 250 or 500 ms. Neither is exported yet (PR 6).
+- `realtime.outbox.batch_duration` measures only the work of an iteration: the stale requeue when it is due, the claim
+  and the batch. The dispatcher ends the measurement before it waits, after an empty claim and after a failed
+  iteration, so an idle iteration records only its claim time. Before this change it also counted the fixed 250 or
+  500 ms poll. This matters because OBS-003 PR 6 is to export the `Paquetenvia.*` meters with `lane` as a tag. The
+  telemetry reads durations and the claimed-row age on the same `TimeProvider` as the wait.
+- The wait still runs inside the cycle's trace (OBS-003), as the fixed poll did. The outbox loops' traces are not
+  exported.
 
 ## Tests
 
@@ -156,12 +161,18 @@ proves it: a row that became ready right after an empty claim and was taken by t
   - the lanes are independent (work on one does not restart the other's wait);
   - a failed iteration keeps the poll interval;
   - stopping during a 1 s wait returns without the clock moving;
+  - the batch duration records each claim (5 ms on the clock) and never the 250, 500 or 1000 ms wait after it;
   - the idle heartbeat of both lanes, and the idle claim count;
   - `MaxClaimAgeMs` includes the wait;
   - the defaults and the AI-15 ceiling;
   - the validator and the configuration binding refuse values below the poll interval, above 1000 ms or not a number.
 - Integration (PostgreSQL), `tests/Paqueteria.IntegrationTests/Realtime/Scl007AdaptiveOutboxWaitDeliveryTests.cs`
   (category `OutboxSignalRDelivery`): the delivery after an idle period, above.
+  - The harness polls every 50 ms, so the test reads the waits from the API's own `appsettings.json` and puts them back.
+  - It measures only the end-to-end result. Only the fake-clock unit tests prove the backoff itself: each wait, its
+    reset, its cap and the independence of the lanes.
+  - Each of the four samples must be at or below 2 s. The worst case is the 1 s wait plus a few milliseconds of claim
+    and publish on loopback, so a runner has about 0.9 s of margin.
 - `PilotApiStartupConfigurationTests` asserts the pilot API composes 250 ms / 1 s and 500 ms / 1 s.
 - Regression: the realtime outbox, SignalR delivery, OBS-002 and OBS-003 tests keep passing unchanged. The harness keeps
   its 50 ms poll interval and now also backs off, up to 1 s.
