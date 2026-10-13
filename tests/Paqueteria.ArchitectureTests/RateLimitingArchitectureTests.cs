@@ -10,33 +10,9 @@ namespace Paqueteria.ArchitectureTests;
 /// </summary>
 public sealed partial class RateLimitingArchitectureTests
 {
-    private const string RateLimitingFolder = "src/BuildingBlocks/Paqueteria.Infrastructure/Security/RateLimiting/";
+    private const string RateLimitingFolder = RateLimitingGuard.RegistryFolder;
     private const string Registry = RateLimitingFolder + "RateLimitRegistry.cs";
     private const string PolicyTable = "src/Paqueteria.Api/Http/ApiRateLimitPolicies.cs";
-
-    /// <summary>Rate-limiter API that only the shared registry may use.</summary>
-    private static readonly string[] RegistryOnlyTokens =
-    [
-        "AddRateLimiter(",
-        "OnRejected =",
-        "RejectionStatusCode",
-        "GlobalLimiter",
-        "RateLimitPartition.",
-        "PartitionedRateLimiter",
-        "FixedWindowRateLimiterOptions",
-        "SlidingWindowRateLimiterOptions",
-        "TokenBucketRateLimiterOptions",
-        "ConcurrencyLimiterOptions",
-        "AddFixedWindowLimiter(",
-        "AddSlidingWindowLimiter(",
-        "AddTokenBucketLimiter(",
-        "AddConcurrencyLimiter(",
-        "IRateLimiterPolicy",
-        "using System.Threading.RateLimiting;",
-        "using Microsoft.AspNetCore.RateLimiting;",
-        "EnableRateLimiting",
-        "DisableRateLimiting",
-    ];
 
     [Fact]
     public void Only_the_shared_registry_calls_AddRateLimiter()
@@ -55,13 +31,23 @@ public sealed partial class RateLimitingArchitectureTests
     [Fact]
     public void No_module_registers_a_limiter_builds_a_partition_or_writes_a_rejection()
     {
-        var violations = SourceFiles()
-            .Where(file => !file.Path.StartsWith(RateLimitingFolder, StringComparison.Ordinal))
-            .SelectMany(file => RegistryOnlyTokens
-                .Where(token => file.Code.Contains(token, StringComparison.Ordinal))
-                .Select(token => $"{file.Path}: {token}"))
-            .ToArray();
+        var files = SourceFiles().ToArray();
+        var violations = files.SelectMany(file => RateLimitingGuard.CodeViolations(file.Path, file.Text)).ToArray();
 
+        Assert.True(files.Length > 100, $"Only {files.Length} source files were read.");
+        Assert.Empty(violations);
+        // The registry itself is what the guard keeps the others from doing.
+        Assert.Contains(files, file => file.Path == Registry && file.Code.Contains("AddRateLimiter(", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void No_project_imports_a_rate_limiting_namespace_project_wide()
+    {
+        var projects = ProjectFiles().ToArray();
+        var violations = projects.SelectMany(file => RateLimitingGuard.ProjectViolations(file.Path, file.Text)).ToArray();
+
+        Assert.Contains(projects, file => file.Path == "Directory.Build.props");
+        Assert.Contains(projects, file => file.Path.EndsWith("Orders.Endpoints.csproj", StringComparison.Ordinal));
         Assert.Empty(violations);
     }
 
@@ -93,10 +79,13 @@ public sealed partial class RateLimitingArchitectureTests
         var program = Assert.Single(files, file => file.Path == "src/Paqueteria.Api/Program.cs").Code;
         Assert.Equal(1, Regex.Count(program, @"builder\.Services\.AddApiRateLimiting\(\);"));
         Assert.Equal(1, Regex.Count(program, @"app\.UseRateLimiter\(\);"));
-        Assert.True(
-            program.IndexOf("app.UseAuthentication();", StringComparison.Ordinal) <
-                program.IndexOf("app.UseRateLimiter();", StringComparison.Ordinal),
-            "the limiter runs after authentication, so authenticated callers are partitioned by subject");
+        var routing = program.IndexOf("app.UseRouting();", StringComparison.Ordinal);
+        var authentication = program.IndexOf("app.UseAuthentication();", StringComparison.Ordinal);
+        var limiter = program.IndexOf("app.UseRateLimiter();", StringComparison.Ordinal);
+        // Routing first, so the writer sees the endpoint and its policy; authentication first, so authenticated
+        // callers are partitioned by subject.
+        Assert.True(routing > 0 && routing < limiter, "the limiter runs after routing");
+        Assert.True(authentication > 0 && authentication < limiter, "the limiter runs after authentication");
     }
 
     [Fact]
@@ -118,23 +107,34 @@ public sealed partial class RateLimitingArchitectureTests
         }
     }
 
-    private static IEnumerable<(string Path, string Code)> SourceFiles() =>
+    private static IEnumerable<(string Path, string Text, string Code)> SourceFiles() =>
         Directory.EnumerateFiles(TestRepository.GetPath("src"), "*.cs", SearchOption.AllDirectories)
-            .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
-                           !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
-            .Select(path => (
-                Path.GetRelativePath(TestRepository.Root, path).Replace('\\', '/'),
-                WithoutComments(File.ReadAllText(path))));
+            .Where(IsSource)
+            .Select(path =>
+            {
+                var text = File.ReadAllText(path);
+                return (Relative(path), text, RateLimitingGuard.WithoutComments(text));
+            });
 
-    private static string WithoutComments(string source) =>
-        LineCommentPattern().Replace(BlockCommentPattern().Replace(source, string.Empty), string.Empty);
+    /// <summary>Every project, props and targets file of the solution, the root Directory.Build files included.</summary>
+    private static IEnumerable<(string Path, string Text)> ProjectFiles() =>
+        new[] { "*.csproj", "*.props", "*.targets" }
+            .SelectMany(pattern =>
+                Directory.EnumerateFiles(TestRepository.Root, pattern, SearchOption.TopDirectoryOnly)
+                    .Concat(new[] { "src", "tests", "tools", "templates" }
+                        .Select(TestRepository.GetPath)
+                        .Where(Directory.Exists)
+                        .SelectMany(root => Directory.EnumerateFiles(root, pattern, SearchOption.AllDirectories))))
+            .Where(IsSource)
+            .Distinct(StringComparer.Ordinal)
+            .Select(path => (Relative(path), File.ReadAllText(path)));
+
+    private static bool IsSource(string path) =>
+        !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+        !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal);
+
+    private static string Relative(string path) => Path.GetRelativePath(TestRepository.Root, path).Replace('\\', '/');
 
     [GeneratedRegex(@"\.RequireRateLimiting\((?<argument>[^)]*)\)")]
     private static partial Regex RequireRateLimitingPattern();
-
-    [GeneratedRegex(@"/\*.*?\*/", RegexOptions.Singleline)]
-    private static partial Regex BlockCommentPattern();
-
-    [GeneratedRegex(@"(?m)^\s*//.*$")]
-    private static partial Regex LineCommentPattern();
 }

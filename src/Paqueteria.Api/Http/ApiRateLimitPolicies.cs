@@ -12,8 +12,9 @@ namespace Paqueteria.Api.Http;
 /// The numbers are the ones each module used before SEC-004:
 /// <list type="table">
 /// <item><term><c>PublicTrackingLookup</c></term><description><c>PublicTracking:LookupPermitLimit</c> per
-/// <c>LookupWindowSeconds</c> (60 per 60 s) per client network; the uniform 429, no <c>Retry-After</c>, and the
-/// <c>public_tracking.rate_limit.rejected</c> counter.</description></item>
+/// <c>LookupWindowSeconds</c> (60 per 60 s) per client network; the uniform 429, with <c>Retry-After</c> like every
+/// other 429 (owner decision of 2026-10-13), and the <c>public_tracking.rate_limit.rejected</c> counter.
+/// </description></item>
 /// <item><term><c>Realtime.Connections</c></term><description><c>Realtime:ConnectionPermitLimit</c> per
 /// <c>ConnectionWindowSeconds</c> (20 per 60 s) for negotiate and connection requests of the three hubs together,
 /// per subject, or per client network when anonymous.</description></item>
@@ -32,7 +33,6 @@ public static class ApiRateLimitPolicies
                 RateLimitPartitionKind.ClientNetwork,
                 static provider => Window(PublicTrackingEndpointDefaults.RateLimit(provider)))
             {
-                SendsRetryAfter = false,
                 CountRejection = PublicTrackingEndpointDefaults.CountRateLimitRejection,
             },
             new RateLimitPolicy(

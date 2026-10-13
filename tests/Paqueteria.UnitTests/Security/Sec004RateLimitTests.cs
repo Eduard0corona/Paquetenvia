@@ -4,6 +4,7 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Threading.RateLimiting;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Features;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.Extensions.DependencyInjection;
 using Paqueteria.Application.Security;
@@ -115,6 +116,7 @@ public sealed class Sec004RateLimitTests
         Assert.Equal(1, counted);
         Assert.Equal(429, context.Response.StatusCode);
         Assert.Equal("90", context.Response.Headers.RetryAfter.ToString());
+        Assert.Equal("no-store", context.Response.Headers.CacheControl.ToString());
         Assert.Equal("application/problem+json", context.Response.ContentType);
         var body = Body(context);
         Assert.Contains("\"type\":\"about:blank\"", body, StringComparison.Ordinal);
@@ -123,17 +125,34 @@ public sealed class Sec004RateLimitTests
     }
 
     [Fact]
-    public async Task The_writer_answers_public_tracking_surfaces_with_the_uniform_body_and_policy_headers()
+    public async Task The_writer_answers_public_tracking_surfaces_with_the_uniform_body_and_retry_after()
     {
-        await using var provider = Services(Synthetic() with { SendsRetryAfter = false });
+        await using var provider = Services(Synthetic());
         var context = Rejected(provider, Endpoint(Policy, PublicTrackingRateLimitRejection.Instance));
+
+        await RateLimitRejectionWriter.WriteAsync(
+            new OnRejectedContext { HttpContext = context, Lease = new RetryAfterLease(TimeSpan.FromSeconds(59.5)) },
+            default);
+
+        Assert.Equal(429, context.Response.StatusCode);
+        Assert.Equal("60", context.Response.Headers.RetryAfter.ToString());
+        Assert.Equal("application/problem+json", context.Response.ContentType);
+        Assert.Equal("""{"type":"about:blank","title":"Too Many Requests","status":429}""", Body(context));
+    }
+
+    [Fact]
+    public async Task The_writer_counts_but_writes_nothing_once_the_response_started()
+    {
+        var counted = 0;
+        await using var provider = Services(Synthetic() with { CountRejection = _ => counted++ });
+        var context = Rejected(provider, Endpoint(Policy));
+        context.Features.Set<IHttpResponseFeature>(new StartedResponseFeature());
 
         await RateLimitRejectionWriter.WriteAsync(new OnRejectedContext { HttpContext = context, Lease = new NoMetadataLease() }, default);
 
-        Assert.Equal(429, context.Response.StatusCode);
+        Assert.Equal(1, counted);
         Assert.False(context.Response.Headers.ContainsKey("Retry-After"));
-        Assert.Equal("application/problem+json", context.Response.ContentType);
-        Assert.Equal("""{"type":"about:blank","title":"Too Many Requests","status":429}""", Body(context));
+        Assert.Equal(0, context.Response.Body.Length);
     }
 
     [Fact]
@@ -188,6 +207,24 @@ public sealed class Sec004RateLimitTests
         }
 
         return context;
+    }
+
+    private sealed class RetryAfterLease(TimeSpan retryAfter) : RateLimitLease
+    {
+        public override bool IsAcquired => false;
+
+        public override IEnumerable<string> MetadataNames => [MetadataName.RetryAfter.Name];
+
+        public override bool TryGetMetadata(string metadataName, out object? metadata)
+        {
+            metadata = metadataName == MetadataName.RetryAfter.Name ? retryAfter : null;
+            return metadata is not null;
+        }
+    }
+
+    private sealed class StartedResponseFeature : HttpResponseFeature
+    {
+        public override bool HasStarted => true;
     }
 
     private sealed class NoMetadataLease : RateLimitLease

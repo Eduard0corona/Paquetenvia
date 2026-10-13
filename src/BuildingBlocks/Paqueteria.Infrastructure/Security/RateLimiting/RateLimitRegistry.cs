@@ -36,13 +36,10 @@ public sealed record RateLimitPolicy(
     Func<IServiceProvider, FixedWindowLimit> Limit)
 {
     /// <summary>
-    /// Whether a rejection carries <c>Retry-After</c>. On for every policy but public tracking, which keeps the
-    /// headers it had before SEC-004 (none).
+    /// An extra module counter run on each rejection (public tracking keeps its own). It gets the request services
+    /// only, never the request, so it cannot read the user, the address or the path.
     /// </summary>
-    public bool SendsRetryAfter { get; init; } = true;
-
-    /// <summary>An extra module counter run on each rejection (public tracking keeps its own).</summary>
-    public Action<HttpContext>? CountRejection { get; init; }
+    public Action<IServiceProvider>? CountRejection { get; init; }
 }
 
 /// <summary>

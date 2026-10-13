@@ -31,8 +31,8 @@ public static class PublicTrackingEndpointDefaults
     }
 
     /// <summary>SEC-004: a public tracking rejection still counts in <c>public_tracking.rate_limit.rejected</c>.</summary>
-    public static void CountRateLimitRejection(HttpContext context) =>
-        context.RequestServices.GetRequiredService<IPublicTrackingTelemetry>().RateLimitRejected();
+    public static void CountRateLimitRejection(IServiceProvider services) =>
+        services.GetRequiredService<IPublicTrackingTelemetry>().RateLimitRejected();
 }
 
 public static class PublicTrackingEndpoints

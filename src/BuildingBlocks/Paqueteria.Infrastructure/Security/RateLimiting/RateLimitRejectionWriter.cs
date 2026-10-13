@@ -10,9 +10,10 @@ namespace Paqueteria.Infrastructure.Security.RateLimiting;
 
 /// <summary>
 /// SEC-004: the one writer of every rate-limiter rejection. It counts the rejection by policy name only, runs the
-/// policy's own counter, sets <c>Retry-After</c> in whole seconds and writes AI-05 <c>TooManyRequests</c>:
-/// the problem with the request's <c>traceId</c>, or, on a public tracking surface, the uniform body without it.
-/// The partition key, the subject, its hash and the client address are never read here, logged or tagged.
+/// policy's own counter, sets <c>Retry-After</c> in whole seconds and <c>Cache-Control: no-store</c>, and writes
+/// AI-05 <c>TooManyRequests</c>: the problem with the request's <c>traceId</c>, or, on a public tracking surface, the
+/// uniform body without it. The partition key, the subject, its hash and the client address are never read here,
+/// logged or tagged.
 /// </summary>
 public static class RateLimitRejectionWriter
 {
@@ -31,18 +32,26 @@ public static class RateLimitRejectionWriter
                 "A rate-limit rejection came from a policy outside the registry; every limited endpoint must name a registered policy.");
 
         services.GetRequiredService<RateLimitTelemetry>().Rejected(policy.Name);
-        policy.CountRejection?.Invoke(httpContext);
+        policy.CountRejection?.Invoke(services);
 
         var response = httpContext.Response;
-        response.StatusCode = TooManyRequestsProblem.Status;
-        if (policy.SendsRetryAfter)
+        if (response.HasStarted)
         {
-            var retryAfter = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var wait)
-                ? wait
-                : policy.Limit(services).Window;
-            response.Headers.RetryAfter =
-                TooManyRequestsProblem.RetryAfterSeconds(retryAfter).ToString(CultureInfo.InvariantCulture);
+            // Nothing can be written once the response started; the rejection is still counted.
+            return;
         }
+
+        response.StatusCode = TooManyRequestsProblem.Status;
+        // The fixed window limiter reports its full window as the retry hint: a constant per policy, never too early,
+        // and nothing about other callers or a token.
+        var retryAfter = context.Lease.TryGetMetadata(MetadataName.RetryAfter, out var wait)
+            ? wait
+            : policy.Limit(services).Window;
+        response.Headers.RetryAfter =
+            TooManyRequestsProblem.RetryAfterSeconds(retryAfter).ToString(CultureInfo.InvariantCulture);
+        // Like the realtime gate's problems. On public tracking its own privacy headers (no-store, private) are set
+        // when the response starts and win, unchanged.
+        response.Headers.CacheControl = "no-store";
 
         if (endpoint?.Metadata.GetMetadata<PublicTrackingRateLimitRejection>() is not null)
         {

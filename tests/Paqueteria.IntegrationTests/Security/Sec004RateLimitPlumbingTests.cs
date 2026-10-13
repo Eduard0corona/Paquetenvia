@@ -1,8 +1,10 @@
+using System.Collections;
 using System.Collections.Concurrent;
 using System.Diagnostics.Metrics;
 using System.Globalization;
 using System.Net;
 using System.Net.Http.Headers;
+using System.Reflection;
 using System.Text;
 using System.Text.Json;
 using Drivers.Endpoints;
@@ -10,6 +12,7 @@ using Drivers.Infrastructure;
 using Identity.Infrastructure.Mock;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.AspNetCore.RateLimiting;
 using Microsoft.AspNetCore.Routing;
@@ -30,8 +33,9 @@ namespace Paqueteria.IntegrationTests.Security;
 /// <summary>
 /// SEC-004 (phase 4 PR 2): one registry of the rate-limit policies, one rejection writer and one 429 shape, over the
 /// assembled API. Every 429 is AI-05 <c>TooManyRequests</c> as <c>application/problem+json</c> with the request's
-/// <c>traceId</c> and <c>Retry-After</c> in whole seconds; the public tracking surfaces keep their uniform body
-/// without <c>traceId</c>, and <c>publicTracking</c> keeps its headers (no <c>Retry-After</c>) and its counter.
+/// <c>traceId</c>, <c>Retry-After</c> in whole seconds and <c>Cache-Control: no-store</c>; the public tracking
+/// surfaces keep their uniform body without <c>traceId</c>, and <c>publicTracking</c> keeps its privacy headers and
+/// its counter and, by the owner's decision of 2026-10-13, now also says how long to wait (<c>Retry-After</c>).
 /// Partitions isolate subjects and networks, and no log line or metric carries a partition key, subject or address.
 /// </summary>
 public sealed class Sec004RateLimitPlumbingTests
@@ -91,6 +95,7 @@ public sealed class Sec004RateLimitPlumbingTests
         Assert.Equal("application/problem+json", second.Content.Headers.ContentType?.ToString());
         Assert.Equal(UniformBody, await second.Content.ReadAsStringAsync());
         AssertRetryAfter(second, maximumSeconds: 300);
+        Assert.Equal("no-store", second.Headers.CacheControl?.ToString());
     }
 
     [Fact]
@@ -108,9 +113,14 @@ public sealed class Sec004RateLimitPlumbingTests
         // #244: exactly application/problem+json and the same bytes as before SEC-004, without traceId.
         Assert.Equal("application/problem+json", second.Content.Headers.ContentType?.ToString());
         Assert.Equal(UniformBody, await second.Content.ReadAsStringAsync());
-        // Its headers are unchanged: the privacy headers, and no Retry-After (it sent none before SEC-004).
-        Assert.False(second.Headers.Contains("Retry-After"));
+        // Owner decision (2026-10-13), "Sí, agregarlo (Recommended)": it says how long to wait, like every other 429.
+        // The fixed window reports its full window, so the value is the configured window: constant, about no token.
+        Assert.Equal("300", Assert.Single(second.Headers.GetValues("Retry-After")));
+        AssertRetryAfter(second, maximumSeconds: 300);
+        Assert.DoesNotContain("traceId", await second.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+        // Its privacy headers are unchanged.
         Assert.Equal("no-store, private", second.Headers.CacheControl?.ToString());
+        Assert.Equal("no-cache", second.Headers.Pragma.ToString());
         Assert.Equal("no-referrer", Assert.Single(second.Headers.GetValues("Referrer-Policy")));
         // Its own counter (public_tracking.rate_limit.rejected) still counts, once, and so does the policy counter.
         Assert.Equal(1, host.PublicTrackingRejections);
@@ -196,9 +206,12 @@ public sealed class Sec004RateLimitPlumbingTests
     }
 
     [Fact]
-    public async Task No_log_line_or_metric_carries_the_partition_key_the_subject_or_the_address()
+    public async Task No_log_line_trace_or_metric_carries_the_partition_key_the_subject_or_the_address()
     {
         var logs = new CapturingLoggerProvider();
+        // Recording listeners (all data), stricter than the API's own propagation-only listener (OBS-003).
+        using var hostingActivities = new CapturingActivityListener("Microsoft.AspNetCore");
+        using var applicationActivities = new CapturingActivityListener(TraceCorrelation.ActivitySourceName);
         await using var host = new Sec004Factory(gpsLimit: 1, connectionLimit: 1, trackingLimit: 1, logs: logs);
         using var client = host.CreateClient();
         using var allMetrics = new AllMetrics();
@@ -214,6 +227,9 @@ public sealed class Sec004RateLimitPlumbingTests
         Assert.Contains(logs.Entries, entry => entry.Contains("Request starting", StringComparison.Ordinal));
         Assert.Contains(logs.Entries, entry => entry.Contains("Microsoft.AspNetCore.RateLimiting", StringComparison.Ordinal));
         Assert.Contains(allMetrics.Entries, entry => entry.Contains(RateLimitTelemetry.RejectedInstrument, StringComparison.Ordinal));
+        Assert.Contains(hostingActivities.Entries, entry => entry.StartsWith("stop ", StringComparison.Ordinal) &&
+            entry.Contains("HttpRequestIn", StringComparison.Ordinal));
+        var activities = hostingActivities.Entries.Concat(applicationActivities.Entries).ToArray();
 
         var secrets = new List<string> { DriverSubject, DispatcherSubject };
         foreach (var address in new[] { NetworkA, NetworkB, Ipv6A, Ipv6SameSlash64 })
@@ -231,6 +247,7 @@ public sealed class Sec004RateLimitPlumbingTests
         {
             Assert.DoesNotContain(logs.Entries, entry => entry.Contains(secret, StringComparison.OrdinalIgnoreCase));
             Assert.DoesNotContain(allMetrics.Entries, entry => entry.Contains(secret, StringComparison.OrdinalIgnoreCase));
+            Assert.DoesNotContain(activities, entry => entry.Contains(secret, StringComparison.OrdinalIgnoreCase));
         }
     }
 
@@ -265,6 +282,25 @@ public sealed class Sec004RateLimitPlumbingTests
     }
 
     [Fact]
+    public void The_composed_limiter_options_are_exactly_the_registry()
+    {
+        // Whatever any module registers (Configure<RateLimiterOptions>, an alias using or a custom limiter), the
+        // composed options must be the registry's: its writer alone, its policies alone and no global limiter.
+        using var host = new DeployedConfigurationFactory();
+        var options = host.Services.GetRequiredService<IOptions<RateLimiterOptions>>().Value;
+        var registry = host.Services.GetRequiredService<RateLimitPolicyRegistry>();
+
+        var onRejected = Assert.Single(Assert.IsType<Func<OnRejectedContext, CancellationToken, ValueTask>>(options.OnRejected)
+            .GetInvocationList());
+        Assert.Equal(typeof(RateLimitRejectionWriter).GetMethod(nameof(RateLimitRejectionWriter.WriteAsync)), onRejected.Method);
+        Assert.Null(options.GlobalLimiter);
+        Assert.Equal(StatusCodes.Status429TooManyRequests, options.RejectionStatusCode);
+        Assert.Equal(
+            registry.Policies.Select(policy => policy.Name).Order(StringComparer.Ordinal),
+            RegisteredPolicyNames(options).Order(StringComparer.Ordinal));
+    }
+
+    [Fact]
     public void Existing_limits_keep_their_numbers()
     {
         // The API's own configuration (appsettings.json, no override), as deployed.
@@ -272,18 +308,18 @@ public sealed class Sec004RateLimitPlumbingTests
         var registry = host.Services.GetRequiredService<RateLimitPolicyRegistry>();
 
         var actual = registry.Policies
-            .Select(policy => (policy.Name, policy.Partition, Limit: policy.Limit(host.Services), policy.SendsRetryAfter))
+            .Select(policy => (policy.Name, policy.Partition, Limit: policy.Limit(host.Services)))
             .OrderBy(item => item.Name, StringComparer.Ordinal)
             .ToArray();
         Assert.Equal(
             new[]
             {
                 (DriverLocationEndpointOptions.RateLimitPolicy, RateLimitPartitionKind.SubjectOrClientNetwork,
-                    new FixedWindowLimit(30, TimeSpan.FromSeconds(60)), true),
+                    new FixedWindowLimit(30, TimeSpan.FromSeconds(60))),
                 (PublicTrackingEndpointDefaults.RateLimitPolicy, RateLimitPartitionKind.ClientNetwork,
-                    new FixedWindowLimit(60, TimeSpan.FromSeconds(60)), false),
+                    new FixedWindowLimit(60, TimeSpan.FromSeconds(60))),
                 (RealtimeEndpointDefaults.RateLimitPolicy, RateLimitPartitionKind.SubjectOrClientNetwork,
-                    new FixedWindowLimit(20, TimeSpan.FromSeconds(60)), true),
+                    new FixedWindowLimit(20, TimeSpan.FromSeconds(60))),
             },
             actual);
         Assert.Equal("Drivers.LocationIngestion", DriverLocationEndpointOptions.RateLimitPolicy);
@@ -294,6 +330,19 @@ public sealed class Sec004RateLimitPlumbingTests
         var calls = host.Services.GetRequiredService<IOptions<DriversOptions>>().Value.RecipientCalls;
         Assert.Equal((3, 15, 20), (calls.MaximumPerOrder, calls.OrderWindowMinutes, calls.MaximumPerDriverPerHour));
     }
+
+    /// <summary>
+    /// <c>RateLimiterOptions</c> keeps its named policies in two internal maps (<c>AddPolicy</c> with a partition
+    /// function, and <c>AddPolicy&lt;TPolicy&gt;</c>); reading them is the only way to list what was registered. If the
+    /// framework renames them, this fails loudly rather than passing.
+    /// </summary>
+    private static IEnumerable<string> RegisteredPolicyNames(RateLimiterOptions options) =>
+        new[] { "PolicyMap", "UnactivatedPolicyMap" }.SelectMany(name =>
+        {
+            var property = typeof(RateLimiterOptions).GetProperty(name, BindingFlags.Instance | BindingFlags.NonPublic)
+                ?? throw new InvalidOperationException($"RateLimiterOptions.{name} is gone; update this test.");
+            return ((IDictionary)property.GetValue(options)!).Keys.Cast<string>();
+        });
 
     private static async Task RejectOncePerPolicyAsync(HttpClient client)
     {
@@ -316,6 +365,7 @@ public sealed class Sec004RateLimitPlumbingTests
         Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
         Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.ToString());
         AssertRetryAfter(response, maximumRetryAfter);
+        Assert.Equal("no-store", response.Headers.CacheControl?.ToString());
         using var problem = JsonDocument.Parse(await response.Content.ReadAsStringAsync());
         var root = problem.RootElement;
         Assert.Equal(
