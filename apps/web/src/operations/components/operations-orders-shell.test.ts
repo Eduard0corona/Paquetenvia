@@ -117,6 +117,20 @@ describe("Órdenes screen", () => {
     expect(text(html)).toContain("Sin dato");
   });
 
+  // ORD-ORDER-CREATED-AT-2026-10-12: the API sends created_at on every Order, written as System.Text.Json writes a UTC
+  // DateTimeOffset read from PostgreSQL; the column then shows on its own, in Mazatlán time, for every row.
+  it("shows the Creada column for every order once the API sends created_at as the server writes it", () => {
+    const rows = [
+      { ...row, id: "0a1b2c3d-1111-4222-8333-944445555668", created_at: "2026-10-12T17:04:05.123456+00:00" },
+      { ...row, id: "0a1b2c3d-1111-4222-8333-944445555669", created_at: "2026-10-05T06:30:00+00:00" },
+    ];
+    const html = render(state({ rows }));
+    expect(html).toContain('<th scope="col">Estado</th><th scope="col">Creada</th><th scope="col" class="opsAmount">');
+    expect(html).toContain('<time dateTime="2026-10-12T17:04:05.123456+00:00">12 oct 2026, 10:04</time>');
+    expect(html).toContain('<time dateTime="2026-10-05T06:30:00+00:00">4 oct 2026, 23:30</time>');
+    expect(text(html)).not.toContain("Sin dato");
+  });
+
   it("keeps the focus on the page: no remount of the guía search, a focusable summary and Cargar más", () => {
     const searched = render(state({ guide: row.public_id, rows: [row], nextCursor: "c1" }));
     expect(searched).toContain('<button type="button" class="btnLink">Quitar búsqueda</button>');

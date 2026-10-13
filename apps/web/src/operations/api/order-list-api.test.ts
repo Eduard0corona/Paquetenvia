@@ -89,6 +89,23 @@ describe("order list api", () => {
     expect(fetchMock).toHaveBeenCalledOnce();
   });
 
+  // ORD-ORDER-CREATED-AT-2026-10-12: the API now sends Order.created_at as System.Text.Json writes a UTC DateTimeOffset
+  // read from PostgreSQL (microseconds or whole seconds, +00:00); the list keeps it exactly as sent.
+  it("keeps the created_at the server sends on every Order", async () => {
+    const sent = ["2026-10-12T17:04:05.123456+00:00", "2026-10-05T06:30:00+00:00"];
+    vi.stubGlobal(
+      "fetch",
+      vi.fn().mockResolvedValue(
+        json(200, {
+          items: sent.map((created_at, index) => ({ ...order, id: `0a1b2c3d-1111-4222-8333-94444555566${index}`, created_at })),
+          next_cursor: null,
+        }),
+      ),
+    );
+    const page = await createOrderListApi("https://api.synthetic.test", session).list(noFilters, null);
+    expect(page.items.map((item) => item.created_at)).toEqual(sent);
+  });
+
   it("fails closed on a response outside the contract", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(json(200, { items: [{ ...order, email: "x" }], next_cursor: null })));
     const api = createOrderListApi("https://api.synthetic.test", session);

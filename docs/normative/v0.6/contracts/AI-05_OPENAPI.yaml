@@ -4120,6 +4120,7 @@ components:
       - pricing_tier
       - total
       - city_id
+      - created_at
       properties:
         id:
           type: string
@@ -4178,6 +4179,14 @@ components:
           - string
           - 'null'
           format: date-time
+        created_at:
+          type: string
+          format: date-time
+          description: >-
+            ORD-ORDER-CREATED-AT-2026-10-12 - the instant the order was created (orders.orders.created_at, NOT NULL)
+            as a UTC instant, sent on every operation that returns an Order (createOrder, listOrders, getOrder and
+            transitionOrder, an idempotent replay included); it never changes. It is not personal data, and adding
+            it changed no public tracking response, order event or outbox payload.
         service_window:
           type:
           - object
@@ -8093,6 +8102,25 @@ x-pilot-contract-deltas:
       sent with other filters is 409 INVALID_REQUEST after the capability check; cursors of the earlier format page
       as before and unreadable ones keep the empty page (the response gains 409 Conflict); the capability, the Order
       shape, RLS and every other filter are unchanged; no table, index, role, grant or migration change
+  - id: ORD-ORDER-CREATED-AT
+    status: DECIDED
+    decision: ORD-ORDER-CREATED-AT-2026-10-12 (project owner, 2026-10-12; step 2 of the answer recorded in
+      UI-PHASE3-ORDERS-LIST-2026-10-12)
+    literal: '"Pantalla Órdenes: el API de la lista no trae la fecha de creación de cada orden, así que la columna
+      "Creada" no se puede mostrar (los filtros por fecha sí funcionan). Agregarla cambia el API y la web actual
+      rechaza campos que no conoce. ¿Qué hacemos?" - En dos pasos (Recommended)'
+    option: 'Este PR deja la web lista para aceptar la fecha; en un PR siguiente el API la agrega y se muestra la
+      columna. Así ningún orden de despliegue rompe nada.'
+    not_chosen: 'Sin columna de fecha ("La lista queda con guía, estado y total, de la más reciente a la más antigua;
+      la fecha se ve al abrir la orden.")'
+    implementation: shipped by feat/ord-order-created-at together with its code and tests - OrderResult.CreatedAt,
+      the created_at of OrderResponse and OrderDetailResponse, and the replay of an idempotent createOrder or
+      transitionOrder response stored before the field existed, which reads the value from the order row
+    delta: Order requires created_at (string, date-time), orders.orders.created_at written as a UTC instant
+      (System.Text.Json writes +00:00); createOrder, listOrders, getOrder (OrderDetail) and transitionOrder send it.
+      Step 1 (#234) made every web reader of the Order accept an optional strict UTC created_at, so the web shows
+      the "Creada" column by itself and every deployment order keeps working; no parameter, capability, RLS, table,
+      index, role, grant, migration, event, outbox payload or public tracking field changes
   - id: DRV-DISPATCH-CONTACT
     status: DECIDED
     decision: DRV-DISPATCH-CONTACT-2026-10-12 (project owner, 2026-10-12)
