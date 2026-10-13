@@ -8739,7 +8739,9 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
     The first NuGet-only security remediation since the MVP-0 freeze. The owner admitted an
     exact graph (2026-10-13): the SignalR client to 10.0.13, transitive pinning repo-wide,
     and Xml and Pkcs pinned to 10.0.13. The 14 SignalR packages move in the integration
-    tests only; Xml and Pkcs move in four lock files and become CentralTransitive.
+    tests only; Xml and Pkcs move in four lock files and become CentralTransitive. Six
+    advisories: one SignalR, two Pkcs and three Xml (the last two admitted later the same
+    day, "Incluir los 6"), all fixed by that graph.
     """
 
     ISSUE = "260"
@@ -8876,7 +8878,7 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
         }
 
     def base_advisories(self):
-        """The sanitized base audit of fbc77db: NuGet (contract and integration) plus braces."""
+        """The sanitized base audit of fbc77db: six NuGet (contract and integration) + braces."""
 
         return [
             self.nuget_advisory(
@@ -8886,7 +8888,13 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
                 "GHSA-334f-vvp4-7g6p", "Microsoft.AspNetCore.SignalR.Common", "high", 1
             ),
             self.nuget_advisory(
+                "GHSA-7hqp-7c5m-4vq6", "System.Security.Cryptography.Xml", "high", 2
+            ),
+            self.nuget_advisory(
                 "GHSA-846f-f764-76mx", "System.Security.Cryptography.Pkcs", "high", 2
+            ),
+            self.nuget_advisory(
+                "GHSA-c399-9853-6jmj", "System.Security.Cryptography.Xml", "high", 2
             ),
             self.nuget_advisory(
                 "GHSA-r955-8q5j-3h83", "System.Security.Cryptography.Xml", "high", 2
@@ -9072,7 +9080,12 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
             lambda item: item["expected_base_severities"].update(
                 {"GHSA-2fmv-rv2c-59x7": "high"}
             ),
-            lambda item: item["expected_base_totals"].update(high=3, total=4),
+            lambda item: item["expected_base_totals"].update(high=5, total=6),
+            lambda item: item["issue_advisories"][self.ISSUE].remove("GHSA-c399-9853-6jmj"),
+            lambda item: item["expected_base_packages"].update(
+                {"GHSA-7hqp-7c5m-4vq6": "System.Security.Cryptography.Pkcs"}
+            ),
+            lambda item: item["expected_cves"].update({"GHSA-c399-9853-6jmj": "CVE-2026-96960"}),
             lambda item: item["expected_branch_totals"].update(high=0, total=0),
             lambda item: item["expected_cves"].update({"GHSA-r955-8q5j-3h83": "CVE-2026-0000"}),
             lambda item: item.update(nuget_first_patched_version="10.0.14"),
@@ -9440,7 +9453,7 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
         self.assertEqual(
             [
                 ("Issue #5", "CLOSED", 1, "REMEDIATED"),
-                ("Issue #260", "OPEN", 4, "REMEDIATED_PENDING_MERGE"),
+                ("Issue #260", "OPEN", 6, "REMEDIATED_PENDING_MERGE"),
                 ("Issue #180", "OPEN", 1, "ACCEPTED_KNOWN_ADVISORY"),
             ],
             [
@@ -9497,7 +9510,12 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
                 ("GHSA-846f-f764-76mx", "High"),
                 ("GHSA-2fmv-rv2c-59x7", "Moderate"),
             ),
-            package("System.Security.Cryptography.Xml", ("GHSA-r955-8q5j-3h83", "High")),
+            package(
+                "System.Security.Cryptography.Xml",
+                ("GHSA-r955-8q5j-3h83", "High"),
+                ("GHSA-7hqp-7c5m-4vq6", "High"),
+                ("GHSA-c399-9853-6jmj", "High"),
+            ),
         ]
         signalr = package("Microsoft.AspNetCore.SignalR.Common", ("GHSA-334f-vvp4-7g6p", "High"))
         paths = {

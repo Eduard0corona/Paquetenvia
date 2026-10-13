@@ -534,6 +534,46 @@ Límite conocido (anterior a esta regla, sin cambio de comportamiento): un paso 
 compara versiones con el orden de NuGet. Queda como seguimiento: decidir si una bajada exige una
 marca explícita o se rechaza.
 
+### Grafo NuGet de una remediación de seguridad (SEC-2026-12)
+
+`SEC-2026-12-SIGNALR-CRYPTOGRAPHY` (Issue #260, rama `fix/security-2026-12-signalr-common`, base
+`fbc77db`) es la primera remediación de seguridad sólo NuGet desde el congelamiento MVP-0. El owner
+decidió "Remediar con la tabla", "Los 4 en un PR", "Fijado transitivo" e "Incluir los 6"
+(2026-10-13, `SEC-2026-12-NUGET-REMEDIATION-2026-10-13` en el decision-log). El cambio es:
+
+- `Microsoft.AspNetCore.SignalR.Client` pasa de 10.0.10 a 10.0.13;
+- `CentralPackageTransitivePinningEnabled` queda activo en todo el repositorio;
+- `System.Security.Cryptography.Pkcs` y `.Xml` se fijan en 10.0.13;
+- los 14 paquetes SignalR de la tabla del owner se mueven sólo en el lock de IntegrationTests;
+- Xml y Pkcs se mueven en los locks de ArchitectureTests, ContractTests, IntegrationTests y
+  DatabaseMigrator, y quedan `CentralTransitive`.
+
+En modo `SECURITY_REMEDIATION`, `validate_signalr_cryptography_remediation_diff` exige:
+
+- `Directory.Packages.props` igual a la base más exactamente esas tres ediciones, en su lugar;
+- cada uno de los cuatro locks igual al grafo base más exactamente los 16 movimientos declarados en
+  `expected_nuget_package_moves`, con `from`/`to` y `contentHash` exactos;
+- cada lock con el SHA-256 de su archivo generado (`expected_lockfile_sha256`).
+
+Cualquier otro archivo o nodo falla cerrado.
+
+El grafo permanente (capa 1, `test_k` contra el baseline MVP-0 `988926c7…`) sólo admitía
+baseline + admisiones, y ADP-001 admitió Xml y Pkcs 10.0.10 únicamente como transitivos. Ahora
+también acepta exactamente los movimientos de esta remediación: `security_remediation_nuget_graphs`
+lee la autorización (activa o, ya retirada, histórica). El parámetro opcional `nuget_remediations`
+de `package_graph_lockfile_diff`, `validate_baseline_package_graph_lockfile_diff`,
+`validate_admitted_central_packages` y `_baseline_central_package_versions` deshace en memoria esos
+movimientos antes de juzgar el grafo:
+
+- un nodo vuelve a su origen sólo si está exactamente en su destino (versión, hash, tipo y
+  `requested`);
+- el manifiesto central se revierte sólo si están presentes todas sus ediciones.
+
+Todo lo demás se juzga como antes y cualquier otra deriva falla cerrada. Los campos del grafo
+(`NUGET_REMEDIATION_GRAPH_FIELDS`) sólo pueden aparecer en la autorización exacta de SEC-2026-12,
+activa o retirada, y sólo con exactamente sus movimientos. La evidencia de liberación nunca pasa
+`nuget_remediations`, así que el modo normal y las admisiones no cambian.
+
 ## Rollback REL-000
 
 El rollback de este bloque es no destructivo:

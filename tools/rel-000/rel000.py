@@ -253,13 +253,16 @@ SIGNALR_CRYPTOGRAPHY_ISSUE_TITLE = (
     "SEC-2026-12: remediate SignalR.Common, Cryptography.Pkcs and Cryptography.Xml "
     "NuGet advisories"
 )
-# The four Microsoft advisories of 2026-10-13 that SEC-2026-12 remediates, all fixed in
-# 10.0.13: advisory -> (affected package, severity, CVE).
+# The six Microsoft advisories of 2026-10-13 that SEC-2026-12 remediates, all fixed in
+# 10.0.13: advisory -> (affected package, severity, CVE). The last two were published after
+# the first four; the same Xml 10.0.13 pin fixes them ("Incluir los 6").
 SIGNALR_CRYPTOGRAPHY_ADVISORIES = {
     "GHSA-334f-vvp4-7g6p": ("Microsoft.AspNetCore.SignalR.Common", "high", "CVE-2026-70159"),
     "GHSA-846f-f764-76mx": ("System.Security.Cryptography.Pkcs", "high", "CVE-2026-84008"),
     "GHSA-2fmv-rv2c-59x7": ("System.Security.Cryptography.Pkcs", "moderate", "CVE-2026-70162"),
     "GHSA-r955-8q5j-3h83": ("System.Security.Cryptography.Xml", "high", "CVE-2026-96958"),
+    "GHSA-7hqp-7c5m-4vq6": ("System.Security.Cryptography.Xml", "high", "CVE-2026-96960"),
+    "GHSA-c399-9853-6jmj": ("System.Security.Cryptography.Xml", "high", "CVE-2026-96959"),
 }
 _SIGNALR_CRYPTOGRAPHY_INTEGRATION_LOCK = "tests/Paqueteria.IntegrationTests/packages.lock.json"
 SIGNALR_CRYPTOGRAPHY_LOCK_FILES = [
@@ -1294,7 +1297,7 @@ def validate_remediation_policy(policy: Any, *, base_policy: bool = False) -> di
                     known_id: BRACES_KNOWN_ADVISORY["severity"],
                 }
                 or authorization.get("expected_base_totals")
-                != {"total": 5, "critical": 0, "high": 4, "moderate": 1, "low": 0}
+                != {"total": 7, "critical": 0, "high": 6, "moderate": 1, "low": 0}
                 or authorization.get("expected_branch_totals")
                 != {"total": 1, "critical": 0, "high": 1, "moderate": 0, "low": 0}
                 or authorization.get("expected_cves")
