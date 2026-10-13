@@ -18,12 +18,19 @@ public static class OperationsQueueCountsEndpoints
 {
     public const string Route = "/api/v1/operations/queue-counts";
 
+    /// <summary>
+    /// SEC-004 (owner answer Q3, "Uno cada uno"): the queue counts, <c>RateLimits:QueueCounts</c> (60 per minute) per
+    /// user, a budget of their own (the dashboard has its own). The host registers it with every other policy.
+    /// </summary>
+    public const string RateLimitPolicy = "Reporting.QueueCounts";
+
     public static IEndpointRouteBuilder MapOperationsQueueCountsEndpoints(
         this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapGet(Route, GetAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
             .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .RequireRateLimiting(OperationsQueueCountsEndpoints.RateLimitPolicy)
             .AddEndpointFilter<OperationsDashboardResponseHeadersFilter>()
             .WithName("getOperationsQueueCounts")
             .WithTags("Operations")
@@ -31,6 +38,7 @@ public static class OperationsQueueCountsEndpoints
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status429TooManyRequests)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
         return endpoints;
     }

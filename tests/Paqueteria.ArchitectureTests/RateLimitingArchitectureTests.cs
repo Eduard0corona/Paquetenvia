@@ -59,9 +59,11 @@ public sealed partial class RateLimitingArchitectureTests
             .SelectMany(file => RequireRateLimitingPattern().Matches(file.Code).Select(match => (file.Path, match.Groups["argument"].Value)))
             .ToArray();
 
-        // publicTracking, publishDriverLocation and the three hubs.
-        Assert.Equal(5, requirements.Length);
-        Assert.All(requirements, requirement => Assert.Matches(@"^[A-Za-z]+\.RateLimitPolicy$", requirement.Value));
+        // PR 2: publicTracking, publishDriverLocation and the three hubs. PR 3: previewOrderCsv, commitOrderCsv,
+        // exportSettlementCsv, createLocation, createProofUploadSession, finalizeProof, the dashboard,
+        // getOperationsQueueCounts, listOrders, createQuote, listAssignableDrivers and startAuthCenterSignIn.
+        Assert.Equal(17, requirements.Length);
+        Assert.All(requirements, requirement => Assert.Matches(@"^[A-Za-z]+\.[A-Za-z]*RateLimitPolicy$", requirement.Value));
         Assert.All(requirements, requirement => Assert.StartsWith("src/Modules/", requirement.Path, StringComparison.Ordinal));
 
         var table = Assert.Single(files, file => file.Path == PolicyTable).Code;
@@ -105,6 +107,48 @@ public sealed partial class RateLimitingArchitectureTests
         {
             Assert.DoesNotContain(forbidden, writer, StringComparison.Ordinal);
         }
+
+        // SEC-004 PR 3 (owner answer Q8): the OBS-002 summary gets the same policy name, and nothing else.
+        Assert.Equal(1, Regex.Count(writer, @"_summary\.Record\(policy\);"));
+        Assert.Equal(1, Regex.Count(writer, @"\.Rejected\(policy\.Name\);"));
+    }
+
+    /// <summary>
+    /// SEC-004 PR 3 (owner answer Q8): the OBS-002 <c>Policy</c> dimension can only carry a registry policy name. The
+    /// summary is built in one place, from the registry's names; it refuses any other name (unit tests); the writer
+    /// records the policy it counted; and the reporter logs only what the summary holds.
+    /// </summary>
+    [Fact]
+    public void The_rate_limit_summary_carries_registry_policy_names_only()
+    {
+        var files = SourceFiles().ToArray();
+        const string Summary = "src/BuildingBlocks/Paqueteria.Infrastructure/Observability/RateLimitRejectionSummary.cs";
+
+        Assert.Equal(
+            [Registry],
+            files.Where(file => file.Code.Contains("AddRateLimitRejectionSummary(", StringComparison.Ordinal) &&
+                                file.Path != Summary)
+                .Select(file => file.Path));
+        var registry = Assert.Single(files, file => file.Path == Registry).Code;
+        Assert.Equal(
+            1,
+            Regex.Count(registry, @"services\.AddRateLimitRejectionSummary\(registry\.Policies\.Select\(policy => policy\.Name\)\);"));
+        Assert.Equal(
+            [Summary],
+            files.Where(file => file.Code.Contains("new RateLimitRejectionSummary(", StringComparison.Ordinal))
+                .Select(file => file.Path));
+        Assert.Equal(
+            [RateLimitingFolder + "RateLimitRejectionWriter.cs"],
+            files.Where(file => Regex.IsMatch(file.Code, @"\.Record\(policy\)"))
+                .Select(file => file.Path));
+
+        var summary = Assert.Single(files, file => file.Path == Summary).Code;
+        Assert.Equal(1, Regex.Count(summary, @"logger\.Log\("));
+        Assert.Contains("foreach (var (policy, rejected) in summary.TakeSnapshot())", summary, StringComparison.Ordinal);
+        Assert.Contains(
+            "\"Rate limit {Policy} summary: rejected={Rejected} window_s={WindowSeconds}\",\n                policy,\n                rejected,\n                windowSeconds);",
+            summary.ReplaceLineEndings("\n"),
+            StringComparison.Ordinal);
     }
 
     private static IEnumerable<(string Path, string Text, string Code)> SourceFiles() =>

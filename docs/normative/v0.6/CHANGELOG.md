@@ -1,5 +1,39 @@
 # Changelog
 
+## Límites de tasa en los endpoints pesados: servidor, contratos y app del repartidor (SEC-004, fase 4 PR 3) — 2026-10-13
+
+- Respuestas literales del project owner (2026-10-12 y 2026-10-13), registradas en `decision-log.md`:
+  - `SEC-004-HEAVY-ENDPOINT-MAPPING-2026-10-12`: CSV "Compartido, 1 a la vez (Recommended)"; fotos "60 cada paso
+    (Recommended)"; tablero y conteos "Uno cada uno (Recommended)"; inicio de sesión "Solo /auth/login (Recommended)";
+    texto ante un 429 "Mensaje común con espera (Recommended)".
+  - `OBS-001-DASHBOARD-429-2026-10-12`: "Enmendar ADR-OBS-001 (Recommended)".
+  - `SEC-004-RETRY-AFTER-2026-10-13`: "Sí, agregarlo (Recommended)".
+  - `SEC-004-REJECTION-SUMMARY-2026-10-13`: "Resumen en los logs (Recommended)".
+- Límites por usuario (hash del sujeto; la red del cliente sin sujeto), ventana fija sin cola: vista previa y
+  confirmación del CSV 10/min juntas y una confirmación a la vez por usuario; exportar liquidación 10/min; crear
+  dirección 30/min; pedir subida de foto 60/min y confirmarla 60/min, cada uno con su presupuesto; tablero 60/min y
+  conteos 60/min, cada uno con el suyo; lista de órdenes 120/min; cotizar 60/min; repartidores asignables 60/min.
+  Inicio de sesión: 20/min por red, solo `GET /auth/login`; `/signin-authcenter` no se limita. Los números son la
+  sección `RateLimits`, validada al arrancar; un valor inválido detiene la API.
+- AI-05: 429 `TooManyRequests` en `previewOrderCsv`, `commitOrderCsv`, `exportSettlementCsv`, `createLocation`,
+  `createProofUploadSession`, `finalizeProof`, `getOperationsQueueCounts`, `listOrders`, `createQuote` y
+  `listAssignableDrivers`; `startAuthCenterSignIn` declara su 429 (página HTML simple para una navegación del
+  navegador, con el texto aprobado, o el problema). `TooManyRequests` declara el encabezado `Retry-After` (entero,
+  mínimo 1) que ya manda todo 429. Entrada `SEC-004-HEAVY-ENDPOINT-LIMITS` en `x-pilot-contract-deltas`. Rutas y
+  esquemas siguen en 69 y 125; las referencias internas pasan de 651 a 662.
+- El tablero, fuera de AI-05, registra su 429 en una enmienda de ADR-OBS-001; `HttpSurfaceOpenApiCoverageTests` ya no
+  lo omite y revisa sus respuestas de error contra esa enmienda.
+- OBS-002: evento 4604 `RateLimitSummary`, una línea por límite y minuto con rechazos (`Policy`, `Rejected`,
+  `WindowSeconds`); `Policy` y `Rejected` entran a `TelemetryDimensions.Allowed`. Ninguna alerta ni libro de trabajo
+  lo lee.
+- App del repartidor (respuestas Q2 y Q6): un 429 al pedir o confirmar una foto ya no se toma por evidencia rechazada.
+  La acción conserva sus llaves y su avance, la cola no manda nada hasta que pasa el `Retry-After` del servidor (ni con
+  "Sincronizar ahora") y sigue sola, sin mensaje. AI-07 lo registra en `driver_stop.rate_limit` y la página de
+  `/auth/login` en la ruta `/login`.
+- AI-08 SEC-004: las tres decisiones pendientes del PR 3 quedan decididas. El mensaje y la espera del botón en cada
+  pantalla del panel (AI-07) salen en la parte web del PR 3. Sin cambios en AI-04, AI-06, AI-18, roles, permisos,
+  migraciones ni paquetes. Nota: `docs/development/sec-004-heavy-endpoint-limits.md`.
+
 ## Correlación W3C sin paquetes (OBS-003-W3C-CORRELATION-2026-10-12, fase 4 PR 1) — 2026-10-12
 
 - Aplica la fase 4 aprobada; no hay pregunta nueva al owner. Respuesta literal del owner

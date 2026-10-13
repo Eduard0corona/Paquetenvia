@@ -17,6 +17,21 @@ public static class AuthCenterDefaults
     public const string CsrfHeaderName = "X-AuthCenter-CSRF";
     public const string CallbackPath = "/signin-authcenter";
     public const string LoginPath = "/auth/login";
+
+    /// <summary>
+    /// SEC-004 (owner answer Q5, "Solo /auth/login"): sign-in starts, <c>RateLimits:SignIn</c> (20 per minute) per
+    /// client network. The callback (<see cref="CallbackPath"/>) is not limited. The host registers it with every other
+    /// policy.
+    /// </summary>
+    public const string SignInRateLimitPolicy = "Identity.SignIn";
+
+    /// <summary>
+    /// SEC-004 (owner answer Q6, "Mensaje común con espera"): the page a browser sees when sign-in starts are limited,
+    /// verbatim.
+    /// </summary>
+    public const string SignInRateLimitMessage =
+        "Demasiados intentos de inicio de sesión desde esta red. Espera un minuto e intenta de nuevo.";
+
     public const string SessionPath = "/auth/session";
     public const string LogoutPath = "/auth/logout";
     public const string BackchannelLogoutPath = "/auth/backchannel-logout";

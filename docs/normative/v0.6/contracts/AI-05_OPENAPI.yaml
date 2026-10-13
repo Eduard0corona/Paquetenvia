@@ -77,6 +77,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
   /orders:
@@ -249,6 +251,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '409':
           $ref: '#/components/responses/Conflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
   /orders/csv/preview:
@@ -259,6 +263,8 @@ paths:
       description: >-
         CSV-001 prevalidation. Reads the uploaded file, reports it row by row and
         creates nothing; the returned content_digest is what commit must echo.
+        SEC-004-HEAVY-ENDPOINT-MAPPING-2026-10-12: preview and commit spend one
+        budget of 10 per minute per user together; past it, 429 TooManyRequests.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       requestBody:
@@ -280,6 +286,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
   /orders/csv/commit:
@@ -292,6 +300,11 @@ paths:
         previewed one and whose every row prevalidates, then creates each row through
         the ORD-001 create path. Idempotency-Key names the batch: replaying it returns
         the first response, and reusing it for other content is IDEMPOTENCY_CONFLICT.
+        SEC-004-HEAVY-ENDPOINT-MAPPING-2026-10-12: commit and preview spend one
+        budget of 10 per minute per user together, and one commit per user runs at
+        a time - while it runs, another commit of the same user (another batch or
+        a replay of the same Idempotency-Key) is 429 TooManyRequests and spends
+        nothing; it may be sent again once the first one has answered.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - $ref: '#/components/parameters/IdempotencyKey'
@@ -320,6 +333,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
   /orders/{orderId}:
@@ -498,6 +513,8 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/DispatchAssignmentConflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
   /drivers:
@@ -618,6 +635,8 @@ paths:
           $ref: '#/components/responses/Unauthorized'
         '403':
           $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
   /routes:
@@ -1030,6 +1049,8 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/ProofConflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
     get:
@@ -2396,7 +2417,9 @@ paths:
         whose acr is urn:authcenter:acr:mfa or urn:authcenter:acr:phr and whose amr
         contains mfa. Every successful sign-in replaces the browser's previous session
         (the previous ticket is deleted and a new opaque key is issued). Responses
-        carry Cache-Control no-store.
+        carry Cache-Control no-store. SEC-004-HEAVY-ENDPOINT-MAPPING-2026-10-12: at
+        most 20 sign-in starts per minute per client network (IPv4 address or IPv6
+        /64); the callback /signin-authcenter is not limited.
       security: []
       parameters:
       - name: return_url
@@ -2419,6 +2442,31 @@ paths:
       responses:
         '302':
           description: Redirect to the AuthCenter authorization endpoint; sets the __Host- correlation and nonce cookies.
+        '429':
+          description: >-
+            Too many sign-in starts from this client network
+            (SEC-004-HEAVY-ENDPOINT-MAPPING-2026-10-12). A request whose Accept
+            names text/html (a browser navigation) receives a simple page in
+            Spanish with exactly "Demasiados intentos de inicio de sesión desde esta
+            red. Espera un minuto e intenta de nuevo." and nothing else (no
+            script, style, link, form or branding; Content-Security-Policy
+            default-src 'none'); any other request receives the TooManyRequests
+            Problem with traceId. Either way Retry-After and Cache-Control
+            no-store.
+          headers:
+            Retry-After:
+              description: Whole seconds to wait before trying again, at least 1 (the policy's whole window).
+              required: true
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            text/html:
+              schema:
+                type: string
+            application/problem+json:
+              schema:
+                $ref: '#/components/schemas/Problem'
   /signin-authcenter:
     servers:
     - url: /
@@ -2737,6 +2785,8 @@ paths:
           $ref: '#/components/responses/Forbidden'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
   /orders/{orderId}/proof-upload-sessions:
@@ -2769,6 +2819,8 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/ProofConflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
   /driver/me/documents:
@@ -3431,6 +3483,8 @@ paths:
           $ref: '#/components/responses/UniformNotFound'
         '409':
           $ref: '#/components/responses/SettlementConflict'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
 components:
@@ -3715,7 +3769,24 @@ components:
           schema:
             $ref: '#/components/schemas/Problem'
     TooManyRequests:
-      description: Request rejected by rate limiting
+      description: >-
+        Request rejected by rate limiting (SEC-004). The body is the Problem
+        {"type":"about:blank","title":"Too Many Requests","status":429} with the
+        request's traceId; the public tracking answers keep it uniform without
+        traceId. Every 429 says how long to wait in Retry-After, public tracking
+        included (SEC-004-RETRY-AFTER-2026-10-13), and is not cached
+        (Cache-Control no-store; publicTracking keeps its own no-store, private).
+      headers:
+        Retry-After:
+          description: >-
+            Whole seconds to wait before trying again, rounded up and at least 1.
+            For a limiter policy it is the policy's whole window (an upper
+            bound, the same for every caller); for requestRecipientCall it is
+            the wait the database computes.
+          required: true
+          schema:
+            type: integer
+            minimum: 1
       content:
         application/problem+json:
           schema:
@@ -8166,3 +8237,22 @@ x-pilot-contract-deltas:
       with request_id NULL); rows the Worker writes keep request_id NULL until phase 4 PR 7; inbound trace headers are
       ignored; no path, operation, status code, required member or other schema changes, and the public tracking
       bodies stay uniform without it
+  - id: SEC-004-HEAVY-ENDPOINT-LIMITS
+    status: DECIDED
+    decision: SEC-004-RATE-LIMITS-2026-10-12, SEC-004-HEAVY-ENDPOINT-MAPPING-2026-10-12, SEC-004-RETRY-AFTER-2026-10-13
+      and SEC-004-REJECTION-SUMMARY-2026-10-13 (project owner)
+    literal: '"Por usuario: CSV 10/min (1 importación a la vez), exportar liquidación 10/min, crear dirección (cuesta
+      Google) 30/min, fotos 30–60/min, tablero y conteos 60/min, lista de órdenes 120/min, cotizar 60/min, repartidores
+      asignables 60/min; inicio de sesión 20/min por red. Se ajusta tras 2 semanas con métricas."'
+    implementation: shipped by feat/sec-004-heavy-endpoint-limits (phase 4 PR 3) together with its code and tests -
+      the policies of ApiRateLimitPolicies with their RateLimits configuration validated at start, the registry's
+      shared window and in-flight rule, the sign-in page and the per-minute RateLimitSummary log event
+    delta: 429 TooManyRequests is now declared on previewOrderCsv and commitOrderCsv (one budget of 10 per minute per
+      user together, and one commit per user at a time), exportSettlementCsv (10), createLocation (30),
+      createProofUploadSession (60) and finalizeProof (60, a budget each, per driver), getOperationsQueueCounts (60),
+      listOrders (120), createQuote (60) and listAssignableDrivers (60), per minute and per user (the authenticated
+      subject's hash; the client network when anonymous), and on startAuthCenterSignIn (20 per minute per client
+      network; a browser navigation receives a simple page). The undeclared operations dashboard (60 per minute per
+      user, its own budget) records its 429 in ADR-OBS-001. TooManyRequests now declares the Retry-After header that
+      every 429 already sends. The numbers are configuration (RateLimits) and a later owner decision re-sets them; no
+      path, operation, schema or other status code changes

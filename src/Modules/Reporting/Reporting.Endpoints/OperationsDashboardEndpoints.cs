@@ -13,6 +13,13 @@ namespace Reporting.Endpoints;
 
 public static class OperationsDashboardEndpoints
 {
+    /// <summary>
+    /// SEC-004 (owner answer Q3, "Uno cada uno"): the dashboard, <c>RateLimits:OperationsDashboard</c> (60 per minute)
+    /// per user, a budget of its own (the queue counts have theirs). Its 429 is recorded in ADR-OBS-001 (owner answer
+    /// Q4). The host registers it with every other policy.
+    /// </summary>
+    public const string RateLimitPolicy = "Reporting.OperationsDashboard";
+
     private static readonly string[] KnownParameters =
     [
         "order_id",
@@ -36,6 +43,7 @@ public static class OperationsDashboardEndpoints
         endpoints.MapGet("/api/v1/operations/dashboard", GetAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
             .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .RequireRateLimiting(OperationsDashboardEndpoints.RateLimitPolicy)
             .AddEndpointFilter<OperationsDashboardResponseHeadersFilter>()
             .WithName("getOperationsDashboard")
             .WithTags("Operations")
@@ -43,6 +51,7 @@ public static class OperationsDashboardEndpoints
             .ProducesProblem(StatusCodes.Status400BadRequest)
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
+            .ProducesProblem(StatusCodes.Status429TooManyRequests)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
         return endpoints;
     }

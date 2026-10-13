@@ -129,6 +129,39 @@ lee de otra organización (decisión de privacidad y aislamiento, BLOCKER según
 grant nuevos en AI-06/AI-18 con su propia decisión; el trabajo del operador no necesita ese nombre. Sin cambios en
 AI-04, AI-05, AI-06, AI-18, migraciones, roles, grants ni flujos cross-module. Rollback: revertir el commit.
 
+## Enmienda 2026-10-13: límite de tasa del tablero y su 429 (OBS-001-DASHBOARD-429-2026-10-12)
+
+SEC-004-RATE-LIMITS-2026-10-12 limita "tablero y conteos 60/min" y pide que cada operación limitada declare su 429 en
+el API, pero este endpoint no está en AI-05. Pregunta literal al owner (2026-10-12): "El tablero (GET
+/operations/dashboard) no está en el contrato del API (AI-05): lo cubre la decisión de observabilidad ADR-OBS-001.
+Para que también "declare su 429", ¿dónde se registra?". Respuesta: "Enmendar ADR-OBS-001 (Recommended)", cuya
+opción decía "Se agrega a esa decisión el 429, con la misma forma de error que el resto del API. Es un cambio
+pequeño.". No elegida: "Declararlo en AI-05" ("Se documenta el tablero completo en el contrato: ruta, respuesta y
+errores. Más trabajo, pero todo queda en un solo lugar.").
+
+- Límite: la política `Reporting.OperationsDashboard`, 60 lecturas por minuto por usuario (`RateLimits:OperationsDashboard`),
+  con presupuesto propio, separado del de `getOperationsQueueCounts`; respuesta literal del owner a "¿Un presupuesto
+  compartido o uno para cada uno?": "Uno cada uno (Recommended)" ("60 por minuto para el tablero y 60 por minuto para
+  los conteos. Con varias pestañas abiertas, una no le quita cupo a la otra."). La partición es el hash del sujeto
+  autenticado (la red del cliente si no hay sujeto). Ventana fija sin cola, en memoria de la API, exacta con una sola
+  réplica (GATE-013).
+- 429: la misma forma de error que el resto del API, el `TooManyRequests` de AI-05: `application/problem+json`
+  `{"type":"about:blank","title":"Too Many Requests","status":429,"traceId":"<32 hexadecimales>"}`, con `Retry-After`
+  en segundos enteros (la ventana completa: 60 con la configuración por defecto) y `Cache-Control: no-store`. Lo
+  escribe el único escritor de rechazos de la API y el rechazo cuenta en el resumen OBS-002 `RateLimitSummary` (4604)
+  con `Policy=Reporting.OperationsDashboard`.
+- El limitador corre después de la autenticación y antes del contexto de tenant y de la autorización: un 429 no abre
+  transacción ni lee órdenes. No cambian la forma de la respuesta 200, los filtros, el cursor ni los lectores
+  (DISPATCHER y PLATFORM_ADMIN con MFA); los demás roles siguen con 403.
+
+Respuestas de error de `GET /api/v1/operations/dashboard` (las lee `HttpSurfaceOpenApiCoverageTests`): `400`, `401`,
+`403`, `429`, `503`.
+
+El endpoint sigue fuera de AI-05 y es la única excepción de `HttpSurfaceOpenApiCoverageTests`; esa prueba ya no lo
+omite: exige que cada estado de error que el endpoint emite, el 429 incluido, esté en la línea anterior. Sin cambios en
+AI-04, AI-06, AI-18, migraciones, roles, grants ni flujos cross-module. Rollback: revertir el commit (el límite vive en
+memoria; no queda nada que deshacer).
+
 ## Alternativas descartadas
 
 - Ampliar `listOrders`: modificaría AI-05 y acoplaría consumidores existentes.

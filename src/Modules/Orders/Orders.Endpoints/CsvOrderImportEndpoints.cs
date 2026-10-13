@@ -17,6 +17,18 @@ namespace Orders.Endpoints;
 /// </summary>
 public static class CsvOrderImportEndpoints
 {
+    /// <summary>
+    /// SEC-004 (owner answer Q1, "Compartido, 1 a la vez"): preview and commit spend one budget per user,
+    /// <c>RateLimits:CsvImport</c> (10 per minute). The host registers it with every other policy.
+    /// </summary>
+    public const string RateLimitPolicy = "Orders.CsvImport";
+
+    /// <summary>
+    /// SEC-004 (owner answer Q1): the commit spends the <see cref="RateLimitPolicy"/> budget and, while one commit of a
+    /// user is in flight, a second one of the same user is rejected until the first finishes.
+    /// </summary>
+    public const string CommitRateLimitPolicy = "Orders.CsvImportCommit";
+
     private const string PreviewRoute = "/api/v1/orders/csv/preview";
     private const string CommitRoute = "/api/v1/orders/csv/commit";
     private const long MultipartEnvelopeAllowanceBytes = 8 * 1024;
@@ -26,6 +38,7 @@ public static class CsvOrderImportEndpoints
         endpoints.MapPost(PreviewRoute, PreviewAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
             .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .RequireRateLimiting(CsvOrderImportEndpoints.RateLimitPolicy)
             .DisableAntiforgery()
             .WithName("previewOrderCsv")
             .WithTags("Orders")
@@ -34,11 +47,13 @@ public static class CsvOrderImportEndpoints
             .ProducesProblem(StatusCodes.Status401Unauthorized)
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status409Conflict)
+            .ProducesProblem(StatusCodes.Status429TooManyRequests)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapPost(CommitRoute, CommitAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
             .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .RequireRateLimiting(CsvOrderImportEndpoints.CommitRateLimitPolicy)
             .DisableAntiforgery()
             .WithName("commitOrderCsv")
             .WithTags("Orders")
@@ -48,6 +63,7 @@ public static class CsvOrderImportEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status409Conflict)
             .Produces<CsvImportPreviewResponse>(StatusCodes.Status422UnprocessableEntity)
+            .ProducesProblem(StatusCodes.Status429TooManyRequests)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         return endpoints;

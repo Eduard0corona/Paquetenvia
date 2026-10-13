@@ -263,8 +263,12 @@ public sealed class Sec004RateLimitPlumbingTests
 
         Assert.NotEmpty(limited);
         Assert.All(limited, item => Assert.NotNull(registry.Find(item.Policy)));
+        // GET /auth/login is mapped only with Authentication:Provider=AuthCenter; Sec004HeavyEndpointLimitsTests checks
+        // that it names the sign-in policy there.
         Assert.Equal(
-            registry.Policies.Select(policy => policy.Name).Order(StringComparer.Ordinal),
+            registry.Policies.Select(policy => policy.Name)
+                .Where(name => name != Identity.Endpoints.AuthCenter.AuthCenterDefaults.SignInRateLimitPolicy)
+                .Order(StringComparer.Ordinal),
             limited.Select(item => item.Policy!).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
 
         // Only the public tracking surfaces answer the uniform body.
@@ -307,10 +311,26 @@ public sealed class Sec004RateLimitPlumbingTests
         using var host = new DeployedConfigurationFactory();
         var registry = host.Services.GetRequiredService<RateLimitPolicyRegistry>();
 
+        // The policies PR 2 brought together; Sec004HeavyEndpointLimitsTests pins the decided list of PR 3.
+        var existing = new[]
+        {
+            DriverLocationEndpointOptions.RateLimitPolicy,
+            PublicTrackingEndpointDefaults.RateLimitPolicy,
+            RealtimeEndpointDefaults.RateLimitPolicy,
+        };
         var actual = registry.Policies
+            .Where(policy => existing.Contains(policy.Name, StringComparer.Ordinal))
             .Select(policy => (policy.Name, policy.Partition, Limit: policy.Limit(host.Services)))
             .OrderBy(item => item.Name, StringComparer.Ordinal)
             .ToArray();
+        Assert.Equal(15, registry.Policies.Count);
+        Assert.All(registry.Policies.Where(policy => existing.Contains(policy.Name, StringComparer.Ordinal)), policy =>
+        {
+            // They keep the framework's own fixed window: no shared window, no in-flight rule.
+            Assert.Null(policy.SharesWindowOf);
+            Assert.Null(policy.InFlightLimit);
+            Assert.False(registry.UsesBudgets(policy));
+        });
         Assert.Equal(
             new[]
             {

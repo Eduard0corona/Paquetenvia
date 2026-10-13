@@ -10,11 +10,18 @@ namespace Pricing.Endpoints;
 
 public static class QuoteEndpoints
 {
+    /// <summary>
+    /// SEC-004: <c>createQuote</c>, <c>RateLimits:Quote</c> (60 per minute) per user. The host registers it with every
+    /// other policy.
+    /// </summary>
+    public const string CreateRateLimitPolicy = "Pricing.Quote";
+
     public static IEndpointRouteBuilder MapQuoteEndpoints(this IEndpointRouteBuilder endpoints)
     {
         endpoints.MapPost("/api/v1/quotes", CreateAsync)
             .RequireAuthorization(OrganizationPolicies.ActiveOrganizationMember)
             .RequireTenantContext(StatusCodes.Status403Forbidden)
+            .RequireRateLimiting(QuoteEndpoints.CreateRateLimitPolicy)
             .WithName("createQuote")
             .WithTags("Quotes")
             .Accepts<CreateQuoteRequest>("application/json")
@@ -23,6 +30,7 @@ public static class QuoteEndpoints
             .ProducesProblem(StatusCodes.Status403Forbidden)
             .ProducesProblem(StatusCodes.Status409Conflict)
             .ProducesProblem(StatusCodes.Status422UnprocessableEntity)
+            .ProducesProblem(StatusCodes.Status429TooManyRequests)
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
 
         endpoints.MapGet("/api/v1/quotes/{quoteId:guid}", GetAsync)

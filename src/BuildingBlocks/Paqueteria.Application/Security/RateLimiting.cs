@@ -36,6 +36,56 @@ public sealed class PublicTrackingRateLimitRejection
 }
 
 /// <summary>
+/// SEC-004 PR 3 (owner answer Q6, "Mensaje común con espera"): endpoint metadata of a browser navigation
+/// (<c>GET /auth/login</c>). When the rejected request accepts <c>text/html</c>, its 429 is this simple page instead
+/// of the problem; any other request still gets AI-05 <c>TooManyRequests</c>. The page is the message in one
+/// paragraph, with the message's first sentence as its title, and nothing else: no script, style, image, link, form
+/// or branding. The response also carries <c>Retry-After</c> and <c>Cache-Control: no-store</c> like every 429.
+/// </summary>
+public sealed class RateLimitRejectionPage
+{
+    public const string ContentType = "text/html; charset=utf-8";
+
+    /// <summary>Nothing may load, run, frame or submit from the page.</summary>
+    public const string ContentSecurityPolicy =
+        "default-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'";
+
+    public RateLimitRejectionPage(string message)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(message);
+        Message = message;
+        var sentence = message.IndexOf(". ", StringComparison.Ordinal) is var end and > 0 ? message[..(end + 1)] : message;
+        Body = Encoding.UTF8.GetBytes(
+            "<!doctype html>\n" +
+            "<html lang=\"es-MX\">\n" +
+            "<head>\n" +
+            "<meta charset=\"utf-8\">\n" +
+            "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n" +
+            "<meta name=\"robots\" content=\"noindex\">\n" +
+            $"<title>{Escape(sentence)}</title>\n" +
+            "</head>\n" +
+            "<body>\n" +
+            $"<p>{Escape(message)}</p>\n" +
+            "</body>\n" +
+            "</html>\n");
+    }
+
+    /// <summary>The text the page shows, verbatim.</summary>
+    public string Message { get; }
+
+    /// <summary>The whole page, UTF-8.</summary>
+    public ReadOnlyMemory<byte> Body { get; }
+
+    /// <summary>Escapes the markup characters only; accented letters stay as they are in a UTF-8 page.</summary>
+    private static string Escape(string text) =>
+        text.Replace("&", "&amp;", StringComparison.Ordinal)
+            .Replace("<", "&lt;", StringComparison.Ordinal)
+            .Replace(">", "&gt;", StringComparison.Ordinal)
+            .Replace("\"", "&quot;", StringComparison.Ordinal)
+            .Replace("'", "&#39;", StringComparison.Ordinal);
+}
+
+/// <summary>
 /// Rate-limit partition of an authenticated caller: an opaque hash of its subject (the <c>sub</c> claim), so limiter
 /// state never stores the subject itself. The value is never logged, traced or used as a metric tag.
 /// </summary>

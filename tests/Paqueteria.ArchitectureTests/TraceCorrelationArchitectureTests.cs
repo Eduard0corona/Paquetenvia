@@ -64,6 +64,8 @@ public sealed partial class TraceCorrelationArchitectureTests
                 "delegates every cycle to IJobScheduler (PeriodicJobScheduler)",
             ["src/BuildingBlocks/Paqueteria.Infrastructure/Observability/HttpStatusTelemetry.cs"] =
                 "the OBS-002 per-minute status summary spans many requests and belongs to none",
+            ["src/BuildingBlocks/Paqueteria.Infrastructure/Observability/RateLimitRejectionSummary.cs"] =
+                "the SEC-004 per-minute rate-limit summary spans many requests and belongs to none",
         };
 
     [Theory]
