@@ -10,13 +10,13 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
-using Npgsql;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
 using Paqueteria.Application.Scheduling;
 using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
 using Paqueteria.Infrastructure.Cloud;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Paqueteria.Infrastructure.Scheduling;
 using Paqueteria.Infrastructure.Tenancy;
 
@@ -106,17 +106,17 @@ public static class DependencyInjection
             signsUrls: !addValidationWorker));
         services.AddSingleton<DefenderForStorageThreatScanner>();
 
-        services.TryAddSingleton(serviceProvider => NpgsqlDataSource.Create(
-            serviceProvider.GetRequiredService<IConfiguration>().GetConnectionString("Paqueteria")
-            ?? throw new InvalidOperationException(
-                "Custody PostgreSQL requires ConnectionStrings:Paqueteria.")));
+        // SCL-007: the process's one pool of the role Custody runs as: paqueteria_app in the API and, with the proof
+        // validation worker, paqueteria_worker in the Worker.
+        var databaseRole = addValidationWorker ? RuntimeDatabaseRole.Worker : RuntimeDatabaseRole.Application;
+        services.AddRuntimeDataSource(configuration, databaseRole);
         services.TryAddScoped<TenantDatabaseExecutionState>();
         services.TryAddScoped<TenantTransactionGuardInterceptor>();
         services.TryAddScoped<TenantSaveChangesGuardInterceptor>();
         services.AddDbContext<CustodyDbContext>((serviceProvider, options) =>
         {
             options.UseNpgsql(
-                    serviceProvider.GetRequiredService<NpgsqlDataSource>(),
+                    serviceProvider.GetRuntimeDataSource(databaseRole),
                     postgres =>
                     {
                         postgres.MigrationsAssembly(typeof(CustodyDbContext).Assembly.FullName);
@@ -201,13 +201,12 @@ public static class DependencyInjection
                         OperationalCleanupOptions.WorkerConnectionStringName)),
                 "OperationalCleanup requires ConnectionStrings:PaqueteriaWorker when a job is enabled.")
             .ValidateOnStart();
-        services.AddSingleton(_ => new OperationalCleanupDataSource(
-            configuration.GetConnectionString(OperationalCleanupOptions.WorkerConnectionStringName) ?? string.Empty));
+        services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Worker);
         services.AddSingleton<IOperationalCleanupGateway>(serviceProvider =>
         {
-            var dataSource = serviceProvider.GetRequiredService<OperationalCleanupDataSource>();
+            var pool = serviceProvider.GetRequiredKeyedService<RuntimeDataSource>(RuntimeDatabaseRole.Worker);
             return new PostgreSqlOperationalCleanupGateway(
-                () => dataSource.Value,
+                () => pool.DataSource,
                 serviceProvider.GetRequiredService<IOptions<OperationalCleanupOptions>>().Value.CommandTimeoutSeconds);
         });
         services.AddSingleton<OperationalCleanupTelemetry>();

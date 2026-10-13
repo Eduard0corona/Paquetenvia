@@ -1,5 +1,29 @@
 # Changelog
 
+## Un pool de conexiones por rol (SCL-007-POOL-PER-ROLE-2026-10-13, fase 4 PR 8) — 2026-10-13
+
+- Aplica la fase 4 aprobada; no hay pregunta nueva al owner. Respuesta literal del owner
+  (`PHASE4-PLATFORM-APPROVAL-2026-10-12`): "Sí, avanza con la fase 4 (Recommended)"; la pregunta nombraba "un pool de
+  conexiones por rol".
+- Un `NpgsqlDataSource` por rol de base de datos en cada proceso, compartido por todos los módulos: `paqueteria_app`
+  (`ConnectionStrings:Paqueteria`) y `paqueteria_realtime` (`ConnectionStrings:PaqueteriaRealtime`, los despachadores de
+  tiempo real) en la API, y `paqueteria_worker` (`ConnectionStrings:PaqueteriaWorker`) en el Worker. Antes, 22 lugares
+  del código armaban su propio pool: 5 pools en la API y 9 en el Worker.
+- Presupuesto validado al arrancar (`DatabasePools`): 10 + 4 + 10 = 24 conexiones como máximo; cada tamaño entre 1 y 24
+  y la suma hasta 24 = piso((50 − 15 reservadas por Azure) × 0.70) de las conexiones de usuario del B1ms (AZR-001-INV-014).
+  Quedan 11 para el migrador, el mantenimiento y la administración. El `Maximum Pool Size` de la cadena de conexión se
+  reemplaza; un valor inválido impide arrancar la API o el Worker.
+- Sigue igual: transacción explícita con `set_config(..., true)` y `SET LOCAL ROLE` después de `BEGIN`; cada pool se
+  autentica con un solo login `NOBYPASSRLS` de su rol; las comprobaciones de readiness siguen fallando ante un rol mal
+  formado; el `pooling_contract` de AI-15 no cambia y PgBouncer sigue detrás de GATE-014. Pruebas en PostgreSQL real:
+  ningún estado de sesión sobrevive entre préstamos, también con `No Reset On Close=true`.
+- La validación de pruebas del Worker lee `ConnectionStrings:PaqueteriaWorker` (el piloto ya le da el mismo secreto con
+  los dos nombres). `DataProtection:ConnectionStringName` solo acepta `Paqueteria` y `PaqueteriaWorker`.
+- Pendiente del owner: la alerta de métrica de Azure Monitor sobre conexiones de PostgreSQL y su correo.
+- AI-08 SCL-007 registra el rol de tiempo real, el presupuesto y las credenciales que quedan fuera. Sin cambios en AI-04,
+  AI-05, AI-06, AI-13, AI-15, AI-18, AI-24, roles, permisos, migraciones, secretos, Bicep ni paquetes. Nota:
+  `docs/development/scl-007-pool-per-role.md`.
+
 ## Límites de tasa en las pantallas del panel: mensaje con cuenta regresiva y recargas espaciadas (SEC-004-PANEL-SCREENS-2026-10-13, fase 4 PR 3, parte del panel) — 2026-10-13
 
 - Respuestas literales del project owner (2026-10-13), registradas en `decision-log.md` con su contexto y las opciones

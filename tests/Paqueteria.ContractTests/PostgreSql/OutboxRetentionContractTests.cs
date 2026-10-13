@@ -5,6 +5,7 @@ using Npgsql;
 using NpgsqlTypes;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
 using Paqueteria.Infrastructure.Database.Outbox.Retention;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Paqueteria.Infrastructure.Scheduling;
 
 namespace Paqueteria.ContractTests.PostgreSql;
@@ -174,7 +175,7 @@ public sealed class OutboxRetentionContractTests(PostgreSqlContractFixture fixtu
             }
         }
 
-        var dataSource = new OutboxRetentionDataSource(fixture.WorkerConnectionString);
+        var dataSource = RuntimeDataSource.Create(RuntimeDatabaseRole.Worker, fixture.WorkerConnectionString, maximumPoolSize: 4);
         await using (dataSource)
         {
             var gateway = new PostgreSqlOutboxPurgeGateway(dataSource, commandTimeoutSeconds: 30);
@@ -1047,14 +1048,14 @@ public sealed class OutboxRetentionContractTests(PostgreSqlContractFixture fixtu
 
     private sealed class Harness : IAsyncDisposable
     {
-        private readonly OutboxRetentionDataSource _dataSource;
+        private readonly RuntimeDataSource _dataSource;
         private readonly OutboxRetentionTelemetry _telemetry = new();
         private readonly OutboxRetentionOptions _options;
         private readonly TimeProvider _time;
 
         public Harness(string workerConnectionString, OutboxRetentionOptions options, TimeProvider time)
         {
-            _dataSource = new OutboxRetentionDataSource(workerConnectionString);
+            _dataSource = RuntimeDataSource.Create(RuntimeDatabaseRole.Worker, workerConnectionString, maximumPoolSize: 4);
             _options = options;
             _time = time;
             Gateway = new RecordingGateway(new PostgreSqlOutboxPurgeGateway(_dataSource, commandTimeoutSeconds: 30));

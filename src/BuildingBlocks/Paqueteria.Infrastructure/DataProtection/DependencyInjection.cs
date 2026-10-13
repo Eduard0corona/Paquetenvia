@@ -6,28 +6,10 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
-using Npgsql;
 using Paqueteria.Infrastructure.Cloud;
+using Paqueteria.Infrastructure.Database.Pooling;
 
 namespace Paqueteria.Infrastructure.DataProtection;
-
-/// <summary>
-/// Owns the lifetime of the key-ring data source so the repository and the health check share a
-/// single pool without competing with the tenant-scoped application data sources.
-/// </summary>
-internal sealed class DataProtectionDataSource(string connectionString) : IAsyncDisposable
-{
-    private readonly Lazy<NpgsqlDataSource> _dataSource = new(() => NpgsqlDataSource.Create(
-        !string.IsNullOrWhiteSpace(connectionString)
-            ? connectionString
-            : throw new InvalidOperationException(
-                "A connection string is required when DataProtection:Provider=PostgreSql.")));
-
-    public NpgsqlDataSource Value => _dataSource.Value;
-
-    public ValueTask DisposeAsync() =>
-        _dataSource.IsValueCreated ? _dataSource.Value.DisposeAsync() : ValueTask.CompletedTask;
-}
 
 public static class DependencyInjection
 {
@@ -65,13 +47,15 @@ public static class DependencyInjection
         services.AddHealthChecks()
             .AddCheck<DataProtectionHealthCheck>("data_protection_keyring", tags: ["ready"]);
 
-        if (options.Provider != DataProtectionProviderKind.PostgreSql)
+        // SCL-007: the key ring uses the process's one pool of its runtime role (paqueteria_app in the API,
+        // paqueteria_worker in the Worker); an unknown connection name fails the start validation above.
+        if (options.Provider != DataProtectionProviderKind.PostgreSql ||
+            !RuntimeDatabaseRoles.TryFromConnectionStringName(options.ConnectionStringName, out var databaseRole))
         {
             return services;
         }
 
-        services.AddSingleton(_ => new DataProtectionDataSource(
-            configuration.GetConnectionString(options.ConnectionStringName) ?? string.Empty));
+        services.AddRuntimeDataSource(configuration, databaseRole);
 
         var dataProtection = services.AddDataProtection()
             .SetApplicationName(options.ApplicationName)
@@ -97,7 +81,7 @@ public static class DependencyInjection
         services.AddSingleton<IConfigureOptions<KeyManagementOptions>>(serviceProvider =>
             new ConfigureOptions<KeyManagementOptions>(keyManagement =>
                 keyManagement.XmlRepository = new PostgreSqlXmlRepository(
-                    serviceProvider.GetRequiredService<DataProtectionDataSource>().Value,
+                    serviceProvider.GetRuntimeDataSource(databaseRole),
                     options,
                     serviceProvider.GetRequiredService<ILogger<PostgreSqlXmlRepository>>())));
 

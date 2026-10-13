@@ -277,7 +277,14 @@ public sealed class OrderAutoCloseTests
     {
         var services = new ServiceCollection();
         services.AddLogging();
-        services.AddOrdersAutoClose(new ConfigurationBuilder().Build());
+        // SCL-007: the Worker DbContext is built on the shared paqueteria_worker pool, which fails closed without its
+        // connection string instead of falling back to a placeholder; nothing here opens it.
+        services.AddOrdersAutoClose(new ConfigurationBuilder()
+            .AddInMemoryCollection(new Dictionary<string, string?>
+            {
+                ["ConnectionStrings:PaqueteriaWorker"] = WorkerConnection,
+            })
+            .Build());
 
         Assert.Single(services, descriptor =>
             descriptor.ServiceType == typeof(IHostedService) &&

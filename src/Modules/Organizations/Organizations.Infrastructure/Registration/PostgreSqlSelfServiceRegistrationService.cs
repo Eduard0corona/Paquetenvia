@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -7,6 +8,7 @@ using NpgsqlTypes;
 using Organizations.Application;
 using Organizations.Application.Registration;
 using Paqueteria.Application.Idempotency;
+using Paqueteria.Infrastructure.Database.Pooling;
 
 namespace Organizations.Infrastructure.Registration;
 
@@ -18,7 +20,7 @@ namespace Organizations.Infrastructure.Registration;
 /// subjects or identifiers.
 /// </summary>
 public sealed class PostgreSqlSelfServiceRegistrationService(
-    NpgsqlDataSource dataSource,
+    [FromKeyedServices(RuntimeDatabaseRole.Application)] NpgsqlDataSource dataSource,
     IOptions<TenancyOptions> options,
     ISelfServiceOrganizationAuthorizer authorizer,
     ILogger<PostgreSqlSelfServiceRegistrationService> logger) : ISelfServiceRegistrationService

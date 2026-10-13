@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Security.Cryptography;
 using Npgsql;
 using Paqueteria.Infrastructure.Database.Baseline;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Testcontainers.PostgreSql;
 using Microsoft.Extensions.Logging;
 
@@ -65,18 +66,27 @@ public sealed class PostgreSqlContractFixture : IAsyncLifetime
         var connectionString = WithPooling(_container.GetConnectionString(), AppLogin, _appPassword);
         var connectionStringBuilder = new NpgsqlConnectionStringBuilder(connectionString)
         {
-            MaxPoolSize = maxPoolSize,
             ApplicationName = applicationName,
         };
-        var dataSourceBuilder = new NpgsqlDataSourceBuilder(connectionStringBuilder.ConnectionString);
-        dataSourceBuilder.UseNetTopologySuite();
+
+        // SCL-007: built exactly as the API's shared paqueteria_app pool (RuntimeDataSource, NetTopologySuite plugin),
+        // so the TEN-002 pooled-connection regression runs on the shared-pool builder.
+        var plugins = new List<Action<NpgsqlDataSourceBuilder>> { static builder => builder.UseNetTopologySuite() };
         if (loggerFactory is not null)
         {
-            dataSourceBuilder.UseLoggerFactory(loggerFactory);
-            dataSourceBuilder.EnableParameterLogging();
+            plugins.Add(builder =>
+            {
+                builder.UseLoggerFactory(loggerFactory);
+                builder.EnableParameterLogging();
+            });
         }
 
-        return dataSourceBuilder.Build();
+        return RuntimeDataSource.Create(
+                RuntimeDatabaseRole.Application,
+                connectionStringBuilder.ConnectionString,
+                maxPoolSize,
+                [.. plugins])
+            .DataSource;
     }
 
     public async Task InitializeAsync()

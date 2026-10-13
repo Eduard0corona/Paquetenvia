@@ -1,6 +1,8 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
 using Npgsql;
+using Paqueteria.Infrastructure.Database.Pooling;
 
 namespace Paqueteria.Infrastructure.DataProtection;
 
@@ -22,14 +24,15 @@ internal sealed class DataProtectionHealthCheck(
             return HealthCheckResult.Healthy("data_protection_local_keyring");
         }
 
-        if (services.GetService(typeof(DataProtectionDataSource)) is not DataProtectionDataSource dataSource)
+        if (!RuntimeDatabaseRoles.TryFromConnectionStringName(options.Value.ConnectionStringName, out var databaseRole) ||
+            services.GetKeyedService<RuntimeDataSource>(databaseRole) is not { } dataSource)
         {
             return HealthCheckResult.Unhealthy("data_protection_keyring_unconfigured");
         }
 
         try
         {
-            await using var connection = await dataSource.Value
+            await using var connection = await dataSource
                 .OpenConnectionAsync(cancellationToken)
                 .ConfigureAwait(false);
             await using var transaction = await connection

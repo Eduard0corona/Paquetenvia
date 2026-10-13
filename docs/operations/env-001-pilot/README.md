@@ -604,10 +604,14 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
 - **An OBS-002 alert fired:** open the workbook *Paquetenvia pilot operations (OBS-002)* or run the
   rule's query from Azure Monitor → Alerts → the alert → *View query results*. The query shows the
   lane, job, app or status counts that tripped it (§10).
-- **PostgreSQL connections:** B1ms allows about 50. API and Worker pools are capped at 5 per data
-  source (`Maximum Pool Size=5;Minimum Pool Size=0`); the API's realtime dispatcher login is one more data
-  source of 5 (it replaces the Worker connection the dispatchers would otherwise have opened).
-  `too many connections` means lowering those or moving to B2s (+≈41 USD/month, over budget).
+- **PostgreSQL connections:** B1ms has `max_connections` 50, of which Azure reserves 15, so 35 are user
+  connections. SCL-007 gives each process one pool per database role: the API's `paqueteria_app` pool (10) and its
+  realtime dispatcher pool (`paqueteria_realtime`, 4), and the Worker's `paqueteria_worker` pool (10), 24 in all
+  (`docs/development/scl-007-pool-per-role.md`). The sizes come from `DatabasePools` (defaults in each image's
+  `appsettings.json`) and replace the `Maximum Pool Size=5` of the runtime secrets; a size above 24 in total refuses
+  the start. The other 11 are for the migrate, verify and logins jobs (`Maximum Pool Size=4`), the restore drill and
+  administration. `too many connections` means lowering `DatabasePools__*` or moving to B2s (+≈41 USD/month, over
+  budget).
 - **Realtime dispatcher not ready:** `/health/ready` reports `realtime_outbox_dispatcher` unhealthy when
   `pg-realtime-runtime-connection` is missing or its login is not `pv_pilot_realtime` (member of
   `paqueteria_realtime` only), when the Notifications lane step `20261012000100_AddRealtimeDispatcherRole` has not

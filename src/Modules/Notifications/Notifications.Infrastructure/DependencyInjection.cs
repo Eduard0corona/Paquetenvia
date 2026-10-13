@@ -1,8 +1,10 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Notifications.Application.Audience;
 using Notifications.Infrastructure.Delivery;
 using Notifications.Infrastructure.Dispatching;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Paqueteria.Infrastructure.Observability;
 
 namespace Notifications.Infrastructure;
@@ -21,8 +23,8 @@ public static class DependencyInjection
                     !string.IsNullOrWhiteSpace(configuration.GetConnectionString("PaqueteriaWorker")),
                 "Notifications:Provider=PostgreSql requires ConnectionStrings:PaqueteriaWorker.")
             .ValidateOnStart();
-        services.AddSingleton(_ => new NotificationsWorkerConnectionFactory(
-            configuration.GetConnectionString("PaqueteriaWorker") ?? string.Empty));
+        services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Worker);
+        services.TryAddSingleton<NotificationsWorkerConnectionFactory>();
         services.AddSingleton<NotificationAudienceResolver>();
         services.AddSingleton<INotificationsStore, PostgreSqlNotificationsStore>();
         services.AddSingleton<ISyntheticInAppProvider, SyntheticInAppProvider>();

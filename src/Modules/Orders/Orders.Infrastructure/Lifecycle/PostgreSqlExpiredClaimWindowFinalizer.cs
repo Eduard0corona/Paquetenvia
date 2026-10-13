@@ -10,13 +10,26 @@ namespace Orders.Infrastructure.Lifecycle;
 /// tenant context is set and no tenant or order identifier is sent: discovery, locking and the
 /// finalized_at write all happen inside the function's single statement.
 /// </summary>
-public sealed class PostgreSqlExpiredClaimWindowFinalizer(NpgsqlDataSource dataSource) : IExpiredClaimWindowFinalizer
+public sealed class PostgreSqlExpiredClaimWindowFinalizer : IExpiredClaimWindowFinalizer
 {
     private const int CommandTimeoutSeconds = 30;
+    private readonly Func<NpgsqlDataSource> _dataSource;
+
+    public PostgreSqlExpiredClaimWindowFinalizer(NpgsqlDataSource dataSource)
+        : this(() => dataSource)
+    {
+        ArgumentNullException.ThrowIfNull(dataSource);
+    }
+
+    /// <summary>SCL-007: the shared Worker pool, resolved on first use so a disabled job never needs it.</summary>
+    internal PostgreSqlExpiredClaimWindowFinalizer(Func<NpgsqlDataSource> dataSource)
+    {
+        _dataSource = dataSource;
+    }
 
     public async Task<int> FinalizeExpiredBatchAsync(int batchSize, CancellationToken cancellationToken)
     {
-        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var connection = await _dataSource().OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using (var role = new NpgsqlCommand("SET LOCAL ROLE paqueteria_worker;", connection, transaction))
         {

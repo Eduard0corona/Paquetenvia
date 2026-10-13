@@ -4,6 +4,7 @@ using Npgsql;
 using NpgsqlTypes;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
 using Paqueteria.Infrastructure.Database.Baseline;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Realtime.Infrastructure.Dispatching;
 
 namespace Paqueteria.ContractTests.PostgreSql;
@@ -391,7 +392,9 @@ public sealed partial class DispatchPostgreSqlContractTests
         {
             var created = await CreateAssignmentService(fixture.AppDataSource)
                 .CreateOwnDriverAssignmentAsync(Command(scenario) with { OrganizationId = operatorId }, default);
-            await using var connections = new RealtimeDispatcherConnectionFactory(fixture.RealtimeConnectionString);
+            await using var realtimePool = RuntimeDataSource.Create(
+                RuntimeDatabaseRole.Realtime, fixture.RealtimeConnectionString, maximumPoolSize: 4);
+            var connections = new RealtimeDispatcherConnectionFactory(realtimePool);
             var evidence = new PostgreSqlRealtimeOutboxEvidenceReader(connections);
 
             // The owner's operations audience reads the assignment; the operator's driver is the driver audience.
@@ -475,7 +478,9 @@ public sealed partial class DispatchPostgreSqlContractTests
         {
             var created = await CreateAssignmentService(fixture.AppDataSource)
                 .CreateOwnDriverAssignmentAsync(Command(scenario) with { OrganizationId = operatorId }, default);
-            await using var connections = new RealtimeDispatcherConnectionFactory(fixture.RealtimeConnectionString);
+            await using var realtimePool = RuntimeDataSource.Create(
+                RuntimeDatabaseRole.Realtime, fixture.RealtimeConnectionString, maximumPoolSize: 4);
+            var connections = new RealtimeDispatcherConnectionFactory(realtimePool);
             var evidence = new PostgreSqlRealtimeOutboxEvidenceReader(connections);
 
             var active = await evidence.ReadAssignmentAsync(scenario.OrganizationId, created.Id, default);

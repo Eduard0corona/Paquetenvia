@@ -3,7 +3,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Options;
-using Npgsql;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Reporting.Application.Operations;
 using Reporting.Infrastructure.Operations;
 
@@ -33,10 +33,8 @@ public static class DependencyInjection
                 "OperationsDashboard:Provider=PostgreSql requires ConnectionStrings:Paqueteria.")
             .ValidateOnStart();
 
-        services.TryAddSingleton(serviceProvider => NpgsqlDataSource.Create(
-            serviceProvider.GetRequiredService<IConfiguration>().GetConnectionString("Paqueteria")
-            ?? throw new InvalidOperationException(
-                "A PostgreSQL operations dashboard requires a configured connection string.")));
+        // SCL-007: the API's one paqueteria_app pool, shared with every other API module.
+        services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Application);
         services.TryAddSingleton<IOperationsDashboardTelemetry, OperationsDashboardTelemetry>();
         services.AddSingleton<DisabledOperationsDashboardReader>();
         services.AddScoped<PostgreSqlOperationsDashboardReader>();
