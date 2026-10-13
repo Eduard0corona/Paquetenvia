@@ -241,7 +241,7 @@ public sealed class PostgreSqlRecipientCallService(
                     StatusReportedAction,
                     EntityType,
                     report.CallRequestId,
-                    null,
+                    report.RequestId,
                     new
                     {
                         call_request_id = report.CallRequestId,
@@ -853,7 +853,7 @@ public sealed class PostgreSqlRecipientCallService(
                 action,
                 EntityType,
                 keypress.CallRequestId,
-                null,
+                keypress.RequestId,
                 new
                 {
                     call_request_id = keypress.CallRequestId,

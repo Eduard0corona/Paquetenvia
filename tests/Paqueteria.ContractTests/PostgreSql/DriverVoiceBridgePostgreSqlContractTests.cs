@@ -1,15 +1,24 @@
+using System.Collections.Concurrent;
+using System.Net;
 using System.Text;
 using System.Text.Json;
 using Drivers.Application.Voice;
+using Drivers.Endpoints;
 using Drivers.Infrastructure;
 using Drivers.Infrastructure.Persistence;
 using Drivers.Infrastructure.Persistence.Migrations;
 using Drivers.Infrastructure.Voice;
 using Locations.Application.Geocoding;
 using Locations.Infrastructure.Geocoding;
+using Microsoft.AspNetCore.Builder;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.Hosting.Server;
+using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Infrastructure;
 using Microsoft.EntityFrameworkCore.Migrations;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -19,6 +28,7 @@ using Paqueteria.Application.Voice;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
 using Paqueteria.Infrastructure.Auditing;
 using Paqueteria.Infrastructure.Database.Baseline;
+using Paqueteria.Infrastructure.Observability;
 using Paqueteria.Infrastructure.Security.Pii;
 using Paqueteria.Infrastructure.Tenancy;
 using Paqueteria.Infrastructure.Voice;
@@ -874,6 +884,55 @@ public sealed class DriverVoiceBridgePostgreSqlContractTests(PostgreSqlContractF
     }
 
     [PostgreSqlContractFact]
+    public async Task Each_webhook_audit_row_carries_the_trace_id_of_its_request()
+    {
+        // OBS-003: the Twilio webhooks run inside an API request, so the audit row each one writes carries that request's
+        // W3C trace id in request_id: the State.TraceId of the request's own log lines (its hosting "Request starting").
+        var vault = new Adp001FakeKeyVault();
+        await using var scenario = await VoiceScenario.CreateAsync(fixture, vault);
+        var provider = new FakeVoiceProvider(request =>
+            new(VoiceBridgeOutcome.Placed, VoiceBridgeResultCodes.Placed, SidFor(request.CallRequestId)));
+        await using var services = CreateServices(VoiceBridgeMode.Live, vault, provider, ManyCalls());
+        await services.Phones.RegisterAsync(Register(scenario, DriverDigits), default);
+        var organizationId = scenario.OrganizationId;
+        var call = await services.Calls.RequestAsync(Call(scenario, "voice-001-idem-key-1"), default);
+        var sid = SidFor(call.CallRequestId);
+        var logs = new RequestStartCapture();
+        await using var host = await VoiceWebhookHost.StartAsync(services.Calls, logs);
+
+        services.Clock.UtcNow = Now.AddSeconds(10);
+        Assert.Equal(
+            VoiceWebhookHost.BridgeTwiml,
+            await host.PostAsync(VoiceWebhookPaths.DriverConfirm, organizationId, call.CallRequestId, HttpStatusCode.OK,
+                ("CallSid", sid), ("Digits", "1")));
+        services.Clock.UtcNow = Now.AddSeconds(20);
+        Assert.Equal(
+            VoiceWebhookHost.ConnectTwiml,
+            await host.PostAsync(VoiceWebhookPaths.RecipientConfirm, organizationId, call.CallRequestId, HttpStatusCode.OK,
+                ("CallSid", OtherCallSid), ("ParentCallSid", sid), ("Digits", "1")));
+        services.Clock.UtcNow = Now.AddMinutes(1);
+        await host.PostAsync(VoiceWebhookPaths.CallStatus, organizationId, call.CallRequestId, HttpStatusCode.NoContent,
+            ("CallSid", sid), ("CallStatus", "completed"), ("CallDuration", "42"));
+
+        var requestIds = await ReadAuditRequestIdsAsync(organizationId, call.CallRequestId);
+        var webhooks = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            ["RECIPIENT_CALL_DRIVER_CONFIRMED"] = logs.TraceIdOf(VoiceWebhookPaths.DriverConfirm),
+            ["RECIPIENT_CALL_BRIDGED"] = logs.TraceIdOf(VoiceWebhookPaths.RecipientConfirm),
+            ["RECIPIENT_CALL_STATUS_REPORTED"] = logs.TraceIdOf(VoiceWebhookPaths.CallStatus),
+        };
+        Assert.All(webhooks, webhook => Assert.True(TraceCorrelation.IsTraceId(webhook.Value), webhook.Key));
+        Assert.Equal(3, webhooks.Values.Distinct(StringComparer.Ordinal).Count());
+        foreach (var (action, traceId) in webhooks)
+        {
+            Assert.Equal((action, traceId), (action, requestIds[action]));
+        }
+
+        // The driver's own call request keeps the request id its command carried.
+        Assert.Equal("req-call", requestIds["RECIPIENT_CALL_REQUESTED"]);
+    }
+
+    [PostgreSqlContractFact]
     public async Task Without_a_1_nobody_is_bridged_the_outcome_is_recorded_and_nothing_is_retried()
     {
         var vault = new Adp001FakeKeyVault();
@@ -1598,6 +1657,160 @@ public sealed class DriverVoiceBridgePostgreSqlContractTests(PostgreSqlContractF
             }
 
             return respond(request);
+        }
+    }
+
+    private async Task<Dictionary<string, string?>> ReadAuditRequestIdsAsync(Guid organizationId, Guid callRequestId)
+    {
+        await using var command = fixture.AdminDataSource.CreateCommand(
+            """
+            SELECT action,request_id FROM platform.audit_logs
+            WHERE org_id=@org AND entity_type='RecipientCallRequest' AND entity_id=@id
+            """);
+        command.Parameters.AddWithValue("org", organizationId);
+        command.Parameters.AddWithValue("id", callRequestId);
+        var requestIds = new Dictionary<string, string?>(StringComparer.Ordinal);
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            requestIds.Add(reader.GetString(0), reader.IsDBNull(1) ? null : reader.GetString(1));
+        }
+
+        return requestIds;
+    }
+
+    /// <summary>
+    /// The production webhook routes (<see cref="VoiceWebhookEndpoints"/>) on a loopback Kestrel, behind the API's
+    /// <c>UseTraceCorrelation</c> and with its log correlation (<c>AddTraceCorrelation</c>), over the real call service.
+    /// The verifier accepts every request: the signature is not under test here.
+    /// </summary>
+    private sealed class VoiceWebhookHost : IAsyncDisposable
+    {
+        internal const string BridgeTwiml = "<Response><Dial>synthetic</Dial></Response>";
+        internal const string ConnectTwiml = "<Response></Response>";
+        private const string HangupTwiml = "<Response><Hangup/></Response>";
+
+        private readonly WebApplication _app;
+        private readonly HttpClient _client;
+
+        private VoiceWebhookHost(WebApplication app, HttpClient client)
+        {
+            _app = app;
+            _client = client;
+        }
+
+        internal static async Task<VoiceWebhookHost> StartAsync(IRecipientCallService calls, ILoggerProvider logs)
+        {
+            var builder = WebApplication.CreateSlimBuilder();
+            builder.WebHost.UseKestrel(kestrel => kestrel.Listen(IPAddress.Loopback, 0));
+            builder.Logging.ClearProviders();
+            builder.Logging.AddProvider(logs);
+            builder.Services.AddTraceCorrelation();
+            builder.Services.AddSingleton<IVoiceBridgeStatus>(new FakeVoiceStatus(VoiceBridgeMode.Live));
+            builder.Services.AddSingleton<IVoiceWebhookVerifier, AcceptingVerifier>();
+            builder.Services.AddSingleton(calls);
+            var app = builder.Build();
+            app.UseTraceCorrelation();
+            app.MapVoiceWebhookEndpoints();
+            await app.StartAsync();
+            var address = app.Services.GetRequiredService<IServer>().Features.Get<IServerAddressesFeature>()!.Addresses.Single();
+            return new VoiceWebhookHost(app, new HttpClient { BaseAddress = new Uri(address, UriKind.Absolute) });
+        }
+
+        internal async Task<string> PostAsync(
+            string path,
+            Guid organizationId,
+            Guid callRequestId,
+            HttpStatusCode expected,
+            params (string Name, string Value)[] fields)
+        {
+            using var content = new FormUrlEncodedContent(
+                fields.Select(field => new KeyValuePair<string, string>(field.Name, field.Value)));
+            using var response = await _client.PostAsync(
+                VoiceWebhookPaths.PathAndQuery(path, organizationId, callRequestId), content);
+            var body = await response.Content.ReadAsStringAsync();
+            Assert.True(expected == response.StatusCode, $"{path}: {(int)response.StatusCode} {body}");
+            return body;
+        }
+
+        public async ValueTask DisposeAsync()
+        {
+            _client.Dispose();
+            await _app.StopAsync();
+            await _app.DisposeAsync();
+        }
+
+        private sealed class AcceptingVerifier : IVoiceWebhookVerifier
+        {
+            public VoiceWebhookVerdict Verify(VoiceWebhookRequest request) => VoiceWebhookVerdict.Verified;
+
+            public string BuildInboundCallResponse() => HangupTwiml;
+
+            public string BuildBridgeResponse(VoicePhoneNumber recipient, Guid organizationId, Guid callRequestId) =>
+                BridgeTwiml;
+
+            public string BuildRecipientScreenResponse(Guid organizationId, Guid callRequestId) => HangupTwiml;
+
+            public string BuildConnectResponse() => ConnectTwiml;
+
+            public string BuildHangupResponse() => HangupTwiml;
+        }
+    }
+
+    /// <summary>The <c>TraceId</c> of each hosting "Request starting" line, by request path.</summary>
+    private sealed class RequestStartCapture : ILoggerProvider
+    {
+        private const string HostingCategory = "Microsoft.AspNetCore.Hosting.Diagnostics";
+        private const int RequestStartingEventId = 1;
+        private readonly ConcurrentQueue<(string Path, string? TraceId)> _starts = new();
+
+        internal string? TraceIdOf(string path) => Assert.Single(_starts, start => start.Path == path).TraceId;
+
+        public ILogger CreateLogger(string categoryName) =>
+            categoryName == HostingCategory ? new Logger(_starts) : NullLogger.Instance;
+
+        public void Dispose()
+        {
+        }
+
+        private sealed class Logger(ConcurrentQueue<(string Path, string? TraceId)> starts) : ILogger
+        {
+            public IDisposable? BeginScope<TState>(TState state)
+                where TState : notnull => null;
+
+            public bool IsEnabled(LogLevel logLevel) => logLevel != LogLevel.None;
+
+            public void Log<TState>(
+                LogLevel logLevel,
+                EventId eventId,
+                TState state,
+                Exception? exception,
+                Func<TState, Exception?, string> formatter)
+            {
+                if (eventId.Id != RequestStartingEventId || state is not IEnumerable<KeyValuePair<string, object?>> properties)
+                {
+                    return;
+                }
+
+                string? path = null;
+                string? traceId = null;
+                foreach (var property in properties)
+                {
+                    if (property.Key == "Path")
+                    {
+                        path = property.Value?.ToString();
+                    }
+                    else if (property.Key == TraceCorrelation.LogProperty)
+                    {
+                        traceId = property.Value as string;
+                    }
+                }
+
+                if (path is not null)
+                {
+                    starts.Enqueue((path, traceId));
+                }
+            }
         }
     }
 
