@@ -247,6 +247,196 @@ NEXT_SHARP_SOURCEMAP_KNOWN_ADVISORY_BASE_BINDING = {
     ],
     "expected_lockfile_sha256": "a85a581a4b6b0a4169c8632091aa5bdc2981891c4fa40661344cbc8b43e4522d",
 }
+SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID = "SEC-2026-12-SIGNALR-CRYPTOGRAPHY"
+SIGNALR_CRYPTOGRAPHY_ISSUE = 260
+SIGNALR_CRYPTOGRAPHY_ISSUE_TITLE = (
+    "SEC-2026-12: remediate SignalR.Common, Cryptography.Pkcs and Cryptography.Xml "
+    "NuGet advisories"
+)
+# The six Microsoft advisories of 2026-10-13 that SEC-2026-12 remediates, all fixed in
+# 10.0.13: advisory -> (affected package, severity, CVE). The last two were published after
+# the first four; the same Xml 10.0.13 pin fixes them ("Incluir los 6").
+SIGNALR_CRYPTOGRAPHY_ADVISORIES = {
+    "GHSA-334f-vvp4-7g6p": ("Microsoft.AspNetCore.SignalR.Common", "high", "CVE-2026-70159"),
+    "GHSA-846f-f764-76mx": ("System.Security.Cryptography.Pkcs", "high", "CVE-2026-84008"),
+    "GHSA-2fmv-rv2c-59x7": ("System.Security.Cryptography.Pkcs", "moderate", "CVE-2026-70162"),
+    "GHSA-r955-8q5j-3h83": ("System.Security.Cryptography.Xml", "high", "CVE-2026-96958"),
+    "GHSA-7hqp-7c5m-4vq6": ("System.Security.Cryptography.Xml", "high", "CVE-2026-96960"),
+    "GHSA-c399-9853-6jmj": ("System.Security.Cryptography.Xml", "high", "CVE-2026-96959"),
+}
+_SIGNALR_CRYPTOGRAPHY_INTEGRATION_LOCK = "tests/Paqueteria.IntegrationTests/packages.lock.json"
+SIGNALR_CRYPTOGRAPHY_LOCK_FILES = [
+    "tests/Paqueteria.ArchitectureTests/packages.lock.json",
+    "tests/Paqueteria.ContractTests/packages.lock.json",
+    _SIGNALR_CRYPTOGRAPHY_INTEGRATION_LOCK,
+    "tools/Paqueteria.DatabaseMigrator/packages.lock.json",
+]
+# A main-direct remediation leaves docs/normative/** untouched, so the back-sync merges
+# cleanly; the decision-log row and CHANGELOG entry go in with the retirement.
+SIGNALR_CRYPTOGRAPHY_NON_DEPENDENCY_FILES = [
+    ".github/workflows/ci.yml",
+    ".github/workflows/pr-validation.yml",
+    "docs/development/rel-000-internal-release.md",
+    "tests/fixtures/rel-000/security-tracking.json",
+    "tools/rel-000/rel000.py",
+    "tools/rel-000/security-remediation-policy.json",
+    "tools/rel-000/test_rel000.py",
+]
+# Exact SEC-2026-12 central package edits (owner decisions of 2026-10-13, "Remediar con la
+# tabla" and "Fijado transitivo"): one version change, two new pins inserted before their
+# anchor, and transitive pinning turned on repo-wide right after Central Package Management.
+SIGNALR_CRYPTOGRAPHY_CENTRAL_VERSION_CHANGES = {
+    "Microsoft.AspNetCore.SignalR.Client": {"from": "10.0.10", "to": "10.0.13"},
+}
+SIGNALR_CRYPTOGRAPHY_CENTRAL_VERSION_ADDITIONS = [
+    {"id": "System.Security.Cryptography.Pkcs", "version": "10.0.13", "before": "Testcontainers.PostgreSql"},
+    {"id": "System.Security.Cryptography.Xml", "version": "10.0.13", "before": "Testcontainers.PostgreSql"},
+]
+CENTRAL_PACKAGE_MANAGEMENT_LINE = "<ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>"
+CENTRAL_TRANSITIVE_PINNING_LINE = (
+    "<CentralPackageTransitivePinningEnabled>true</CentralPackageTransitivePinningEnabled>"
+)
+# Exact SEC-2026-12 NuGet graph: the only lockfile nodes that may move, each from and to an
+# exact version and content hash, only in its lock files. The 14 SignalR packages of the
+# owner's table move only in the integration tests; Xml and Pkcs move in four lock files and,
+# pinned centrally, become CentralTransitive. Every other node keeps its base bytes.
+SIGNALR_CRYPTOGRAPHY_NUGET_PACKAGE_MOVES = {
+    "Microsoft.AspNetCore.Connections.Abstractions": {
+        "from_version": "10.0.10",
+        "from_content_hash": "oXFVxDMZeUSCVGRyZsZAIJIrKVNayMstMfBrNOkPWJvxePziwmTGfx3+HPlf5bnwYxt6oq/FKduCoTIXXMNf1A==",
+        "to_version": "10.0.13",
+        "to_content_hash": "l/1VmXALhXxdTWG+41N25xigbAXZx/43c6cVw+mXxLH6KCKO25P3c53MLK5w5ua0GCr2RdZhN/xsUwCG7v9N1w==",
+        "pinned_centrally": False,
+        "lock_files": [_SIGNALR_CRYPTOGRAPHY_INTEGRATION_LOCK],
+    },
+    "Microsoft.AspNetCore.Http.Connections.Client": {
+        "from_version": "10.0.10",
+        "from_content_hash": "85adEQWKkB+d0fevCrToFlN99hhPfBPT7ZluCzrakxp8u63kKuA/5Wt9gRs0x6AMDOW6rOOJhh2TnCKlPeGq6g==",
+        "to_version": "10.0.13",
+        "to_content_hash": "r9hlU+te+QWFJlUCt2C22TDKY3oMER8ayC7Qzeq6yJ5toHBKcSqshhyyaLKK1jgBuyNi4ejly0wE8ANV8TyfWQ==",
+        "pinned_centrally": False,
+        "lock_files": [_SIGNALR_CRYPTOGRAPHY_INTEGRATION_LOCK],
+    },
+    "Microsoft.AspNetCore.Http.Connections.Common": {
+        "from_version": "10.0.10",
+        "from_content_hash": "hPuO+G0LWlO3kQDispgYjJrj2J5D1n8QdLugnTM4Q51D+quliennt+bH6S87iOVhcsXI+ve2k0K0vd9VcHtnag==",
+        "to_version": "10.0.13",
+        "to_content_hash": "L3NCYBsvQIcSS+qu6TemunsNGEDk29hLchifeBcg7kcriAwfKJSUPyF34zVzFTfsgnza531SMynbNr7g1tcq0Q==",
+        "pinned_centrally": False,
+        "lock_files": [_SIGNALR_CRYPTOGRAPHY_INTEGRATION_LOCK],
+    },
+    "Microsoft.AspNetCore.SignalR.Client": {
+        "from_version": "10.0.10",
+        "from_content_hash": "g4MtTk+83S4phUGVvilHgKWa0gfX9qhnRQGIaeq7Kgz3MIAHkPt1h9XnlK3bRTPcsDVFuKhb7rKAtFvxl7NtDQ==",
+        "to_version": "10.0.13",
+        "to_content_hash": "17fMUI5gkRwR9qXXTELd5OChcFn3lkgWpiblaaELQ45zOL7VuU7HJYAYnMk+Irjf2jpRxHT7b0imy+NVIFyoYQ==",
+        "pinned_centrally": False,
+        "lock_files": [_SIGNALR_CRYPTOGRAPHY_INTEGRATION_LOCK],
+    },
+    "Microsoft.AspNetCore.SignalR.Client.Core": {
+        "from_version": "10.0.10",
+        "from_content_hash": "1y+34HyOpeSUkkKKaQdXARnYtQLObre7GJoPK3TYbQJYe5GqXamL17WuEroX7EBDWzmTCylSc8QNMXXerGiirw==",
+        "to_version": "10.0.13",
+        "to_content_hash": "zfCQ0/J/rATKKcpwcpQYFz8sxhvrzgGyblsATcfxqSCibRkPFmDZcFmfD0UfLi38q+VDMpwEVuzOCO3TpRy99Q==",
+        "pinned_centrally": False,
+        "lock_files": [_SIGNALR_CRYPTOGRAPHY_INTEGRATION_LOCK],
+    },
+    "Microsoft.AspNetCore.SignalR.Common": {
+        "from_version": "10.0.10",
+        "from_content_hash": "X0bTYSNXyLeOHbS4HbF1x4aXFUxgu35CyUgAuCJGpZcRz2wwftRbeJ6v17wlUm7Dzvbbo5Dvff5arwY2tDHYBg==",
+        "to_version": "10.0.13",
+        "to_content_hash": "Rd6v57QqwW7Uayx0//qsf6J8MGcdw4Lw3Bq3dfT33KWnydaf0HsXoBxHQze/EowSsYQUx2yi9+PWCob9A9GuFw==",
+        "pinned_centrally": False,
+        "lock_files": [_SIGNALR_CRYPTOGRAPHY_INTEGRATION_LOCK],
+    },
+    "Microsoft.AspNetCore.SignalR.Protocols.Json": {
+        "from_version": "10.0.10",
+        "from_content_hash": "n/O6U+WCOurES0EmsMfd//S8QerLv1/n8tswbuH9s4JV45oM2xj0xXu+fSfIh+pzUD00MUh8PY7utlOWF53KWQ==",
+        "to_version": "10.0.13",
+        "to_content_hash": "8TvhozBxdbcmS+4S4mb2FN2ls5NU99zwapQAUIse8oWV7CwvUTq0bBJ5/0+0B0JW9wnrxBpMrJ6jkivnG+f7fg==",
+        "pinned_centrally": False,
+        "lock_files": [_SIGNALR_CRYPTOGRAPHY_INTEGRATION_LOCK],
+    },
+    "Microsoft.Extensions.DependencyInjection": {
+        "from_version": "10.0.10",
+        "from_content_hash": "ANyvsgkNBRvcJh2XLgn8veGmajf+8m0AbKK+HPWdRL1yraSNVVSmQhFntLtdz/C795jxqqup+k05cs/3jZQPOA==",
+        "to_version": "10.0.13",
+        "to_content_hash": "4tnWU9vrU/A8NwYe9Z6wvieZ0EBb/uM82LAT+edNhdepOBWREZ7M7mzb941EIDPJaeOFdbVrDd5+7s9e89U6bQ==",
+        "pinned_centrally": False,
+        "lock_files": [_SIGNALR_CRYPTOGRAPHY_INTEGRATION_LOCK],
+    },
+    "Microsoft.Extensions.DependencyInjection.Abstractions": {
+        "from_version": "10.0.10",
+        "from_content_hash": "z/2xXlFw2aLGjHyEm6E0tQ+In6VfzQzTrtArbQ2c0TQE16ZbyDCMGPvaUT9I0s8rgy9sRWlU2P9waW37qV04qA==",
+        "to_version": "10.0.13",
+        "to_content_hash": "G2GrGWNAPZBsii2F6AU8n+JT2tC1/I0Ml/e9ZyNCgPjf3hZqronP7o0X91aAynCmVeae8KkSIUNXXeXCNRmdVQ==",
+        "pinned_centrally": False,
+        "lock_files": [_SIGNALR_CRYPTOGRAPHY_INTEGRATION_LOCK],
+    },
+    "Microsoft.Extensions.Features": {
+        "from_version": "10.0.10",
+        "from_content_hash": "4Zdm7n1vxXAXpHOhGQVpGd5KCdcI1EWk66ilgdrDt2I+928ND+u/F+EVrzYi9pmRR+XeAE47kjuVEmkP0b0mBw==",
+        "to_version": "10.0.13",
+        "to_content_hash": "7xLogOKNBYYWbUUEMOPfuirfcYG8iBNQ4TOc3aUzJpiRD7tyQqzYWhDPXAk2kOuJTd7ImcGtdT1HEQTC9VljuQ==",
+        "pinned_centrally": False,
+        "lock_files": [_SIGNALR_CRYPTOGRAPHY_INTEGRATION_LOCK],
+    },
+    "Microsoft.Extensions.Logging": {
+        "from_version": "10.0.10",
+        "from_content_hash": "Tf6z5HsL0VDYRTfvsoNrTGHGheCwkTsZBA2FFh5ATJUbkAwug+FFNISJK2gjpUNemlAOoWllAK52HOWCjto3EQ==",
+        "to_version": "10.0.13",
+        "to_content_hash": "fqbiPy4nUp4H2XHKAVQXKN2y3T2h4cFIx1DAAgE6iY9OHkN/OA1cKFi+geJKRWGuX6pS5SFbsjIPWHJqrxE0eg==",
+        "pinned_centrally": False,
+        "lock_files": [_SIGNALR_CRYPTOGRAPHY_INTEGRATION_LOCK],
+    },
+    "Microsoft.Extensions.Logging.Abstractions": {
+        "from_version": "10.0.10",
+        "from_content_hash": "zkFxGYUvdxAvIKTyXHrmW+Sux53D4SezD9dMyZ6hrwwzPQJNuwCRy1f5W7AvYTqacEGhWF2XderRQG1OvbV8og==",
+        "to_version": "10.0.13",
+        "to_content_hash": "aSZEhEig4fvNiw2zs8Z6NyDlniKtq6YjcF3DyHuqTEHcZ2VKA/6itMPZ+dW+yWABWExlDcQwwdbqX1Rcb7W8WQ==",
+        "pinned_centrally": False,
+        "lock_files": [_SIGNALR_CRYPTOGRAPHY_INTEGRATION_LOCK],
+    },
+    "Microsoft.Extensions.Options": {
+        "from_version": "10.0.10",
+        "from_content_hash": "srnhnk7nE8krBiIXp71LvBmKBtraBONWSRzdjJgRv1Ko9Mp8IVNqv4vIS9hGeVteBig8aQkva9ZG+sC+o5sVcA==",
+        "to_version": "10.0.13",
+        "to_content_hash": "tmMJgdrE4uhf1JcNs9CV9moAHW+hmDuvgMiPpnQxarKaUxqI2eN33sYK5S4l9Uw+rG9PJvlm4qPxMhvolTDTaQ==",
+        "pinned_centrally": False,
+        "lock_files": [_SIGNALR_CRYPTOGRAPHY_INTEGRATION_LOCK],
+    },
+    "Microsoft.Extensions.Primitives": {
+        "from_version": "10.0.10",
+        "from_content_hash": "5wu/GrYVd8mG2DVUw3vFJzF+O336TyTGg/Kmcgw9bfwYhCoFiV5lR5QeEmKecJyrW4W54nMfD3p3589E8a7czQ==",
+        "to_version": "10.0.13",
+        "to_content_hash": "ZjTwxzhiw2TMEzIbUDkMF0dfDB2I4NQgIfKD0ELu9/5Mk+SRGdKZcD0/lvBrRCAPo6KN2r0BW86MRancoyJkoA==",
+        "pinned_centrally": False,
+        "lock_files": [_SIGNALR_CRYPTOGRAPHY_INTEGRATION_LOCK],
+    },
+    "System.Security.Cryptography.Pkcs": {
+        "from_version": "10.0.10",
+        "from_content_hash": "KG8t5RHczdgB3IWvRndpI0nE1DSo7ikDYSDbITxfgRFyIvnYiKzuPjaZOsPnwFQ1aOGUl9sEulJul9wlHLEUoA==",
+        "to_version": "10.0.13",
+        "to_content_hash": "a+EovgC1fBnwdlQ6cn3j4JFBfKqiFaFvoAhjisOoSvazLAcIznaBzPQP0oYnvccmeXfqUH1KebVZOxSeH6rMaw==",
+        "pinned_centrally": True,
+        "lock_files": list(SIGNALR_CRYPTOGRAPHY_LOCK_FILES),
+    },
+    "System.Security.Cryptography.Xml": {
+        "from_version": "10.0.10",
+        "from_content_hash": "Mz6Y+s+uMQKj1H2BUF0OhlmaOQkLgSG34/IrUaBDirYBQ6bgwcFvO/XtXWcoDlBLFoFB0uKqDNhybHOd+fQK1A==",
+        "to_version": "10.0.13",
+        "to_content_hash": "v6/GHhLaHkuN/ISgbKzBeyC7TP7S6Qm/dVyKA+p0ay9nlJyLif+spozjAGclY/FRIv2TC+KNQCo7dSNmupvWtQ==",
+        "pinned_centrally": True,
+        "lock_files": list(SIGNALR_CRYPTOGRAPHY_LOCK_FILES),
+    },
+}
+# Policy fields that declare a NuGet graph moved through the security route.
+NUGET_REMEDIATION_GRAPH_FIELDS = (
+    "expected_nuget_package_moves",
+    "expected_central_version_changes",
+    "expected_central_version_additions",
+    "central_package_transitive_pinning_required",
+)
 EXPECTED_MVP0_P0_COUNT = 29
 FIN001_EXPECTED_DEPENDENCIES = {"DSP-002", "EXT-001", "RTE-001"}
 ITEM_STATUSES = {"VERIFIED", "PARTIAL", "NOT_STARTED", "BLOCKED", "NOT_APPLICABLE"}
@@ -1075,6 +1265,74 @@ def validate_remediation_policy(policy: Any, *, base_policy: bool = False) -> di
                     "The Next.js, Sharp and source-map-js remediation authorization is "
                     "incomplete or inconsistent.",
                 )
+        if authorization.get("id") == SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID:
+            tracked_ids = list(SIGNALR_CRYPTOGRAPHY_ADVISORIES)
+            known_id = BRACES_KNOWN_ADVISORY["advisory_id"]
+            dependency_files = [CENTRAL_PACKAGES_PATH, *SIGNALR_CRYPTOGRAPHY_LOCK_FILES]
+            lock_hashes = authorization.get("expected_lockfile_sha256")
+            if (
+                authorization.get("tracked_issue") != SIGNALR_CRYPTOGRAPHY_ISSUE
+                or authorization.get("tracked_issue_title") != SIGNALR_CRYPTOGRAPHY_ISSUE_TITLE
+                or "related_tracked_issue" in authorization
+                or authorization.get("issue_advisories")
+                != {str(SIGNALR_CRYPTOGRAPHY_ISSUE): tracked_ids}
+                or authorization.get("expected_base_advisories") != [*tracked_ids, known_id]
+                or authorization.get("expected_base_packages")
+                != {
+                    **{
+                        advisory_id: package
+                        for advisory_id, (package, _, _) in SIGNALR_CRYPTOGRAPHY_ADVISORIES.items()
+                    },
+                    known_id: BRACES_KNOWN_ADVISORY["package"],
+                }
+                or authorization.get("expected_base_severities")
+                != {
+                    **{
+                        advisory_id: severity
+                        for advisory_id, (_, severity, _) in SIGNALR_CRYPTOGRAPHY_ADVISORIES.items()
+                    },
+                    known_id: BRACES_KNOWN_ADVISORY["severity"],
+                }
+                or authorization.get("expected_base_totals")
+                != {"total": 7, "critical": 0, "high": 6, "moderate": 1, "low": 0}
+                or authorization.get("expected_branch_totals")
+                != {"total": 1, "critical": 0, "high": 1, "moderate": 0, "low": 0}
+                or authorization.get("expected_cves")
+                != {
+                    advisory_id: cve
+                    for advisory_id, (_, _, cve) in SIGNALR_CRYPTOGRAPHY_ADVISORIES.items()
+                }
+                or authorization.get("nuget_affected_range") != ">=10.0.0 <10.0.13"
+                or authorization.get("nuget_first_patched_version") != "10.0.13"
+                or authorization.get("allowed_direct_packages")
+                != list(SIGNALR_CRYPTOGRAPHY_CENTRAL_VERSION_CHANGES)
+                or authorization.get("allowed_dependency_files") != dependency_files
+                or authorization.get("required_dependency_files") != dependency_files
+                or authorization.get("allowed_non_dependency_files")
+                != SIGNALR_CRYPTOGRAPHY_NON_DEPENDENCY_FILES
+                or authorization.get("expected_central_version_changes")
+                != SIGNALR_CRYPTOGRAPHY_CENTRAL_VERSION_CHANGES
+                or authorization.get("expected_central_version_additions")
+                != SIGNALR_CRYPTOGRAPHY_CENTRAL_VERSION_ADDITIONS
+                or authorization.get("central_package_transitive_pinning_required") is not True
+                or authorization.get("expected_nuget_package_moves")
+                != SIGNALR_CRYPTOGRAPHY_NUGET_PACKAGE_MOVES
+                or not isinstance(lock_hashes, dict)
+                or list(lock_hashes) != SIGNALR_CRYPTOGRAPHY_LOCK_FILES
+                or any(
+                    re.fullmatch(r"[0-9a-f]{64}", str(value)) is None
+                    for value in lock_hashes.values()
+                )
+                or authorization.get("require_sharp_runtime_smoke") is not False
+                or "target_sharp_version" in authorization
+                or authorization.get("prohibited_prereleases") is not True
+                or authorization.get("manual_lockfile_edits_allowed") is not False
+            ):
+                fail(
+                    "REMEDIATION_POLICY_INVALID",
+                    "The SignalR and cryptography NuGet remediation authorization is "
+                    "incomplete or inconsistent.",
+                )
     # An accepted known advisory exists only under its own exact authorization.
     for authorization in [*historical, *active]:
         if "accepted_known_advisory" in authorization and authorization.get("id") != (
@@ -1093,6 +1351,23 @@ def validate_remediation_policy(policy: Any, *, base_policy: bool = False) -> di
             fail(
                 "REMEDIATION_POLICY_INVALID",
                 "Only the exact SEC-2026-11 authorization may rebind or cite a known advisory.",
+            )
+        # A NuGet graph moved through the security route exists only under the exact
+        # SEC-2026-12 authorization, active or retired, and only with its exact moves: the
+        # permanent package graph check reads it (see security_remediation_nuget_graphs).
+        if any(field in authorization for field in NUGET_REMEDIATION_GRAPH_FIELDS) and (
+            authorization.get("id") != SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID
+            or authorization.get("expected_nuget_package_moves")
+            != SIGNALR_CRYPTOGRAPHY_NUGET_PACKAGE_MOVES
+            or authorization.get("expected_central_version_changes")
+            != SIGNALR_CRYPTOGRAPHY_CENTRAL_VERSION_CHANGES
+            or authorization.get("expected_central_version_additions")
+            != SIGNALR_CRYPTOGRAPHY_CENTRAL_VERSION_ADDITIONS
+            or authorization.get("central_package_transitive_pinning_required") is not True
+        ):
+            fail(
+                "REMEDIATION_POLICY_INVALID",
+                "Only the exact SEC-2026-12 authorization may move a NuGet graph.",
             )
     validate_dependency_admission_registry(policy, identifiers, branches)
     return policy
@@ -5357,10 +5632,265 @@ def _central_package_versions_from_xml(
     return versions
 
 
+def _nuget_requested(version: str) -> str:
+    return f"[{version}, )"
+
+
+def _nuget_moves_for_lock(
+    relative: str, moves: dict[str, dict[str, Any]]
+) -> dict[str, dict[str, Any]]:
+    return {package: move for package, move in moves.items() if relative in move["lock_files"]}
+
+
+def nuget_remediation_expected_lock(
+    relative: str,
+    base_lock: Any,
+    moves: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Apply only the declared moves of a NuGet security remediation to a base lockfile.
+
+    In every framework of the lockfile, each declared node must sit exactly at its starting
+    version and content hash. It moves to its exact target, a Direct node requests the new
+    version, and a node pinned centrally turns from Transitive into CentralTransitive. Its
+    edges to other packages moved in the same lockfile follow them. Every other node and
+    every other edge keeps its base value.
+    """
+
+    applicable = _nuget_moves_for_lock(relative, moves)
+    expected = copy.deepcopy(base_lock)
+    frameworks = expected.get("dependencies") if isinstance(expected, dict) else None
+    if not isinstance(frameworks, dict) or not frameworks:
+        fail(
+            "BASE_LOCK_GRAPH_UNEXPECTED",
+            "The base NuGet lockfile has no dependency graph.",
+            file=relative,
+        )
+    for framework, nodes in frameworks.items():
+        for package, move in applicable.items():
+            node = nodes.get(package) if isinstance(nodes, dict) else None
+            node_type = node.get("type") if isinstance(node, dict) else None
+            if (
+                not isinstance(node, dict)
+                or node.get("resolved") != move["from_version"]
+                or node.get("contentHash") != move["from_content_hash"]
+                or node_type not in ({"Transitive"} if move["pinned_centrally"] else {"Direct", "Transitive"})
+                or (node_type == "Transitive" and "requested" in node)
+                or (
+                    node_type == "Direct"
+                    and node.get("requested") != _nuget_requested(move["from_version"])
+                )
+            ):
+                fail(
+                    "BASE_LOCK_GRAPH_UNEXPECTED",
+                    "The base NuGet lockfile no longer matches the authorized vulnerable graph.",
+                    file=relative,
+                    framework=framework,
+                    package=package,
+                )
+            moved = copy.deepcopy(node)
+            moved["resolved"] = move["to_version"]
+            moved["contentHash"] = move["to_content_hash"]
+            if move["pinned_centrally"]:
+                moved["type"] = "CentralTransitive"
+            if moved["type"] != "Transitive":
+                moved["requested"] = _nuget_requested(move["to_version"])
+            edges = moved.get("dependencies")
+            if isinstance(edges, dict):
+                for dependency, version in edges.items():
+                    target = applicable.get(dependency)
+                    if target is not None and version == target["from_version"]:
+                        edges[dependency] = target["to_version"]
+            nodes[package] = moved
+    return expected
+
+
+def nuget_remediation_reverted_lock(
+    relative: str,
+    current_lock: Any,
+    moves: dict[str, dict[str, Any]],
+) -> Any:
+    """Undo exactly the declared moves of a NuGet security remediation, node by node.
+
+    Only a node that sits exactly at its declared target (version, content hash, type and
+    requested range) returns to its declared start, with its edges to other moved packages.
+    Anything else is left as it is, so the permanent package graph check still judges it
+    and fails closed on any other drift.
+    """
+
+    applicable = _nuget_moves_for_lock(relative, moves)
+    frameworks = current_lock.get("dependencies") if isinstance(current_lock, dict) else None
+    if not applicable or not isinstance(frameworks, dict):
+        return current_lock
+    reverted = copy.deepcopy(current_lock)
+    for nodes in reverted["dependencies"].values():
+        if not isinstance(nodes, dict):
+            continue
+        for package, move in applicable.items():
+            node = nodes.get(package)
+            target_request = _nuget_requested(move["to_version"])
+            if (
+                not isinstance(node, dict)
+                or node.get("resolved") != move["to_version"]
+                or node.get("contentHash") != move["to_content_hash"]
+                or (
+                    move["pinned_centrally"]
+                    and (
+                        node.get("type") != "CentralTransitive"
+                        or node.get("requested") != target_request
+                    )
+                )
+                or (
+                    not move["pinned_centrally"]
+                    and not (
+                        (node.get("type") == "Direct" and node.get("requested") == target_request)
+                        or (node.get("type") == "Transitive" and "requested" not in node)
+                    )
+                )
+            ):
+                continue
+            original = copy.deepcopy(node)
+            original["resolved"] = move["from_version"]
+            original["contentHash"] = move["from_content_hash"]
+            if move["pinned_centrally"]:
+                original["type"] = "Transitive"
+                del original["requested"]
+            elif original["type"] == "Direct":
+                original["requested"] = _nuget_requested(move["from_version"])
+            edges = original.get("dependencies")
+            if isinstance(edges, dict):
+                for dependency, version in edges.items():
+                    other = applicable.get(dependency)
+                    if other is not None and version == other["to_version"]:
+                        edges[dependency] = other["from_version"]
+            nodes[package] = original
+    return reverted
+
+
+def _central_package_line(package: str, version: str) -> str:
+    return f'<PackageVersion Include="{package}" Version="{version}" />'
+
+
+def nuget_remediation_expected_props(base_text: str, authorization: dict[str, Any]) -> list[str]:
+    """Apply only the declared central edits of a NuGet security remediation to the base.
+
+    Each changed PackageVersion line keeps its place and indentation, transitive pinning is
+    inserted right after the Central Package Management switch, and each new pin is
+    inserted right before its anchor, in declaration order. Returns the expected lines.
+    """
+
+    lines = base_text.splitlines()
+
+    def single(predicate, label: str) -> int:
+        matches = [index for index, line in enumerate(lines) if predicate(line.strip())]
+        if len(matches) != 1:
+            fail(
+                "BASE_CENTRAL_PACKAGES_UNEXPECTED",
+                "The base central package manifest no longer matches the authorized edits.",
+                line=label,
+            )
+        return matches[0]
+
+    def indentation(index: int) -> str:
+        return lines[index][: len(lines[index]) - len(lines[index].lstrip())]
+
+    if any("CentralPackageTransitivePinningEnabled" in line for line in lines):
+        fail(
+            "BASE_CENTRAL_PACKAGES_UNEXPECTED",
+            "The base central package manifest already configures transitive pinning.",
+        )
+    for package, change in authorization["expected_central_version_changes"].items():
+        before = _central_package_line(package, change["from"])
+        index = single(lambda line, before=before: line == before, before)
+        lines[index] = indentation(index) + _central_package_line(package, change["to"])
+    if authorization.get("central_package_transitive_pinning_required") is True:
+        index = single(lambda line: line == CENTRAL_PACKAGE_MANAGEMENT_LINE, CENTRAL_PACKAGE_MANAGEMENT_LINE)
+        lines.insert(index + 1, indentation(index) + CENTRAL_TRANSITIVE_PINNING_LINE)
+    for addition in authorization["expected_central_version_additions"]:
+        if any(f'Include="{addition["id"]}"' in line for line in lines):
+            fail(
+                "BASE_CENTRAL_PACKAGES_UNEXPECTED",
+                "The base central package manifest already declares an authorized new pin.",
+                package=addition["id"],
+            )
+        prefix = f'<PackageVersion Include="{addition["before"]}" '
+        index = single(lambda line, prefix=prefix: line.startswith(prefix), prefix)
+        lines.insert(index, indentation(index) + _central_package_line(addition["id"], addition["version"]))
+    return lines
+
+
+def nuget_remediation_reverted_props(current_text: str, authorization: dict[str, Any]) -> str:
+    """Undo exactly the declared central edits when every one of them is present.
+
+    Each edited line must appear exactly once; otherwise the text is returned unchanged and
+    the permanent package graph check fails closed on it.
+    """
+
+    lines = current_text.splitlines(keepends=True)
+
+    def single(content: str) -> int | None:
+        matches = [index for index, line in enumerate(lines) if line.strip() == content]
+        return matches[0] if len(matches) == 1 else None
+
+    removals = [
+        _central_package_line(addition["id"], addition["version"])
+        for addition in authorization["expected_central_version_additions"]
+    ]
+    if authorization.get("central_package_transitive_pinning_required") is True:
+        removals.append(CENTRAL_TRANSITIVE_PINNING_LINE)
+    changes = {
+        _central_package_line(package, change["to"]): change
+        for package, change in authorization["expected_central_version_changes"].items()
+    }
+    positions = {content: single(content) for content in [*removals, *changes]}
+    if any(position is None for position in positions.values()):
+        return current_text
+    for content, change in changes.items():
+        index = positions[content]
+        lines[index] = lines[index].replace(
+            f'Version="{change["to"]}"', f'Version="{change["from"]}"', 1
+        )
+    removed = {positions[content] for content in removals}
+    return "".join(line for index, line in enumerate(lines) if index not in removed)
+
+
+def security_remediation_nuget_graphs(policy: dict[str, Any]) -> list[dict[str, Any]]:
+    """The NuGet graphs that owner-authorized security remediations moved, retired or active.
+
+    The permanent package graph is the MVP-0 baseline plus the admitted packages
+    (GOV-DEPENDENCY-ADMISSION-001) plus exactly these moves, which the policy loader pins
+    to the SEC-2026-12 authorization (``NUGET_REMEDIATION_GRAPH_FIELDS``).
+    """
+
+    return [
+        copy.deepcopy(item)
+        for item in [*policy["historical_remediations"], *policy["active_remediations"]]
+        if "expected_nuget_package_moves" in item
+    ]
+
+
+def _nuget_remediations_reverted_lock(
+    relative: str, lock: Any, nuget_remediations: list[dict[str, Any]] | None
+) -> Any:
+    for authorization in reversed(nuget_remediations or []):
+        lock = nuget_remediation_reverted_lock(
+            relative, lock, authorization["expected_nuget_package_moves"]
+        )
+    return lock
+
+
+def _nuget_remediations_reverted_props(
+    text: str, nuget_remediations: list[dict[str, Any]] | None
+) -> str:
+    for authorization in reversed(nuget_remediations or []):
+        text = nuget_remediation_reverted_props(text, authorization)
+    return text
+
+
 def validate_admitted_central_packages(
     repository_root: Path,
     base_main_sha: str,
     admissions: list[dict[str, Any]] | None,
+    nuget_remediations: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Prove Directory.Packages.props == baseline + admitted PackageVersion lines.
 
@@ -5368,6 +5898,8 @@ def validate_admitted_central_packages(
     baseline PackageVersion keeps its exact version, every added PackageVersion is
     an admitted direct package at its exact version, and removing exactly those
     added lines must reproduce the baseline bytes (no other edit is possible).
+    ``nuget_remediations`` (the permanent check against an older baseline only) first
+    undoes the exact central edits of those security remediations.
     """
 
     baseline_raw = run_git(repository_root, "show", f"{base_main_sha}:{CENTRAL_PACKAGES_PATH}")
@@ -5377,7 +5909,9 @@ def validate_admitted_central_packages(
             "BASELINE_CENTRAL_PACKAGES_CHANGED",
             "Directory.Packages.props must remain byte-identical to the baseline.",
         )
-    current_raw = current_path.read_text(encoding="utf-8")
+    current_raw = _nuget_remediations_reverted_props(
+        current_path.read_text(encoding="utf-8"), nuget_remediations
+    )
     if current_raw.strip() == baseline_raw:
         return {"changed": False, "admitted": []}
     catalog = admitted_package_catalog(admissions)
@@ -5456,25 +5990,36 @@ def _baseline_central_package_versions(
     base_main_sha: str,
     all_changed: set[str],
     admissions: list[dict[str, Any]] | None = None,
+    nuget_remediations: list[dict[str, Any]] | None = None,
 ) -> dict[str, tuple[str, str]]:
     props_path = CENTRAL_PACKAGES_PATH
     if not admissions:
-        if props_path in all_changed:
+        if props_path in all_changed and not nuget_remediations:
             fail(
                 "BASELINE_CENTRAL_PACKAGES_CHANGED",
                 "Directory.Packages.props must remain byte-identical to the baseline.",
             )
         baseline_raw = run_git(repository_root, "show", f"{base_main_sha}:{props_path}")
         current_path = repository_root / props_path
-        if not current_path.is_file() or current_path.read_text(encoding="utf-8").strip() != baseline_raw:
+        if (
+            not current_path.is_file()
+            or _nuget_remediations_reverted_props(
+                current_path.read_text(encoding="utf-8"), nuget_remediations
+            ).strip()
+            != baseline_raw
+        ):
             fail(
                 "BASELINE_CENTRAL_PACKAGES_CHANGED",
                 "Directory.Packages.props must remain byte-identical to the baseline.",
             )
         root_raw = baseline_raw
     else:
-        validate_admitted_central_packages(repository_root, base_main_sha, admissions)
-        root_raw = (repository_root / props_path).read_text(encoding="utf-8")
+        validate_admitted_central_packages(
+            repository_root, base_main_sha, admissions, nuget_remediations
+        )
+        root_raw = _nuget_remediations_reverted_props(
+            (repository_root / props_path).read_text(encoding="utf-8"), nuget_remediations
+        )
     try:
         root = ET.fromstring(root_raw)
     except ET.ParseError as exc:
@@ -5931,6 +6476,7 @@ def validate_baseline_package_graph_lockfile_diff(
     base_main_sha: str,
     all_changed: list[str],
     admissions: list[dict[str, Any]] | None = None,
+    nuget_remediations: list[dict[str, Any]] | None = None,
 ) -> list[str]:
     """Accept only lock drift whose full package graph exists in the baseline.
 
@@ -5942,7 +6488,7 @@ def validate_baseline_package_graph_lockfile_diff(
     """
 
     return package_graph_lockfile_diff(
-        repository_root, base_main_sha, all_changed, admissions
+        repository_root, base_main_sha, all_changed, admissions, nuget_remediations
     )[0]
 
 
@@ -5951,8 +6497,15 @@ def package_graph_lockfile_diff(
     base_main_sha: str,
     all_changed: list[str],
     admissions: list[dict[str, Any]] | None = None,
+    nuget_remediations: list[dict[str, Any]] | None = None,
 ) -> tuple[list[str], dict[str, list[str]]]:
-    """Return the accepted lockfiles and, per admitted package id, where it appears."""
+    """Return the accepted lockfiles and, per admitted package id, where it appears.
+
+    ``nuget_remediations`` is for the permanent check against a baseline older than
+    those security remediations: their exact moves are undone in each current lockfile
+    and in the central manifest before the graph is judged
+    (``security_remediation_nuget_graphs``). Release evidence never passes it.
+    """
 
     lockfiles = sorted(
         path for path in all_changed if Path(path).name == "packages.lock.json"
@@ -5969,6 +6522,7 @@ def package_graph_lockfile_diff(
         current = load_json(repository_root / relative)
         if not isinstance(current, dict):
             fail("NUGET_LOCK_INVALID", "A NuGet lockfile must be a JSON object.", file=relative)
+        current = _nuget_remediations_reverted_lock(relative, current, nuget_remediations)
         current_packages = _nuget_package_nodes(current)
         base_raw = run_git(
             repository_root,
@@ -6013,6 +6567,7 @@ def package_graph_lockfile_diff(
             base_main_sha,
             changed_set,
             admissions if catalog else None,
+            nuget_remediations,
         )
         project_relative = project_files[0]
         direct_references = _new_project_package_references(
@@ -7165,6 +7720,153 @@ def validate_next_sharp_sourcemap_remediation_diff(
     }
 
 
+def _first_nuget_node_difference(
+    expected: dict[str, Any], current: Any
+) -> dict[str, Any]:
+    """Name the first framework and package where a lockfile left its expected graph."""
+
+    if not isinstance(current, dict) or set(current) != set(expected):
+        return {"field": "root"}
+    if current.get("version") != expected.get("version"):
+        return {"field": "version"}
+    expected_frameworks = expected["dependencies"]
+    current_frameworks = current.get("dependencies")
+    if not isinstance(current_frameworks, dict) or set(current_frameworks) != set(
+        expected_frameworks
+    ):
+        return {"field": "dependencies"}
+    for framework, nodes in expected_frameworks.items():
+        current_nodes = current_frameworks[framework]
+        if not isinstance(current_nodes, dict):
+            return {"framework": framework}
+        for package in sorted(set(nodes) | set(current_nodes)):
+            if nodes.get(package) != current_nodes.get(package):
+                return {"framework": framework, "package": package}
+    return {}
+
+
+def validate_signalr_cryptography_remediation_diff(
+    repository_root: Path,
+    base_main_sha: str,
+    all_changed: list[str],
+    changed_dependency_files: list[str],
+    authorization: dict[str, Any],
+) -> dict[str, Any]:
+    """SEC-2026-12: prove the NuGet tree is the base plus only the owner's exact graph.
+
+    ``Directory.Packages.props`` must equal the base lines after only the declared edits
+    (the SignalR client version, transitive pinning and the Xml and Pkcs pins). Each of
+    the four lockfiles must equal the base graph after only the declared node moves, with
+    the exact target content hashes, and must be byte-identical to its pinned generated
+    file. Every other dependency file, and every file outside the allowlist, is rejected.
+    """
+
+    allowed_all = set(authorization["allowed_dependency_files"]) | set(
+        authorization["allowed_non_dependency_files"]
+    )
+    unexpected = sorted(set(all_changed) - allowed_all)
+    if unexpected:
+        fail(
+            "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+            "The SignalR and cryptography remediation changed a file outside its exact "
+            "authorization.",
+            files=unexpected,
+        )
+    required = set(authorization["required_dependency_files"])
+    if set(changed_dependency_files) != required:
+        fail(
+            "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
+            "The SignalR and cryptography remediation dependency files do not match the "
+            "exact authorization.",
+            expected=sorted(required),
+            actual=changed_dependency_files,
+        )
+
+    moves = authorization["expected_nuget_package_moves"]
+    targets = [
+        *(change["to"] for change in authorization["expected_central_version_changes"].values()),
+        *(addition["version"] for addition in authorization["expected_central_version_additions"]),
+        *(move["to_version"] for move in moves.values()),
+    ]
+    if any(_semver_tuple(version) is None for version in targets):
+        fail(
+            "PRERELEASE_DEPENDENCY_REJECTED",
+            "Prerelease dependency versions are forbidden in the remediation graph.",
+        )
+
+    base_props = run_git(repository_root, "show", f"{base_main_sha}:{CENTRAL_PACKAGES_PATH}")
+    current_props = (repository_root / CENTRAL_PACKAGES_PATH).read_text(encoding="utf-8")
+    expected_props = nuget_remediation_expected_props(base_props, authorization)
+    if current_props.splitlines() != expected_props or not current_props.endswith("\n"):
+        fail(
+            "NUGET_CENTRAL_VERSION_CHANGE_INVALID",
+            "Directory.Packages.props differs from the exact SignalR and cryptography edits.",
+        )
+    central_versions = _central_package_versions_from_xml(
+        current_props, "NUGET_CENTRAL_VERSION_CHANGE_INVALID", "current"
+    )
+    expected_central = {
+        **{
+            package.casefold(): (package, change["to"])
+            for package, change in authorization["expected_central_version_changes"].items()
+        },
+        **{
+            addition["id"].casefold(): (addition["id"], addition["version"])
+            for addition in authorization["expected_central_version_additions"]
+        },
+    }
+    if any(central_versions.get(key) != value for key, value in expected_central.items()):
+        fail(
+            "NUGET_CENTRAL_VERSION_CHANGE_INVALID",
+            "A central package differs from its exact patched version.",
+        )
+
+    lock_hashes: dict[str, str] = {}
+    for lock_path in SIGNALR_CRYPTOGRAPHY_LOCK_FILES:
+        try:
+            base_lock = json.loads(run_git(repository_root, "show", f"{base_main_sha}:{lock_path}"))
+        except json.JSONDecodeError as exc:
+            fail("BASE_DEPENDENCY_LOCK_INVALID", "The base NuGet lockfile is invalid.", error=str(exc))
+        expected_lock = nuget_remediation_expected_lock(lock_path, base_lock, moves)
+        lock_bytes = (repository_root / lock_path).read_bytes()
+        try:
+            current_lock = json.loads(lock_bytes.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            fail("NUGET_LOCK_INVALID", "A NuGet lockfile is invalid.", file=lock_path, error=str(exc))
+        if current_lock != expected_lock:
+            fail(
+                "NUGET_LOCK_GRAPH_INVALID",
+                "The NuGet lockfile changed outside the exact SignalR and cryptography graph.",
+                file=lock_path,
+                **_first_nuget_node_difference(expected_lock, current_lock),
+            )
+        lock_hash = hashlib.sha256(lock_bytes).hexdigest()
+        if lock_hash != authorization["expected_lockfile_sha256"][lock_path]:
+            fail(
+                "LOCKFILE_GENERATED_GRAPH_INVALID",
+                "The NuGet lockfile differs from the exact authorized generated file.",
+                file=lock_path,
+                expected=authorization["expected_lockfile_sha256"][lock_path],
+                actual=lock_hash,
+            )
+        lock_hashes[lock_path] = lock_hash
+
+    return {
+        "remediation_id": authorization["id"],
+        "dependency_manifest_changed": True,
+        "dependency_lockfile_changed": True,
+        "dependency_workspace_changed": False,
+        "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
+        "changed_dependency_files": changed_dependency_files,
+        "lockfile_consistency_verified": True,
+        "vulnerable_lock_versions": [],
+        "nuget_lockfiles_regenerated": list(SIGNALR_CRYPTOGRAPHY_LOCK_FILES),
+        "nuget_lockfile_sha256": lock_hashes,
+        "nuget_versions": {package: move["to_version"] for package, move in moves.items()},
+        "central_package_transitive_pinning": True,
+    }
+
+
 def validate_dependency_admission_source(
     all_changed: list[str],
     admissions: list[dict[str, Any]],
@@ -7398,6 +8100,17 @@ def validate_dependency_diff(
         and authorization.get("id") == NEXT_SHARP_SOURCEMAP_REMEDIATION_ID
     ):
         return validate_next_sharp_sourcemap_remediation_diff(
+            repository_root,
+            base_main_sha,
+            all_changed,
+            changed,
+            authorization,
+        )
+    if (
+        authorization is not None
+        and authorization.get("id") == SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID
+    ):
+        return validate_signalr_cryptography_remediation_diff(
             repository_root,
             base_main_sha,
             all_changed,
