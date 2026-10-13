@@ -1432,6 +1432,7 @@ screen_contracts:
     decision: UI-PHASE3-ORDERS-LIST-2026-10-12
     decision_amendments:
     - ORD-LIST-DATE-FILTER-2026-10-12
+    - ORD-ORDER-CREATED-AT-2026-10-12
     authority: REST API + PostgreSQL
     sources:
       list: GET /orders (listOrders) with status, public_id, created_from, created_to and cursor
@@ -1470,9 +1471,10 @@ screen_contracts:
       columns:
       - Guía (Order.public_id; a link to the order detail for DISPATCHER and PLATFORM_ADMIN, plain text for VIEWER)
       - Estado (exact status with its group color, dot and text, never color alone)
-      - Creada (Order.created_at as date and time in America/Mazatlan) - shown only when the API sends created_at for
-        some order of the page; an order of that page without it reads "Sin dato" (owner answer "En dos pasos
-        (Recommended)" - this release accepts the field, the API adds it in a following change)
+      - Creada (Order.created_at as date and time in America/Mazatlan) - the API sends created_at on every Order
+        (ORD-ORDER-CREATED-AT-2026-10-12, the second step of the owner answer "En dos pasos (Recommended)"), so the
+        column shows on every page; the web still shows it only when some order of the page carries created_at and
+        reads an order without it as "Sin dato", so an earlier API keeps working in any deployment order
       - Total (IVA incluido) (Order.total, integer MXN cents through the shared Money component)
       row: a click anywhere on the row opens /ops/orders/:id for the roles that open the detail; the guía link is the
         keyboard path; VIEWER rows are not links and the screen says the detail is opened by dispatch and
@@ -1489,7 +1491,9 @@ screen_contracts:
     order_contract: every web reader of the AI-05 Order (this list, Buscar guía, Rutas Agregar entrega, Cobro contra
       entrega, Nueva orden, the order detail and the driver's offline transitions) accepts an optional created_at,
       ignored when absent and, when present, a strict UTC instant (YYYY-MM-DDTHH:mm:ss, 0 to 7 fractional digits, Z
-      or +00:00) or the response is refused; so the API can add Order.created_at in any deployment order
+      or +00:00) or the response is refused; so the API can add Order.created_at in any deployment order. The API
+      sends it on every Order since ORD-ORDER-CREATED-AT-2026-10-12 and the readers keep accepting its absence, so
+      either side can be deployed or rolled back first
     recovery:
     - load, Actualizar and every filter change read the first page again; a filter change drops the previous rows at
       once; the page becoming visible and window focus read it again only while a single page is shown (never while
@@ -1503,8 +1507,6 @@ screen_contracts:
     - changing an order from the list (no transitions, assignments or bulk actions)
     - a search criterion other than the exact guía
     not_supported:
-    - the creation column while the API does not send Order.created_at - the owner chose "En dos pasos
-      (Recommended)", so this change makes the web accept the field and a following change adds it to the API
     - FINANCE "Órdenes (lectura)" of the approved menu - the owner answered "No por ahora (Recommended)", so FINANCE
       keeps seeing only the COD-pending orders on its own screen and has no Órdenes item; widening its read access is
       a permission change that needs an ADR

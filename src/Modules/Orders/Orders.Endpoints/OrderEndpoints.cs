@@ -479,6 +479,9 @@ public static class OrderEndpoints
         new MoneyResponse(result.Total.Currency, result.Total.AmountCents),
         result.ClaimWindowEndsAt,
         result.FinalizedAt,
+        // ORD-ORDER-CREATED-AT-2026-10-12: always the UTC offset, so System.Text.Json writes +00:00, a strict UTC
+        // instant the web accepts (apps/web/src/lib/utc-instant.ts).
+        result.CreatedAt.ToUniversalTime(),
         ToResponse(result.ServiceWindow));
 
     private static ServiceWindowResponse? ToResponse(OrderServiceWindow? window) =>
@@ -505,6 +508,7 @@ public static class OrderEndpoints
             order.Total,
             order.ClaimWindowEndsAt,
             order.FinalizedAt,
+            order.CreatedAt,
             order.ServiceWindow,
             result.Timeline.Select(item => new OrderTimelineResponse(
                 item.EventType,
@@ -574,6 +578,10 @@ public sealed record MoneyResponse(
     [property: JsonPropertyName("currency")] string Currency,
     [property: JsonPropertyName("amount_cents")] long AmountCents);
 
+/// <summary>
+/// AI-05 Order. <c>created_at</c> (ORD-ORDER-CREATED-AT-2026-10-12) is <c>orders.orders.created_at</c>, the order's
+/// creation instant in UTC, on every operation that returns an Order.
+/// </summary>
 public sealed record OrderResponse(
     [property: JsonPropertyName("id")] Guid Id,
     [property: JsonPropertyName("public_id")] string PublicId,
@@ -592,6 +600,7 @@ public sealed record OrderResponse(
     [property: JsonPropertyName("total")] MoneyResponse Total,
     [property: JsonPropertyName("claim_window_ends_at")] DateTimeOffset? ClaimWindowEndsAt,
     [property: JsonPropertyName("finalized_at")] DateTimeOffset? FinalizedAt,
+    [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt,
     [property: JsonPropertyName("service_window")] ServiceWindowResponse? ServiceWindow);
 
 /// <summary>ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: the order's delivery window as UTC instants.</summary>
@@ -621,6 +630,7 @@ public sealed record OrderDetailResponse(
     [property: JsonPropertyName("total")] MoneyResponse Total,
     [property: JsonPropertyName("claim_window_ends_at")] DateTimeOffset? ClaimWindowEndsAt,
     [property: JsonPropertyName("finalized_at")] DateTimeOffset? FinalizedAt,
+    [property: JsonPropertyName("created_at")] DateTimeOffset CreatedAt,
     [property: JsonPropertyName("service_window")] ServiceWindowResponse? ServiceWindow,
     [property: JsonPropertyName("timeline")] IReadOnlyList<OrderTimelineResponse> Timeline,
     [property: JsonPropertyName("allowed_transitions")] IReadOnlyList<OrderAllowedTransitionResponse> AllowedTransitions);

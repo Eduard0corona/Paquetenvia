@@ -41,7 +41,7 @@ public sealed class OrdersOpenApiImplementationTests
         AssertJsonProperties<TransitionOrderRequest>(
             "client_occurred_at", "expected_version", "metadata", "reason", "target_status");
         AssertJsonProperties<OrderResponse>(
-            "city_id", "claim_window_ends_at", "destination_location_id", "finalized_at", "id",
+            "city_id", "claim_window_ends_at", "created_at", "destination_location_id", "finalized_at", "id",
             "operator_org_id", "origin_location_id", "owner_org_id", "price_net", "pricing_tier", "public_id",
             "quote_id", "service_area_id", "service_type", "service_window", "status", "total", "version");
         AssertJsonProperties<OrderTimelineResponse>("event_type", "occurred_at");
@@ -365,7 +365,7 @@ public sealed class OrdersOpenApiImplementationTests
 
         Assert.DoesNotContain("cod_expected_cents", PropertyNames(schemas.Mapping("Order")));
         AssertJsonProperties<OrderResponse>(
-            "city_id", "claim_window_ends_at", "destination_location_id", "finalized_at", "id",
+            "city_id", "claim_window_ends_at", "created_at", "destination_location_id", "finalized_at", "id",
             "operator_org_id", "origin_location_id", "owner_org_id", "price_net", "pricing_tier", "public_id",
             "quote_id", "service_area_id", "service_type", "service_window", "status", "total", "version");
         Assert.DoesNotContain(
@@ -649,6 +649,111 @@ public sealed class OrdersOpenApiImplementationTests
         Assert.Contains("OrderAllowedTransitionsPolicy.Compute(", coordinator, StringComparison.Ordinal);
         Assert.DoesNotContain("OrderTransitionMatrix", source, StringComparison.Ordinal);
     }
+
+    /// <summary>
+    /// ORD-ORDER-CREATED-AT-2026-10-12 (owner, "En dos pasos (Recommended)", step 2): AI-05 Order requires created_at,
+    /// a date-time the server always has (orders.orders.created_at is NOT NULL); every operation that returns an
+    /// Order (createOrder, listOrders, getOrder through OrderDetail, transitionOrder) answers it from the same
+    /// OrderResponse, whose members are exactly the AI-05 Order; and every value the API can write is a strict UTC
+    /// instant the web's single created_at rule (apps/web/src/lib/utc-instant.ts) accepts.
+    /// </summary>
+    [Fact]
+    public void Order_created_at_is_a_required_UTC_date_time_the_web_accepts()
+    {
+        var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var schemas = root.Mapping("components").Mapping("schemas");
+        var order = schemas.Mapping("Order");
+        Assert.Contains("created_at", RequiredPropertyNames(order));
+        var createdAt = order.Mapping("properties").Mapping("created_at");
+        Assert.Equal("string", createdAt.Scalar("type"));
+        Assert.Equal("date-time", createdAt.Scalar("format"));
+        Assert.Contains("ORD-ORDER-CREATED-AT-2026-10-12", createdAt.Scalar("description"), StringComparison.Ordinal);
+        Assert.Equal(JsonPropertyNames<OrderResponse>(), PropertyNames(order));
+        AssertJsonProperties<OrderDetailResponse>(
+            [.. JsonPropertyNames<OrderResponse>(), "allowed_transitions", "timeline"]);
+
+        // Every Order-returning operation answers with the Order schema (getOrder through OrderDetail's allOf).
+        var paths = root.Mapping("paths");
+        foreach (var (path, method, status, reference) in new[]
+                 {
+                     ("/orders", "post", "201", "#/components/schemas/Order"),
+                     ("/orders/{orderId}", "get", "200", "#/components/schemas/OrderDetail"),
+                     ("/orders/{orderId}/transitions", "post", "200", "#/components/schemas/Order"),
+                 })
+        {
+            Assert.Equal(
+                reference,
+                paths.Mapping(path).Mapping(method).Mapping("responses").Mapping(status).Mapping("content")
+                    .Mapping("application/json").Mapping("schema").Scalar("$ref"));
+        }
+
+        Assert.Equal(
+            "#/components/schemas/Order",
+            paths.Mapping("/orders").Mapping("get").Mapping("responses").Mapping("200").Mapping("content")
+                .Mapping("application/json").Mapping("schema").Mapping("properties").Mapping("items")
+                .Mapping("items").Scalar("$ref"));
+        Assert.Equal(
+            "#/components/schemas/Order",
+            schemas.Mapping("OrderDetail").Sequence("allOf").Children.OfType<YamlMappingNode>()
+                .First().Scalar("$ref"));
+
+        // What System.Text.Json writes for the instants the server holds (whole seconds, microseconds from
+        // PostgreSQL, the seven digits of a DateTimeOffset) passes the web's strict UTC instant rule unchanged.
+        var web = WebUtcInstantPattern();
+        var options = new System.Text.Json.JsonSerializerOptions(System.Text.Json.JsonSerializerDefaults.Web);
+        foreach (var instant in new[]
+                 {
+                     new DateTimeOffset(2026, 10, 12, 17, 4, 5, TimeSpan.Zero),
+                     new DateTimeOffset(2026, 10, 12, 17, 4, 5, TimeSpan.Zero).AddTicks(1_234_560),
+                     new DateTimeOffset(2026, 10, 12, 17, 4, 5, TimeSpan.Zero).AddTicks(1_234_567),
+                     new DateTimeOffset(2028, 2, 29, 23, 59, 59, TimeSpan.Zero).AddTicks(9_999_990),
+                     new DateTimeOffset(2026, 1, 1, 0, 0, 0, TimeSpan.Zero).AddTicks(10),
+                 })
+        {
+            using var json = System.Text.Json.JsonDocument.Parse(
+                System.Text.Json.JsonSerializer.Serialize(SampleOrder(instant), options));
+            var written = json.RootElement.GetProperty("created_at").GetString()!;
+            Assert.Matches(web, written);
+            Assert.Equal(instant, DateTimeOffset.Parse(written, System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        var delta = root.Mapping("x-pilot-contract-deltas").Sequence("entries").Children
+            .Cast<YamlMappingNode>()
+            .Single(entry => entry.Scalar("id") == "ORD-ORDER-CREATED-AT");
+        Assert.Equal("DECIDED", delta.Scalar("status"));
+        Assert.Contains("ORD-ORDER-CREATED-AT-2026-10-12", delta.Scalar("decision"), StringComparison.Ordinal);
+        Assert.Contains("feat/ord-order-created-at", delta.Scalar("implementation"), StringComparison.Ordinal);
+    }
+
+    /// <summary>The web's strict UTC instant pattern, read from its single definition.</summary>
+    private static Regex WebUtcInstantPattern()
+    {
+        var source = File.ReadAllText(Path.Combine(RepositoryPaths.Root, "apps", "web", "src", "lib", "utc-instant.ts"));
+        var match = Regex.Match(source, @"const utcInstantPattern = /(?<pattern>[^\n]+)/;");
+        Assert.True(match.Success, "apps/web/src/lib/utc-instant.ts no longer defines utcInstantPattern.");
+        return new Regex(match.Groups["pattern"].Value, RegexOptions.ECMAScript);
+    }
+
+    private static OrderResponse SampleOrder(DateTimeOffset createdAt) => new(
+        Guid.Parse("c1000000-0000-0000-0000-000000000001"),
+        "ORD_AAAAAAAAAAAAAAAAAAAAAA",
+        Guid.Parse("c1000000-0000-0000-0000-000000000002"),
+        null,
+        "DRAFT",
+        new MoneyResponse("MXN", 10_000),
+        1,
+        Guid.Parse("c1000000-0000-0000-0000-000000000003"),
+        Guid.Parse("c1000000-0000-0000-0000-000000000004"),
+        "SAME_DAY",
+        Guid.Parse("c1000000-0000-0000-0000-000000000005"),
+        Guid.Parse("c1000000-0000-0000-0000-000000000006"),
+        null,
+        "OCCASIONAL",
+        new MoneyResponse("MXN", 10_000),
+        null,
+        null,
+        createdAt,
+        null);
 
     private static void AssertJsonProperties<T>(params string[] expected)
     {

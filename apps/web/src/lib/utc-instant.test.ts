@@ -13,6 +13,9 @@ describe("strict UTC instant", () => {
     "2026-10-12T17:04:05.1234567Z",
     "2026-10-12T17:04:05+00:00",
     "2026-10-12T17:04:05.123+00:00",
+    // ORD-ORDER-CREATED-AT-2026-10-12: what the API writes for orders.orders.created_at (microseconds, +00:00).
+    "2026-10-12T17:04:05.123456+00:00",
+    "2026-10-12T17:04:05.1234567+00:00",
     "2028-02-29T23:59:59Z",
   ])("accepts %s", (value) => {
     expect(isStrictUtcInstant(value)).toBe(true);

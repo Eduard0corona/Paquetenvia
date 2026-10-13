@@ -347,6 +347,69 @@ public sealed class OrderHttpTests : IClassFixture<OrderHttpWebApplicationFactor
         Assert.DoesNotContain("payload", body, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// ORD-ORDER-CREATED-AT-2026-10-12: createOrder, its replay, listOrders, getOrder and transitionOrder all write the
+    /// Order's created_at through the API's own serializer as the strict UTC instant the web accepts (Z or +00:00;
+    /// apps/web/src/lib/utc-instant.ts), microseconds included, from the value the service returns.
+    /// </summary>
+    [Fact]
+    public async Task Every_Order_response_writes_created_at_as_a_strict_UTC_instant()
+    {
+        const string expected = "2026-10-12T17:04:05.123456+00:00";
+        Assert.Equal(
+            OrderHttpWebApplicationFactory.CreatedAt,
+            DateTimeOffset.Parse(expected, System.Globalization.CultureInfo.InvariantCulture));
+        var quoteId = Guid.NewGuid();
+        var key = Key();
+        Guid orderId;
+        string publicId;
+        using (var created = await CreateAsync(quoteId, key))
+        {
+            Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+            using var json = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+            Assert.Equal(expected, json.RootElement.GetProperty("created_at").GetString());
+            orderId = json.RootElement.GetProperty("id").GetGuid();
+            publicId = json.RootElement.GetProperty("public_id").GetString()!;
+        }
+
+        using (var replay = await CreateAsync(quoteId, key))
+        using (var json = JsonDocument.Parse(await replay.Content.ReadAsStringAsync()))
+        {
+            Assert.Equal(expected, json.RootElement.GetProperty("created_at").GetString());
+        }
+
+        using (var list = await SendAuthenticatedAsync(
+                   HttpMethod.Get, $"/api/v1/orders?public_id={Uri.EscapeDataString(publicId)}"))
+        using (var json = JsonDocument.Parse(await list.Content.ReadAsStringAsync()))
+        {
+            var item = Assert.Single(json.RootElement.GetProperty("items").EnumerateArray());
+            Assert.Equal(expected, item.GetProperty("created_at").GetString());
+        }
+
+        using (var detail = await SendAuthenticatedAsync(HttpMethod.Get, $"/api/v1/orders/{orderId:D}"))
+        using (var json = JsonDocument.Parse(await detail.Content.ReadAsStringAsync()))
+        {
+            Assert.Equal(expected, json.RootElement.GetProperty("created_at").GetString());
+        }
+
+        using var transition = Authenticated(HttpMethod.Post, $"/api/v1/orders/{orderId:D}/transitions");
+        transition.Headers.Add("Idempotency-Key", Key());
+        transition.Content = JsonContent.Create(new
+        {
+            target_status = "CANCELLED",
+            reason = "Cancelación sintética.",
+            expected_version = 1,
+            metadata = new { },
+        });
+        using var cancelled = await client.SendAsync(transition);
+        Assert.Equal(HttpStatusCode.OK, cancelled.StatusCode);
+        using (var json = JsonDocument.Parse(await cancelled.Content.ReadAsStringAsync()))
+        {
+            Assert.Equal("CANCELLED", json.RootElement.GetProperty("status").GetString());
+            Assert.Equal(expected, json.RootElement.GetProperty("created_at").GetString());
+        }
+    }
+
     [Fact]
     public async Task POST_same_key_with_changed_body_returns_409()
     {

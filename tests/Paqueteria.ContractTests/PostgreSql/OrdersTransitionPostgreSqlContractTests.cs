@@ -1257,7 +1257,8 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
             "OCCASIONAL",
             new MoneyResult("MXN", scenario.TotalCents),
             null,
-            null);
+            null,
+            new DateTimeOffset(2026, 10, 12, 17, 4, 5, TimeSpan.Zero));
         var jsonOptions = new System.Text.Json.JsonSerializerOptions(
             System.Text.Json.JsonSerializerDefaults.Web)
         {

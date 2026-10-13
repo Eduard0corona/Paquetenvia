@@ -21,6 +21,35 @@
   `OBS-003-W3C-CORRELATION`; este cambio no altera rutas, esquemas ni referencias internas (69, 125 y 651 en la base fusionada). Sin cambios en AI-04,
   AI-06, AI-18, roles, permisos, migraciones ni paquetes. Nota: `docs/development/obs-003-w3c-correlation.md`.
 
+## API: `created_at` en la `Order` y columna "Creada" de "Órdenes" (ORD-ORDER-CREATED-AT-2026-10-12) — 2026-10-12
+
+- Segundo paso de la respuesta literal del project owner registrada en `UI-PHASE3-ORDERS-LIST-2026-10-12`: "Pantalla
+  Órdenes: el API de la lista no trae la fecha de creación de cada orden, así que la columna "Creada" no se puede
+  mostrar (los filtros por fecha sí funcionan). Agregarla cambia el API y la web actual rechaza campos que no conoce.
+  ¿Qué hacemos?" → "En dos pasos (Recommended)" ("Este PR deja la web lista para aceptar la fecha; en un PR siguiente
+  el API la agrega y se muestra la columna. Así ningún orden de despliegue rompe nada."); no elegida: "Sin columna de
+  fecha" ("La lista queda con guía, estado y total, de la más reciente a la más antigua; la fecha se ve al abrir la
+  orden."). El primer paso salió en #234. Fila `ORD-ORDER-CREATED-AT-2026-10-12` en `decision-log.md` (MAJOR de
+  AI-01 §7, su registro ADR).
+- AI-05: el esquema `Order` agrega `created_at` (`string`, `format: date-time`, instante UTC) y lo pone en
+  `required`, porque el servidor siempre lo tiene (`orders.orders.created_at` es NOT NULL y nunca cambia). Lo mandan
+  `createOrder`, `listOrders`, `getOrder` (`OrderDetail`) y `transitionOrder`, también al repetir una solicitud
+  idempotente. Entrada `ORD-ORDER-CREATED-AT` en `x-pilot-contract-deltas`. Rutas, esquemas y referencias internas
+  siguen en 69, 125 y 651.
+- Servidor: `OrderResult.CreatedAt` lleva el valor de la fila; `createOrder` responde el instante de creación
+  truncado a microsegundos, igual al que guarda PostgreSQL. Una respuesta idempotente guardada antes de este cambio no
+  trae `created_at`; al repetirla se lee de la fila de la orden en la misma transacción tenant (si no hay fila, falla
+  cerrado). La respuesta va en UTC: System.Text.Json escribe `+00:00`, que la regla única de la web
+  (`src/lib/utc-instant.ts`) acepta.
+- Privacidad: `created_at` no es dato personal, financiero ni secreto. El rastreo público, los eventos, el outbox,
+  SignalR, la auditoría y los logs no cambian. FINANCE lo recibe en su lista de cobros pendientes como cualquier otro
+  campo de la `Order`.
+- AI-07 `order_list`: enmienda `ORD-ORDER-CREATED-AT-2026-10-12`; la columna "Creada" dice que el API ya manda la fecha
+  y se quita de `not_supported`. La web no cambia: la columna aparece sola y los lectores siguen aceptando que falte.
+- Sin cambios de parámetros, capacidades, RLS, tablas, índices, roles, permisos, migraciones ni flujos atómicos;
+  AI-04, AI-06 y AI-18 iguales. Despliegue y reversión en cualquier orden (revertir el commit; no hay datos que
+  deshacer). Nota: `docs/development/ord-order-created-at.md`.
+
 ## REL-000: subidas encadenadas entre admisiones de dependencias (GOV-REL000-CHAINED-UPGRADES-2026-10-12, OBS-003-TEST-EXTENSIONS-ADMISSION-2026-10-12) — 2026-10-12
 
 - Preguntas y respuestas literales del project owner (2026-10-12), registradas en `decision-log.md`:
