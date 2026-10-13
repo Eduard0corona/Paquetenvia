@@ -1156,7 +1156,7 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         // OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13: the bridged lane also leaves the trace step: the outbox definer stores
         // the caller's trace context, keeps its owner and ACL, and the executor holds INSERT on trace_parent only.
         Assert.Equal(
-            "paqueteria_operator_outbox_executor|{paqueteria_operator_outbox_executor=X/paqueteria_operator_outbox_executor,paqueteria_app=X/paqueteria_operator_outbox_executor}|t",
+            "paqueteria_operator_outbox_executor|{paqueteria_operator_outbox_executor=X/paqueteria_operator_outbox_executor,paqueteria_app=X/paqueteria_operator_outbox_executor}|true",
             await environment.TextAsync($"""
                 SELECT pg_get_userbyid(proowner) || '|' || proacl::text || '|' || (position('app.trace_parent' IN prosrc) > 0)::text
                 FROM pg_proc WHERE oid='{Dispatch.Infrastructure.Persistence.Migrations.AddOperatorOwnerOutboxExecutor.OutboxFunctionSignature}'::regprocedure
