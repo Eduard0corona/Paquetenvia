@@ -13,7 +13,7 @@ built on `System.Diagnostics.Activity`.
 | --- | --- |
 | Inbound | `traceparent`, `tracestate`, `baggage`, `Request-Id` and `Correlation-Context` are ignored. Every API request starts a new W3C trace, even when a browser sends a sampled context. |
 | Outbound | No request carries those headers: Google Maps, WhatsApp, ACS e-mail, Twilio, the AuthCenter OIDC back-channel (discovery, JWKS, token, revocation), Azure Key Vault (secrets, keys, cryptography), Blob Storage, the data protection key resolver and the managed identity token requests. |
-| One identifier | The 32 lowercase hex W3C trace id is `HttpContext.TraceIdentifier`, `platform.audit_logs.request_id`, the `traceId` of every `application/problem+json` and `State.TraceId` in every JSON console line of the request. |
+| One identifier | The 32 lowercase hex W3C trace id is `HttpContext.TraceIdentifier`, the `traceId` of every `application/problem+json`, `State.TraceId` in every JSON console line of the request and the `request_id` of every `platform.audit_logs` row written while handling the request, the Twilio voice webhooks included. The exceptions are listed in "Audit rows without the trace id". |
 | Worker | Every job cycle (ADR-034 `PeriodicJobScheduler`, proof validation) and every outbox dispatch cycle (notifications and dispatch lanes in the Worker, the two realtime lanes in the API) runs in its own new root trace. Its id is in the cycle's lines. |
 | AI-05 | `Problem` documents the optional `traceId` (`^[0-9a-f]{32}$`). The change is additive. The contract delta `OBS-003-W3C-CORRELATION` records it. This change adds no path, schema or internal reference (69, 125 and 651 on the merged base). |
 
@@ -47,6 +47,10 @@ optional, so they still conform.
     request's `Accept` excludes JSON and no writer runs.
 - Two middlewares write problems by hand. Both now add `traceId`: the tenant context middleware, and the realtime
   gate for the private hubs (operations, driver). The tracking hub keeps its uniform body.
+- The Twilio voice webhooks (call status, driver key press, recipient key press) pass `httpContext.TraceIdentifier`
+  in `VoiceCallStatusReport.RequestId` and `VoiceKeypress.RequestId`, so their audit rows
+  (`RECIPIENT_CALL_STATUS_REPORTED`, `RECIPIENT_CALL_DRIVER_CONFIRMED`, `RECIPIENT_CALL_NOT_CONFIRMED`,
+  `RECIPIENT_CALL_BRIDGE_FAILED`, `RECIPIENT_CALL_BRIDGED`) carry the trace id. Before this they wrote `NULL`.
 - `AzureClientTracing.WithoutDistributedTracing()` handles the Azure SDK.
   - Azure.Core adds `traceparent` (and `tracestate`) from `Activity.Current` in its own pipeline, whatever the
     process propagator says.
@@ -56,6 +60,21 @@ optional, so they still conform.
   - Both facts are proved by `Obs003AzureClientTracingTests`. So every Azure client and credential options instance
     gets a transport wrapper that removes the five trace-context headers right before sending, and the SDK
     activities are turned off.
+  - Each client is built in one place: the secret reader and PII key wrap constructors, the Blob gateway
+    constructor, `AzureWorkloadCredential.Create` and `DataProtectionKeyEncryptionKeyResolver.CreateKeyVault` (the
+    data protection registration calls it). Each has an internal overload that takes a test transport, so the tests
+    drive the production construction itself.
+  - `AzureClientTracingGuard` (architecture tests) reads the source one construction at a time. Every file that uses
+    an Azure SDK namespace (any `Azure.*` but `Azure.Core`, or `Microsoft.Extensions.Azure`) or an extension that
+    builds Azure clients must be reviewed. In those files, every client, credential or key resolver construction,
+    explicit or target-typed, must pass options through `WithoutDistributedTracing()`: directly, through a helper
+    whose every return goes through it, or through a variable only ever assigned that way. A target-typed `new(`
+    whose type the statement does not name is refused. Anywhere in `src`, `ProtectKeysWithAzureKeyVault` must take
+    the reviewed `DataProtectionKeyEncryptionKeyResolver`, and `PersistKeysToAzureBlobStorage`, `AddAzureClients`,
+    `AddAzureKeyVault` and `HttpPipelineBuilder.Build` must be routed through the wrapper; their credential overloads
+    build their own unwrapped clients. No global using (in code or in a project file) may import an Azure SDK
+    namespace. The project does not reference Roslyn, so the guard uses regular expressions;
+    `AzureClientTracingGuardTests` shows it rejects each known bypass as a fixture source.
 - Worker loops call `TraceCorrelation.StartJobCycle(job)` or `StartOutboxDispatchCycle(lane)` once per cycle. This
   clears any ambient activity and starts a new root.
   - Activity names are fixed operation names (`Paqueteria.JobCycle`, `Paqueteria.OutboxDispatchCycle`). The display
@@ -70,8 +89,10 @@ optional, so they still conform.
   reader: about 30 call sites, the Identity problem writers and the tenant activation audit. It also covers any
   future reader, with no risk of missing one. The hosting log scope still captures Kestrel's id as `RequestId`,
   because the scope is created before any middleware runs. It is never written: the API and Worker JSON console
-  formatters write no scopes, and `Api_json_console_does_not_include_scopes` guards that for the API. The tests
-  check that no line contains `RequestId` or `Scopes`, so a JSON line carries only one identifier.
+  formatters write no scopes, and `Api_and_worker_json_consoles_do_not_include_scopes` guards the configuration of
+  both hosts. The OBS-003 tests capture lines with the host's own JSON console formatter and the host's scope
+  provider, so their check that no line contains `RequestId` or `Scopes` would fail if the console wrote scopes
+  (`Scopes_would_be_seen_if_the_console_wrote_them` is the control). A JSON line carries only one identifier.
 - **`State.TraceId`, not a new formatter.** .NET 10's `JsonConsoleFormatter` has no option for trace ids, and
   writing activity ids as a scope would also turn on every other scope. A custom formatter would duplicate the
   framework's JSON writer. The decorator uses public APIs only, leaves `Message`, the template and every property
@@ -91,6 +112,24 @@ optional, so they still conform.
   (`ForbiddenProblem` and the `*ConflictProblem` family) are standalone open objects with no `additionalProperties`
   or `allOf`. They carry the member at runtime, but their AI-05 text does not list it yet.
 
+## Audit rows without the trace id
+
+Every audit row written while handling an API request carries the request's trace id in `request_id`, the voice
+webhooks included. These rows do not, on purpose or for now:
+
+- **Worker writers.** `ProofValidationProcessor` (`custody.proof_upload_session.ready` and `.rejected`) and
+  `PostgreSqlAssignmentLifecycleReactor` (the assignment lifecycle audit) write `request_id = NULL`. They run in a
+  Worker cycle, not in a request, and the cycle's trace id is not the trace of the request that produced the
+  message. Linking a message to its producer's trace is PR 7's decision (column, payload or none), so they stay
+  `NULL` until then.
+- **`PENDING_MEMBERSHIP_ACCEPTED` (REG-002).** `security.apply_pending_memberships(text,bytea[],integer[])` writes it
+  during the AuthCenter sign-in callback, which is an API request, with `request_id = NULL`: the SECURITY DEFINER
+  function takes no request id. Passing one changes the function's signature (a migration, AI-06 and AI-18), so it
+  is left for a separate change.
+- **The master data loader** (`MASTER_DATA_LOADED`) is a command-line tool, not a request; it writes `mdm-001`.
+
+AI-05 (`Problem.traceId` and the `OBS-003-W3C-CORRELATION` contract delta) says exactly this.
+
 ## Found, not changed here
 
 - `TenantContextMiddleware` sets `application/problem+json`, then calls `WriteAsJsonAsync(value)`, which resets the
@@ -98,6 +137,12 @@ optional, so they still conform.
   body now carries `traceId`; the media type is left for a separate fix.
 - The rate limiter's 429 on GPS ingestion and hub negotiate still has an empty body. PR 2 gives it the
   `TooManyRequests` problem with `traceId`.
+- **SignalR long polling.** A private hub connection over long polling spans several HTTP requests: negotiate, the
+  poll that opens the connection, the sends and later polls. The PLATFORM_ADMIN `TENANT_CONTEXT_ACTIVATED` audit on
+  the operations hub takes its `request_id` from the request the realtime gate saw, which the connection keeps as
+  its `HttpContext`. The hub's own log lines for the same connection can be written in the trace of another
+  request of that connection, so the audit id and those lines can disagree. Over WebSockets (one request) they
+  agree. No code change.
 
 ## For later PRs
 
@@ -105,6 +150,13 @@ optional, so they still conform.
   `TracerProvider` and its sampler.
   - Keep the propagator, the `TraceIdentifier` middleware, the problem `traceId`, the log enrichment (the logs stay
     on the console) and the Azure transport wrapper.
+  - The OpenTelemetry ASP.NET Core instrumentation extracts inbound `traceparent` and `baggage` through
+    OpenTelemetry's own `Propagators.DefaultTextMapPropagator`, not through `DistributedContextPropagator`. PR 6 must
+    set a no-op OpenTelemetry propagator and re-run the inbound tests (`Obs003RequestCorrelationTests`,
+    `Obs003TraceIdPostgreSqlTests`).
+  - `State.TraceId` will appear next to OpenTelemetry's own trace id (the trace id of an exported log record, or
+    the operation id Application Insights shows). Both come from the same activity, so they are equal; the KQL of
+    the alerts and the workbook should name the one it uses.
   - Keep `Microsoft.AspNetCore.SignalR.Server` unobserved unless hub-message trace context is ignored too.
   - Any request-path sink must be listed in `ReviewedRequestPathSinks`.
 - **PR 7.** Decide on trace context through the outbox. Until then every cycle and message has its own trace, and
@@ -121,8 +173,12 @@ optional, so they still conform.
   - two scheduler cycles and three dispatch-lane cycles each have their own id.
 - `tests/Paqueteria.UnitTests/Security/Obs003AzureClientTracingTests.cs`:
   - the SDK default sends `traceparent` (the control);
-  - the secrets reader, the PII key and cryptography clients, the Blob options, the data protection resolver and
-    the managed identity credential send none while a sampled activity with trace state and baggage is current.
+  - the secrets reader, the PII key and cryptography clients, the Blob gateway, the data protection resolver and
+    the managed identity credential send none while a sampled activity with trace state and baggage is current;
+  - each is built by its production constructor or factory (`AzureBlobProofGateway`,
+    `DataProtectionKeyEncryptionKeyResolver.CreateKeyVault`, `AzureWorkloadCredential.Create`), with a test transport
+    as the only change. Reverting the gateway's constructor to `new BlobClientOptions()` fails it: the transport is
+    lost and no request is captured.
 - `tests/Paqueteria.IntegrationTests/Observability/`:
   - `Obs003OutboundTraceHeadersTests`: real clients against a loopback Kestrel that records headers on the wire.
     - The control: the runtime's default propagator would inject.
@@ -134,7 +190,10 @@ optional, so they still conform.
   - `Obs003RequestCorrelationTests` (no database):
     - an inbound context is ignored;
     - the problem `traceId` is set with `Accept` JSON, HTML or absent;
-    - every JSON line of the request carries its id, and nothing inbound, `RequestId` or `Scopes` reaches any line;
+    - every JSON line of the request, found by its hosting request scope rather than by its `TraceId`, carries its
+      id, and nothing inbound, `RequestId` or `Scopes` reaches any line. The lines are formatted by the API's own
+      JSON console formatter with the host's scopes; `Scopes_would_be_seen_if_the_console_wrote_them` is the
+      control with `IncludeScopes` on;
     - the private hub 401 carries `traceId`, and the tracking hub 404 is byte-for-byte uniform.
   - `Obs003TraceIdPostgreSqlTests` (PostgreSQL 18, `PublicTrackingPostgreSql` collection): a PLATFORM_ADMIN request
     has the same id in a JSON console line, in its `TENANT_CONTEXT_ACTIVATED` audit row and in its 400 problem.
@@ -143,13 +202,30 @@ optional, so they still conform.
   - `Obs003CycleTraceTests`: in the real Worker composition, claim window finalization job cycles and dispatch lane
     cycles each have distinct ids. In the API composition, both realtime lanes do too. The database is unreachable,
     so every cycle logs.
+  - `DriverVoiceHttpTests`: the status callback and both key-press webhooks pass a 32-hex trace id to the service,
+    a different one per request.
+- `tests/Paqueteria.ContractTests/PostgreSql/DriverVoiceBridgePostgreSqlContractTests.cs`
+  (`Each_webhook_audit_row_carries_the_trace_id_of_its_request`, PostgreSQL 18): the production webhook routes on a
+  loopback Kestrel behind `UseTraceCorrelation`, over the real call service. The `RECIPIENT_CALL_DRIVER_CONFIRMED`,
+  `RECIPIENT_CALL_BRIDGED` and `RECIPIENT_CALL_STATUS_REPORTED` rows carry, in `request_id`, the `TraceId` of their
+  own request's hosting log line; the three ids differ.
 - `tests/Paqueteria.ArchitectureTests/TraceCorrelationArchitectureTests.cs`:
   - both hosts configure correlation before building;
   - `UseTraceCorrelation` is the first middleware;
-  - every Azure SDK client file is reviewed and strips trace context;
+  - every file that uses an Azure SDK namespace is reviewed, and every Azure client, credential or key resolver
+    construction and every guarded extension goes through the wrapper (`AzureClientTracingGuard`);
   - only the Azure transport names trace headers;
   - every `BackgroundService` is either a traced cycle loop or listed with a reason;
-  - only `TraceCorrelation` starts activities, and nothing sets tags, events or baggage.
+  - only `TraceCorrelation` starts activities (`new Activity(` included), nothing sets tags, events or baggage,
+    and only it sets a display name, on any receiver.
+- `tests/Paqueteria.ArchitectureTests/AzureClientTracingGuardTests.cs`: the guard rejects, as fixture sources, a
+  target-typed `new(` (field, assignment and an unnamed type), `EmailClient`, `ServiceBusClient`, `QueueClient`,
+  `ClientSecretCredential`, `AzureCliCredential`, a second unwrapped construction in a reviewed file, a route only a
+  nested credential takes, a helper that skips the wrapper on one return, `AddAzureClients`, the credential overloads
+  of `ProtectKeysWithAzureKeyVault` and `PersistKeysToAzureBlobStorage`, `HttpPipelineBuilder.Build`, an unreviewed
+  namespace, a fully qualified client, a global using and a project-wide `<Using>`; the production patterns pass.
+- `tests/Paqueteria.ArchitectureTests/TrackingTokenLogRedactionArchitectureTests.cs`:
+  `Api_and_worker_json_consoles_do_not_include_scopes` covers both hosts' `Program.cs` and `appsettings*.json`.
 - `tests/Paqueteria.ContractTests/Obs003ProblemTraceIdContractTests.cs`:
   - the AI-05 `Problem.traceId` shape;
   - no problem schema is closed or requires it;
@@ -162,9 +238,11 @@ optional, so they still conform.
 dotnet build Paqueteria.sln -c Release
 dotnet test tests/Paqueteria.UnitTests -c Release --no-build --filter "FullyQualifiedName~Obs003"
 dotnet test tests/Paqueteria.ArchitectureTests -c Release --no-build --filter "FullyQualifiedName~TraceCorrelation"
+dotnet test tests/Paqueteria.ArchitectureTests -c Release --no-build --filter "FullyQualifiedName~AzureClientTracingGuard"
 dotnet test tests/Paqueteria.ContractTests -c Release --no-build --filter "FullyQualifiedName~Obs003"
-# needs Docker for the PostgreSQL class
-dotnet test tests/Paqueteria.IntegrationTests -c Release --no-build --filter "FullyQualifiedName~Obs003"
+# needs Docker for the PostgreSQL classes
+dotnet test tests/Paqueteria.IntegrationTests -c Release --no-build --filter "FullyQualifiedName~Obs003|FullyQualifiedName~DriverVoiceHttpTests"
+dotnet test tests/Paqueteria.ContractTests -c Release --no-build --filter "FullyQualifiedName~Each_webhook_audit_row_carries"
 ```
 
 To see it by hand, run the API with `ASPNETCORE_ENVIRONMENT=Development` and call any endpoint that answers a

@@ -15,7 +15,11 @@ public static class AzureWorkloadCredential
 {
     public const string ClientIdVariable = "AZURE_CLIENT_ID";
 
-    public static TokenCredential Create(string? clientId) => new ManagedIdentityCredential(CreateOptions(clientId));
+    public static TokenCredential Create(string? clientId) => Create(clientId, transport: null);
+
+    /// <summary>Test seam: the production credential with its token requests sent through <paramref name="transport"/>.</summary>
+    internal static TokenCredential Create(string? clientId, HttpPipelineTransport? transport) =>
+        new ManagedIdentityCredential(CreateOptions(clientId, transport));
 
     /// <summary>
     /// The credential options: system- or user-assigned identity, and no trace context on the token requests

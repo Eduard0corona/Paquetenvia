@@ -243,19 +243,24 @@ public sealed class TrackingTokenLogRedactionArchitectureTests
         }
     }
 
-    [Fact]
-    public void Api_json_console_does_not_include_scopes()
+    [Theory]
+    [InlineData("src/Paqueteria.Api")]
+    [InlineData("src/Paqueteria.Worker")]
+    public void Api_and_worker_json_consoles_do_not_include_scopes(string host)
     {
-        // Defence in depth: the redaction makes scopes safe, and the API console formatter still keeps them off.
-        var program = File.ReadAllText(TestRepository.GetPath("src/Paqueteria.Api/Program.cs"));
+        // Defence in depth: the redaction makes scopes safe, and the console formatters still keep them off. OBS-003
+        // also relies on it: a hosting scope would add Kestrel's RequestId (and the activity scope a second TraceId)
+        // next to the request's State.TraceId.
+        var program = File.ReadAllText(TestRepository.GetPath($"{host}/Program.cs"));
         Assert.Contains("builder.Logging.ClearProviders();", program, StringComparison.Ordinal);
         Assert.Contains("builder.Logging.AddJsonConsole();", program, StringComparison.Ordinal);
-        foreach (var settings in Directory.EnumerateFiles(
-                     TestRepository.GetPath("src/Paqueteria.Api"),
-                     "appsettings*.json",
-                     SearchOption.TopDirectoryOnly))
+        Assert.DoesNotContain("IncludeScopes", program, StringComparison.Ordinal);
+        var settings = Directory.EnumerateFiles(TestRepository.GetPath(host), "appsettings*.json", SearchOption.TopDirectoryOnly)
+            .ToArray();
+        Assert.NotEmpty(settings);
+        foreach (var file in settings)
         {
-            Assert.DoesNotContain("IncludeScopes", File.ReadAllText(settings), StringComparison.Ordinal);
+            Assert.DoesNotContain("IncludeScopes", File.ReadAllText(file), StringComparison.Ordinal);
         }
     }
 

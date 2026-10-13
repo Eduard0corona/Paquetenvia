@@ -12,9 +12,15 @@
   API empieza una traza nueva. Salida: ninguna petición lleva esos encabezados (Google Maps, mensajes, voz, AuthCenter y
   Azure). Azure.Core agrega `traceparent` aunque `IsDistributedTracingEnabled` sea `false`, así que cada cliente de
   Azure envía por un transporte que quita esos encabezados.
-- Un solo identificador: el trace id W3C (32 hexadecimales en minúscula) va en `HttpContext.TraceIdentifier`, en
-  `platform.audit_logs.request_id`, en el `traceId` de todo `application/problem+json` y en `State.TraceId` de cada
-  línea de log de la petición. El seguimiento público conserva sus cuerpos uniformes sin `traceId`.
+- Un solo identificador: el trace id W3C (32 hexadecimales en minúscula) va en `HttpContext.TraceIdentifier`, en el
+  `traceId` de todo `application/problem+json`, en `State.TraceId` de cada línea de log de la petición y en el
+  `request_id` de cada fila de `platform.audit_logs` que se escribe al atender una petición a la API, también en los
+  webhooks de voz de Twilio (estado de la llamada y teclas del repartidor y del destinatario), que ahora lo pasan en sus
+  comandos. Una excepción: `PENDING_MEMBERSHIP_ACCEPTED`, que `security.apply_pending_memberships` escribe al iniciar
+  sesión, sigue con `request_id` NULL porque la función no recibe el id. Las filas que escribe el Worker (validación
+  de pruebas y ciclo de vida de asignaciones) no pertenecen a ninguna petición y siguen en NULL hasta el PR 7. AI-05
+  dice exactamente eso en `Problem.traceId` y en la entrada `OBS-003-W3C-CORRELATION`. El seguimiento público conserva
+  sus cuerpos uniformes sin `traceId`.
 - Worker: cada ciclo de job y cada ciclo de despacho del outbox (también los despachadores de tiempo real en la API)
   corre en su propia traza raíz.
 - AI-05, cambio aditivo: `Problem` documenta `traceId` opcional (`^[0-9a-f]{32}$`) y `x-pilot-contract-deltas` agrega

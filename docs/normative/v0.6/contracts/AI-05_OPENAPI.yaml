@@ -5322,8 +5322,12 @@ components:
           pattern: ^[0-9a-f]{32}$
           description: >-
             OBS-003-W3C-CORRELATION-2026-10-12. The W3C trace id of the request, 32 lowercase hexadecimal digits:
-            the same value the API writes in every log line of the request and in platform.audit_logs.request_id.
-            Every request starts a new trace; an inbound traceparent, tracestate or baggage is ignored. Optional
+            the same value the API writes in every log line of the request and in the request_id of every
+            platform.audit_logs row written while handling the request, the Twilio voice webhooks included. One
+            exception: PENDING_MEMBERSHIP_ACCEPTED, written at sign-in by security.apply_pending_memberships, which
+            takes no request id, keeps request_id NULL. Rows the Worker writes (proof validation, assignment
+            lifecycle) belong to no request and keep request_id NULL until trace context crosses the outbox (phase 4
+            PR 7). Every request starts a new trace; an inbound traceparent, tracestate or baggage is ignored. Optional
             and additive: every problem the API writes carries it, including those described by the other problem
             schemas (open objects), except the public tracking answers (publicTracking 404, 429 and 503 and the
             tracking hub), which keep their uniform bodies without it (Invariant 5).
@@ -8156,6 +8160,9 @@ x-pilot-contract-deltas:
     implementation: shipped by feat/obs-003-w3c-correlation (phase 4 PR 1) together with its code and tests -
       TraceCorrelation, the request trace id in HttpContext.TraceIdentifier and AddProblemDetailsTraceId
     delta: purely additive - Problem documents the optional traceId (32 lowercase hexadecimal digits), the W3C trace id
-      of the request, which is also platform.audit_logs.request_id and the TraceId of the request's log lines; inbound
-      trace headers are ignored; no path, operation, status code, required member or other schema changes, and the
-      public tracking bodies stay uniform without it
+      of the request, which is also the TraceId of the request's log lines and the request_id of every
+      platform.audit_logs row written while handling the request (the Twilio voice webhooks included), except
+      PENDING_MEMBERSHIP_ACCEPTED (written at sign-in by security.apply_pending_memberships, which takes no request id,
+      with request_id NULL); rows the Worker writes keep request_id NULL until phase 4 PR 7; inbound trace headers are
+      ignored; no path, operation, status code, required member or other schema changes, and the public tracking
+      bodies stay uniform without it

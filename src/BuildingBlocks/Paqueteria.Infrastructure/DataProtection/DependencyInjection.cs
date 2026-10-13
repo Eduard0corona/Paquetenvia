@@ -1,5 +1,4 @@
 using Azure.Core;
-using Azure.Security.KeyVault.Keys.Cryptography;
 using Microsoft.AspNetCore.DataProtection;
 using Microsoft.AspNetCore.DataProtection.KeyManagement;
 using Microsoft.Extensions.Configuration;
@@ -84,10 +83,8 @@ public static class DependencyInjection
             // ADP-001 / ENV-001: every key written to the shared ring is wrapped by the Key Vault key
             // (managed identity). Existing unwrapped entries stay readable; new ones are encrypted.
             services.AddAzureWorkloadCredential();
-            services.TryAddSingleton(serviceProvider => new DataProtectionKeyEncryptionKeyResolver(
-                new KeyResolver(
-                    serviceProvider.GetRequiredService<TokenCredential>(),
-                    DataProtectionKeyEncryptionKeyResolver.CreateClientOptions())));
+            services.TryAddSingleton(serviceProvider => DataProtectionKeyEncryptionKeyResolver.CreateKeyVault(
+                serviceProvider.GetRequiredService<TokenCredential>()));
             dataProtection.ProtectKeysWithAzureKeyVault(
                 keyEncryptionKeyId,
                 serviceProvider => serviceProvider.GetRequiredService<DataProtectionKeyEncryptionKeyResolver>().Resolver);

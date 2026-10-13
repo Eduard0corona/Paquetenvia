@@ -80,9 +80,18 @@ public sealed class AzureBlobProofGateway : IProofBlobGateway
     private readonly BlobContainerClient _container;
 
     public AzureBlobProofGateway(IOptions<ProofStorageOptions> options, TokenCredential credential)
+        : this(options, credential, transport: null)
+    {
+    }
+
+    /// <summary>Test seam: routes the Blob SDK through <paramref name="transport"/>.</summary>
+    internal AzureBlobProofGateway(
+        IOptions<ProofStorageOptions> options,
+        TokenCredential credential,
+        HttpPipelineTransport? transport)
     {
         var settings = options.Value.AzureBlob;
-        _service = new BlobServiceClient(new Uri(settings.ServiceUri), credential, CreateClientOptions());
+        _service = new BlobServiceClient(new Uri(settings.ServiceUri), credential, CreateClientOptions(transport));
         _container = _service.GetBlobContainerClient(settings.ContainerName);
     }
 

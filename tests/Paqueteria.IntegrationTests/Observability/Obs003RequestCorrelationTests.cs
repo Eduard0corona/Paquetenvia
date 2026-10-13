@@ -15,8 +15,8 @@ namespace Paqueteria.IntegrationTests.Observability;
 /// <summary>
 /// OBS-003 in the real API pipeline (no database): inbound <c>traceparent</c>, <c>tracestate</c> and <c>baggage</c>
 /// are ignored, so every request is a new trace; its 32-hex id is the problem <c>traceId</c>, whatever the request's
-/// <c>Accept</c>, and the <c>TraceId</c> of every JSON console line the request writes. The public tracking hub keeps
-/// its uniform body without it.
+/// <c>Accept</c>, and the <c>TraceId</c> of every JSON console line the request writes, as the API's own formatter
+/// writes it with the host's scopes. The public tracking hub keeps its uniform body without it.
 /// </summary>
 public sealed class Obs003RequestCorrelationTests
 {
@@ -37,12 +37,14 @@ public sealed class Obs003RequestCorrelationTests
         Assert.Equal(3, new[] { json, html, plain }.Distinct(StringComparer.Ordinal).Count());
         Assert.DoesNotContain(Obs003.InboundTraceId, new[] { json, html, plain });
 
-        // Every line of each request carries that request's id, and nothing inbound reaches any line.
+        // Every line of each request carries that request's id. The lines of a request are found by the hosting
+        // request scope they were written in (set before any middleware), not by their TraceId, so a line of the
+        // request without the id, or with another one, fails here.
         foreach (var traceId in new[] { json, html, plain })
         {
-            var lines = logs.LinesOf(traceId);
-            Assert.NotEmpty(lines);
+            var lines = logs.LinesOfRequestScope(logs.RequestScopeOf(traceId));
             Assert.Contains(lines, line => line.Contains("\"Category\":\"Microsoft.AspNetCore.Hosting.Diagnostics\"", StringComparison.Ordinal));
+            Assert.All(lines, line => Assert.Equal(traceId, JsonConsoleCapture.TraceIdOf(line)));
         }
 
         foreach (var line in logs.Lines)
@@ -50,7 +52,10 @@ public sealed class Obs003RequestCorrelationTests
             Assert.DoesNotContain(Obs003.InboundTraceId, line, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain(Obs003.InboundParentSpanId, line, StringComparison.OrdinalIgnoreCase);
             Assert.DoesNotContain("synthetic-obs003", line, StringComparison.Ordinal);
-            // One identifier per line: no hosting scope (RequestId, ConnectionId) is written by the JSON console.
+            // One identifier per line. The capture formats with the API's own JSON console formatter and the host's
+            // scopes (the hosting scope holds Kestrel's RequestId, the activity scope a second TraceId), so a console
+            // that wrote scopes would fail here (the control is Scopes_would_be_seen_if_the_console_wrote_them).
+            // Api_and_worker_json_consoles_do_not_include_scopes guards the configuration of both hosts.
             Assert.DoesNotContain("\"RequestId\"", line, StringComparison.Ordinal);
             Assert.DoesNotContain("\"Scopes\"", line, StringComparison.Ordinal);
             if (JsonConsoleCapture.TraceIdOf(line) is { } lineTraceId)
@@ -58,6 +63,22 @@ public sealed class Obs003RequestCorrelationTests
                 Assert.True(TraceCorrelation.IsTraceId(lineTraceId), line);
             }
         }
+    }
+
+    [Fact]
+    public async Task Scopes_would_be_seen_if_the_console_wrote_them()
+    {
+        // The control of the scope assertions above: with IncludeScopes on, the same capture writes the hosting
+        // scope's RequestId into the lines of the request.
+        using var logs = new JsonConsoleCapture();
+        await using var api = new CorrelationApiFactory(logs, includeScopes: true);
+        using var client = api.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        var traceId = await ProblemAsync(client, "application/json", inbound: false);
+
+        var lines = logs.LinesOfRequestScope(logs.RequestScopeOf(traceId));
+        Assert.Contains(lines, line => line.Contains("\"Scopes\"", StringComparison.Ordinal) &&
+                                       line.Contains("\"RequestId\"", StringComparison.Ordinal));
     }
 
     [Fact]
@@ -110,20 +131,26 @@ public sealed class Obs003RequestCorrelationTests
         return Obs003.ProblemTraceId(await response.Content.ReadAsStringAsync());
     }
 
-    private sealed class CorrelationApiFactory(JsonConsoleCapture logs) : WebApplicationFactory<Program>
+    private sealed class CorrelationApiFactory(JsonConsoleCapture logs, bool includeScopes = false)
+        : WebApplicationFactory<Program>
     {
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Testing");
-            builder.ConfigureAppConfiguration(configuration =>
-                configuration.AddInMemoryCollection(new Dictionary<string, string?>
-                {
-                    ["Authentication:Provider"] = "Mock",
-                    ["IdentityBootstrap:Provider"] = "Mock",
-                    // Hosting, routing and authentication lines too, so every request writes some.
-                    ["Logging:LogLevel:Microsoft.AspNetCore"] = "Debug",
-                }));
-            builder.ConfigureLogging(logging => logging.AddProvider(logs));
+            var settings = new Dictionary<string, string?>
+            {
+                ["Authentication:Provider"] = "Mock",
+                ["IdentityBootstrap:Provider"] = "Mock",
+                // Hosting, routing and authentication lines too, so every request writes some.
+                ["Logging:LogLevel:Microsoft.AspNetCore"] = "Debug",
+            };
+            if (includeScopes)
+            {
+                settings["Logging:Console:FormatterOptions:IncludeScopes"] = "true";
+            }
+
+            builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(settings));
+            builder.ConfigureLogging(logs.AddTo);
         }
     }
 }

@@ -3,10 +3,7 @@ using System.Diagnostics;
 using System.Net;
 using Azure.Core;
 using Azure.Core.Pipeline;
-using Azure.Identity;
-using Azure.Security.KeyVault.Keys.Cryptography;
 using Azure.Security.KeyVault.Secrets;
-using Azure.Storage.Blobs;
 using Custody.Infrastructure.ProofStorage;
 using Microsoft.Extensions.Options;
 using Paqueteria.Infrastructure.Cloud;
@@ -18,9 +15,10 @@ namespace Paqueteria.UnitTests.Security;
 /// <summary>
 /// OBS-003: Azure SDK clients add <c>traceparent</c> from <c>Activity.Current</c> through their own pipeline policy,
 /// whatever the process propagator says. Every Azure client the code builds (Key Vault secrets, keys and
-/// cryptography, Blob Storage, the data protection key resolver and the managed identity credential) is driven
-/// here through a fake transport while a sampled activity with trace state and baggage is current: none of their
-/// requests carries trace context. A client with the SDK defaults is the control that the capture sees it.
+/// cryptography, Blob Storage, the data protection key resolver and the managed identity credential) is built here
+/// by its production constructor or factory, with a fake transport as the only change, and driven while a sampled
+/// activity with trace state and baggage is current: none of their requests carries trace context. A client with
+/// the SDK defaults is the control that the capture sees it.
 /// </summary>
 public sealed class Obs003AzureClientTracingTests
 {
@@ -82,17 +80,23 @@ public sealed class Obs003AzureClientTracingTests
     }
 
     [Fact]
-    public async Task Proof_blob_client_options_send_no_trace_context()
+    public async Task Proof_blob_gateway_sends_no_trace_context()
     {
         var transport = new CapturingTransport();
-        var options = AzureBlobProofGateway.CreateClientOptions(transport.Transport);
-        options.Retry.MaxRetries = 0;
-        var service = new BlobServiceClient(
-            new Uri("https://stobs003synthetic.blob.core.windows.net"),
+        // The production constructor: reverting it to unwrapped Blob options loses the transport and fails here.
+        var gateway = new AzureBlobProofGateway(
+            Options.Create(new ProofStorageOptions
+            {
+                AzureBlob = new AzureBlobProofStorageOptions
+                {
+                    ServiceUri = "https://stobs003synthetic.blob.core.windows.net",
+                    ContainerName = "proofs",
+                },
+            }),
             new SyntheticCredential(),
-            options);
+            transport.Transport);
 
-        await WithinSampledRequestActivityAsync(() => service.GetBlobContainerClient("proofs").GetPropertiesAsync());
+        await WithinSampledRequestActivityAsync(() => gateway.GetContainerStateAsync(CancellationToken.None));
 
         transport.AssertNoTraceContext();
     }
@@ -101,13 +105,12 @@ public sealed class Obs003AzureClientTracingTests
     public async Task Data_protection_key_resolver_sends_no_trace_context()
     {
         var transport = new CapturingTransport();
-        var options = DataProtectionKeyEncryptionKeyResolver.CreateClientOptions(transport.Transport);
-        options.Retry.MaxRetries = 0;
-        var resolver = new KeyResolver(new SyntheticCredential(), options);
+        // The factory the data protection registration calls (CreateKeyVault), with the test transport.
+        var resolver = DataProtectionKeyEncryptionKeyResolver.CreateKeyVault(new SyntheticCredential(), transport.Transport).Resolver;
 
         await WithinSampledRequestActivityAsync(async () =>
         {
-            var key = await resolver.ResolveAsync(new Uri(Vault, $"keys/data-protection/{new string('b', 32)}"));
+            var key = await resolver.ResolveAsync(new Uri(Vault, $"keys/data-protection/{new string('b', 32)}").AbsoluteUri);
             await key.WrapKeyAsync("RSA-OAEP-256", new byte[32]);
         });
 
@@ -118,12 +121,11 @@ public sealed class Obs003AzureClientTracingTests
     public async Task Managed_identity_token_requests_send_no_trace_context()
     {
         var transport = new CapturingTransport(HttpStatusCode.BadRequest);
-        var options = AzureWorkloadCredential.CreateOptions("00000000-0000-0000-0000-0000000000a1", transport.Transport);
-        options.Retry.MaxRetries = 0;
-        var credential = new ManagedIdentityCredential(options);
+        // The credential the workload registers (AzureWorkloadCredential.Create), with the test transport.
+        var credential = AzureWorkloadCredential.Create("00000000-0000-0000-0000-0000000000a1", transport.Transport);
 
         await WithinSampledRequestActivityAsync(() =>
-            credential.GetTokenAsync(new TokenRequestContext(["https://vault.azure.net/.default"])).AsTask());
+            credential.GetTokenAsync(new TokenRequestContext(["https://vault.azure.net/.default"]), CancellationToken.None).AsTask());
 
         transport.AssertNoTraceContext();
     }

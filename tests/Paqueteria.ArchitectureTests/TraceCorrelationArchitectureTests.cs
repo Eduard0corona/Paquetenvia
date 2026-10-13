@@ -11,22 +11,28 @@ namespace Paqueteria.ArchitectureTests;
 /// </summary>
 public sealed partial class TraceCorrelationArchitectureTests
 {
-    /// <summary>Files that build an Azure SDK client, credential or options, each reviewed to strip trace context.</summary>
+    /// <summary>
+    /// Every file that uses an Azure SDK namespace (any <c>Azure.*</c> but <c>Azure.Core</c>, or
+    /// <c>Microsoft.Extensions.Azure</c>) or an extension that builds Azure clients, each reviewed to strip trace
+    /// context. <see cref="AzureClientTracingGuard"/> checks every construction in them.
+    /// </summary>
     private static readonly IReadOnlyDictionary<string, string> ReviewedAzureClientFiles =
         new Dictionary<string, string>(StringComparer.Ordinal)
         {
             ["src/BuildingBlocks/Paqueteria.Infrastructure/Cloud/AzureWorkloadCredential.cs"] =
-                "managed identity credential options through WithoutDistributedTracing",
+                "the managed identity credential, built with CreateOptions, which ends in WithoutDistributedTracing",
             ["src/BuildingBlocks/Paqueteria.Infrastructure/Cloud/KeyVaultSecretsConfiguration.cs"] =
-                "Key Vault secrets client options through WithoutDistributedTracing",
+                "the Key Vault secrets client, built with options through WithoutDistributedTracing",
             ["src/BuildingBlocks/Paqueteria.Infrastructure/DataProtection/DataProtectionKeyEncryption.cs"] =
-                "data protection cryptography client options through WithoutDistributedTracing",
+                "the data protection key resolver, built by CreateKeyVault with CreateClientOptions",
             ["src/BuildingBlocks/Paqueteria.Infrastructure/DataProtection/DependencyInjection.cs"] =
-                "the key resolver is built with DataProtectionKeyEncryptionKeyResolver.CreateClientOptions()",
+                "ProtectKeysWithAzureKeyVault through the resolver overload with DataProtectionKeyEncryptionKeyResolver",
             ["src/BuildingBlocks/Paqueteria.Infrastructure/Security/Pii/AzureKeyVaultPiiKeyWrapClient.cs"] =
-                "key and cryptography client options through Configure, which ends in WithoutDistributedTracing",
+                "the key and cryptography clients, built with options through Configure, which ends in WithoutDistributedTracing",
             ["src/Modules/Custody/Custody.Infrastructure/ProofStorage/AzureBlobProofGateway.cs"] =
-                "Blob client options through CreateClientOptions, which ends in WithoutDistributedTracing",
+                "the Blob service client, built with CreateClientOptions, which ends in WithoutDistributedTracing",
+            ["src/Modules/Custody/Custody.Infrastructure/ProofStorage/AzureBlobProofObjectStorage.cs"] =
+                "SAS builders and Blob models only; every Blob request goes through IProofBlobGateway",
         };
 
     private const string Scheduler = "src/BuildingBlocks/Paqueteria.Infrastructure/Scheduling/PeriodicJobScheduler.cs";
@@ -87,21 +93,14 @@ public sealed partial class TraceCorrelationArchitectureTests
     [Fact]
     public void Every_azure_sdk_client_is_reviewed_to_strip_trace_context()
     {
-        var files = SourceFiles()
-            .Where(file => AzureClientPattern().IsMatch(CodeWithoutComments(file)))
-            .Select(Relative)
-            .Order(StringComparer.Ordinal)
-            .ToArray();
+        var sources = SourceFiles().Select(Guarded).ToArray();
 
-        Assert.Equal(ReviewedAzureClientFiles.Keys.Order(StringComparer.Ordinal), files);
-        foreach (var file in files)
-        {
-            var code = CodeWithoutComments(TestRepository.GetPath(file));
-            Assert.True(
-                code.Contains(".WithoutDistributedTracing()", StringComparison.Ordinal) ||
-                code.Contains("DataProtectionKeyEncryptionKeyResolver.CreateClientOptions()", StringComparison.Ordinal),
-                $"{file}: {ReviewedAzureClientFiles[file]}");
-        }
+        // Every file that uses an Azure SDK namespace or a guarded extension is reviewed, and no entry is stale.
+        Assert.Equal(ReviewedAzureClientFiles.Keys.Order(StringComparer.Ordinal), AzureClientTracingGuard.InScope(sources));
+        // Every construction of a client, credential or key resolver in them, and every guarded extension anywhere,
+        // goes through WithoutDistributedTracing.
+        Assert.Empty(AzureClientTracingGuard.Violations(sources, ReviewedAzureClientFiles.Keys.ToHashSet(StringComparer.Ordinal)));
+        Assert.Empty(ProjectFiles().SelectMany(file => AzureClientTracingGuard.ProjectViolations(Relative(file), File.ReadAllText(file))));
     }
 
     [Fact]
@@ -148,7 +147,8 @@ public sealed partial class TraceCorrelationArchitectureTests
         var starters = SourceFiles()
             .Where(file => CodeWithoutComments(file).Contains("StartActivity(", StringComparison.Ordinal) ||
                            CodeWithoutComments(file).Contains("new ActivitySource(", StringComparison.Ordinal) ||
-                           CodeWithoutComments(file).Contains("new ActivityListener", StringComparison.Ordinal))
+                           CodeWithoutComments(file).Contains("new ActivityListener", StringComparison.Ordinal) ||
+                           NewActivityPattern().IsMatch(CodeWithoutComments(file)))
             .Select(Relative)
             .ToArray();
         Assert.Equal([correlation], starters);
@@ -159,9 +159,9 @@ public sealed partial class TraceCorrelationArchitectureTests
             .ToArray();
         Assert.Empty(enrichers);
 
-        // The only activity name set after start is the fixed job or lane name of a cycle.
+        // The only activity name set after start is the fixed job or lane name of a cycle, whatever the receiver.
         var renames = SourceFiles()
-            .Where(file => CodeWithoutComments(file).Contains("activity.DisplayName", StringComparison.Ordinal))
+            .Where(file => AzureClientTracingGuard.DisplayNameAssignments(CodeWithoutComments(file)).Count > 0)
             .Select(Relative)
             .ToArray();
         Assert.Equal([correlation], renames);
@@ -176,17 +176,30 @@ public sealed partial class TraceCorrelationArchitectureTests
         '\n',
         File.ReadLines(file).Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)));
 
+    /// <summary>The file as the guard reads it: full-line comments blanked, so line numbers stay true.</summary>
+    private static GuardedSource Guarded(string file) => new(
+        Relative(file),
+        string.Join(
+            '\n',
+            File.ReadLines(file).Select(line => line.TrimStart().StartsWith("//", StringComparison.Ordinal) ? string.Empty : line)));
+
+    /// <summary>Project and MSBuild files that could add a global using to every file of a project.</summary>
+    private static IEnumerable<string> ProjectFiles() =>
+        new[] { "*.csproj", "*.props", "*.targets" }
+            .SelectMany(pattern => Directory.EnumerateFiles(TestRepository.GetPath("src"), pattern, SearchOption.AllDirectories))
+            .Concat(new[] { "Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props" }
+                .Select(TestRepository.GetPath)
+                .Where(File.Exists))
+            .Where(file => !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
+
     private static string Relative(string file) =>
         Path.GetRelativePath(TestRepository.Root, file).Replace(Path.DirectorySeparatorChar, '/');
 
     [GeneratedRegex(@"\bapp\.Use[A-Za-z]*\(")]
     private static partial Regex AppUsePattern();
 
-    [GeneratedRegex(
-        @"new (?:SecretClient|KeyClient|CryptographyClient|BlobServiceClient|BlobContainerClient|BlobClient|" +
-        @"ManagedIdentityCredential|DefaultAzureCredential|WorkloadIdentityCredential|ChainedTokenCredential|" +
-        @"EnvironmentCredential|KeyResolver|[A-Za-z]+ClientOptions|[A-Za-z]+CredentialOptions)\(")]
-    private static partial Regex AzureClientPattern();
+    [GeneratedRegex(@"(?<![\w.])new\s+(?:global::)?(?:System\.Diagnostics\.)?Activity\s*\(")]
+    private static partial Regex NewActivityPattern();
 
     [GeneratedRegex("\"(?:traceparent|tracestate|baggage|Request-Id|Correlation-Context)\"", RegexOptions.IgnoreCase)]
     private static partial Regex TraceHeaderLiteralPattern();

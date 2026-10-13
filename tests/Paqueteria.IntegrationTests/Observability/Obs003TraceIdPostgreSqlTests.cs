@@ -96,7 +96,7 @@ public sealed class Obs003TraceIdPostgreSqlTests(PostgreSqlSecurityWebApplicatio
                 {
                     ["Logging:LogLevel:Microsoft.AspNetCore"] = "Debug",
                 }));
-            builder.ConfigureLogging(logging => logging.AddProvider(logs));
+            builder.ConfigureLogging(logs.AddTo);
         });
 
     /// <summary>

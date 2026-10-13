@@ -110,7 +110,7 @@ public sealed class Obs003CycleTraceTests
                     ["Dispatch:AssignmentLifecycle:Provider"] = "PostgreSql",
                     ["Dispatch:AssignmentLifecycle:PollIntervalMilliseconds"] = "100",
                 }));
-            builder.ConfigureLogging(logging => logging.AddProvider(logs));
+            builder.ConfigureLogging(logs.AddTo);
         }
     }
 
@@ -133,7 +133,7 @@ public sealed class Obs003CycleTraceTests
                     ["ConnectionStrings:Paqueteria"] = UnreachableDatabase,
                     [$"ConnectionStrings:{OutboxDispatcherOptions.ConnectionStringName}"] = UnreachableRealtimeDatabase,
                 }));
-            builder.ConfigureLogging(logging => logging.AddProvider(logs));
+            builder.ConfigureLogging(logs.AddTo);
         }
     }
 }

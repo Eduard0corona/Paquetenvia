@@ -126,7 +126,8 @@ public static class VoiceWebhookEndpoints
         {
             // An unknown or already final call request is acknowledged as well: the provider must not retry it.
             _ = await service.RecordStatusAsync(
-                new VoiceCallStatusReport(organizationId, callRequestId, callSid, callStatus, duration),
+                new VoiceCallStatusReport(
+                    organizationId, callRequestId, callSid, callStatus, duration, httpContext.TraceIdentifier),
                 cancellationToken);
             return Results.NoContent();
         }
@@ -195,7 +196,7 @@ public static class VoiceWebhookEndpoints
         }
 
         var decision = await service.ConfirmDriverAsync(
-            new VoiceKeypress(organizationId, callRequestId, callSid, confirmed),
+            new VoiceKeypress(organizationId, callRequestId, callSid, confirmed, httpContext.TraceIdentifier),
             cancellationToken);
         return Results.Content(
             decision.Recipient is { } recipient
@@ -263,7 +264,7 @@ public static class VoiceWebhookEndpoints
         }
 
         var connect = await service.ConfirmRecipientAsync(
-            new VoiceKeypress(organizationId, callRequestId, parentCallSid, confirmed),
+            new VoiceKeypress(organizationId, callRequestId, parentCallSid, confirmed, httpContext.TraceIdentifier),
             cancellationToken);
         return Results.Content(
             connect ? verifier.BuildConnectResponse() : verifier.BuildHangupResponse(),
