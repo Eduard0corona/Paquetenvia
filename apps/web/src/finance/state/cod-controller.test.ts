@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RateLimitWaits } from "../../lib/rate-limit-wait";
 import { TenantApiError } from "../../operations/api/tenant-request";
 import {
   bearerSession,
@@ -14,7 +15,7 @@ import type { OperationsSession } from "../../operations/session/operations-sess
 import { PendingSubmissions } from "../../operations/state/pending-submissions";
 import type { CodApi } from "../api/cod-api";
 import { parseCodTransaction, parseOrderFinancials } from "../contracts/cod";
-import { CodController } from "./cod-controller";
+import { CodController, codPendingRateLimit } from "./cod-controller";
 
 const expected = () => parseOrderFinancials(financialsResponse());
 const recorded = () =>
@@ -402,5 +403,91 @@ describe("COD tenant switch", () => {
     resolve(expected());
     await inFlight;
     expect(context.controller.getSnapshot().financials).toBeNull();
+  });
+});
+
+describe("pending COD list under the SEC-004 limit (owner answer Q14)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-13T12:00:00Z"));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  const first = { id: orderId, public_id: "PQ-000123", status: "DELIVERED" };
+  const second = { id: syntheticUuid(0x103), public_id: "PQ-000125", status: "DELIVERED" };
+
+  function limitedCod() {
+    const waits = new RateLimitWaits();
+    const state = { limited: 0, items: [first] };
+    const pendingReconciliation = vi.fn<CodApi["pendingReconciliation"]>(async (cursor) => {
+      if (state.limited > 0) {
+        waits.record("order_list", state.limited);
+        throw new TenantApiError("rate_limited", null, false, state.limited);
+      }
+      return cursor === null ? { items: state.items, next_cursor: "c1" } : { items: [second], next_cursor: null };
+    });
+    const api: CodApi = {
+      financials: vi.fn(async () => expected()),
+      pendingReconciliation,
+      record: vi.fn(async () => parseCodTransaction(codTransactionResponse())),
+      reconcile: vi.fn(async () => parseCodTransaction(codTransactionResponse())),
+    };
+    const controller = new CodController({
+      readSession: () => bearerSession(orgA),
+      createApi: () => api,
+      loadRole: async () => "DISPATCHER",
+      waits,
+    });
+    return { controller, pendingReconciliation, waits, state };
+  }
+
+  it("waits with the order list (listOrders)", () => {
+    expect(codPendingRateLimit).toEqual(["order_list"]);
+  });
+
+  it("keeps the list on a 429, reads nothing during the wait and reads once, by itself, when it ends", async () => {
+    const env = limitedCod();
+    await env.controller.start();
+    expect(env.controller.getSnapshot().pending).toEqual([first]);
+
+    env.state.limited = 2;
+    await env.controller.loadPending(true);
+    expect(env.pendingReconciliation).toHaveBeenCalledTimes(2);
+    expect(env.controller.getSnapshot()).toMatchObject({ pending: [first], pendingCursor: "c1", message: null });
+
+    env.state.limited = 0;
+    env.state.items = [first, second];
+    await env.controller.loadPending();
+    await env.controller.loadPending(true);
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(env.pendingReconciliation).toHaveBeenCalledTimes(2);
+    // The list does not reload by itself otherwise; at 0 it does, once (owner answer Q14).
+    await vi.advanceTimersByTimeAsync(1);
+    expect(env.pendingReconciliation).toHaveBeenCalledTimes(3);
+    expect(env.pendingReconciliation).toHaveBeenLastCalledWith(null, expect.anything());
+    expect(env.controller.getSnapshot().pending).toEqual([first, second]);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(env.pendingReconciliation).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("starts during a wait without reading, and reads once when it ends", async () => {
+    const env = limitedCod();
+    env.waits.record("order_list", 5);
+    await env.controller.start();
+    expect(env.pendingReconciliation).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(env.pendingReconciliation).toHaveBeenCalledTimes(1);
+  });
+
+  it("is not held by another limit, and leaves no timer when the screen stops", async () => {
+    const env = limitedCod();
+    env.waits.record("dashboard", 60);
+    await env.controller.start();
+    expect(env.pendingReconciliation).toHaveBeenCalledTimes(1);
+    env.state.limited = 30;
+    await env.controller.loadPending();
+    env.controller.stop();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

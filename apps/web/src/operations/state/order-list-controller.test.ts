@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RateLimitWaits } from "../../lib/rate-limit-wait";
 import type { OrderListApi } from "../api/order-list-api";
 import { TenantApiError } from "../api/tenant-request";
 import {
@@ -310,5 +311,125 @@ describe("order list refresh and failures", () => {
     expect(env.list).toHaveBeenLastCalledWith(noFilters, null, expect.any(AbortSignal));
     env.controller.stop();
     expect(env.controller.getSnapshot()).toMatchObject({ phase: "no_session", rows: [], guide: null });
+  });
+});
+
+describe("Órdenes under the SEC-004 limit (owner answers Q11, Q14)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-13T12:00:00Z"));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  /** listOrders that answers 429 (recording the wait, as the API client does) while `limited` is set. */
+  function limitedList(pages: (query: OrderListQuery, cursor: string | null) => OrderListPage) {
+    const waits = new RateLimitWaits();
+    const state = { limited: 0 };
+    const list = vi.fn(async (query: OrderListQuery, cursor: string | null): Promise<OrderListPage> => {
+      if (state.limited > 0) {
+        waits.record("order_list", state.limited);
+        throw new TenantApiError("rate_limited", null, false, state.limited);
+      }
+      return pages(query, cursor);
+    });
+    const session: OperationsSession = { organizationId: orgA, sessionNamespace: "synthetic", getAccessToken: () => "token" };
+    const controller = new OrderListController({
+      readSession: () => session,
+      createApi: () => ({ list }),
+      loadRole: async () => "DISPATCHER",
+      isHidden: () => false,
+      waits,
+    });
+    return { controller, list, waits, state };
+  }
+
+  it("keeps the rows on a 429, sends nothing during the wait and reads once, by itself, when it ends", async () => {
+    const env = limitedList(() => ({ items: [row(2), row(1)], next_cursor: null }));
+    await env.controller.start();
+    expect(env.list).toHaveBeenCalledTimes(1);
+
+    env.state.limited = 2;
+    await env.controller.refresh("manual");
+    expect(env.list).toHaveBeenCalledTimes(2);
+    expect(env.controller.getSnapshot()).toMatchObject({ error: null, message: null, loading: false });
+    expect(env.controller.getSnapshot().rows).toHaveLength(2);
+    expect(env.controller.rateLimited).toBe(true);
+
+    env.state.limited = 0;
+    await env.controller.refresh("manual");
+    await env.controller.refresh("visibility");
+    await env.controller.refresh("focus");
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(env.list).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(env.list).toHaveBeenCalledTimes(3);
+    expect(env.controller.rateLimited).toBe(false);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(env.list).toHaveBeenCalledTimes(3);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("keeps a filter change on screen without sending it and reads it when the wait ends (Q14)", async () => {
+    const env = limitedList((query) => ({ items: query.status === "DELIVERED" ? [row(5)] : [row(2), row(1)], next_cursor: null }));
+    await env.controller.start();
+    env.waits.record("order_list", 3);
+
+    await env.controller.setView({ status: "DELIVERED", from: null, to: null });
+    await env.controller.setGuide(guide);
+    expect(env.list).toHaveBeenCalledTimes(1);
+    expect(env.controller.getSnapshot()).toMatchObject({ guide, rows: [], loaded: false });
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(env.list).toHaveBeenCalledTimes(2);
+    expect(env.list).toHaveBeenLastCalledWith(
+      expect.objectContaining({ status: "DELIVERED", publicId: guide }),
+      null,
+      expect.any(AbortSignal),
+    );
+    expect(env.controller.getSnapshot().rows).toEqual([row(5)]);
+  });
+
+  it("does not drop the pages 'Cargar más' loaded: at 0 only the buttons re-enable (Q14)", async () => {
+    const env = limitedList((_, cursor) =>
+      cursor === null ? { items: [row(3)], next_cursor: "c1" } : cursor === "c1" ? { items: [row(2)], next_cursor: "c2" } : { items: [row(1)], next_cursor: null },
+    );
+    await env.controller.start();
+    await env.controller.loadMore();
+    expect(env.controller.getSnapshot().rows).toHaveLength(2);
+
+    env.state.limited = 2;
+    await env.controller.loadMore();
+    expect(env.list).toHaveBeenCalledTimes(3);
+    expect(env.controller.getSnapshot()).toMatchObject({ error: null, nextCursor: "c2" });
+    env.state.limited = 0;
+    // "Cargar más" is refused while the wait lasts.
+    await env.controller.loadMore();
+    expect(env.list).toHaveBeenCalledTimes(3);
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(env.list).toHaveBeenCalledTimes(3);
+    expect(env.controller.getSnapshot().rows).toHaveLength(2);
+    // Re-enabled: pressing it again sends the same cursor.
+    await env.controller.loadMore();
+    expect(env.list).toHaveBeenLastCalledWith(noFilters, "c2", expect.any(AbortSignal));
+    expect(env.controller.getSnapshot().rows).toHaveLength(3);
+  });
+
+  it("reads the first page again at 0 when 'Cargar más' met the limit on the first page", async () => {
+    const env = limitedList((_, cursor) => (cursor === null ? { items: [row(3)], next_cursor: "c1" } : { items: [row(2)], next_cursor: null }));
+    await env.controller.start();
+    env.state.limited = 1;
+    await env.controller.loadMore();
+    env.state.limited = 0;
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(env.list).toHaveBeenCalledTimes(3);
+    expect(env.list).toHaveBeenLastCalledWith(noFilters, null, expect.any(AbortSignal));
+  });
+
+  it("leaves no timer behind when the screen stops during the wait", async () => {
+    const env = limitedList(() => ({ items: [row(1)], next_cursor: null }));
+    await env.controller.start();
+    env.state.limited = 30;
+    await env.controller.refresh("manual");
+    env.controller.stop();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

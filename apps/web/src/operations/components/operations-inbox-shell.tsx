@@ -39,6 +39,8 @@ import { orderStatusLabels, serviceTypeLabel } from "../contracts/operations-for
 import type { OperationsQueueId } from "../contracts/queue-counts";
 import { formatServiceWindow } from "../contracts/service-window";
 import { useOperationsInbox } from "../state/use-operations-inbox";
+import { inboxRateLimit } from "../state/inbox-controller";
+import { RateLimitNoticeView, useRateLimitWait } from "../../components/ui/rate-limit-notice";
 import { bulkAssignmentTitleId, OperationsBulkAssignment } from "./operations-bulk-assignment";
 import { OperationsDriverAssignment } from "./operations-driver-assignment";
 
@@ -91,6 +93,11 @@ export function OperationsInboxShell() {
   const view = useMemo(() => parseInboxView(new URLSearchParams(searchKey)), [searchKey]);
   const viewKey = inboxViewKey(view);
   const state = useOperationsInbox(view);
+  // SEC-004 (owner answers Q11, Q14, Q16): during the server's wait for the dashboard or the counts the inbox sends
+  // nothing, "Actualizar" and "Cargar más" are disabled, a queue or filter change is kept, and the inbox reads once
+  // by itself when the wait ends.
+  const rateLimit = useRateLimitWait(inboxRateLimit);
+  const waiting = rateLimit.secondsLeft > 0;
   const [assigning, setAssigning] = useState<AssignTarget | null>(null);
   const [selection, setSelection] = useState<Selection>({ key: "", ids: [] });
   const [batch, setBatch] = useState<BulkBatch | null>(null);
@@ -169,7 +176,7 @@ export function OperationsInboxShell() {
               type="button"
               className="btn btnSecondary"
               onClick={() => state.refresh()}
-              disabled={state.loading || blocked}
+              disabled={state.loading || blocked || waiting}
             >
               Actualizar
             </button>
@@ -191,6 +198,7 @@ export function OperationsInboxShell() {
               {state.error}
             </p>
           )}
+          <RateLimitNoticeView {...rateLimit} />
 
           <nav className="opsInboxQueues" aria-label="Colas de trabajo">
             <ul>
@@ -320,7 +328,7 @@ export function OperationsInboxShell() {
               {hasInboxFilters(view) ? "Prueba con otros filtros o límpialos." : null}
             </EmptyState>
           )}
-          {(!showing || !state.loaded) && state.error === null && (
+          {(!showing || !state.loaded) && state.error === null && !waiting && (
             <p className="live" aria-live="polite">
               Cargando órdenes…
             </p>
@@ -362,7 +370,7 @@ export function OperationsInboxShell() {
             </div>
           )}
           {showing && state.hasMore && (
-            <button type="button" className="btn btnSecondary" onClick={state.loadMore} disabled={state.loadingMore}>
+            <button type="button" className="btn btnSecondary" onClick={state.loadMore} disabled={state.loadingMore || waiting}>
               {state.loadingMore ? "Cargando…" : "Cargar más"}
             </button>
           )}

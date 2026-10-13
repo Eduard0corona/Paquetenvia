@@ -13,9 +13,16 @@ import {
 import type { OperationsSession } from "../session/operations-session";
 import { ExternalStore } from "./external-store";
 import { PendingSubmissions } from "./pending-submissions";
-import { describeFailure } from "./tenant-error-messages";
+import { describeFailure, isRateLimited } from "./tenant-error-messages";
+import { rateLimitWaits, type RateLimitedOperation, type RateLimitWaits } from "../../lib/rate-limit-wait";
 
 export const csvImportPath = "/ops/orders/import";
+
+/**
+ * SEC-004 (owner answer Q1): the preview and the commit share one budget, so a 429 on either disables both buttons
+ * ("Previsualizar" and "Confirmar") until the wait ends.
+ */
+export const csvImportRateLimit: readonly RateLimitedOperation[] = ["csv_import"];
 
 export interface CsvImportState {
   readonly phase: "no_session" | "loading" | "ready" | "access_unavailable";
@@ -37,6 +44,8 @@ export interface CsvImportDependencies {
   readonly readSession: () => OperationsSession | null;
   readonly createApi: (session: OperationsSession) => CsvImportApi;
   readonly loadRole: (session: OperationsSession, signal: AbortSignal) => Promise<string | null>;
+  /** SEC-004: the tab's server waits (tests pass their own). */
+  readonly waits?: RateLimitWaits;
 }
 
 const initialState: CsvImportState = {
@@ -60,6 +69,11 @@ const commitScope = "csv-commit";
  * into memory once, so the commit sends exactly what was previewed. The report and
  * outcomes are shown only as the API returned them. A tenant switch drops the file,
  * the report and the batch Idempotency-Key.
+ *
+ * SEC-004 (owner answer Q6): during the server's wait after a 429 nothing is sent and both
+ * buttons stay disabled; the file, the report and the batch key stay, and nothing is sent
+ * again by itself. Pressing "Confirmar" again sends the same key: the 429 came before the
+ * handler, which is the existing rule for a request without a valid answer.
  */
 export class CsvImportController extends ExternalStore<CsvImportState> {
   private api: CsvImportApi | null = null;
@@ -143,7 +157,7 @@ export class CsvImportController extends ExternalStore<CsvImportState> {
   public async preview(): Promise<void> {
     const api = this.api;
     const file = this.file;
-    if (api === null || file === null || this.getSnapshot().busy) return;
+    if (api === null || file === null || this.getSnapshot().busy || this.waiting()) return;
     const generation = this.generation;
     this.pending.settle(commitScope);
     this.update({ busy: true, preview: null, commit: null, errors: [], message: null, stepUpHref: null });
@@ -173,7 +187,7 @@ export class CsvImportController extends ExternalStore<CsvImportState> {
     const file = this.file;
     const state = this.getSnapshot();
     const preview = state.preview;
-    if (api === null || file === null || preview === null || !state.canCommit || state.busy) return;
+    if (api === null || file === null || preview === null || !state.canCommit || state.busy || this.waiting()) return;
     if (!isCommittable(preview)) return;
     if (!restrictedGoodsAcknowledged) {
       this.update({ errors: [csvRestrictedGoodsRequiredMessage], message: null, stepUpHref: null });
@@ -226,7 +240,16 @@ export class CsvImportController extends ExternalStore<CsvImportState> {
     return this.session;
   }
 
+  private waiting(): boolean {
+    return (this.dependencies.waits ?? rateLimitWaits).isWaiting(csvImportRateLimit);
+  }
+
   private fail(error: unknown): void {
+    if (isRateLimited(error)) {
+      // SEC-004: the common message counts down above the buttons; nothing of its own.
+      this.update({ message: null, stepUpHref: null });
+      return;
+    }
     const view = describeFailure(error, csvImportPath, csvConflictMessages);
     this.update({ message: view.message, stepUpHref: view.stepUpHref });
   }

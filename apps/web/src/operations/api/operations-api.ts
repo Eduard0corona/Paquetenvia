@@ -18,6 +18,8 @@ import {
   MissingCredentialError,
   resolveRequestAuthorization,
 } from "../../auth/request-credentials";
+import { rateLimitWaits, type RateLimitedOperation } from "../../lib/rate-limit-wait";
+import { readRetryAfterSeconds } from "../../lib/retry-after";
 
 export interface OperationsDashboardApi {
   list(
@@ -56,7 +58,11 @@ export class OperationsApiError extends Error {
       | "invalid"
       | "conflict"
       | "unavailable"
-      | "network",
+      | "network"
+      /** SEC-004: a 429 (ADR-OBS-001 for the dashboard, AI-05 TooManyRequests for the counts). */
+      | "rate_limited",
+    /** The wait a 429 asked for (Retry-After), null when it said nothing usable. */
+    public readonly retryAfterSeconds: number | null = null,
   ) {
     super("La consulta de operaciones no está disponible.");
     this.name = "OperationsApiError";
@@ -78,6 +84,7 @@ export function createOperationsApi(
     search: URLSearchParams,
     parser: (value: unknown) => unknown,
     signal?: AbortSignal,
+    rateLimit?: RateLimitedOperation,
   ): Promise<unknown> {
     const timeoutController = new AbortController();
     const timeoutId = setTimeout(
@@ -127,7 +134,13 @@ export function createOperationsApi(
         throw new OperationsApiError("network");
       }
       throwIfAborted(combined);
-      if (!response.ok) throw classify(response.status);
+      if (!response.ok) {
+        const failure = classify(response, rateLimit);
+        // SEC-004: every screen that reads the operation shows the wait and sends nothing until it ends.
+        if (failure.category === "rate_limited" && rateLimit !== undefined)
+          rateLimitWaits.record(rateLimit, failure.retryAfterSeconds);
+        throw failure;
+      }
       const contentType = response.headers.get("content-type") ?? "";
       if (!contentType.toLowerCase().includes("application/json")) {
         throw new OperationsApiError("invalid");
@@ -180,7 +193,7 @@ export function createOperationsApi(
       if (signal?.aborted) throw signal.reason;
       throw new OperationsApiError("network");
     }
-    if (!response.ok) throw classify(response.status);
+    if (!response.ok) throw classify(response);
   }
 
   return {
@@ -190,6 +203,7 @@ export function createOperationsApi(
         buildOperationsDashboardSearch(filters),
         parseOperationsDashboard,
         signal,
+        "dashboard",
       )) as OperationsDashboardResponse;
     },
     async getOrder(orderId, signal) {
@@ -215,6 +229,7 @@ export function createOperationsApi(
         new URLSearchParams(),
         parseOperationsQueueCounts,
         signal,
+        "queue_counts",
       )) as OperationsQueueCounts;
     },
     publishExternalOffer: postExternalOffer,
@@ -302,7 +317,16 @@ function assertUuid(value: string): void {
     throw new OperationsApiError("invalid");
 }
 
-function classify(status: number): OperationsApiError {
+/**
+ * A 429 is `rate_limited` only for a limited operation (the dashboard and the queue counts, SEC-004), whose wait the
+ * caller records; any other read or write keeps reading it as `unavailable`, as before SEC-004.
+ */
+function classify(response: Response, rateLimit?: RateLimitedOperation): OperationsApiError {
+  const status = response.status;
+  if (status === 429)
+    return rateLimit === undefined
+      ? new OperationsApiError("unavailable")
+      : new OperationsApiError("rate_limited", readRetryAfterSeconds(response.headers));
   if (status === 401) return new OperationsApiError("unauthorized");
   if (status === 403) return new OperationsApiError("forbidden");
   if (status === 404) return new OperationsApiError("not_found");

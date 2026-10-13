@@ -4,7 +4,7 @@ import { TenantApiError } from "../api/tenant-request";
 import { nextStepActions, transitionConflictMessage } from "../contracts/order-transitions";
 import { orderId } from "../contracts/ui-001-screens.fixtures";
 import { OrderTransitionController, type OrderTransitionState } from "./order-transition-controller";
-import { searchOrderByPublicId } from "./order-search";
+import { orderSearchRateLimit, searchOrderByPublicId } from "./order-search";
 
 const [cancel] = nextStepActions([{ target_status: "CANCELLED", required_metadata: [] }]);
 
@@ -126,6 +126,16 @@ describe("order search (UI-PHASE2-SEARCH-TRANSITIONS-2026-10-05)", () => {
     find.mockRejectedValueOnce(new TenantApiError("unavailable"));
     await expect(searchOrderByPublicId({ findOrderIdByPublicId: find }, "ORD_abcdefghij-_0123456789")).resolves.toEqual({
       kind: "failed",
+    });
+  });
+
+  it("tells a 429 apart, so the top bar shows the common message instead of its failure (SEC-004, Q13)", async () => {
+    expect(orderSearchRateLimit).toEqual(["order_list"]);
+    const find = vi.fn<OrderActionsApi["findOrderIdByPublicId"]>().mockRejectedValueOnce(
+      new TenantApiError("rate_limited", null, false, 2),
+    );
+    await expect(searchOrderByPublicId({ findOrderIdByPublicId: find }, "ORD_abcdefghij-_0123456789")).resolves.toEqual({
+      kind: "rate_limited",
     });
   });
 });

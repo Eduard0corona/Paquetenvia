@@ -1,5 +1,31 @@
 # Changelog
 
+## Límites de tasa en las pantallas del panel: mensaje con cuenta regresiva y recargas espaciadas (SEC-004-PANEL-SCREENS-2026-10-13, fase 4 PR 3, parte del panel) — 2026-10-13
+
+- Respuestas literales del project owner (2026-10-13), registradas en `decision-log.md` con su contexto y las opciones
+  no elegidas:
+  - Q11, pantallas que se actualizan solas: "Reintenta sola (Recommended)".
+  - Q12, un segundo: ""1 segundo" (Recommended)".
+  - Q13, "Buscar guía" y "Agregar entrega": "Mensaje común (Recommended)".
+  - Q14, botones de las pantallas que se actualizan solas: "Se pausan (Recommended)".
+  - Q15, selector de repartidor: "La pide sola (Recommended)".
+  - Q16, solo los conteos: "Toda la pantalla (Recommended)".
+- Aplica también Q6 "Mensaje común con espera (Recommended)" (`SEC-004-HEAVY-ENDPOINT-MAPPING-2026-10-12`) y Q9
+  "Espaciar recargas (Recommended)" y Q10 "Dejarlo en 60/min (Recommended)" (`SEC-004-RELOADS-AND-BULK-2026-10-13`).
+- AI-07 agrega `panel_rate_limit` y una entrada `rate_limit` en cada pantalla limitada: "Demasiadas solicitudes. Espera
+  N segundos e intenta de nuevo." con N del `Retry-After` contando cada segundo ("1 segundo" al final; 60 si el
+  encabezado falta o no es un entero positivo), anunciado una vez por espera.
+- Pantallas que envían (CSV, exportar liquidación, "Calcular precio", "Buscar guía", "Agregar entrega"): el botón se
+  desactiva durante la espera y se reactiva solo; lo capturado se conserva y nada se reenvía solo; al volver a pulsar
+  se envía la misma `Idempotency-Key`.
+- Pantallas que se actualizan solas (tablero, bandeja, detalle de la orden, Órdenes, Cobros pendientes): se pausan las
+  recargas automáticas, "Actualizar" y "Cargar más"; un cambio de filtro se guarda; al llegar a 0 se recargan una vez
+  (Órdenes no, si ya se cargaron más páginas). Una espera de los conteos pausa toda la pantalla.
+- Toda pantalla que recarga con avisos en tiempo real (tablero, bandeja, detalle de la orden, Rutas) recarga como
+  máximo cada 3 segundos por pestaña, sin perder avisos.
+- Ningún límite cambia. Sin cambios en AI-04, AI-05, AI-06, AI-18, roles, permisos, migraciones ni paquetes. Nota:
+  `docs/development/sec-004-panel-limits.md`.
+
 ## Recargas del panel y asignación en lote ante los límites (SEC-004-RELOADS-AND-BULK-2026-10-13, fase 4 PR 3) — 2026-10-13
 
 - Respuestas literales del project owner (2026-10-13), registradas en `decision-log.md` con su contexto: la premisa

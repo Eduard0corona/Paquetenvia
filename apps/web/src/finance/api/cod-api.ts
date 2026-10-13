@@ -43,7 +43,8 @@ export function createCodApi(baseUrl: string, session: OperationsSession): CodAp
     async pendingReconciliation(cursor, signal) {
       const search = new URLSearchParams({ cod_pending_reconciliation: "true" });
       if (cursor !== null) search.set("cursor", cursor);
-      const response = await send({ method: "GET", path: "/api/v1/orders", search, signal });
+      // SEC-004: listOrders, so it spends and waits with the order list.
+      const response = await send({ method: "GET", path: "/api/v1/orders", search, signal, rateLimit: "order_list" });
       return (await readJson(response, parsePendingCodPage)) as PendingCodPage;
     },
     async record(orderId, body, idempotencyKey, signal) {

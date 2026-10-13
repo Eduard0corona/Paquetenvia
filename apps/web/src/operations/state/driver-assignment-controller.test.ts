@@ -1,9 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { RateLimitWaits } from "../../lib/rate-limit-wait";
 import type { AssignmentApi } from "../api/assignment-api";
 import { TenantApiError } from "../api/tenant-request";
 import type { AssignableDriver, AssignableDriverPage, Assignment } from "../contracts/assignable-driver";
 import { orderId, syntheticUuid } from "../contracts/ui-001-screens.fixtures";
-import { DriverAssignmentController, type DriverAssignmentState } from "./driver-assignment-controller";
+import {
+  assignableDriversRateLimit,
+  DriverAssignmentController,
+  type DriverAssignmentState,
+} from "./driver-assignment-controller";
 
 const eligible: AssignableDriver = {
   driver_id: syntheticUuid(0x601),
@@ -176,5 +181,92 @@ describe("driver assignment controller (UI-PHASE2-DRIVER-PICKER-2026-10-05)", ()
     resolve(page([eligible]));
     await loading;
     expect(states.every((state) => state.kind === "loading")).toBe(true);
+  });
+});
+
+describe("driver picker under the SEC-004 limit (owner answer Q15, 'La pide sola')", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-10-13T12:00:00Z"));
+  });
+  afterEach(() => vi.useRealTimers());
+
+  function limitedPicker(answers: Array<() => AssignableDriverPage>) {
+    const waits = new RateLimitWaits();
+    const states: DriverAssignmentState[] = [];
+    const listAssignableDrivers = vi.fn<AssignmentApi["listAssignableDrivers"]>(async () => {
+      const next = answers.shift();
+      if (next === undefined) throw new Error("Unexpected read.");
+      return next();
+    });
+    const tooMany = (seconds: number) => () => {
+      waits.record("assignable_drivers", seconds);
+      throw new TenantApiError("rate_limited", null, false, seconds);
+    };
+    const controller = new DriverAssignmentController(
+      { listAssignableDrivers, assignDriver: vi.fn().mockResolvedValue(assignment()) },
+      orderId,
+      (state) => states.push(state),
+      vi.fn(),
+      () => "key",
+      { waits },
+    );
+    return { controller, listAssignableDrivers, waits, states, tooMany };
+  }
+
+  it("waits with the bulk assignment (one limit)", () => {
+    expect(assignableDriversRateLimit).toEqual(["assignable_drivers"]);
+  });
+
+  it("asks for the first list once, by itself, when the wait ends, with no message of its own", async () => {
+    const answers: Array<() => AssignableDriverPage> = [];
+    const env = limitedPicker(answers);
+    answers.push(env.tooMany(2), () => page([eligible, ineligible]));
+    await env.controller.load();
+    expect(env.controller.current).toMatchObject({ kind: "loading", message: null, busy: "idle" });
+    await vi.advanceTimersByTimeAsync(1_999);
+    expect(env.listAssignableDrivers).toHaveBeenCalledTimes(1);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(env.listAssignableDrivers).toHaveBeenCalledTimes(2);
+    expect(env.controller.current).toMatchObject({ kind: "ready", drivers: [eligible, ineligible] });
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(env.listAssignableDrivers).toHaveBeenCalledTimes(2);
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("does not read when opened during a wait, and reads once when it ends", async () => {
+    const answers: Array<() => AssignableDriverPage> = [() => page([eligible])];
+    const env = limitedPicker(answers);
+    env.waits.record("assignable_drivers", 3);
+    await env.controller.load();
+    expect(env.listAssignableDrivers).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(3_000);
+    expect(env.listAssignableDrivers).toHaveBeenCalledTimes(1);
+  });
+
+  it("holds 'Cargar más repartidores' during the wait, keeps the list, and never reads more by itself", async () => {
+    const answers: Array<() => AssignableDriverPage> = [() => page([eligible], "c1")];
+    const env = limitedPicker(answers);
+    await env.controller.load();
+    answers.push(env.tooMany(2));
+    await env.controller.loadMore();
+    expect(env.controller.current).toMatchObject({ kind: "ready", drivers: [eligible], nextCursor: "c1", busy: "idle", message: null });
+    await env.controller.loadMore();
+    expect(env.listAssignableDrivers).toHaveBeenCalledTimes(2);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(env.listAssignableDrivers).toHaveBeenCalledTimes(2);
+    answers.push(() => page([ineligible]));
+    await env.controller.loadMore();
+    expect(env.listAssignableDrivers).toHaveBeenLastCalledWith(orderId, "c1");
+    expect(env.controller.current.drivers).toEqual([eligible, ineligible]);
+  });
+
+  it("leaves no timer behind when the picker closes during the wait", async () => {
+    const answers: Array<() => AssignableDriverPage> = [];
+    const env = limitedPicker(answers);
+    answers.push(env.tooMany(30));
+    await env.controller.load();
+    env.controller.dispose();
+    expect(vi.getTimerCount()).toBe(0);
   });
 });

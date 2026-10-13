@@ -22,6 +22,24 @@ import {
 import { ExternalStore } from "./external-store";
 import { inboxAggregateVersions, mergeInboxSources } from "./inbox-merge";
 import { QueueCountsLoader } from "./queue-counts-loader";
+import { ScreenReloads, type ReloadTimers } from "./screen-reloads";
+import { isRateLimited } from "./tenant-error-messages";
+import {
+  rateLimitWaits,
+  sleepUntilWaitEnds,
+  type RateLimitedOperation,
+  type RateLimitWaits,
+} from "../../lib/rate-limit-wait";
+
+/**
+ * SEC-004: the inbox reads the dashboard and the counts, each with its own budget (owner answer Q3). A wait for
+ * either pauses the whole inbox (owner answer Q16, "Toda la pantalla").
+ */
+export const inboxRateLimit: readonly RateLimitedOperation[] = ["dashboard", "queue_counts"];
+const countsRateLimit: readonly RateLimitedOperation[] = ["queue_counts"];
+
+/** The debounce of a realtime notice before its reload, as before SEC-004 (then spaced by 3 s, owner answer Q9). */
+export const inboxRealtimeDebounceMilliseconds = 250;
 
 /**
  * UI-PHASE3-INBOX-2026-10-10: state of the dispatcher's work inbox ("Bandeja de trabajo").
@@ -41,6 +59,10 @@ export interface InboxDependencies {
   readonly createApi: (session: OperationsSession) => InboxApi;
   /** Realtime, polling and visibility loads wait while the page is hidden. */
   readonly isHidden?: () => boolean;
+  /** SEC-004: the tab's server waits (tests pass their own). */
+  readonly waits?: RateLimitWaits;
+  /** The clock and timers of the reload spacing and the wait (tests pass fake ones). */
+  readonly timers?: Partial<ReloadTimers>;
 }
 
 export type InboxPhase = "loading" | "no_session" | "ready" | "access_unavailable";
@@ -110,6 +132,10 @@ export class InboxController extends ExternalStore<InboxState> {
   private readonly zoneNames = new Map<string, string>();
   private coordinator = new AuthoritativeRefreshCoordinator<LoadResult>();
   private readonly counts: QueueCountsLoader;
+  /** Owner answers Q9, Q11, Q14 and Q16: realtime spacing, the server's wait and the one reload when it ends. */
+  private readonly reloads: ScreenReloads<"realtime">;
+  /** Aborted with the scope: a reconnect waiting out the server's wait stops waiting. */
+  private scopeAbort = new AbortController();
 
   public constructor(
     private readonly dependencies: InboxDependencies,
@@ -133,6 +159,21 @@ export class InboxController extends ExternalStore<InboxState> {
     this.counts = new QueueCountsLoader((view) =>
       this.update({ counts: view.counts, countsUnavailable: view.unavailable }),
     );
+    this.reloads = new ScreenReloads({
+      operations: inboxRateLimit,
+      waits: dependencies.waits,
+      timers: dependencies.timers,
+      reload: () => void this.load("replace", "realtime", "normal"),
+    });
+  }
+
+  /**
+   * A realtime notice (OperationsHub): gathered into at most one reload every 3 seconds, after the existing 250 ms
+   * debounce, and none during the server's wait (owner answer Q9).
+   */
+  public notice(): void {
+    if (this.api === null || this.getSnapshot().phase === "access_unavailable") return;
+    this.reloads.notice("realtime", inboxRealtimeDebounceMilliseconds);
   }
 
   /**
@@ -182,6 +223,10 @@ export class InboxController extends ExternalStore<InboxState> {
    * versions feed the realtime resynchronization; it fails when the scope changed.
    */
   public async resynchronize(): Promise<RestSynchronizationSnapshot> {
+    // SEC-004: the mandatory read waits out the server's wait instead of meeting the same 429 and dropping the hub.
+    const scope = this.scope;
+    await sleepUntilWaitEnds(this.waits(), inboxRateLimit, this.scopeAbort.signal);
+    if (scope !== this.scope) throw new RefreshScopeChangedError();
     const result = await this.load("replace", "reconnect", "mandatory-reconnect");
     if (result === null) throw new RefreshScopeChangedError();
     return { aggregate_versions: inboxAggregateVersions(this.sources) };
@@ -211,6 +256,9 @@ export class InboxController extends ExternalStore<InboxState> {
 
   private newScope(): void {
     this.scope += 1;
+    this.reloads.cancel();
+    this.scopeAbort.abort();
+    this.scopeAbort = new AbortController();
     this.coordinator.cancel();
     this.coordinator = new AuthoritativeRefreshCoordinator<LoadResult>();
   }
@@ -229,12 +277,16 @@ export class InboxController extends ExternalStore<InboxState> {
     }
     if (requirement === "normal" && backgroundTriggers.has(trigger) && (this.dependencies.isHidden?.() ?? false))
       return null;
+    // SEC-004 (owner answers Q11, Q14, Q16): during the server's wait nothing is sent, whatever asked (polling,
+    // realtime, "Actualizar", a view change); the inbox reads once, by itself, with the view on screen when it ends.
+    if (requirement === "normal" && !this.reloads.admit("realtime")) return null;
     const isCurrent = () => this.scope === scope && this.api === api;
     try {
       return await coordinator.request({
         requirement,
         isCurrent,
         execute: async (signal) => {
+          this.reloads.reloaded();
           if (kind === "replace") this.update({ loading: true });
           else this.update({ loadingMore: true });
           try {
@@ -276,6 +328,10 @@ export class InboxController extends ExternalStore<InboxState> {
           error: null,
           lastUpdated: null,
         });
+      } else if (isRateLimited(caught)) {
+        // SEC-004: the common message counts down, the rows stay, and the inbox reads once when the wait ends.
+        this.update({ phase: "ready", error: null });
+        this.reloads.rateLimited("realtime");
       } else {
         this.update({
           phase: "ready",
@@ -344,9 +400,22 @@ export class InboxController extends ExternalStore<InboxState> {
         .sort((left, right) => left.label.localeCompare(right.label, "es-MX") || (left.id < right.id ? -1 : 1)),
     });
     // The counts are read again with every list read, exactly like the dashboard.
-    if (result.kind === "replace" && this.api !== null) {
-      const api = this.api;
-      void this.counts.load((signal) => api.queueCounts(signal));
+    if (result.kind === "replace") void this.loadCounts();
+  }
+
+  /** SEC-004: a 429 on the counts pauses the whole inbox, which reads everything once when it ends (Q16). */
+  private async loadCounts(): Promise<void> {
+    const api = this.api;
+    if (api === null) return;
+    if (this.waits().isWaiting(countsRateLimit)) {
+      this.reloads.rateLimited("realtime");
+      return;
     }
+    const outcome = await this.counts.load((signal) => api.queueCounts(signal));
+    if (outcome === "rate_limited" && this.api === api) this.reloads.rateLimited("realtime");
+  }
+
+  private waits(): RateLimitWaits {
+    return this.dependencies.waits ?? rateLimitWaits;
   }
 }

@@ -39,7 +39,8 @@ describe("manual route planner policy", () => {
 
   it("refetches REST after RouteChanged, a reconnection and a version conflict only", () => {
     const hook = read("src/operations/state/use-manual-routes.ts");
-    expect(hook).toContain("RouteChanged: (event) => void controller.routeChanged(event.payload.route_id)");
+    // SEC-004-RELOADS-AND-BULK-2026-10-13 (owner answer Q9): the notices are gathered, at most one read every 3 s.
+    expect(hook).toContain("RouteChanged: (event) => controller.notice(event.payload.route_id)");
     expect(hook).toContain("resynchronizeFromRest: () => controller.resynchronize()");
     const controller = read("src/operations/state/manual-routes-controller.ts");
     // Only VERSION_CONFLICT says the route changed, and it reads the route again (tested in the controller).

@@ -240,6 +240,13 @@ describe("route planner without internal ids (UI-PHASE3-ROUTES-NO-IDS-2026-10-12
     expect(detailHtml({ route: { ...detail, status: "PLANNED" } })).toMatch(/type="submit" disabled="">Agregar entrega/);
   });
 
+  it("holds 'Agregar entrega' with the common countdown during the wait of listOrders, keeping the guía (SEC-004 Q13)", () => {
+    const html = detailHtml({ guide, rateLimit: { secondsLeft: 1 } });
+    expect(html).toMatch(/type="submit" disabled="">Agregar entrega/);
+    expect(html).toContain(`value="${guide}"`);
+    expect(html).toContain('<p class="notice noticeWarn" role="timer">Demasiadas solicitudes. Espera 1 segundo e intenta de nuevo.</p>');
+  });
+
   it("names each stop by its guía, Guía no disponible or Cargando guía…, and its actions by guía or position", () => {
     const html = detailHtml();
     const titles = [...html.matchAll(/<strong>([\s\S]*?)<\/strong><small>/g)].map((match) => text(match[1] ?? ""));

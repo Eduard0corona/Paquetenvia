@@ -12,8 +12,9 @@ import { ManualRoutesController, type ManualRoutesState } from "./manual-routes-
 
 /**
  * The route planner (`/ops/routes`): REST is the source of truth (ManualRoutesController, UI-PHASE3-ROUTES-NO-IDS-
- * 2026-10-12) and the operations hub only asks for it - RouteChanged reads the list (and the route shown) again and a
- * reconnection resynchronizes from that read. A session or organization change stops the hub and starts from empty.
+ * 2026-10-12) and the operations hub only asks for it - RouteChanged reads the list (and the route shown) again, at
+ * most once every 3 seconds (owner answer Q9 of SEC-004-RELOADS-AND-BULK-2026-10-13), and a reconnection
+ * resynchronizes from that read. A session or organization change stops the hub and starts from empty.
  * Nothing is kept outside this tab's memory.
  */
 export function useManualRoutes(): { state: ManualRoutesState; controller: ManualRoutesController } {
@@ -53,7 +54,8 @@ export function useManualRoutes(): { state: ManualRoutesState; controller: Manua
           resynchronizeFromRest: () => controller.resynchronize(),
         },
         {
-          RouteChanged: (event) => void controller.routeChanged(event.payload.route_id),
+          // Owner answer Q9: gathered into at most one read every 3 seconds.
+          RouteChanged: (event) => controller.notice(event.payload.route_id),
         },
       );
       connection = next;
