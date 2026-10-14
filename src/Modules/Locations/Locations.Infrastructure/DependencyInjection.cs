@@ -17,6 +17,7 @@ using Paqueteria.Application.Locations;
 using Paqueteria.Application.Security;
 using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Paqueteria.Infrastructure.Security.Pii;
 using Paqueteria.Infrastructure.Tenancy;
 
@@ -53,20 +54,18 @@ public static class DependencyInjection
                 "PostgreSQL location creation requires a PII protector.")
             .ValidateOnStart();
 
-        services.AddSingleton(serviceProvider =>
-        {
-            var dataSourceBuilder = new NpgsqlDataSourceBuilder(
-                serviceProvider.GetRequiredService<IConfiguration>().GetConnectionString("Paqueteria")
-                ?? throw new InvalidOperationException("PostgreSQL locations require a configured connection string."));
-            dataSourceBuilder.UseNetTopologySuite();
-            return new LocationsDataSource(dataSourceBuilder.Build());
-        });
+        // SCL-007: the API's one paqueteria_app pool, shared with every other API module; PostGIS types on it.
+        services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Application);
+        services.AddRuntimeDataSourcePlugin(
+            RuntimeDatabaseRole.Application,
+            RuntimeDataSourcePlugin.NetTopologySuite,
+            static builder => builder.UseNetTopologySuite());
         services.TryAddScoped<TenantDatabaseExecutionState>();
         services.TryAddScoped<TenantTransactionGuardInterceptor>();
         services.TryAddScoped<TenantSaveChangesGuardInterceptor>();
         services.AddDbContext<LocationsDbContext>((serviceProvider, options) =>
             options.UseNpgsql(
-                    serviceProvider.GetRequiredService<LocationsDataSource>().Value,
+                    serviceProvider.GetRuntimeDataSource(RuntimeDatabaseRole.Application),
                     postgres =>
                     {
                         postgres.UseNetTopologySuite();
@@ -162,11 +161,4 @@ public static class DependencyInjection
         environment.IsDevelopment() ||
         environment.IsEnvironment("Testing") ||
         SyntheticEnvironmentPolicy.IsDevSynthetic(environment.EnvironmentName);
-}
-
-internal sealed class LocationsDataSource(NpgsqlDataSource value) : IAsyncDisposable
-{
-    internal NpgsqlDataSource Value { get; } = value;
-
-    public ValueTask DisposeAsync() => Value.DisposeAsync();
 }

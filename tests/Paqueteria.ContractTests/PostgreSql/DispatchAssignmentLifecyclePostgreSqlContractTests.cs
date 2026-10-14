@@ -5,6 +5,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Realtime.Infrastructure.Dispatching;
 
 namespace Paqueteria.ContractTests.PostgreSql;
@@ -87,7 +88,9 @@ public sealed partial class DispatchPostgreSqlContractTests
     public async Task D8_dispatch_lane_claim_lease_retry_and_dead_letter_match_the_other_lanes()
     {
         await using var scenario = await DispatchScenario.CreateAsync(fixture);
-        var store = new PostgreSqlDispatchOutboxStore(new DispatchWorkerConnectionFactory(fixture.WorkerConnectionString));
+        await using var workerPool = RuntimeDataSource.Create(
+            RuntimeDatabaseRole.Worker, fixture.WorkerConnectionString, maximumPoolSize: 4);
+        var store = new PostgreSqlDispatchOutboxStore(new DispatchWorkerConnectionFactory(workerPool));
         var dispatchRow = Guid.NewGuid();
         var futureRow = Guid.NewGuid();
         var realtimeRow = Guid.NewGuid();
@@ -206,8 +209,10 @@ public sealed partial class DispatchPostgreSqlContractTests
 
         // AI12-ASSIGNMENT-TERMINAL-STATES: Realtime finds evidence for the closed assignment at the
         // closing order version, with the affected driver still an authorized audience.
-        await using (var realtimeConnections = new RealtimeDispatcherConnectionFactory(fixture.RealtimeConnectionString))
+        await using (var realtimePool = RuntimeDataSource.Create(
+            RuntimeDatabaseRole.Realtime, fixture.RealtimeConnectionString, maximumPoolSize: 4))
         {
+            var realtimeConnections = new RealtimeDispatcherConnectionFactory(realtimePool);
             var evidenceReader = new PostgreSqlRealtimeOutboxEvidenceReader(realtimeConnections);
             var evidence = await evidenceReader.ReadClosedAssignmentAsync(
                 scenario.OrganizationId, first.Id, transition.Version, default);

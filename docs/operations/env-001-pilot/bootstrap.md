@@ -33,8 +33,8 @@ done
 
 Defender for Storage malware scanning creates an Event Grid system topic in the resource group. That
 is why `Microsoft.EventGrid` is registered. `Microsoft.Insights` holds the OBS-002 alert rules, action
-group and workbook (`observability.bicep`); on an existing subscription register it once before the
-first deployment that includes stage 5.
+group and workbook (`observability.bicep`) and the OBS-003 Application Insights component
+(`platform.bicep`, stage 2); on an existing subscription register it once before the next deployment.
 
 ## 2. Create the resource group (the region is fixed)
 
@@ -100,7 +100,8 @@ echo "$TAG_READER_ID"
   - Container Apps, PostgreSQL, Key Vault, Storage, VNet, ACR and Log Analytics;
   - Defender for Storage settings (`Microsoft.Security/defenderForStorageSettings`) and its Event Grid
     system topic;
-  - the Cost Management budget (`Microsoft.Consumption/budgets`).
+  - the Cost Management budget (`Microsoft.Consumption/budgets`);
+  - the OBS-003 Application Insights component (`Microsoft.Insights/components`).
 - **Role Based Access Control Administrator** lets the templates assign roles to the workload
   identities. An ABAC condition restricts it to the seven roles the templates use, so the deployer can
   never grant Owner, Contributor, User Access Administrator or Storage Blob Data Owner.

@@ -148,7 +148,7 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
     internal static Task<DriverStopsNextServer> StartAsync(
         string? apiBaseUrl = null,
         int? requestedPort = null) =>
-        StartCoreAsync(NextRuntime.Development, apiBaseUrl, requestedPort, connectSources: null);
+        StartCoreAsync(NextRuntime.Development, apiBaseUrl, requestedPort, connectSources: null, runtimeEnvironment: null);
 
     /// <summary>
     /// Builds the deployable artifact and serves it with <c>next start</c>.
@@ -161,17 +161,24 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
     /// (<c>PAQUETERIA_CSP_CONNECT_SOURCES</c>), such as the signed-upload
     /// storage origin, exactly as a deployment configures them.
     /// </param>
+    /// <param name="runtimeEnvironment">
+    /// Server-only settings read by the pages at request time, given to <c>next start</c> as a deployment gives them
+    /// (for example the owner-set <c>PAQUETERIA_TERMS_VERSION</c> and <c>PAQUETERIA_PRIVACY_VERSION</c> of the
+    /// order wizard). They never reach the build, so the cached artifact does not depend on them.
+    /// </param>
     internal static Task<DriverStopsNextServer> StartProductionAsync(
         string apiBaseUrl,
         int? requestedPort = null,
-        string? connectSources = null) =>
-        StartCoreAsync(NextRuntime.Production, apiBaseUrl, requestedPort, connectSources);
+        string? connectSources = null,
+        IReadOnlyDictionary<string, string>? runtimeEnvironment = null) =>
+        StartCoreAsync(NextRuntime.Production, apiBaseUrl, requestedPort, connectSources, runtimeEnvironment);
 
     private static async Task<DriverStopsNextServer> StartCoreAsync(
         NextRuntime runtime,
         string? apiBaseUrl,
         int? requestedPort,
-        string? connectSources)
+        string? connectSources,
+        IReadOnlyDictionary<string, string>? runtimeEnvironment)
     {
         await ServerGate.WaitAsync();
         FileStream? crossProcessLease = null;
@@ -188,6 +195,7 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
                 apiBaseUrl,
                 requestedPort,
                 connectSources,
+                runtimeEnvironment,
                 crossProcessLease,
                 nextEnvDeclaration);
         }
@@ -211,6 +219,7 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
         string? apiBaseUrl,
         int? requestedPort,
         string? connectSources,
+        IReadOnlyDictionary<string, string>? runtimeEnvironment,
         FileStream crossProcessLease,
         NextEnvDeclarationSnapshot nextEnvDeclaration)
     {
@@ -249,6 +258,10 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
         if (!string.IsNullOrWhiteSpace(connectSources))
         {
             process.StartInfo.Environment["PAQUETERIA_CSP_CONNECT_SOURCES"] = connectSources;
+        }
+        foreach (var (name, value) in runtimeEnvironment ?? new Dictionary<string, string>())
+        {
+            process.StartInfo.Environment[name] = value;
         }
         process.OutputDataReceived += (_, args) =>
         {

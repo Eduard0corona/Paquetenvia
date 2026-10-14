@@ -1,11 +1,15 @@
-using System.Diagnostics;
 using System.Diagnostics.Metrics;
 
 namespace Realtime.Infrastructure.Dispatching;
 
+/// <remarks>
+/// Durations and ages are read on the host's <see cref="TimeProvider"/>, the clock the dispatchers wait on
+/// (SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13).
+/// </remarks>
 internal sealed class RealtimeOutboxTelemetry : IDisposable
 {
     private readonly Meter _meter = new("Paquetenvia.Realtime.Outbox");
+    private readonly TimeProvider _timeProvider;
     private readonly Counter<long> _claimBatches;
     private readonly Counter<long> _claimedMessages;
     private readonly Counter<long> _publishedMessages;
@@ -19,8 +23,10 @@ internal sealed class RealtimeOutboxTelemetry : IDisposable
     private readonly Histogram<double> _batchDuration;
     private readonly Histogram<double> _messageAge;
 
-    public RealtimeOutboxTelemetry()
+    public RealtimeOutboxTelemetry(TimeProvider timeProvider)
     {
+        ArgumentNullException.ThrowIfNull(timeProvider);
+        _timeProvider = timeProvider;
         _claimBatches = _meter.CreateCounter<long>("realtime.outbox.claim_batches");
         _claimedMessages = _meter.CreateCounter<long>("realtime.outbox.claimed_messages");
         _publishedMessages = _meter.CreateCounter<long>("realtime.outbox.published_messages");
@@ -35,6 +41,10 @@ internal sealed class RealtimeOutboxTelemetry : IDisposable
         _messageAge = _meter.CreateHistogram<double>("realtime.outbox.oldest_claimed_age", "s");
     }
 
+    /// <summary>
+    /// Measures one dispatcher iteration's work until disposed. Disposing twice records once, so a dispatcher can end
+    /// the measurement before it waits (SCL-007: the batch duration never counts the wait between claims).
+    /// </summary>
     public IDisposable MeasureBatch(string lane) =>
         Measure(value => _batchDuration.Record(value, Lane(lane)));
 
@@ -51,7 +61,7 @@ internal sealed class RealtimeOutboxTelemetry : IDisposable
         if (oldest is not null)
         {
             _messageAge.Record(
-                Math.Max(0, (DateTimeOffset.UtcNow - oldest.Value).TotalSeconds),
+                Math.Max(0, (_timeProvider.GetUtcNow() - oldest.Value).TotalSeconds),
                 Lane(lane));
         }
     }
@@ -95,12 +105,19 @@ internal sealed class RealtimeOutboxTelemetry : IDisposable
 
     private static KeyValuePair<string, object?> Lane(string lane) => new("lane", lane);
 
-    private static IDisposable Measure(Action<double> recorder) => new Measurement(recorder);
+    private IDisposable Measure(Action<double> recorder) => new Measurement(recorder, _timeProvider);
 
-    private sealed class Measurement(Action<double> recorder) : IDisposable
+    private sealed class Measurement(Action<double> recorder, TimeProvider timeProvider) : IDisposable
     {
-        private readonly long _startedAt = Stopwatch.GetTimestamp();
+        private readonly long _startedAt = timeProvider.GetTimestamp();
+        private int _recorded;
 
-        public void Dispose() => recorder(Stopwatch.GetElapsedTime(_startedAt).TotalMilliseconds);
+        public void Dispose()
+        {
+            if (Interlocked.Exchange(ref _recorded, 1) == 0)
+            {
+                recorder(timeProvider.GetElapsedTime(_startedAt).TotalMilliseconds);
+            }
+        }
     }
 }

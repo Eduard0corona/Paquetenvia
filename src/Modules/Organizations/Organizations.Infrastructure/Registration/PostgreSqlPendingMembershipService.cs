@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -12,6 +13,7 @@ using Organizations.Infrastructure.Persistence;
 using Paqueteria.Application.Idempotency;
 using Paqueteria.Application.Security;
 using Paqueteria.Application.Tenancy;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Paqueteria.Infrastructure.Tenancy;
 
 namespace Organizations.Infrastructure.Registration;
@@ -23,7 +25,7 @@ namespace Organizations.Infrastructure.Registration;
 /// normalized and hashed here and never leaves this class, and nothing identifying is logged.
 /// </summary>
 public sealed class PostgreSqlPendingMembershipService(
-    NpgsqlDataSource dataSource,
+    [FromKeyedServices(RuntimeDatabaseRole.Application)] NpgsqlDataSource dataSource,
     IOptions<TenancyOptions> options,
     IEmailLookupHasher emailLookupHasher,
     TenantTransactionContext<OrganizationsDbContext> transactionContext,

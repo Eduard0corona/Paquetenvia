@@ -94,6 +94,58 @@ describe("offline operation projection", () => {
     ]);
     expect(projection.stops[1].projectedStatus).toBe("DELIVERING");
   });
+
+  // docs/development/driver-photo-selection-refresh.md: the screen takes the
+  // confirmation read before the scheduler removes the confirmed action.
+  it("settles an action REST shows applied instead of showing it as a conflict", () => {
+    // The pickup photo was sent; the driver already saved the next two steps
+    // and is previewing the delivery photo ("Confirmar entrega", DELIVERING).
+    const operations = [
+      operation("PICKUP_PROOF", orderA, 4, "2026-07-26T10:00:01.000Z", 2),
+      operation("START_TRANSIT", orderA, 5, "2026-07-26T10:00:02.000Z", 3),
+      operation("START_DELIVERY", orderA, 6, "2026-07-26T10:00:03.000Z", 4),
+    ];
+    const pickedUp = [{ ...stops[0], status: "PICKED_UP" as const, aggregate_version: 5 }];
+
+    const projection = projectDriverOperations(pickedUp, operations);
+
+    expect(projection.stops[0]).toMatchObject({
+      confirmedStatus: "PICKED_UP",
+      confirmedVersion: 5,
+      projectedStatus: "DELIVERING",
+      projectedVersion: 7,
+      pendingCount: 2,
+      attentionCount: 0,
+    });
+    expect(projection.operations.map((candidate) => [candidate.kind, candidate.status])).toEqual([
+      ["START_TRANSIT", "PENDING"],
+      ["START_DELIVERY", "PENDING"],
+    ]);
+  });
+
+  it("still shows a conflict when REST went beyond the action or the driver holds it", () => {
+    // Another device did the check-in and the pickup: not this action's target.
+    const beyond = projectDriverOperations(
+      [{ ...stops[0], status: "PICKED_UP" as const, aggregate_version: 5 }],
+      [operation("CHECK_IN", orderA, 3, "2026-07-26T10:00:00.000Z", 1)],
+    );
+    expect(beyond.stops[0]).toMatchObject({ projectedStatus: "PICKED_UP", attentionCount: 1 });
+    expect(beyond.operations.map((candidate) => candidate.status)).toEqual(["NEEDS_ATTENTION"]);
+
+    // An action held for the driver stays held until the driver resolves it.
+    const held = projectDriverOperations(
+      [{ ...stops[0], status: "AT_PICKUP" as const, aggregate_version: 4 }],
+      [
+        {
+          ...operation("CHECK_IN", orderA, 3, "2026-07-26T10:00:00.000Z", 1),
+          status: "NEEDS_ATTENTION" as const,
+          safeError: "VERSION_CONFLICT" as const,
+        },
+      ],
+    );
+    expect(held.stops[0]).toMatchObject({ projectedStatus: "AT_PICKUP", attentionCount: 1 });
+    expect(held.operations.map((candidate) => candidate.status)).toEqual(["NEEDS_ATTENTION"]);
+  });
 });
 
 function operation(

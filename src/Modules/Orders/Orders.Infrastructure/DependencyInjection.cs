@@ -4,7 +4,6 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
-using Npgsql;
 using Orders.Application.Csv;
 using Orders.Application.Lifecycle;
 using Orders.Application.Orders;
@@ -19,6 +18,7 @@ using Paqueteria.Application.Auditing;
 using Paqueteria.Application.Scheduling;
 using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Paqueteria.Infrastructure.Scheduling;
 using Paqueteria.Infrastructure.Tenancy;
 using Paqueteria.Contracts.Tracking;
@@ -113,10 +113,8 @@ public static class DependencyInjection
                 _ => serviceProvider.GetRequiredService<DisabledOrderTrackingLinkIssuer>(),
             });
         services.TryAddSingleton<TrackingTokenHasher>();
-        services.TryAddSingleton(serviceProvider => NpgsqlDataSource.Create(
-            serviceProvider.GetRequiredService<IConfiguration>().GetConnectionString("Paqueteria")
-            ?? throw new InvalidOperationException(
-                "A PostgreSQL public tracking provider requires a configured connection string.")));
+        // SCL-007: the API's one paqueteria_app pool, shared with every other API module.
+        services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Application);
         services.TryAddScoped<TenantDatabaseExecutionState>();
         services.TryAddScoped<TenantTransactionGuardInterceptor>();
         services.TryAddScoped<TenantSaveChangesGuardInterceptor>();
@@ -124,7 +122,7 @@ public static class DependencyInjection
         {
             var ordersOptions = serviceProvider.GetRequiredService<IOptions<OrdersOptions>>().Value;
             dbOptions.UseNpgsql(
-                    serviceProvider.GetRequiredService<NpgsqlDataSource>(),
+                    serviceProvider.GetRuntimeDataSource(RuntimeDatabaseRole.Application),
                     postgres =>
                     {
                         postgres.CommandTimeout(ordersOptions.CommandTimeoutSeconds);
@@ -223,11 +221,13 @@ public static class DependencyInjection
                         ClaimWindowFinalizationOptions.WorkerConnectionStringName)),
                 "Orders:ClaimWindowFinalization:Enabled requires ConnectionStrings:PaqueteriaWorker.")
             .ValidateOnStart();
-        services.AddSingleton(_ => new OrdersWorkerDataSource(
-            configuration.GetConnectionString(ClaimWindowFinalizationOptions.WorkerConnectionStringName) ?? string.Empty));
+        services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Worker);
+        services.TryAddSingleton<OrdersWorkerDataSource>();
         services.AddSingleton<IExpiredClaimWindowFinalizer>(serviceProvider =>
-            new PostgreSqlExpiredClaimWindowFinalizer(
-                serviceProvider.GetRequiredService<OrdersWorkerDataSource>().DataSource));
+        {
+            var worker = serviceProvider.GetRequiredService<OrdersWorkerDataSource>();
+            return new PostgreSqlExpiredClaimWindowFinalizer(() => worker.DataSource);
+        });
         services.AddSingleton<ClaimWindowFinalizationCycle>();
         services.AddSingleton<ClaimWindowFinalizationTelemetry>();
         services.AddSingleton<ClaimWindowFinalizationJob>();
@@ -274,8 +274,8 @@ public static class DependencyInjection
         services.AddOptions<OrderTransitionDriverEligibilityOptions>()
             .Bind(configuration.GetSection(OrderTransitionDriverEligibilityOptions.SectionName));
 
-        services.TryAddSingleton(_ => new OrdersWorkerDataSource(
-            configuration.GetConnectionString(OrderAutoCloseOptions.WorkerConnectionStringName) ?? string.Empty));
+        services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Worker);
+        services.TryAddSingleton<OrdersWorkerDataSource>();
         services.TryAddScoped<TenantDatabaseExecutionState>();
         services.TryAddScoped<TenantTransactionGuardInterceptor>();
         services.TryAddScoped<TenantSaveChangesGuardInterceptor>();
@@ -317,8 +317,10 @@ public static class DependencyInjection
             serviceProvider.GetRequiredService<PostgreSqlOrderTransitionService>());
 
         services.AddSingleton<IOrderAutoCloseOwnerDiscovery>(serviceProvider =>
-            new PostgreSqlOrderAutoCloseOwnerDiscovery(
-                serviceProvider.GetRequiredService<OrdersWorkerDataSource>().DataSource));
+        {
+            var worker = serviceProvider.GetRequiredService<OrdersWorkerDataSource>();
+            return new PostgreSqlOrderAutoCloseOwnerDiscovery(() => worker.DataSource);
+        });
         services.AddSingleton<IOrderAutoCloseCandidateReader, PostgreSqlOrderAutoCloseCandidateReader>();
         services.AddSingleton<IOrderAutoCloseAttempter, OrderAutoCloseAttempter>();
         services.AddSingleton<OrderAutoCloseCycle>();

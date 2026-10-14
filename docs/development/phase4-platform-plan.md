@@ -48,7 +48,7 @@ Cada PR que cambie AI-05, AI-06, AI-07 u otro documento normativo lleva su fila 
 | 7 | OBS-003 | Contexto de traza a través del outbox | PR 1 (PR 6 para verlo) | columna, payload o ninguno |
 | 8 | SCL-007 | Un pool de conexiones por rol | ninguno (mejor después del PR 6) | alerta de conexiones de PostgreSQL y correo |
 | 9 | SCL-007 | Espera adaptativa del outbox | ninguno (mejor después del PR 8) | espera máxima por lane |
-| 10 | OPS-005 | Pruebas de punta a punta de la plataforma | PR 1 a PR 9 | recorridos de negocio de la suite |
+| 10 | OPS-005 | Pruebas de punta a punta de la plataforma | PR 1 a PR 9 | ninguna (recorridos decididos: `OPS-005-JOURNEYS-2026-10-13`) |
 
 Los PR 1 a 6 van primero, como pidió el owner ("Empiezo por OpenTelemetry y correlación, y por los límites de tasa en
 endpoints pesados"). Los PR 7 a 10 vienen después.
@@ -190,9 +190,15 @@ Son tres pasos, con su propio PR cada uno (GOV-DEPENDENCY-ROUTE-001, `branching-
   - prueba de arquitectura: el seudónimo y el tipo de rol no llegan a métricas, a eventos OBS-002 ni a consultas de
     alertas.
 
-### PR 7: contexto de traza a través del outbox (OBS-003, pendiente)
+### PR 7: contexto de traza a través del outbox (OBS-003)
 
-Decisión pendiente del owner, sin recomendación todavía:
+Lo aplicado está en `docs/development/obs-003-outbox-trace-context.md` (`OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13`). El
+owner decidió el 2026-10-13: "Columna nueva (Recommended)". Cada productor guarda el contexto W3C de su traza en la
+columna `trace_parent` de las dos tablas del outbox, y cada mensaje se procesa en una actividad hija de ese contexto:
+los logs del Worker y de los lanes de tiempo real llevan la traza de la petición original. AI-03 §18 y AI-12 no
+cambian.
+
+Las opciones que se presentaron:
 
 - **Columna:** columna nueva en `platform.outbox_events` y `platform.location_outbox_events`.
   - Es un cambio de AI-06/AI-18 con migración por módulo.
@@ -208,9 +214,14 @@ Llevar el contexto hasta los clientes SignalR toca AI-12: `correlation_id` es `u
 dígitos hexadecimales.
 
 AI-03 §18 pide `trace_id` y `correlation_id` en cada evento. Con "ninguno", cada evento lleva su propia traza, pero no
-la de la petición que lo originó. Si el owner elige esa opción, el PR 7 revisa si §18 necesita una aclaración.
+la de la petición que lo originó. Con la columna, el `trace_id` de cada evento es el de la petición o tarea que lo
+produjo, y §18 no necesita cambio para `trace_id` y `correlation_id`. El seudónimo de empresa en las líneas por
+mensaje del Worker queda pendiente del owner (AI-08 OBS-003).
 
 ### PR 8: un pool de conexiones por rol (SCL-007)
+
+Lo aplicado está en `docs/development/scl-007-pool-per-role.md` (`SCL-007-POOL-PER-ROLE-2026-10-13`): tres pools
+(`paqueteria_app` y `paqueteria_realtime` en la API, `paqueteria_worker` en el Worker), 10 + 4 + 10 = 24 conexiones.
 
 - Un `NpgsqlDataSource` por rol de base de datos en cada proceso (`paqueteria_app` en la API, `paqueteria_worker` en el
   Worker), compartido por todos los módulos, en lugar de los 22 actuales.
@@ -232,21 +243,28 @@ la de la petición que lo originó. Si el owner elige esa opción, el PR 7 revis
 
 ### PR 9: espera adaptativa del outbox (SCL-007)
 
+Lo aplicado está en `docs/development/scl-007-adaptive-outbox-wait.md` (`SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13`):
+los despachadores de tiempo real de la API esperan 250 ms, 500 ms y luego 1 s (negocio) o 500 ms y luego 1 s
+(ubicación) mientras no hay trabajo; los pollers del Worker no cambian.
+
 - Mientras los lotes regresan llenos, el despachador vuelve a reclamar de inmediato. Mientras regresan vacíos, espera
   cada vez más, hasta una espera máxima. Al encontrar trabajo, vuelve a empezar.
 - Solo usa las funciones existentes de claim, settle y requeue con `lease_token`: sin SQL nuevo ni acceso directo al
   outbox.
 - Los lanes de negocio y de ubicación conservan esperas independientes.
-- Pendiente del owner: la espera máxima de cada lane. Debe cumplir tres cosas:
+- El owner decidió la espera máxima el 2026-10-13: "1 segundo en ambos (Recommended)". Cumple las tres cosas que se
+  pedían:
   - mantener el latido por minuto de `OutboxLaneSummary` (OBS-002);
   - quedar muy debajo del aviso `oldest_outbox_age_seconds` de AI-15 (60 s);
   - en los lanes de tiempo real, respetar el aviso `event_delivery_p95_seconds` de AI-15 (2 s).
-- `MaxClaimAgeMs` va a incluir esa espera.
+- `MaxClaimAgeMs` incluye esa espera: se mide al volver el claim, como `now - min(available_at)`.
 - Pruebas: espera progresiva, reinicio al haber trabajo, latido en reposo y cancelación (reloj falso).
 
 ### PR 10: pruebas de punta a punta de la plataforma (OPS-005)
 
-- Suite en `tests/Paqueteria.EndToEndTests`: API, Worker y Web armados contra PostgreSQL/PostGIS real.
+- Suite en `tests/Paqueteria.IntegrationTests/PlatformEndToEnd` (categoría `PlatformEndToEnd`; el owner decidió el
+  lugar el 2026-10-14, `OPS-005-SUITE-IN-INTEGRATIONTESTS-2026-10-14`): API, Worker y Web armados contra
+  PostgreSQL/PostGIS real. `tests/Paqueteria.EndToEndTests` sigue reservado y vacío.
 - Comprueba:
   - un trace id de punta a punta;
   - el 429 con `problem+json` y `Retry-After`, y el texto aprobado en la web;
@@ -256,7 +274,25 @@ la de la petición que lo originó. Si el owner elige esa opción, el PR 7 revis
 - Solo datos sintéticos (SEC-003). Sin pruebas de relleno: lo prohíbe el README del proyecto.
 - Corre dentro de un job de CI existente: un job nuevo cambiaría la topología de 13 jobs de Foundation y necesitaría su
   propia decisión.
-- Pendiente del owner: los recorridos de negocio que corre la suite además de esas comprobaciones.
+- El owner decidió los recorridos el 2026-10-13 (`OPS-005-JOURNEYS-2026-10-13`): "Recorrido principal
+  (Recommended)", "Cotizar, crear y confirmar la orden, asignar repartidor, recoger, entregar con foto y ver 'Entregada'
+  en el seguimiento público. Un recorrido completo; suma unos minutos al job de CI existente."
+
+Lo aplicado está en `docs/development/ops-005-end-to-end-suite.md`:
+
+- El recorrido corre por las pantallas reales del build de producción de la web: el asistente "Nueva orden", el detalle
+  de la orden ("Liberar para recolección", "Asignar repartidor", "Ver enlace"), la PWA del repartidor con sus dos fotos
+  por carga firmada, y el seguimiento público, que muestra "Entregado".
+- Las cinco comprobaciones de plataforma se miden en la misma corrida; el 429 tiene su propia prueba.
+- La suite corre dentro del job `driver-stops-pwa`, que ya prepara PostgreSQL, el almacenamiento S3, las dependencias
+  web y Chromium. Los jobs `dotnet` la excluyen por categoría (`PlatformEndToEnd`).
+- La suite se escribió primero como proyecto propio (`tests/Paqueteria.EndToEndTests`). Llenar su archivo de paquetes
+  era un cambio de dependencias: REL-000 lo rechazaba (el owner aprobó una regla,
+  `OPS-005-E2E-LOCKFILE-REL000-2026-10-14`, "Solo este proyecto (Recommended)") y después el PR Gate también, porque
+  ninguna dependencia entra por `development`. El owner decidió entonces "Suite en integración (Recommended)"
+  (`OPS-005-SUITE-IN-INTEGRATIONTESTS-2026-10-14`): la suite se movió a IntegrationTests con su propia categoría, en el
+  mismo job; no cambia ningún archivo de paquetes ni ningún control, y la regla de REL-000 se retiró antes del merge
+  sin aplicarse.
 
 ## Decisiones pendientes del owner
 
@@ -264,10 +300,10 @@ la de la petición que lo originó. Si el owner elige esa opción, el PR 7 revis
 | --- | --- | --- |
 | Lista exacta de paquetes (admisión explícita por paquete) | PR 4 | AI-08 OBS-003, `OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12` |
 | Correo de alertas (`alertEmailAddress`) | despliegue de las alertas (ya pendiente desde OBS-002) | AI-08 OBS-003 y SCL-007 |
-| Contexto de traza a través del outbox: columna, payload o ninguno | PR 7 | AI-08 OBS-003 |
 | Alerta de métrica sobre conexiones de PostgreSQL | PR 8 (la alerta, no el pool) | AI-08 SCL-007 |
 | Espera máxima del outbox por lane | PR 9 | AI-08 SCL-007 |
-| Recorridos de negocio de la suite de punta a punta | PR 10 | AI-08 OPS-005 |
+| Recorridos de negocio de la suite de punta a punta | decidida 2026-10-13 (`OPS-005-JOURNEYS-2026-10-13`, "Recorrido principal (Recommended)") | AI-08 OPS-005 |
+| Dónde vive la suite de punta a punta | decidida 2026-10-14 (`OPS-005-SUITE-IN-INTEGRATIONTESTS-2026-10-14`, "Suite en integración (Recommended)"; reemplaza a `OPS-005-E2E-LOCKFILE-REL000-2026-10-14` antes del merge) | AI-08 OPS-005, `decision-log.md` |
 
 ## Invariantes que ningún PR de la fase 4 cambia
 

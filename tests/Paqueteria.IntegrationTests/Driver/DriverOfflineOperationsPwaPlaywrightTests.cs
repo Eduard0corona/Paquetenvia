@@ -1453,6 +1453,69 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         Assert.Equal(["PICKED_UP"], backend.TransitionTargets);
     }
 
+    /// <summary>
+    /// The photo the driver is previewing for the next action survives the sync of the previous one
+    /// (docs/development/driver-photo-selection-refresh.md, OPS-005 run 38506623366): the confirmation read of
+    /// "Llegué a recolección", held here until the photo is on screen, settles the queue without the stop ever showing
+    /// that action as a conflict, so the photo step stays and "Usar esta foto" queues and sends that same photo.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Previewed_photo_survives_the_sync_of_the_previous_action()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        var page = await browser.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-photo-selection-refresh");
+        var backend = new SyntheticOfflineBackend { HoldReadsAfterTransition = true };
+        await backend.RouteAsync(page);
+        var photoSha256 = Convert.ToHexStringLower(SHA256.HashData(FirstPreviewPng));
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(page, "Llegué a recolección");
+        await page.GetByRole(AriaRole.Button, new() { Name = "Llegué a recolección" })
+            .ClickAsync();
+
+        // The server applied the check-in; the read that confirms it waits.
+        await backend.HeldReadArrived.WaitAsync(TimeSpan.FromSeconds(15));
+        Assert.Equal(["AT_PICKUP"], backend.TransitionTargets);
+        await ExpectTextAsync(page, "Confirmar recolección");
+        await page.Locator("input[type=file]").SetInputFilesAsync(
+            new FilePayload
+            {
+                Name = "previewed-during-sync.png",
+                MimeType = "image/png",
+                Buffer = FirstPreviewPng,
+            });
+        var previewUrl = await WaitForDecodedPreviewAsync(page);
+
+        // The read answers AT_PICKUP at version 4; the queue drops the check-in and the screen shows it empty.
+        backend.ReleaseHeldReads();
+        await WaitForOperationCountAsync(page, 0);
+        await ExpectTextAsync(page, "0 acciones en el dispositivo");
+
+        // The same photo is still in its preview, and "Usar esta foto" queues and sends exactly that photo.
+        Assert.True(await page.GetByRole(
+                AriaRole.Heading,
+                new() { Name = "Vista previa de la foto" })
+            .IsVisibleAsync());
+        Assert.Equal(
+            previewUrl,
+            await page.GetByRole(AriaRole.Img, new() { Name = "Foto de evidencia tomada" })
+                .GetAttributeAsync("src"));
+        await page.GetByRole(AriaRole.Button, new() { Name = "Usar esta foto" })
+            .ClickAsync();
+        await ExpectTextAsync(page, "Iniciar traslado");
+        await WaitUntilAsync(() => backend.TransitionTargets.Count == 2);
+        await WaitForOperationCountAsync(page, 0);
+        await WaitForProofCountAsync(page, 0);
+        Assert.Equal(["AT_PICKUP", "PICKED_UP"], backend.TransitionTargets);
+        Assert.Equal([photoSha256], backend.SessionSha256.Distinct());
+        Assert.Equal(1, backend.UploadCount);
+    }
+
     [Fact]
     [Trait("Category", "DriverOfflineOperationsPwa")]
     public async Task Lost_transition_response_is_confirmed_by_rest_before_resend()
@@ -2298,6 +2361,8 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
     private sealed class SyntheticOfflineBackend
     {
         private readonly object gate = new();
+        private readonly TaskCompletionSource heldReadArrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource heldReadsReleased = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly ConcurrentDictionary<string, int> finalizeAttempts = new();
         private readonly Dictionary<string, string> sessionsByKey = [];
         private readonly Dictionary<string, FinalizedProof> proofsByKey = [];
@@ -2324,6 +2389,14 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         internal List<string> RateLimitedSessionKeys { get; } = [];
         internal bool ConflictFirstTransition { get; init; }
         internal bool ExpireTransitions { get; init; }
+
+        /// <summary>
+        /// Holds every stops read that comes after a transition request until <see cref="ReleaseHeldReads"/>, so the
+        /// read that confirms the transition waits while the test acts on the screen.
+        /// </summary>
+        internal bool HoldReadsAfterTransition { get; init; }
+        internal Task HeldReadArrived => heldReadArrived.Task;
+        internal void ReleaseHeldReads() => heldReadsReleased.TrySetResult();
 
         /// <summary>UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: cash the DELIVERY stop expects; 0 means none.</summary>
         internal long CodExpectedCents { get; init; }
@@ -2379,7 +2452,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
 
         internal async Task RouteAsync(IPage page)
         {
-            await page.RouteAsync(DriverStopsPwaPlaywrightTests.StopsRoute, RouteStopsAsync);
+            await page.RouteAsync(DriverStopsPwaPlaywrightTests.StopsRoute, HoldThenRouteStopsAsync);
             await page.RouteAsync("**/api/v1/orders/*/transitions", RouteTransitionAsync);
             await page.RouteAsync(
                 "**/api/v1/orders/*/proof-upload-sessions",
@@ -2410,6 +2483,21 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
                     },
                 });
             });
+        }
+
+        private async Task HoldThenRouteStopsAsync(IRoute route)
+        {
+            bool hold;
+            lock (gate)
+            {
+                hold = HoldReadsAfterTransition && TransitionTargets.Count > 0;
+            }
+            if (hold)
+            {
+                heldReadArrived.TrySetResult();
+                await heldReadsReleased.Task;
+            }
+            await RouteStopsAsync(route);
         }
 
         private Task RouteStopsAsync(IRoute route)

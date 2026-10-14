@@ -69,9 +69,12 @@ var apiSecretNames = [
   'paquetenvia-email-lookup-key-1'
   'google-maps-api-key'
   'public-tracking-link-key'
+  // OBS-003-TENANT-PSEUDONYM-2026-10-12: the owner-written key of the organization pseudonym in logs and traces.
+  'paquetenvia-telemetry-pseudonym-key-1'
 ]
 var workerSecretNames = [
   'pg-worker-runtime-connection'
+  'paquetenvia-telemetry-pseudonym-key-1'
 ]
 
 resource containerEnvironment 'Microsoft.App/managedEnvironments@2025-07-01' existing = {
@@ -84,6 +87,11 @@ resource registry 'Microsoft.ContainerRegistry/registries@2025-04-01' existing =
 
 resource vault 'Microsoft.KeyVault/vaults@2024-11-01' existing = {
   name: 'kv-pvp-${take(suffix, 13)}'
+}
+
+// OBS-003: the workspace-based Application Insights of platform.bicep (stage 2).
+resource appInsights 'Microsoft.Insights/components@2020-02-02' existing = {
+  name: 'appi-pv-pilot-${suffix}'
 }
 
 resource apiIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
@@ -240,6 +248,16 @@ var apiKeyVaultEnv = [
     name: 'KeyVaultSecrets__Mappings__5__ConfigurationKey'
     value: 'ConnectionStrings:PaqueteriaRealtime'
   }
+  // OBS-003-TENANT-PSEUDONYM-2026-10-12: the owner-written key of the organization pseudonym (README "Secrets the
+  // owner writes"); the API fails at start without it, because its logs carry the pseudonym even with the export off.
+  {
+    name: 'KeyVaultSecrets__Mappings__6__SecretName'
+    value: 'paquetenvia-telemetry-pseudonym-key-1'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__6__ConfigurationKey'
+    value: 'TelemetryPseudonym:Keys:1'
+  }
 ]
 
 var workerKeyVaultEnv = [
@@ -263,9 +281,38 @@ var workerKeyVaultEnv = [
     name: 'KeyVaultSecrets__Mappings__1__ConfigurationKey'
     value: 'ConnectionStrings:Paqueteria'
   }
+  // OBS-003-TENANT-PSEUDONYM-2026-10-12: the Worker validates the pseudonym key at start, like the API.
+  {
+    name: 'KeyVaultSecrets__Mappings__2__SecretName'
+    value: 'paquetenvia-telemetry-pseudonym-key-1'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__2__ConfigurationKey'
+    value: 'TelemetryPseudonym:Keys:1'
+  }
 ]
 
-var apiEnv = concat(productionEnv, proofStorageEnv, dataProtectionEnv, apiKeyVaultEnv, [
+// OBS-003 (OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12), shared by API and Worker: the export of traces and metrics to
+// Application Insights stays off. Turning it on is a reviewed change of this literal to 'true', after the owner created
+// paquetenvia-telemetry-pseudonym-key-1 (docs/development/obs-003-appinsights-export.md); nothing else switches it, and
+// apps.settings.json cannot (env001_pilot_guards.py P17 and P21). The connection string is not a secret: its key can only
+// send telemetry (residual risk in that note). The pseudonym key version matches the mapped secret name.
+var telemetryEnv = [
+  {
+    name: 'TelemetryExport__Enabled'
+    value: 'false'
+  }
+  {
+    name: 'TelemetryExport__ConnectionString'
+    value: appInsights.properties.ConnectionString
+  }
+  {
+    name: 'TelemetryPseudonym__CurrentKeyVersion'
+    value: '1'
+  }
+]
+
+var apiEnv = concat(productionEnv, proofStorageEnv, dataProtectionEnv, apiKeyVaultEnv, telemetryEnv, [
   {
     name: 'AZURE_CLIENT_ID'
     value: apiIdentity.properties.clientId
@@ -405,7 +452,7 @@ var apiEnv = concat(productionEnv, proofStorageEnv, dataProtectionEnv, apiKeyVau
   }
 ], businessSettings)
 
-var workerEnv = concat(productionEnv, proofStorageEnv, dataProtectionEnv, workerKeyVaultEnv, [
+var workerEnv = concat(productionEnv, proofStorageEnv, dataProtectionEnv, workerKeyVaultEnv, telemetryEnv, [
   {
     name: 'AZURE_CLIENT_ID'
     value: workerIdentity.properties.clientId

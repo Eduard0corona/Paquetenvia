@@ -1,3 +1,4 @@
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -5,13 +6,14 @@ using NpgsqlTypes;
 using Orders.Application.Tracking;
 using Organizations.Application.Auditing;
 using Paqueteria.Domain.Tenancy;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Realtime.Application.Authorization;
 using Realtime.Application.Configuration;
 
 namespace Realtime.Infrastructure.Authorization;
 
 internal sealed class PostgreSqlRealtimeConnectionAuthorizer(
-    NpgsqlDataSource dataSource,
+    [FromKeyedServices(RuntimeDatabaseRole.Application)] NpgsqlDataSource dataSource,
     IPublicTrackingProjectionReader trackingReader,
     IPlatformAdminTenantActivationAudit platformAdminAudit,
     IOptions<RealtimeOptions> options,

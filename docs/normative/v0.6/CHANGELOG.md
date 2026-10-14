@@ -1,5 +1,183 @@
 # Changelog
 
+## Pruebas de punta a punta de la plataforma (OPS-005-JOURNEYS-2026-10-13, OPS-005-E2E-LOCKFILE-REL000-2026-10-14 y OPS-005-SUITE-IN-INTEGRATIONTESTS-2026-10-14, fase 4 PR 10) — 2026-10-14
+
+- Respuesta literal del project owner (2026-10-13), registrada en `decision-log.md` con su contexto y las opciones no
+  elegidas: "Recorrido principal (Recommended)" ("Cotizar, crear y confirmar la orden, asignar repartidor, recoger,
+  entregar con foto y ver 'Entregada' en el seguimiento público. Un recorrido completo; suma unos minutos al job de CI
+  existente."). 'Entregada' era la forma de nombrar el estado entregado en el seguimiento público; la suite comprueba
+  la etiqueta pública vigente de DELIVERED, "Entregado" (`apps/web/src/tracking/contracts/public-tracking-labels.ts`,
+  `DELIVERED: "Entregado"`), y ninguna etiqueta cambia.
+- La suite vive en `tests/Paqueteria.IntegrationTests/PlatformEndToEnd` (categoría `PlatformEndToEnd`) y arma la API,
+  el Worker y la web de producción contra PostgreSQL/PostGIS y el almacenamiento S3 de prueba, con el arnés de ese
+  proyecto y solo datos sintéticos. El recorrido corre por las pantallas reales: "Nueva orden" cotiza, crea y confirma;
+  el detalle libera para recolección y asigna al repartidor; la PWA del repartidor recoge y entrega con sus dos fotos
+  por carga firmada; el seguimiento público muestra "Entregado".
+- En la misma corrida mide las comprobaciones de AI-08 OPS-005: una traza por acción del navegador (logs y auditoría;
+  el `traceId` del 429), el 429 `problem+json` con `Retry-After` y el texto aprobado en el asistente, las conexiones de
+  PostgreSQL por rol dentro del presupuesto de SCL-007, un aviso tras 3 s sin trabajo en menos de 2 s y nada que salga
+  del proceso con la exportación apagada.
+- Corre dentro del job `driver-stops-pwa` (categoría `PlatformEndToEnd` del build de IntegrationTests que el job ya
+  restaura y compila; excluida de los jobs `dotnet`); su TRX entra en la evidencia REL-000 de ese job bajo el proyecto
+  IntegrationTests. Ningún job nuevo: Foundation sigue con 13.
+- El archivo de paquetes de la suite (`OPS-005-E2E-LOCKFILE-REL000-2026-10-14`). Dos respuestas literales del project
+  owner (2026-10-14), registradas en `decision-log.md` con su contexto y las opciones no elegidas; la segunda reemplazó
+  a la primera:
+  - Primera pregunta: "PR 10: el control de dependencias de REL-000 rechaza los paquetes del proyecto de pruebas de punta a punta, aunque son exactamente los mismos que ya usan las pruebas de integración (tabla de arriba). ¿Cómo lo resolvemos?" Respuesta: "Archivo vacío = nuevo (Recommended)" ("En este PR, REL-000 trata un archivo de paquetes que en la base está vacío igual que uno nuevo: solo acepta paquetes que ya están en el repositorio, idénticos (nombre, versión y hash). Cualquier otro cambio sigue rechazado. Aplica a los 3 proyectos que hoy tienen el archivo vacío (EndToEndTests, Contracts y Domain). Con pruebas en REL-000.").
+  - Segunda pregunta: "Corrección: la opción \"Archivo vacío = nuevo\" falla la prueba permanente de REL-000, salvo que también se cambie cómo esa prueba deshace la remediación de seguridad SEC-2026-12. ¿Cómo seguimos con el archivo de paquetes de la suite de punta a punta?" Respuesta: "Solo este proyecto (Recommended)" ("REL-000 acepta solo el archivo de EndToEndTests, solo si en la base está vacío y solo si cada paquete es idéntico (nombre, versión y hash) al de las pruebas de integración del mismo commit, que REL-000 ya audita. Cualquier otro cambio sigue rechazado. Pasa la evidencia de release y la prueba permanente, ya probado. Deja en REL-000 un caso especial para una ruta.").
+- Dónde vive la suite (`OPS-005-SUITE-IN-INTEGRATIONTESTS-2026-10-14`). Tercera respuesta literal del project owner
+  (2026-10-14), registrada en `decision-log.md` con su contexto y las opciones no elegidas; reemplaza a la segunda antes
+  del merge, así que la regla de REL-000 no se aplicó y ningún cambio de REL-000 llegó a `development`:
+  - Pregunta: "PR 10: el PR Gate rechaza el archivo de paquetes de la suite de punta a punta, porque ninguna dependencia entra por development. ¿Cómo seguimos?" Respuesta: "Suite en integración (Recommended)" ("La suite se mueve al proyecto de pruebas de integración, con su propia categoría, en el mismo job de CI. No cambia ningún archivo de paquetes y no se toca ningún control: se retira de este PR el cambio a REL-000 que habías aprobado. Se actualiza AI-08 OPS-005, que hoy dice EndToEndTests, con su fila en el decision-log. El proyecto EndToEndTests se queda vacío.").
+- La suite se movió con `git mv` de `tests/Paqueteria.EndToEndTests` a
+  `tests/Paqueteria.IntegrationTests/PlatformEndToEnd`. `tests/Paqueteria.EndToEndTests` queda reservado y vacío,
+  idéntico a `development`. No cambia ningún archivo de paquetes (el csproj y el lock de IntegrationTests quedan
+  iguales) ni ningún control: `tools/rel-000`, la nota de REL-000, `tools/ci/change-domains.json`, el clasificador y el
+  PR Gate quedan idénticos a `development`.
+- AI-08 OPS-005 registra el recorrido decidido y, en `expected_outputs`, el proyecto IntegrationTests con
+  `Category=PlatformEndToEnd`. Sin cambios en AI-03, AI-04, AI-05, AI-06, AI-07, AI-12, AI-13, AI-15, AI-18, roles,
+  permisos ni migraciones; ningún paquete nuevo ni versión nueva. Nota: `docs/development/ops-005-end-to-end-suite.md`.
+
+## Remediación de seguridad NuGet: SignalR, Cryptography.Pkcs y Cryptography.Xml a 10.0.13 (SEC-2026-12-NUGET-REMEDIATION-2026-10-13) — 2026-10-13
+
+- Respuestas literales del project owner (2026-10-13), registradas en `decision-log.md` con su contexto y las opciones
+  no elegidas:
+  - aviso de SignalR: "Remediar con la tabla (Recommended)";
+  - ampliación a Pkcs y Xml: "Los 4 en un PR (Recommended)";
+  - cómo subir Xml y Pkcs: "Fijado transitivo (Recommended)";
+  - dos avisos más de Xml: "Incluir los 6 (Recommended)".
+- Seis avisos de Microsoft del 2026-10-13, todos corregidos en 10.0.13. El tracking es el Issue #260 y la ruta es la de
+  SEC-2026-11 (PR de remediación a `main`, back-sync a `development` y retiro):
+  - `GHSA-334f-vvp4-7g6p` (SignalR.Common);
+  - `GHSA-846f-f764-76mx` y `GHSA-2fmv-rv2c-59x7` (Pkcs);
+  - `GHSA-r955-8q5j-3h83`, `GHSA-7hqp-7c5m-4vq6` y `GHSA-c399-9853-6jmj` (Xml).
+- `Directory.Packages.props`:
+  - `Microsoft.AspNetCore.SignalR.Client` pasa a 10.0.13;
+  - `CentralPackageTransitivePinningEnabled` queda activo en todo el repositorio;
+  - `System.Security.Cryptography.Pkcs` y `.Xml` se fijan en 10.0.13.
+- Los locks se regeneran con `dotnet restore --force-evaluate` y se mueven exactamente 22 nodos:
+  - IntegrationTests: los 14 paquetes SignalR más Xml y Pkcs;
+  - ContractTests, ArchitectureTests y DatabaseMigrator: Xml y Pkcs, que pasan a `CentralTransitive`.
+
+  Ningún otro lock cambia, tampoco los de la API y el Worker.
+- REL-000 agrega:
+  - la autorización `SEC-2026-12-SIGNALR-CRYPTOGRAPHY`;
+  - un validador de grafo exacto: ediciones del manifiesto en su lugar, los 16 movimientos con versiones y hashes
+    exactos, y el SHA-256 de cada lock.
+- El grafo permanente MVP-0 (`test_k`) también acepta exactamente esos movimientos (`nuget_remediations`). La evidencia
+  de liberación no lo usa, así que el modo normal y el código de admisión de dependencias no cambian. El fijado
+  transitivo de todo el repositorio sí acota lo que una admisión futura puede admitir: un `PackageVersion` nuevo para
+  un paquete que ya es transitivo en algún proyecto vuelve ese nodo `CentralTransitive` y falla con
+  `DEPENDENCY_ADMISSION_BASELINE_PACKAGE_CHANGED`, y un consumidor nuevo de Xml o Pkcs también falla. Ambos fallan
+  cerrado. Nota: `docs/development/rel-000-internal-release.md`.
+- Sin cambios en código de producción, migraciones, AI-04, AI-05, AI-06, AI-18, roles ni permisos.
+- Fusionada en `main` por #261 (a29ab4a), sincronizada a `development` por #262 (b5a1fc9) y retirada a
+  `historical_remediations` por este PR.
+
+## Contexto de traza a través del outbox (OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13, fase 4 PR 7) — 2026-10-13
+
+- Respuesta literal del project owner (2026-10-13), registrada en `decision-log.md` con su contexto y las opciones no
+  elegidas: "Columna nueva (Recommended)" ("Una columna con la traza en las dos tablas del outbox (migración con ida y
+  vuelta probadas). Los logs del Worker llevan la traza de la petición original, así que una sola búsqueda en Log
+  Analytics muestra API y Worker juntos, aunque haya muestreo. No toca el contenido del evento ni lo que reciben los
+  clientes. Cumple AI-03 §18 tal como está.").
+- AI-06: columna `trace_parent` (`text`, nula) con CHECK de forma exacta (`00-{trace id}-{span id}-{00|01}`) en
+  `platform.outbox_events` y `platform.location_outbox_events`. Nunca `tracestate`, baggage, empresa, usuario ni datos
+  de la petición, y nunca dentro del `payload`.
+- Cada productor la escribe en su propia transacción con el contexto de su actividad actual (`ValueGeneratedNever`, sin
+  `RETURNING`); la función del operador (DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03) conserva su firma y la lee de
+  `app.trace_parent`, local a la transacción; las dos funciones de Notifications copian la del evento de origen.
+- AI-18: el ejecutor del operador recibe `INSERT (trace_parent)` sobre `platform.outbox_events`, propiedad del paso del
+  lane de Dispatch; la sentencia publicada no cambia y la aserción 30 lo documenta.
+- Migraciones: `20261013000100_AddOutboxTraceContext` (Dispatch) y `20261013000200_CarryOutboxTraceContext`
+  (Notifications), con ida, vuelta e ida probadas en PostgreSQL y el catálogo idéntico; la vuelta va primero en
+  Notifications y Dispatch la rechaza en otro orden. Ninguna fila se reescribe.
+- Las protecciones de contenido de AI-06 (`platform.protect_outbox_content()` y
+  `platform.protect_location_outbox_content()`) también comparan `trace_parent`: ningún UPDATE la cambia. El paso de
+  Dispatch las instala y su vuelta restaura las publicadas antes de quitar la columna.
+- Las funciones de claim devuelven la columna sin cambios (devuelven la fila completa). El Worker y los lanes de tiempo
+  real de la API procesan cada mensaje en su propia actividad, hija del contexto guardado: sus logs llevan la traza de
+  la petición original. Los ciclos de despacho siguen siendo su propia traza y nunca se exportan; con la exportación
+  encendida, el mensaje se exporta solo si la traza de origen se muestreó, sin atributos, junto con sus llamadas
+  HTTP salientes (la del proveedor de una notificación) bajo la lista permitida de PR 6.
+- AI-03 §18 no cambia para `trace_id` y `correlation_id`. Quedan pendientes del owner (AI-08 OBS-003): el seudónimo de
+  empresa y el tipo de rol en las líneas por mensaje del Worker, y el trace id en sus filas de auditoría.
+- Sin cambios en AI-03, AI-04, AI-05, AI-12, AI-13 ni AI-24, en el contenido de los eventos, en los mensajes de SignalR
+  ni en las notificaciones. AI-08 OBS-003 registra la decisión. Nota: `docs/development/obs-003-outbox-trace-context.md`.
+
+## Exportación de trazas y métricas a Application Insights (OBS-003-APPINSIGHTS-EXPORT-2026-10-13, fase 4 PR 6) — 2026-10-13
+
+- Aplica `OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12` ("Application Insights (Recommended)") y
+  `OBS-003-TENANT-PSEUDONYM-2026-10-12` ("Seudónimo de empresa (Recommended)"), con dos respuestas literales del
+  project owner (2026-10-13), registradas en `decision-log.md` con su contexto y las opciones no elegidas:
+  - Q-PR6-1, qué ciclos se exportan: "Solo tareas programadas (Recommended)".
+  - Q-PR6-2, cómo se autentica el envío: "Llave en la conexión (Recommended)".
+- La API y el Worker exportan trazas y métricas de OpenTelemetry (nunca logs) con el exportador oficial de Azure
+  Monitor, sin paquetes nuevos. Apagado por omisión: la sección `TelemetryExport` se valida al arrancar y falla
+  cerrado; apagado, no se registra ningún exportador y nada sale del proceso.
+- Muestreo de 10 % por traza, fijo en código (`ParentBasedSampler(TraceIdRatioBasedSampler(0.10))`). Solo se exportan
+  las peticiones de la API (no `/health/*`) y los ciclos de las tareas programadas de ADR-034, con sus llamadas HTTP
+  salientes. Nunca las vueltas del outbox, la validación de fotos ni spans de base de datos.
+- Lista permitida de atributos de span y de etiquetas de métricas (la de OBS-002, con las de
+  `aspnetcore.rate_limiting.requests`). La propagación sigue sin hacer nada, también con la exportación encendida.
+- Seudónimo de empresa `v{versión}-<32 hex>` (HMAC con el secreto `paquetenvia-telemetry-pseudonym-key-1` que escribe
+  el owner) y tipo de rol del actor en los logs y la traza de las peticiones con empresa seleccionada; nunca en
+  métricas, eventos de OBS-002, alertas ni el libro. Llave sintética en Development y Testing; fuera de ellos la API y
+  el Worker no arrancan sin la llave.
+- Piloto: componente `appi-pv-pilot-<suffix>` sobre el mismo Log Analytics (mismo tope diario de 0.3 GB), con
+  `TelemetryExport__Enabled='false'` literal en `apps.bicep` (se enciende con un PR revisado); guardas P01, P06, P17,
+  P21 y P23 y la comprobación del secreto en el workflow. Riesgo anotado: quien obtenga la cadena de conexión puede
+  mandar telemetría falsa, no leerla, y esa telemetría cuenta contra el tope diario. Ninguna alerta nueva.
+- AI-08 OBS-003 registra lo implementado. Sin cambios en AI-04, AI-05, AI-06, AI-18, roles, permisos, migraciones ni
+  paquetes. Nota: `docs/development/obs-003-appinsights-export.md`.
+
+## Espera adaptativa de los avisos en tiempo real (SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13, fase 4 PR 9) — 2026-10-13
+
+- Respuesta literal del project owner (2026-10-13), registrada en `decision-log.md` con su contexto y las opciones no
+  elegidas: "1 segundo en ambos (Recommended)" ("Negocio y ubicación esperan como máximo 1 s. Sin trabajo bajan de unas
+  6 a 2 consultas por segundo; el primer aviso después de un rato sin trabajo tarda hasta 1 s más, dentro de los 2 s de
+  AI-15.").
+- Los despachadores de tiempo real de la API (lanes de negocio y de ubicación) vuelven a reclamar de inmediato cuando un
+  claim trae trabajo, lleno o parcial, y vuelven a empezar. Tras un claim vacío esperan su intervalo de poll y duplican
+  la espera con cada claim vacío siguiente, hasta 1 s: negocio 250 ms, 500 ms y 1 s; ubicación 500 ms y 1 s. Sin
+  trabajo pasan de unas 6 a unas 2 consultas por segundo. Cada lane tiene su propia espera.
+- Configuración validada al arrancar: `Realtime:OutboxDispatcher:Business:MaximumIdleWaitMilliseconds` y
+  `Realtime:OutboxDispatcher:Location:MaximumIdleWaitMilliseconds`, 1000 por defecto. Un valor menor que el intervalo de
+  poll del lane, mayor que 1000 ms (la mitad del aviso `event_delivery_p95_seconds` de AI-15, 2 s) o que no sea un
+  número impide arrancar la API.
+- Se mantienen el latido por minuto de `OutboxLaneSummary` (OBS-002), el aviso `oldest_outbox_age_seconds` de AI-15
+  (60 s) y el de `event_delivery_p95_seconds` (2 s). `MaxClaimAgeMs` ya incluye la espera: se mide al volver el claim.
+- Solo se usan las funciones existentes de claim, settle y requeue con `lease_token`. Los pollers del Worker no cambian.
+- AI-08 SCL-007 registra la decisión, los límites y la prueba de entrega tras un rato sin trabajo. Sin cambios en
+  AI-04, AI-05, AI-06, AI-12, AI-13, AI-15, AI-18, AI-24, SQL, permisos, migraciones, secretos, Bicep ni paquetes. Nota:
+  `docs/development/scl-007-adaptive-outbox-wait.md`.
+
+## Un pool de conexiones por rol (SCL-007-POOL-PER-ROLE-2026-10-13, fase 4 PR 8) — 2026-10-13
+
+- Aplica la fase 4 aprobada; no hay pregunta nueva al owner. Respuesta literal del owner
+  (`PHASE4-PLATFORM-APPROVAL-2026-10-12`): "Sí, avanza con la fase 4 (Recommended)"; la pregunta nombraba "un pool de
+  conexiones por rol".
+- Un `NpgsqlDataSource` por rol de base de datos en cada proceso, compartido por todos los módulos: `paqueteria_app`
+  (`ConnectionStrings:Paqueteria`) y `paqueteria_realtime` (`ConnectionStrings:PaqueteriaRealtime`, los despachadores de
+  tiempo real) en la API, y `paqueteria_worker` (`ConnectionStrings:PaqueteriaWorker`) en el Worker. Antes, 22 lugares
+  del código armaban su propio pool: 5 pools en la API y 9 en el Worker.
+- Presupuesto validado al arrancar (`DatabasePools`): 10 + 4 + 10 = 24 conexiones como máximo; cada tamaño entre 1 y 24
+  y la suma hasta 24 = piso((50 − 15 reservadas por Azure) × 0.70) de las conexiones de usuario del B1ms (AZR-001-INV-014).
+  Quedan 11 para el migrador, el mantenimiento y la administración. El `Maximum Pool Size` de la cadena de conexión se
+  reemplaza, y cada pool se arma siempre con `Pooling=true`, `Multiplexing=false`, `Include Error Detail=false` y
+  `Max Auto Prepare=0`, diga lo que diga la cadena; un valor inválido impide arrancar la API o el Worker.
+- Sigue igual: transacción explícita con `set_config(..., true)` y `SET LOCAL ROLE` después de `BEGIN`; cada pool se
+  autentica con un solo login `NOBYPASSRLS` de su rol; las comprobaciones de readiness siguen fallando ante un rol mal
+  formado; el `pooling_contract` de AI-15 no cambia y PgBouncer sigue detrás de GATE-014. Pruebas en PostgreSQL real:
+  ningún estado de sesión sobrevive entre préstamos, también con `No Reset On Close=true`.
+- La validación de pruebas del Worker lee `ConnectionStrings:PaqueteriaWorker` (el piloto ya le da el mismo secreto con
+  los dos nombres). `DataProtection:ConnectionStringName` solo acepta `Paqueteria` con `DataProtection:RuntimeRole`
+  `paqueteria_app` y `PaqueteriaWorker` con `paqueteria_worker`.
+- Pendiente del owner: la alerta de métrica de Azure Monitor sobre conexiones de PostgreSQL y su correo.
+- AI-08 SCL-007 registra el rol de tiempo real, el presupuesto y las credenciales que quedan fuera. Sin cambios en AI-04,
+  AI-05, AI-06, AI-13, AI-15, AI-18, AI-24, roles, permisos, migraciones, secretos, Bicep ni paquetes. Nota:
+  `docs/development/scl-007-pool-per-role.md`.
+
 ## Límites de tasa en las pantallas del panel: mensaje con cuenta regresiva y recargas espaciadas (SEC-004-PANEL-SCREENS-2026-10-13, fase 4 PR 3, parte del panel) — 2026-10-13
 
 - Respuestas literales del project owner (2026-10-13), registradas en `decision-log.md` con su contexto y las opciones

@@ -21,8 +21,9 @@ namespace Paqueteria.Infrastructure.Observability;
 /// <para>
 /// The listener is the smallest one that guarantees ids: it samples <see cref="ActivitySamplingResult.PropagationData"/>
 /// for the hosting source and for <see cref="ActivitySourceName"/> only, so activities exist and carry W3C ids but
-/// record no tags, events or baggage. A later exporter (phase 4 PR 6) registers its own listener and sampler next
-/// to this one; nothing here records or exports anything.
+/// record no tags, events or baggage. The OBS-003 export (phase 4 PR 6), when configuration turns it on, adds the
+/// OpenTelemetry listener and sampler next to this one; this listener stays, so the traces that sampler drops still
+/// have W3C ids. Nothing here records or exports anything.
 /// </para>
 /// </remarks>
 public static class TraceCorrelation
@@ -41,6 +42,18 @@ public static class TraceCorrelation
 
     /// <summary>Operation name of an outbox dispatch cycle activity; the display name is the fixed lane name.</summary>
     public const string OutboxDispatchCycleOperation = "Paqueteria.OutboxDispatchCycle";
+
+    /// <summary>
+    /// Operation name of one iteration of a polling loop that is not an ADR-034 scheduled job (proof validation); the
+    /// display name is the fixed loop name. OBS-003 PR 6 (Q-PR6-1): polls are never exported, scheduled job cycles are.
+    /// </summary>
+    public const string PollCycleOperation = "Paqueteria.PollCycle";
+
+    /// <summary>
+    /// OBS-003 phase 4 PR 7: operation name of the activity that processes one claimed outbox message. Its parent is
+    /// the trace that wrote the message (<see cref="OutboxTraceContext"/>); the display name is the fixed lane name.
+    /// </summary>
+    public const string OutboxMessageOperation = "Paqueteria.OutboxMessage";
 
     /// <summary>Operation name of the fallback request activity, used only if hosting started none.</summary>
     public const string RequestOperation = "Paqueteria.HttpRequest";
@@ -81,13 +94,48 @@ public static class TraceCorrelation
         }
     }
 
-    /// <summary>Starts the new root trace of one Worker job cycle; dispose it when the cycle ends.</summary>
+    /// <summary>Starts the new root trace of one ADR-034 scheduled job cycle; dispose it when the cycle ends.</summary>
     public static Activity StartJobCycle(string job) =>
         StartRootActivity(JobCycleOperation, job);
+
+    /// <summary>Starts the new root trace of one polling loop iteration; dispose it when the iteration ends.</summary>
+    public static Activity StartPollCycle(string loop) =>
+        StartRootActivity(PollCycleOperation, loop);
 
     /// <summary>Starts the new root trace of one outbox dispatch cycle; dispose it when the cycle ends.</summary>
     public static Activity StartOutboxDispatchCycle(string lane) =>
         StartRootActivity(OutboxDispatchCycleOperation, lane);
+
+    /// <summary>
+    /// OBS-003 phase 4 PR 7 (OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13): starts the activity that processes one claimed
+    /// outbox message; dispose it when the message is settled. With a stored producer context
+    /// (<paramref name="traceParent"/>, the <c>trace_parent</c> column) the activity is its child: it shares the
+    /// producer's trace id, so every log line of the message carries the trace id of the request or job that wrote it,
+    /// and it inherits the producer's sampled flag as a local parent. Without one (rows written before the column, or
+    /// outside any trace) it is a child of the current dispatch cycle, as before. The dispatch cycle itself stays its
+    /// own root trace; disposing this activity makes the cycle current again.
+    /// </summary>
+    public static Activity StartOutboxMessage(string lane, string? traceParent)
+    {
+        ArgumentException.ThrowIfNullOrWhiteSpace(lane);
+        Activity activity;
+        if (OutboxTraceContext.TryParse(traceParent, out var producer))
+        {
+            activity = Source.StartActivity(OutboxMessageOperation, ActivityKind.Consumer, producer)
+                ?? new Activity(OutboxMessageOperation)
+                    .SetIdFormat(ActivityIdFormat.W3C)
+                    .SetParentId(producer.TraceId, producer.SpanId, producer.TraceFlags)
+                    .Start();
+        }
+        else
+        {
+            activity = Source.StartActivity(OutboxMessageOperation, ActivityKind.Consumer)
+                ?? new Activity(OutboxMessageOperation).SetIdFormat(ActivityIdFormat.W3C).Start();
+        }
+
+        activity.DisplayName = lane;
+        return activity;
+    }
 
     /// <summary>
     /// Starts a new root W3C activity in the calling flow, never a child of whatever activity flowed in. Meant for

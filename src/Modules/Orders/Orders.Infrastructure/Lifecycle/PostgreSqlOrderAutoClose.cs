@@ -16,16 +16,29 @@ namespace Orders.Infrastructure.Lifecycle;
 /// <c>paqueteria_worker</c>, which holds only EXECUTE on it. Like LIF-001 no tenant context is set: the function is
 /// the only cross-tenant step and returns owner organization identifiers only, never an order.
 /// </summary>
-public sealed class PostgreSqlOrderAutoCloseOwnerDiscovery(NpgsqlDataSource dataSource) : IOrderAutoCloseOwnerDiscovery
+public sealed class PostgreSqlOrderAutoCloseOwnerDiscovery : IOrderAutoCloseOwnerDiscovery
 {
     private const int CommandTimeoutSeconds = 30;
+    private readonly Func<NpgsqlDataSource> _dataSource;
+
+    public PostgreSqlOrderAutoCloseOwnerDiscovery(NpgsqlDataSource dataSource)
+        : this(() => dataSource)
+    {
+        ArgumentNullException.ThrowIfNull(dataSource);
+    }
+
+    /// <summary>SCL-007: the shared Worker pool, resolved on first use so a disabled job never needs it.</summary>
+    internal PostgreSqlOrderAutoCloseOwnerDiscovery(Func<NpgsqlDataSource> dataSource)
+    {
+        _dataSource = dataSource;
+    }
 
     public async Task<IReadOnlyList<Guid>> ListOwnersAsync(
         Guid? afterOwnerOrganizationId,
         int limit,
         CancellationToken cancellationToken)
     {
-        await using var connection = await dataSource.OpenConnectionAsync(cancellationToken);
+        await using var connection = await _dataSource().OpenConnectionAsync(cancellationToken);
         await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
         await using (var role = new NpgsqlCommand("SET LOCAL ROLE paqueteria_worker;", connection, transaction))
         {

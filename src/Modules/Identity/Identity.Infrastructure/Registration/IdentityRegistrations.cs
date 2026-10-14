@@ -1,10 +1,12 @@
 using Identity.Application.Bootstrap;
 using Identity.Application.Registration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
 using Paqueteria.Application.Security;
+using Paqueteria.Infrastructure.Database.Pooling;
 
 namespace Identity.Infrastructure.Registration;
 
@@ -17,7 +19,7 @@ namespace Identity.Infrastructure.Registration;
 /// HMACs of the verified email, never the address. Never logs the subject or the email.
 /// </summary>
 public sealed class PostgreSqlIdentityRegistration(
-    NpgsqlDataSource dataSource,
+    [FromKeyedServices(RuntimeDatabaseRole.Application)] NpgsqlDataSource dataSource,
     IOptions<IdentityBootstrapOptions> options,
     IEmailLookupHasher emailLookupHasher,
     ILogger<PostgreSqlIdentityRegistration> logger) : IIdentityRegistration

@@ -20,6 +20,7 @@ using Paqueteria.Infrastructure.Tenancy;
 using Paqueteria.IntegrationTests.Hosting;
 using Testcontainers.PostgreSql;
 using WorkerProgram = WorkerHost::WorkerProgram;
+using Paqueteria.IntegrationTests.Observability;
 
 namespace Paqueteria.IntegrationTests.Operations;
 
@@ -156,6 +157,8 @@ public sealed class Ops003OperationalCleanupWorkerTests
         protected override void ConfigureHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Production");
+            // OBS-003 PR 6: outside Development and Testing the host needs the organization pseudonym key.
+            builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(TelemetryPseudonymTestKey.Settings));
             builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(settings));
             if (scheduler is not null)
             {

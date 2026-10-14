@@ -1157,9 +1157,11 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
             """);
         await using var reader = await security.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
-        // DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: the adoption is followed by the operator outbox executor lane.
+        // DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: the adoption is followed by the operator outbox executor lane,
+        // then by the OBS-003-OUTBOX-TRACE-CONTEXT step.
         Assert.Equal(
-            "20260723_AdoptCanonicalDispatchAssignmentsBaseline," + AddOperatorOwnerOutboxExecutor.MigrationId,
+            "20260723_AdoptCanonicalDispatchAssignmentsBaseline," + AddOperatorOwnerOutboxExecutor.MigrationId + "," +
+            AddOutboxTraceContext.MigrationId,
             reader.GetString(0));
         Assert.Equal("paqueteria_migrator", reader.GetString(1));
         Assert.True(reader.GetBoolean(2));
@@ -1302,7 +1304,8 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
         IDispatchAuthorizationReader? authorizationReader = null,
         IAssignmentIdempotencyAccess? idempotencyAccess = null,
         IAssignmentReplayEvidenceReader? replayEvidenceReader = null,
-        DateTimeOffset? now = null)
+        DateTimeOffset? now = null,
+        DispatchDriverEligibilityOptions? eligibility = null)
     {
         var state = new TenantDatabaseExecutionState();
         var dbOptions = new DbContextOptionsBuilder<DispatchDbContext>()
@@ -1318,7 +1321,7 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
             {
                 Provider = DispatchProviderKind.PostgreSql,
             }),
-            Options.Create(EligibilityOptions()),
+            Options.Create(eligibility ?? EligibilityOptions()),
             new DispatchAssignmentAuthorizer(),
             authorizationReader ?? new PostgreSqlDispatchAuthorizationReader(),
             idempotencyAccess ?? new PostgreSqlAssignmentIdempotencyAccess(),
@@ -1337,7 +1340,8 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
 
     private static PostgreSqlExternalOfferService CreateExternalOfferService(
         NpgsqlDataSource dataSource,
-        DateTimeOffset? now = null)
+        DateTimeOffset? now = null,
+        DispatchDriverEligibilityOptions? eligibility = null)
     {
         var state = new TenantDatabaseExecutionState();
         var dbOptions = new DbContextOptionsBuilder<DispatchDbContext>()
@@ -1353,7 +1357,7 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
             {
                 Provider = DispatchProviderKind.PostgreSql,
             }),
-            Options.Create(EligibilityOptions()),
+            Options.Create(eligibility ?? EligibilityOptions()),
             new DispatchAssignmentAuthorizer(),
             new PostgreSqlDispatchAuthorizationReader(),
             new PostgreSqlDispatchDriverEligibilityReader(),
@@ -1383,7 +1387,7 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
             NullLogger<PostgreSqlDriverStopsQuery>.Instance);
     }
 
-    private static DispatchDriverEligibilityOptions EligibilityOptions() => new()
+    private static DispatchDriverEligibilityOptions EligibilityOptions(bool requireDimensions = true) => new()
     {
         RequiredDocumentTypesByVehicleType = new(StringComparer.Ordinal)
         {
@@ -1399,7 +1403,7 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
                 MaximumLengthMillimeters = 500,
                 MaximumWidthMillimeters = 400,
                 MaximumHeightMillimeters = 300,
-                RequireDimensions = true,
+                RequireDimensions = requireDimensions,
             },
         },
     };
@@ -1781,20 +1785,40 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
         private Guid DriverDocumentId { get; } = Guid.NewGuid();
         public Guid OriginLocationId => order.OriginLocationId;
         public Guid DestinationLocationId => order.DestinationLocationId;
+        public Guid QuoteId => order.QuoteId;
 
-        public static async Task<DispatchScenario> CreateAsync(PostgreSqlContractFixture fixture)
+        /// <param name="createOrder">
+        /// False leaves the quote ACTIVE and creates neither the order nor its package, so a test can create the
+        /// order from the quote through the real coordinator.
+        /// </param>
+        public static async Task<DispatchScenario> CreateAsync(
+            PostgreSqlContractFixture fixture,
+            bool createOrder = true)
         {
             var scenario = new DispatchScenario(fixture);
-            await scenario.order.InitializeAsync("READY_FOR_PICKUP", "USED");
+            await scenario.order.InitializeAsync(
+                "READY_FOR_PICKUP",
+                createOrder ? "USED" : "ACTIVE",
+                createOrder);
+            if (createOrder)
+            {
+                await scenario.ExecuteAdminAsync(
+                    """
+                    INSERT INTO orders.package_items(
+                      id,order_id,owner_org_id,description,weight_grams,declared_value_cents,dimensions_mm)
+                    VALUES (
+                      @package,@order,@org,'synthetic package',500,0,
+                      '{"length_mm":100,"width_mm":80,"height_mm":60}');
+                    """,
+                    P("package", Guid.NewGuid()),
+                    P("order", scenario.OrderId),
+                    P("org", scenario.OrganizationId));
+            }
+
             await scenario.ExecuteAdminAsync(
                 """
                 UPDATE locations.locations SET address_summary='READY origin summary' WHERE id=@origin;
                 UPDATE locations.locations SET address_summary='READY destination summary' WHERE id=@destination;
-                INSERT INTO orders.package_items(
-                  id,order_id,owner_org_id,description,weight_grams,declared_value_cents,dimensions_mm)
-                VALUES (
-                  @package,@order,@org,'synthetic package',500,0,
-                  '{"length_mm":100,"width_mm":80,"height_mm":60}');
                 INSERT INTO identity.users(id,identity_subject,status,created_at)
                 VALUES (@driver_user,@subject,'ACTIVE',@created);
                 INSERT INTO organizations.organization_memberships(
@@ -1811,8 +1835,6 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
                 """,
                 P("origin", scenario.OriginLocationId),
                 P("destination", scenario.DestinationLocationId),
-                P("package", Guid.NewGuid()),
-                P("order", scenario.OrderId),
                 P("org", scenario.OrganizationId),
                 P("driver_user", scenario.DriverUserId),
                 P("subject", $"dsp002-driver-{scenario.DriverUserId:N}"),

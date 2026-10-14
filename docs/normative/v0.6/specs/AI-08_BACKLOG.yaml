@@ -1588,7 +1588,7 @@ items:
   - PWA button and account form (Vitest)
   approval_gate: GATE-007
 - id: OBS-003
-  decision: PHASE4-PLATFORM-APPROVAL-2026-10-12, OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12 and OBS-003-TENANT-PSEUDONYM-2026-10-12 (project owner)
+  decision: PHASE4-PLATFORM-APPROVAL-2026-10-12, OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12, OBS-003-TENANT-PSEUDONYM-2026-10-12, OBS-003-APPINSIGHTS-EXPORT-2026-10-13 and OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13 (project owner)
   epic: Observability
   release: MVP-1
   title: Trazas y correlación con OpenTelemetry y Application Insights
@@ -1602,6 +1602,9 @@ items:
   - dependency admission entry and dependency PR through main for the OpenTelemetry and Azure Monitor packages (GOV-DEPENDENCY-ADMISSION-001, GOV-DEPENDENCY-ROUTE-001; phase 4 PR 4 and PR 5)
   - OpenTelemetry traces and metrics exported through the official Azure Monitor exporter to a workspace-based Application Insights in Mexico Central on the pilot Log Analytics workspace, off by default, with 10 % sampling (phase 4 PR 6)
   - a privacy allowlist of span attributes, and the pseudonymous organization code and actor role kind on traces and logs only (phase 4 PR 6)
+  - "the workspace-based component appi-pv-pilot-<suffix> in platform.bicep; its connection string, the literal TelemetryExport__Enabled='false' and the Key Vault mapping of the owner-written pseudonym secret paquetenvia-telemetry-pseudonym-key-1 for the API and the Worker in apps.bicep; guards P01, P06, P17, P21 and P23 and the workflow check that the secret exists (phase 4 PR 6)"
+  - the producing W3C trace context in a nullable trace_parent column of platform.outbox_events and platform.location_outbox_events (00-{trace id}-{span id}-{00|01}, CHECK on the exact shape), written by every producer in its own transaction and returned by every claim function; the Dispatch lane step 20261013000100_AddOutboxTraceContext (column and check where the baseline predates them, the content guards that compare the column, the operator outbox executor's INSERT on the column and its definer reading the transaction-local app.trace_parent) and the Notifications lane step 20261013000200_CarryOutboxTraceContext (the two Notifications writers copy the originating row's context) (phase 4 PR 7)
+  - each claimed outbox message processed in its own activity, a child of the stored context, in the Worker and in the API realtime lanes (phase 4 PR 7)
   acceptance_criteria:
   - 'DECIDED PHASE4-PLATFORM-APPROVAL-2026-10-12 (literal): "Sí, avanza con la fase 4 (Recommended)" - "Empiezo por OpenTelemetry y correlación, y por los límites de tasa en endpoints pesados, que son lo que más ayuda a operar el piloto."'
   - 'DECIDED OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12 (literal): "Application Insights (Recommended)" - "OpenTelemetry con el exportador oficial de Azure, en México Central, sobre el mismo Log Analytics con muestreo de 10 %. Aprox. 0–5 USD/mes; el peor caso del presupuesto no sube por el tope diario. Admite 7 paquetes nuevos y sube Azure.Core 1.61→1.63 (admisión explícita)."'
@@ -1615,7 +1618,22 @@ items:
   - 'DECIDED OBS-003-TENANT-PSEUDONYM-2026-10-12 (literal): "Seudónimo de empresa (Recommended)" - "Un código HMAC con llave en Key Vault (no el id real) solo en trazas y logs, y el actor solo como tipo de rol; nunca en métricas ni alertas."'
   - when there is an organization context, traces and logs carry the HMAC pseudonym of the organization and the actor role kind only; neither is ever a metric tag, an alert or workbook dimension or an entry of the OBS-002 TelemetryDimensions allowlist, which never gains them (AI-03 §18, AI-13 §10)
   - the pseudonym key is a Key Vault secret read at start with a key version, never stored in the database, logged or committed; Development and Testing use a synthetic key
-  - 'PENDING OWNER DECISION (blocks phase 4 PR 7): trace context through the outbox - an outbox column (AI-06/AI-18 change and migration), a member of the immutable payload, or none (the Worker starts a new trace per message); carrying it on to SignalR clients also meets AI-12 correlation_id, typed uuid optional'
+  - 'DECIDED OBS-003-APPINSIGHTS-EXPORT-2026-10-13, Q-PR6-1 (literal): "Solo tareas programadas (Recommended)" - "Cierres automáticos (cada 60 s), retención del outbox y limpiezas: unas 340 trazas al día, menos de 0.2 USD/mes. No se exportan las vueltas del outbox ni la validación de fotos; el trabajo del outbox llega con el PR 7, ligado a la petición que lo originó."'
+  - the only exported trace roots are API requests (never /health probes) and the ADR-034 scheduled job cycles, with their child spans; outbox dispatch cycles of the Worker and of the API realtime lanes, the proof-validation poll and database spans are never exported; every cycle still runs in its own trace for the logs
+  - 'DECIDED OBS-003-APPINSIGHTS-EXPORT-2026-10-13, Q-PR6-2 (literal): "Llave en la conexión (Recommended)" - "La cadena de conexión trae la llave de instrumentación; vive solo en el servidor (la web no la usa). Sin pasos nuevos para ti. Riesgo anotado: quien la obtenga puede mandar telemetría falsa, no leerla."'
+  - the API and the Worker send with the instrumentation key of the connection string, which reaches only their settings; residual risk recorded - whoever obtains it can send fake telemetry, not read it, and fake telemetry counts against the 0.3 GB daily cap of the pilot workspace
+  - the 10 % is ParentBasedSampler(TraceIdRatioBasedSampler(0.10)) fixed in code and decided per trace from the trace id; Live Metrics, Statsbeat, customer SDK stats, standard metrics, performance counters, offline storage and the resource metric stay off, so the configured ingestion endpoint is the only destination; the exported metrics keep only the OBS-002 metric tag allowlist, the tags of aspnetcore.rate_limiting.requests included
+  - in the pilot the export is turned on only by a reviewed change of the literal TelemetryExport__Enabled in apps.bicep; the settings file cannot set it, and the API and the Worker refuse to start outside Development and Testing without the pseudonym key
+  - 'DECIDED OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13, Q-PR7 (literal): "Columna nueva (Recommended)" - "Una columna con la traza en las dos tablas del outbox (migración con ida y vuelta probadas). Los logs del Worker llevan la traza de la petición original, así que una sola búsqueda en Log Analytics muestra API y Worker juntos, aunque haya muestreo. No toca el contenido del evento ni lo que reciben los clientes. Cumple AI-03 §18 tal como está."'
+  - every producer of a platform outbox row supplies trace_parent from its own current W3C activity in the same transaction (ValueGeneratedNever, no RETURNING), NULL outside any trace; the stored value is version 00, trace id, the producing span id and the sampled flag only - never tracestate, baggage, a tenant, a user or request data - and a CHECK on both tables refuses any other shape
+  - the operator outbox definer keeps its published signature and receives the context through the transaction-local app.trace_parent; the Notifications writers copy the trace_parent of the event the new rows derive from (none once it is purged)
+  - every claim function returns trace_parent with the row; settle, requeue, recovery and purge never read or change it, and purge removes rows that carry it like any other; the content guards of both tables refuse any UPDATE that changes it
+  - the Worker and the API realtime lanes process each claimed message in its own activity, a local child of the stored context, so every log line of that message carries the trace id of the request or job that wrote it; without a stored context the message stays in its dispatch cycle, and every dispatch cycle still runs in its own trace and is never exported
+  - with the export on, a message's activity follows the stored sampled flag (exported only when the producing trace was sampled), named after its fixed lane with no attribute; a context is never taken as remote
+  - trace_parent never enters an outbox payload, a SignalR message (AI-12 unchanged) or a notification; for trace_id and correlation_id AI-03 §18 needs no wording change - the trace_id of an event is the trace id of the request or job that produced it and correlation_id keeps its meaning; the tenant pseudonym and actor role kind on the Worker's per-message lines are not delivered by phase 4 PR 7 (pending below)
+  - 'PENDING OWNER DECISION: whether the Worker''s per-message log lines carry the organization pseudonym and actor role kind of the message''s owner (AI-03 §18 tenant and technical actor; widens OBS-003-TENANT-PSEUDONYM-2026-10-12, which PR 6 applied to requests only)'
+  - 'PENDING OWNER DECISION: whether the Worker''s audit rows (assignment lifecycle, proof validation) write the trace id of the message they process in platform.audit_logs.request_id instead of NULL'
+  - Down runs the Notifications step first (the Dispatch step refuses with OBS003_TRACE_CONTEXT_DOWNGRADE_ORDER while it is recorded), restores the published functions and grants exactly and drops both columns and checks without rewriting any other row data
   - 'PENDING OWNER DECISION: the alert e-mail address the owner sets at deploy (alertEmailAddress, still OWNER_DECISION_REQUIRED); no new alert rule on exported metrics is added without its own owner decision'
   required_tests:
   - inbound trace headers ignored and no trace header on outbound requests (fake HTTP handler)
@@ -1623,6 +1641,12 @@ items:
   - export off by default; with it on, sampling and the span attribute allowlist (test exporter)
   - architecture test proving the organization pseudonym and actor role kind never reach a metric tag, an OBS-002 event property or an alert or workbook query
   - fixed HMAC pseudonym vector and start failure without a key outside Development and Testing
+  - only API requests and scheduled job cycles are sampled, and the exported metric tags stay within the OBS-002 metric tag allowlist, rate-limiting tags included
+  - ENV-001 pilot guards fail closed on the Application Insights component, the export switch, its connection string and the pseudonym key mapping
+  - architecture test proving every runtime outbox INSERT and every SQL function that writes an outbox row carries the trace context, every claim reader reads it and every consumer processes in it, and that it never reaches a payload, SignalR or notification code
+  - the trace_parent CHECK, every claim function returning it, settle, requeue and purge leaving it, the operator definer and both Notifications writers storing the expected context, and both lane steps Up, Down and Up again with an identical catalog (PostgreSQL)
+  - consumers process under the producer's trace and their log lines carry it; the SignalR envelope and the rendered notification carry no trace context
+  - a message's span is exported exactly when its producing trace was sampled, with no attribute; dispatch cycles and messages without a stored context never are (test exporter)
   approval_gate: owner_technology_operations
 - id: SEC-004
   decision: PHASE4-PLATFORM-APPROVAL-2026-10-12 and SEC-004-RATE-LIMITS-2026-10-12 (project owner)
@@ -1681,23 +1705,28 @@ items:
   - NTF-001
   - OBS-002
   expected_outputs:
-  - one NpgsqlDataSource per database role in each process (paqueteria_app in the API, paqueteria_worker in the Worker) shared by every module, instead of 22 separate pools (phase 4 PR 8)
+  - one NpgsqlDataSource per database role in each process (paqueteria_app in the API, paqueteria_worker in the Worker, and the API realtime dispatchers' paqueteria_realtime with its own login, RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12) shared by every module, instead of 22 separate pools (phase 4 PR 8, SCL-007-POOL-PER-ROLE-2026-10-13)
   - a connection budget - the configured maximum pool sizes of every process stay below the pilot PostgreSQL B1ms connection limit (about 50) with headroom for the migrator, maintenance and administration (phase 4 PR 8)
-  - adaptive outbox wait - a dispatcher claims again at once while its batches come back full and backs off while they come back empty, up to a maximum idle wait, instead of a fixed 250-500 ms poll (phase 4 PR 9)
+  - adaptive outbox wait - a dispatcher claims again at once while its batches come back full and backs off while they come back empty, up to a maximum idle wait, instead of a fixed 250-500 ms poll (phase 4 PR 9); applied to the API's realtime outbox dispatchers (business and location lanes, SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13) - a claim that returns work, a full or a partial batch, is followed by the next claim at once and starts the wait over; after an empty claim the lane waits its poll interval and doubles the wait after each further empty claim up to 1 s (business 250 ms, 500 ms, 1 s; location 500 ms, 1 s); idle claims drop from about 6 to about 2 per second; the Worker's pollers keep their fixed intervals
   acceptance_criteria:
   - 'DECIDED PHASE4-PLATFORM-APPROVAL-2026-10-12: one connection pool per role and adaptive outbox wait are part of phase 4'
   - every tenant query still runs inside an explicit transaction with set_config(..., true) after BEGIN and current_org_ids as uuid[]; no session-level state survives a return to the shared pool; the TEN-002 pooled-connection regression passes on the shared pools
   - each pool authenticates as exactly one runtime role; no pool is shared across roles; API and Worker stay NOBYPASSRLS
   - AI-15 pooling_contract is unchanged (transaction pooling compatible); PgBouncer stays behind GATE-014
+  - the pool sizes are configuration validated at start (DatabasePools, defaults ApplicationMaximumPoolSize 10, RealtimeMaximumPoolSize 4 and WorkerMaximumPoolSize 10); each is 1 to 24 and their sum may not exceed 24 = floor((50 - 15 Azure-reserved) x 0.70) of the B1ms user connections (AZR-001-INV-014), leaving 11 for the migrator, maintenance and administration; a Maximum Pool Size in a connection string is replaced, every pool is built with Pooling=true, Multiplexing=false, Include Error Detail=false and Max Auto Prepare=0 whatever the connection string says, and any invalid value refuses the start of the API or the Worker (SCL-007-POOL-PER-ROLE-2026-10-13)
+  - the migrator jobs (pg-migrate-connection), the restore drill and the tools keep their own credentials outside the runtime pools; paqueteria_bootstrap, paqueteria_maintenance and the other executor roles stay NOLOGIN and are reached only by EXECUTE through the runtime pools
   - the adaptive wait uses only the existing claim, settle and requeue functions under lease_token; no new SQL and no direct outbox access
   - business and location lanes keep independent waits, and each lane keeps its per-minute OBS-002 OutboxLaneSummary heartbeat while idle
-  - 'PENDING OWNER DECISION (blocks phase 4 PR 9): the maximum idle wait of each lane; it must keep the per-minute OBS-002 heartbeat, the AI-15 oldest_outbox_age_seconds warning (60 s) and, for the realtime lanes, the AI-15 event_delivery_p95_seconds warning (2 s)'
+  - 'DECIDED SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13 (project owner, "1 segundo en ambos (Recommended)"): the maximum idle wait is 1 s on the business and the location lane; it must keep the per-minute OBS-002 heartbeat, the AI-15 oldest_outbox_age_seconds warning (60 s) and, for the realtime lanes, the AI-15 event_delivery_p95_seconds warning (2 s)'
+  - the maximum idle wait is configuration validated at start (Realtime:OutboxDispatcher:Business:MaximumIdleWaitMilliseconds and Realtime:OutboxDispatcher:Location:MaximumIdleWaitMilliseconds, default 1000); a value below the lane's PollIntervalMilliseconds, above 1000 = half the AI-15 event_delivery_p95_seconds warning (the other half is kept for the claim, the evidence reads, the publish and the settle) or not a number refuses the start of the API
+  - an idle realtime lane claims at least once a second, so its OBS-002 OutboxLaneSummary is still written once a minute and a ready row waits at most 1 s more for its claim; the OBS-002 MaxClaimAgeMs (now - min(available_at), read when the claim returns) includes that wait
   - 'PENDING OWNER DECISION: an Azure Monitor metric alert on PostgreSQL connections (threshold against AI-15 connection_pool_utilization 0.8/0.95, monthly cost against PILOT-BUDGET-ACCEPT-98-108) and the alert e-mail address the owner sets at deploy'
   required_tests:
   - architecture test - one data source per role, resolved by every module
   - pooled-connection tenant context regression on the shared pools (PostgreSQL)
   - connection count within the budget during the OPS-001 synthetic workflow
   - adaptive wait backoff, reset on work, heartbeat while idle and cancellation (fake clock)
+  - a realtime notice committed after an idle period reaches a SignalR client within the AI-15 event_delivery_p95_seconds warning (PostgreSQL)
   approval_gate: owner_technology_operations
 - id: OPS-005
   decision: PHASE4-PLATFORM-APPROVAL-2026-10-12 (project owner)
@@ -1711,7 +1740,7 @@ items:
   - SEC-004
   - SCL-007
   expected_outputs:
-  - an end-to-end suite in tests/Paqueteria.EndToEndTests that runs the assembled API, Worker and Web against real PostgreSQL/PostGIS (phase 4 PR 10)
+  - an end-to-end suite in tests/Paqueteria.IntegrationTests (Category=PlatformEndToEnd) that runs the assembled API, Worker and Web against real PostgreSQL/PostGIS (phase 4 PR 10; location DECIDED OPS-005-SUITE-IN-INTEGRATIONTESTS-2026-10-14; tests/Paqueteria.EndToEndTests stays reserved and empty)
   acceptance_criteria:
   - 'DECIDED PHASE4-PLATFORM-APPROVAL-2026-10-12: end-to-end tests are part of phase 4'
   - one browser action yields one trace id across the API log lines, its audit row and, on an error, the problem traceId
@@ -1721,7 +1750,7 @@ items:
   - with the telemetry export off nothing leaves the process
   - synthetic data only (SEC-003) - no real PII, phone number, e-mail address or token in fixtures or evidence; no placeholder or always-passing test
   - the suite runs inside an existing CI job; adding a job changes the 13-job Foundation topology and needs its own decision
-  - 'PENDING OWNER DECISION (blocks phase 4 PR 10): the business journeys the suite runs beyond the platform checks above'
+  - 'DECIDED OPS-005-JOURNEYS-2026-10-13 (project owner, "Recorrido principal (Recommended)"): beyond the platform checks above the suite runs one complete main journey through the real web screens: quote, create and confirm the order, assign a driver, pick up, deliver with a photo (signed upload to storage, never multipart through the API) and see the order delivered on public tracking'
   required_tests:
   - the end-to-end suite itself, green in CI
   approval_gate: owner_technology_operations

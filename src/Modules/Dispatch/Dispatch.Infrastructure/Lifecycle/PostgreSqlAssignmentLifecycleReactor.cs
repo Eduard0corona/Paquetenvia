@@ -8,6 +8,7 @@ using NpgsqlTypes;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
 using Paqueteria.Application.Tenancy;
+using Paqueteria.Infrastructure.Database.Outbox;
 using Paqueteria.Infrastructure.Tenancy;
 
 namespace Dispatch.Infrastructure.Lifecycle;
@@ -162,9 +163,9 @@ public sealed class PostgreSqlAssignmentLifecycleReactor(
             INSERT INTO platform.outbox_events(
               id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,aggregate_version,payload,
               priority,status,attempts,available_at,locked_at,locked_by,lease_token,lease_expires_at,
-              last_error,created_at,processed_at)
+              last_error,created_at,processed_at,trace_parent)
             VALUES (@id,@owner,@tenant,@topic,'Order',@order,@version,@payload,
-                    50,'PENDING',0,@available,NULL,NULL,NULL,NULL,NULL,@created,NULL)
+                    50,'PENDING',0,@available,NULL,NULL,NULL,NULL,NULL,@created,NULL,@trace_parent)
             """,
             connection,
             transaction);
@@ -177,6 +178,7 @@ public sealed class PostgreSqlAssignmentLifecycleReactor(
         command.Parameters.Add(new NpgsqlParameter<string>("payload", NpgsqlDbType.Jsonb) { TypedValue = payload });
         command.Parameters.Add(new NpgsqlParameter<DateTimeOffset>("available", NpgsqlDbType.TimestampTz) { TypedValue = fact.OccurredAt });
         command.Parameters.Add(new NpgsqlParameter<DateTimeOffset>("created", NpgsqlDbType.TimestampTz) { TypedValue = fact.OccurredAt });
+        command.Parameters.Add(OutboxTraceContextColumn.Parameter());
         if (await command.ExecuteNonQueryAsync(cancellationToken) != 1)
         {
             throw new InvalidOperationException("The AssignmentChanged outbox event was not inserted.");

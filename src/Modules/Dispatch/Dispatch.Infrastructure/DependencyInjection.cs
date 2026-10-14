@@ -12,12 +12,12 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
-using Npgsql;
 using Orders.Application.Orders;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
 using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Paqueteria.Infrastructure.Tenancy;
 
 namespace Dispatch.Infrastructure;
@@ -53,10 +53,8 @@ public static class DependencyInjection
             .Bind(configuration.GetSection("Drivers:Eligibility"))
             .ValidateOnStart();
 
-        services.TryAddSingleton(serviceProvider => NpgsqlDataSource.Create(
-            serviceProvider.GetRequiredService<IConfiguration>().GetConnectionString("Paqueteria")
-            ?? throw new InvalidOperationException(
-                "A PostgreSQL dispatch provider requires a configured connection string.")));
+        // SCL-007: the API's one paqueteria_app pool, shared with every other API module.
+        services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Application);
         services.TryAddScoped<TenantDatabaseExecutionState>();
         services.TryAddScoped<TenantTransactionGuardInterceptor>();
         services.TryAddScoped<TenantSaveChangesGuardInterceptor>();
@@ -64,7 +62,7 @@ public static class DependencyInjection
         {
             var dispatchOptions = serviceProvider.GetRequiredService<IOptions<DispatchOptions>>().Value;
             dbOptions.UseNpgsql(
-                    serviceProvider.GetRequiredService<NpgsqlDataSource>(),
+                    serviceProvider.GetRuntimeDataSource(RuntimeDatabaseRole.Application),
                     postgres =>
                     {
                         postgres.CommandTimeout(dispatchOptions.CommandTimeoutSeconds);

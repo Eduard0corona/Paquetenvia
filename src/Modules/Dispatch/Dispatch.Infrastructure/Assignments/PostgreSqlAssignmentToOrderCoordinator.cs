@@ -18,6 +18,7 @@ using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
 using Paqueteria.Application.Idempotency;
 using Paqueteria.Application.Tenancy;
+using Paqueteria.Infrastructure.Database.Outbox;
 using Paqueteria.Infrastructure.Tenancy;
 
 namespace Dispatch.Infrastructure.Assignments;
@@ -580,10 +581,17 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         }
     }
 
+    /// <summary>
+    /// A missing key and a JSON <c>null</c> are the same thing: no measurement, which the capacity policy
+    /// does not check unless the vehicle requires dimensions. Order creation stores a package without
+    /// measurements as <c>{"length_mm":null,"width_mm":null,"height_mm":null}</c>. Any other value must be a
+    /// positive <see cref="int"/>.
+    /// </summary>
     private static bool TryReadDimension(JsonElement element, string name, out int? value)
     {
         value = null;
-        if (!element.TryGetProperty(name, out var property))
+        if (!element.TryGetProperty(name, out var property) ||
+            property.ValueKind == JsonValueKind.Null)
         {
             return true;
         }
@@ -746,9 +754,9 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
             INSERT INTO platform.outbox_events(
               id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,aggregate_version,payload,
               priority,status,attempts,available_at,locked_at,locked_by,lease_token,lease_expires_at,
-              last_error,created_at,processed_at)
+              last_error,created_at,processed_at,trace_parent)
             VALUES (@id,@owner,@tenant,@topic,'Order',@order,@version,@payload,
-                    50,'PENDING',0,@available,NULL,NULL,NULL,NULL,NULL,@created,NULL)
+                    50,'PENDING',0,@available,NULL,NULL,NULL,NULL,NULL,@created,NULL,@trace_parent)
             """);
         command.Parameters.Add(P("id", NpgsqlDbType.Uuid, outboxId));
         command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, order.OwnerOrganizationId));
@@ -759,6 +767,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         command.Parameters.Add(P("payload", NpgsqlDbType.Jsonb, payload));
         command.Parameters.Add(P("available", NpgsqlDbType.TimestampTz, occurredAt));
         command.Parameters.Add(P("created", NpgsqlDbType.TimestampTz, occurredAt));
+        command.Parameters.Add(OutboxTraceContextColumn.Parameter());
         RequireOne(await command.ExecuteNonQueryAsync(cancellationToken), "Outbox insert failed.");
     }
 
@@ -811,9 +820,9 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
             INSERT INTO platform.outbox_events(
               id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,aggregate_version,payload,
               priority,status,attempts,available_at,locked_at,locked_by,lease_token,lease_expires_at,
-              last_error,created_at,processed_at)
+              last_error,created_at,processed_at,trace_parent)
             VALUES (@id,@owner,@tenant,@topic,'Order',@order,@version,@payload,
-                    50,'PENDING',0,@available,NULL,NULL,NULL,NULL,NULL,@created,NULL)
+                    50,'PENDING',0,@available,NULL,NULL,NULL,NULL,NULL,@created,NULL,@trace_parent)
             """);
         command.Parameters.Add(P("id", NpgsqlDbType.Uuid, outboxId));
         command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, order.OwnerOrganizationId));
@@ -824,6 +833,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         command.Parameters.Add(P("payload", NpgsqlDbType.Jsonb, payload));
         command.Parameters.Add(P("available", NpgsqlDbType.TimestampTz, occurredAt));
         command.Parameters.Add(P("created", NpgsqlDbType.TimestampTz, occurredAt));
+        command.Parameters.Add(OutboxTraceContextColumn.Parameter());
         RequireOne(await command.ExecuteNonQueryAsync(cancellationToken), "Timeline outbox insert failed.");
     }
 
@@ -875,9 +885,9 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
             INSERT INTO platform.outbox_events(
               id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,aggregate_version,payload,
               priority,status,attempts,available_at,locked_at,locked_by,lease_token,lease_expires_at,
-              last_error,created_at,processed_at)
+              last_error,created_at,processed_at,trace_parent)
             VALUES (@id,@owner,@tenant,@topic,'Order',@order,@version,@payload,
-                    50,'PENDING',0,@available,NULL,NULL,NULL,NULL,NULL,@created,NULL)
+                    50,'PENDING',0,@available,NULL,NULL,NULL,NULL,NULL,@created,NULL,@trace_parent)
             """);
         command.Parameters.Add(P("id", NpgsqlDbType.Uuid, outboxId));
         command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, assignment.OwnerOrganizationId));
@@ -888,6 +898,7 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         command.Parameters.Add(P("payload", NpgsqlDbType.Jsonb, payload));
         command.Parameters.Add(P("available", NpgsqlDbType.TimestampTz, occurredAt));
         command.Parameters.Add(P("created", NpgsqlDbType.TimestampTz, occurredAt));
+        command.Parameters.Add(OutboxTraceContextColumn.Parameter());
         RequireOne(await command.ExecuteNonQueryAsync(cancellationToken), "Assignment outbox insert failed.");
     }
 

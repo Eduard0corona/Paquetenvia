@@ -39,13 +39,13 @@ jobs:
         shell: bash
         run: |
           actual="$(sha256sum ./docs/normative/v0.6/database/AI-06_SCHEMA.sql | cut -d ' ' -f 1)"
-          test "$actual" = "f069b455894eb825f252f59c1a50373cd6a0d13d50d6b4493c53024f0d4b7ba7"
+          test "$actual" = "3a491699ee7462ffd6071bcf2a1092d66654916ed2502bf474b9e4fac78b6754"
 
       - name: Verify AI-18 remains unchanged
         shell: bash
         run: |
           actual="$(sha256sum ./docs/normative/v0.6/database/AI-18_DATABASE_ROLE_MODEL.sql | cut -d ' ' -f 1)"
-          test "$actual" = "2a95220f8934f0431da096bb66028b60e2ab00fcdaa8b2c44d39bb43ec8f5700"
+          test "$actual" = "ef05f7ce5e11a5b1fc8fb71d3ae0bb9d3f10074d7eb8e438c3a72c9493435580"
 
       # AZR-001 v0.8 §28 static CI guards and §29 secret scan. Foundation keeps exactly 13 jobs;
       # these guards run as steps of the normative job and never contact Azure.
@@ -181,7 +181,7 @@ jobs:
           dotnet test
           --configuration Release
           --no-build
-          --filter "Category!=PostgreSqlContract&Category!=OutboxSignalRDelivery&Category!=SecureProofUpload&Category!=DriverStopsPwa&Category!=DriverOfflineOperationsPwa&Category!=PublicTrackingPostgreSql&Category!=PublicTrackingPwa&Category!=OperationsDashboardPostgreSql&Category!=OperationsDashboardPwa&Category!=OpsDeliverySimulation"
+          --filter "Category!=PostgreSqlContract&Category!=OutboxSignalRDelivery&Category!=SecureProofUpload&Category!=DriverStopsPwa&Category!=DriverOfflineOperationsPwa&Category!=PublicTrackingPostgreSql&Category!=PublicTrackingPwa&Category!=OperationsDashboardPostgreSql&Category!=OperationsDashboardPwa&Category!=OpsDeliverySimulation&Category!=PlatformEndToEnd"
           --logger "trx;LogFilePrefix=dotnet"
           --results-directory ./TestResults/dotnet
 
@@ -688,6 +688,18 @@ jobs:
           --logger "trx;LogFileName=driver-offline-operations-pwa.trx"
           --results-directory ./TestResults/driver-stops-pwa
 
+      - name: Execute platform end-to-end suite (OPS-005)
+        env:
+          MSBUILDDISABLENODEREUSE: "1"
+        run: >-
+          dotnet test
+          ./tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj
+          --configuration Release
+          --no-build
+          --filter "Category=PlatformEndToEnd"
+          --logger "trx;LogFileName=platform-end-to-end.trx"
+          --results-directory ./TestResults/driver-stops-pwa
+
       - name: Correlate executed driver tests
         run: >-
           python ./tools/rel-000/rel000.py collect-results
@@ -700,6 +712,7 @@ jobs:
           --base-main-sha "$REL000_BASE_MAIN_SHA"
           --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|DriverStopsPwa=./TestResults/driver-stops-pwa/driver-stops-pwa.trx"
           --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|DriverOfflineOperationsPwa=./TestResults/driver-stops-pwa/driver-offline-operations-pwa.trx"
+          --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|PlatformEndToEnd=./TestResults/driver-stops-pwa/platform-end-to-end.trx"
           --output ./TestResults/driver-stops-pwa/rel000-execution-results.json
 
       - name: Publish structured driver execution evidence
@@ -1585,7 +1598,7 @@ jobs:
     env:
       CI: "true"
       REL000_SOURCE_BRANCH: ${{ github.head_ref || github.ref_name }}
-      REL000_REMEDIATION_ID: ${{ github.head_ref == 'fix/security-2026-12-signalr-common' && 'SEC-2026-12-SIGNALR-CRYPTOGRAPHY' || github.head_ref == 'fix/security-2026-10-braces-dos-tracked' && 'SEC-2026-10-BRACES-DOS-TRACKED' || github.head_ref == 'fix/security-2026-08-web-transitives' && 'SEC-2026-08-SECURITY-BASELINE' || '' }}
+      REL000_REMEDIATION_ID: ${{ github.head_ref == 'fix/security-2026-10-braces-dos-tracked' && 'SEC-2026-10-BRACES-DOS-TRACKED' || github.head_ref == 'fix/security-2026-08-web-transitives' && 'SEC-2026-08-SECURITY-BASELINE' || '' }}
       REL000_REMEDIATION_POLICY_PATH: tools/rel-000/security-remediation-policy.json
       REL000_WORKFLOW_RUN_ID: ${{ github.run_id }}
       REL000_WORKFLOW_RUN_ATTEMPT: ${{ github.run_attempt }}

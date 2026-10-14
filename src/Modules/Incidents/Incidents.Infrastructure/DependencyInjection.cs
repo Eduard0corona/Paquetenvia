@@ -7,12 +7,12 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
-using Npgsql;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
 using Paqueteria.Application.Security;
 using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Paqueteria.Infrastructure.Security.Pii;
 using Paqueteria.Infrastructure.Tenancy;
 
@@ -48,17 +48,15 @@ public static class DependencyInjection
                 "maximum AI-05 publishes.")
             .ValidateOnStart();
 
-        services.TryAddSingleton(serviceProvider => NpgsqlDataSource.Create(
-            serviceProvider.GetRequiredService<IConfiguration>().GetConnectionString("Paqueteria")
-            ?? throw new InvalidOperationException(
-                "Incidents PostgreSQL requires ConnectionStrings:Paqueteria.")));
+        // SCL-007: the API's one paqueteria_app pool, shared with every other API module.
+        services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Application);
         services.TryAddScoped<TenantDatabaseExecutionState>();
         services.TryAddScoped<TenantTransactionGuardInterceptor>();
         services.TryAddScoped<TenantSaveChangesGuardInterceptor>();
         services.AddDbContext<IncidentsDbContext>((serviceProvider, options) =>
         {
             options.UseNpgsql(
-                    serviceProvider.GetRequiredService<NpgsqlDataSource>(),
+                    serviceProvider.GetRuntimeDataSource(RuntimeDatabaseRole.Application),
                     postgres =>
                     {
                         postgres.MigrationsAssembly(typeof(IncidentsDbContext).Assembly.FullName);

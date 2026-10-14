@@ -53,6 +53,11 @@ carries `State.TraceId`, the random 32-hex W3C trace id. It is not a telemetry d
 it, and `TelemetryDimensions.Allowed` does not include it. The lane summary (4601) and the HTTP summary (4603) run
 outside any trace and never carry it. A scheduled job cycle (4602) carries the id of its own cycle.
 
+Since OBS-003 PR 6 (`obs-003-appinsights-export.md`), the API's lines inside a request with a selected organization
+also carry `State.OrganizationPseudonym` and `State.ActorRoleKind`. Neither is a telemetry dimension: the OBS-002
+events (4601–4604) are written outside requests, and no alert or workbook query reads them (guard P21 and
+`ObservabilityArchitectureTests`).
+
 ### Outbox lag: what is measured and what is not
 
 Invariant 3 forbids a direct `SELECT` on the outbox from runtime. No existing SECURITY DEFINER or
@@ -66,7 +71,9 @@ No SQL was added for this. Lag is measured cheaply from what the claim functions
 - **`MaxClaimAgeMs`** is `now - min(available_at)` over each claimed batch. It is the time the oldest
   ready message waited before a dispatcher took it. A retry's backoff is not counted as lag, because
   `available_at` is the retry time. The Dispatch store now also reads `available_at` from the
-  `claim_dispatch_outbox` result row, which was already `RETURNING o.*`.
+  `claim_dispatch_outbox` result row, which was already `RETURNING o.*`. `now` is read when the claim
+  returns, so the age includes the dispatcher's wait between claims: on the two realtime lanes, the
+  SCL-007 adaptive idle wait of up to 1 s (`docs/development/scl-007-adaptive-outbox-wait.md`).
 - **A stalled lane** writes no `OutboxLaneSummary`. The summary is driven by the dispatcher loop, so a
   blocked loop stops its heartbeat instead of reporting zeros.
 - **`LoopFailures`** counts loop iterations that failed, for example because the database is

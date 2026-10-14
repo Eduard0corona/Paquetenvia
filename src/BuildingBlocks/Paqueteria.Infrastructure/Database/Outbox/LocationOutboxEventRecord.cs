@@ -31,4 +31,7 @@ internal sealed class LocationOutboxEventRecord
     internal DateTimeOffset CreatedAt { get; init; }
 
     internal DateTimeOffset? ProcessedAt { get; init; }
+
+    /// <summary>OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13: the producing W3C context, supplied by the producer (or null).</summary>
+    internal string? TraceParent { get; init; }
 }

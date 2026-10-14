@@ -1,22 +1,19 @@
 using Identity.Application.Notifications;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Npgsql;
 using NpgsqlTypes;
+using Paqueteria.Infrastructure.Database.Pooling;
 
 namespace Identity.Infrastructure.Notifications;
 
-internal sealed class IdentityNotificationConnectionFactory(string connectionString) : IAsyncDisposable
+/// <summary>SCL-007: the Worker's one <c>paqueteria_worker</c> pool, shared with every other Worker module.</summary>
+internal sealed class IdentityNotificationConnectionFactory(
+    [FromKeyedServices(RuntimeDatabaseRole.Worker)] RuntimeDataSource pool)
 {
-    private readonly NpgsqlDataSource _dataSource = NpgsqlDataSource.Create(
-        !string.IsNullOrWhiteSpace(connectionString)
-            ? connectionString
-            : "Host=127.0.0.1;Database=disabled;Username=disabled;Password=disabled");
-
     public ValueTask<NpgsqlConnection> OpenAsync(CancellationToken cancellationToken) =>
-        _dataSource.OpenConnectionAsync(cancellationToken);
-
-    public ValueTask DisposeAsync() => _dataSource.DisposeAsync();
+        pool.OpenConnectionAsync(cancellationToken);
 }
 
 internal sealed class PostgreSqlActiveNotificationRecipientReader(
@@ -71,8 +68,8 @@ public static class NotificationAudienceDependencyInjection
         this IServiceCollection services,
         IConfiguration configuration)
     {
-        services.AddSingleton(_ => new IdentityNotificationConnectionFactory(
-            configuration.GetConnectionString("PaqueteriaWorker") ?? string.Empty));
+        services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Worker);
+        services.TryAddSingleton<IdentityNotificationConnectionFactory>();
         services.AddSingleton<IActiveNotificationRecipientReader, PostgreSqlActiveNotificationRecipientReader>();
         return services;
     }

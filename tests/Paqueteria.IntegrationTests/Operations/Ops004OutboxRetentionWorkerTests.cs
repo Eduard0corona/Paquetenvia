@@ -10,6 +10,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Paqueteria.Infrastructure.Database.Outbox.Retention;
 using WorkerProgram = WorkerHost::WorkerProgram;
+using Paqueteria.IntegrationTests.Observability;
 
 namespace Paqueteria.IntegrationTests.Operations;
 
@@ -94,6 +95,8 @@ public sealed class Ops004OutboxRetentionWorkerTests
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Production");
+            // OBS-003 PR 6: outside Development and Testing the host needs the organization pseudonym key.
+            builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(TelemetryPseudonymTestKey.Settings));
             builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(settings));
             builder.ConfigureTestServices(services =>
                 services.AddTransient<IOptionsFactory<OutboxRetentionOptions>>(provider => new RecordingOptionsFactory(

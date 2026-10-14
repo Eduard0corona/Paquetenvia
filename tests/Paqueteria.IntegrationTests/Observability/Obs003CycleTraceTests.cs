@@ -101,6 +101,8 @@ public sealed class Obs003CycleTraceTests
         protected override void ConfigureWebHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Production");
+            // OBS-003 PR 6: outside Development and Testing the host needs the organization pseudonym key.
+            builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(TelemetryPseudonymTestKey.Settings));
             builder.ConfigureAppConfiguration(configuration =>
                 configuration.AddInMemoryCollection(new Dictionary<string, string?>
                 {

@@ -1097,11 +1097,15 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         await new DatabaseBaselineDeployer().ApplyAsync(baseline, environment.DeploymentConnectionString, ownershipBridge: Bridge);
         var coordinator = new ModuleMigrationCoordinator();
         await coordinator.ApplyAsync(environment.AdminConnectionString, CancellationToken.None, azureOwnershipBridge: true);
+        // OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13: the later Dispatch step is undone with it (its executor grant and its
+        // history row; the AI-06 trace_parent column stays and is adopted again), so the lane is pending from the
+        // DSP-OPERATOR-OWNER-OUTBOX step on and the bridge applies both steps.
         await environment.AdminExecuteAsync($"""
             DROP FUNCTION {Dispatch.Infrastructure.Persistence.Migrations.AddOperatorOwnerOutboxExecutor.OutboxFunctionSignature};
             DROP FUNCTION {Dispatch.Infrastructure.Persistence.Migrations.AddOperatorOwnerOutboxExecutor.AuditFunctionSignature};
+            REVOKE INSERT (trace_parent) ON platform.outbox_events FROM paqueteria_operator_outbox_executor;
             DELETE FROM platform."__ef_migrations_history_dispatch"
-              WHERE "MigrationId"='{E002OperatorOutboxStateReader.MigrationId}';
+              WHERE "MigrationId" IN ('{E002OperatorOutboxStateReader.MigrationId}','{E002OperatorOutboxStateReader.OutboxTraceContextMigrationId}');
             """);
         Assert.Equal("PENDING", await DispatchLaneAsync());
         const string MembershipSql = """
@@ -1149,6 +1153,22 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         Assert.False(await environment.ScalarAsync(
             "SELECT has_schema_privilege('paqueteria_operator_outbox_executor','security','CREATE')"));
         Assert.Equal(membershipsBefore, await environment.TextAsync(MembershipSql));
+        // OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13: the bridged lane also leaves the trace step: the outbox definer stores
+        // the caller's trace context, keeps its owner and ACL, and the executor holds INSERT on trace_parent only.
+        Assert.Equal(
+            "paqueteria_operator_outbox_executor|{paqueteria_operator_outbox_executor=X/paqueteria_operator_outbox_executor,paqueteria_app=X/paqueteria_operator_outbox_executor}|true",
+            await environment.TextAsync($"""
+                SELECT pg_get_userbyid(proowner) || '|' || proacl::text || '|' || (position('app.trace_parent' IN prosrc) > 0)::text
+                FROM pg_proc WHERE oid='{Dispatch.Infrastructure.Persistence.Migrations.AddOperatorOwnerOutboxExecutor.OutboxFunctionSignature}'::regprocedure
+                """));
+        Assert.Equal(
+            "INSERT",
+            await environment.TextAsync("""
+                SELECT string_agg(acl.privilege_type, ',' ORDER BY acl.privilege_type)
+                FROM pg_attribute a CROSS JOIN LATERAL aclexplode(a.attacl) acl
+                WHERE a.attrelid='platform.outbox_events'::regclass AND a.attname='trace_parent'
+                  AND acl.grantee='paqueteria_operator_outbox_executor'::regrole
+                """));
 
         await using (var admin = new NpgsqlConnection(environment.AdminConnectionString))
         {

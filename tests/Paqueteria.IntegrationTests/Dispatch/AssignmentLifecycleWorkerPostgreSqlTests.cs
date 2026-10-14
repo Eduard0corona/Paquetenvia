@@ -6,11 +6,13 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
 using Npgsql;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Paqueteria.IntegrationTests.Hosting;
 using Paqueteria.IntegrationTests.Realtime;
 using Paqueteria.IntegrationTests.Security;
 using Realtime.Infrastructure.Dispatching;
 using WorkerProgram = WorkerHost::WorkerProgram;
+using Paqueteria.IntegrationTests.Observability;
 
 namespace Paqueteria.IntegrationTests.Dispatch;
 
@@ -113,7 +115,9 @@ public sealed class AssignmentLifecycleWorkerPostgreSqlTests(PostgreSqlSecurityW
                 """,
                 ("assignment", scenario.AssignmentId)));
 
-            await using var connections = new RealtimeDispatcherConnectionFactory(database.RealtimeConnectionString);
+            await using var realtimePool = RuntimeDataSource.Create(
+                RuntimeDatabaseRole.Realtime, database.RealtimeConnectionString, maximumPoolSize: 4);
+            var connections = new RealtimeDispatcherConnectionFactory(realtimePool);
             var evidence = await new PostgreSqlRealtimeOutboxEvidenceReader(connections)
                 .ReadClosedAssignmentAsync(OwnerId, scenario.AssignmentId, closing.Version, default);
             Assert.NotNull(evidence);
@@ -209,6 +213,8 @@ public sealed class AssignmentLifecycleWorkerPostgreSqlTests(PostgreSqlSecurityW
         protected override void ConfigureHost(IWebHostBuilder builder)
         {
             builder.UseEnvironment("Production");
+            // OBS-003 PR 6: outside Development and Testing the host needs the organization pseudonym key.
+            builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(TelemetryPseudonymTestKey.Settings));
             builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(settings));
         }
     }

@@ -392,6 +392,11 @@ jobs:
             echo "::error::Key Vault ${VAULT} lacks public-tracking-link-key. Store the tracking link key (README 'Secrets the owner writes') and re-run."
             exit 1
           fi
+          # OBS-003-TENANT-PSEUDONYM-2026-10-12: the API and the Worker refuse to start without the pseudonym key.
+          if ! has_secret paquetenvia-telemetry-pseudonym-key-1; then
+            echo "::error::Key Vault ${VAULT} lacks paquetenvia-telemetry-pseudonym-key-1. Store the organization pseudonym key (README 'Secrets the owner writes') and re-run."
+            exit 1
+          fi
 
       - name: Close Key Vault firewall for this runner (window 2)
         if: always()

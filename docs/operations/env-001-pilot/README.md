@@ -190,8 +190,8 @@ Guard P06 checks three things:
 
 | Workload (identity) | Secret → configuration key |
 |---|---|
-| API (`id-pv-pilot-api`) | `pg-api-runtime-connection` → `ConnectionStrings:Paqueteria`; `authcenter-paquetenvia-client-secret` → `AuthCenter:ClientSecret`; `paquetenvia-email-lookup-key-1` → `EmailLookup:Keys:1`; `google-maps-api-key` → `Locations:GoogleMaps:ApiKey`; `public-tracking-link-key` → `PublicTracking:LinkKeys:1`; `pg-realtime-runtime-connection` → `ConnectionStrings:PaqueteriaRealtime` (the in-process realtime dispatchers; never the Worker's connection) |
-| Worker (`id-pv-pilot-worker`) | `pg-worker-runtime-connection` → `ConnectionStrings:PaqueteriaWorker` and `ConnectionStrings:Paqueteria` (one secret, read once, mapped to both keys) |
+| API (`id-pv-pilot-api`) | `pg-api-runtime-connection` → `ConnectionStrings:Paqueteria`; `authcenter-paquetenvia-client-secret` → `AuthCenter:ClientSecret`; `paquetenvia-email-lookup-key-1` → `EmailLookup:Keys:1`; `google-maps-api-key` → `Locations:GoogleMaps:ApiKey`; `public-tracking-link-key` → `PublicTracking:LinkKeys:1`; `pg-realtime-runtime-connection` → `ConnectionStrings:PaqueteriaRealtime` (the in-process realtime dispatchers; never the Worker's connection); `paquetenvia-telemetry-pseudonym-key-1` → `TelemetryPseudonym:Keys:1` (OBS-003) |
+| Worker (`id-pv-pilot-worker`) | `pg-worker-runtime-connection` → `ConnectionStrings:PaqueteriaWorker` and `ConnectionStrings:Paqueteria` (one secret, read once, mapped to both keys); `paquetenvia-telemetry-pseudonym-key-1` → `TelemetryPseudonym:Keys:1` (OBS-003) |
 | Migrate and verify jobs (`id-pv-pilot-migrate`) | `pg-migrate-connection` → `PAQUETERIA_MIGRATION_CONNECTION` |
 | Logins job (`id-pv-pilot-logins`) | `pg-migrate-connection` → `PAQUETERIA_MIGRATION_CONNECTION`; `pg-api-login-verifier` → `PAQUETERIA_API_LOGIN_VERIFIER`; `pg-worker-login-verifier` → `PAQUETERIA_WORKER_LOGIN_VERIFIER`; `pg-realtime-login-verifier` → `PAQUETERIA_REALTIME_LOGIN_VERIFIER` |
 
@@ -214,6 +214,7 @@ the app restarts or starts a new revision; the workflow restarts the API and Wor
 | `authcenter-paquetenvia-client-secret` | **owner** (AuthCenter hands it over once) | API (`AuthCenter__ClientSecret`) |
 | `google-maps-api-key` | **owner** (Google Cloud Console, GATE-003-PROVIDER-GOOGLE) | API (`Locations__GoogleMaps__ApiKey`) |
 | `public-tracking-link-key` | **owner** (32 random bytes, base64; TRK-002-AUTO-LINK) | API (`PublicTracking__LinkKeys__1`) |
+| `paquetenvia-telemetry-pseudonym-key-1` | **owner** (32 random bytes, base64; OBS-003-TENANT-PSEUDONYM-2026-10-12) | API and Worker (`TelemetryPseudonym__Keys__1`) |
 | `pg-restore-drill-connection` | `restore-drill.sh` | verify job, during a drill only |
 
 **Reserved names (not created, for later work):**
@@ -362,7 +363,7 @@ hours a month. Sized for 50–100 real deliveries.
 | PostgreSQL B1ms compute | 0.0187 per hour | 13.65 |
 | PostgreSQL storage 32 GB | 0.1265 per GB | 4.05 |
 | PostgreSQL backups (14 days) | free up to 100 % of provisioned storage | 0.00 |
-| API 0.5 vCPU / 1 GiB, always on | active rate 0.000026 per vCPU-s, 0.000003 per GiB-s (the outbox dispatchers poll every 250–500 ms, so the replica rarely qualifies for the idle rate) | 42.04 |
+| API 0.5 vCPU / 1 GiB, always on | active rate 0.000026 per vCPU-s, 0.000003 per GiB-s (the realtime outbox dispatchers still claim about twice a second while idle, SCL-007, so the replica rarely qualifies for the idle rate) | 42.04 |
 | Worker 0.25 vCPU / 0.5 GiB, always on | active rate (continuous polling) | 21.02 |
 | Web 0.25 vCPU / 0.5 GiB, min 1 | mostly idle rate (0.000003 per vCPU-s) with request bursts | ~7.00 |
 | Container Apps monthly free grant | 180,000 vCPU-s + 360,000 GiB-s | −5.76 |
@@ -377,6 +378,7 @@ hours a month. Sized for 50–100 real deliveries.
 | VNet, route, managed certificate, budget | free | 0.00 |
 | **Subtotal before OBS-002** | | **≈ 98 typical, ≈ 108 if the log cap is hit every day** |
 | Log search alerts (OBS-002, §10) | 5 rules at 15 min (0.55 each), Retail Prices API 2026-09-28; e-mails and workbook free; the extra ~0.3–0.45 GB/month of logs fits the 5 GB free tier | 2.75 |
+| Application Insights (OBS-003, §10) | workspace-based on the same workspace and inside the same 0.3 GB/day cap; component free; with the export on, about 1–2 GB/month of traces (10 %) and metrics; 0 while `TelemetryExport__Enabled='false'` | 0 – 5 (inside the Log Analytics row's worst case) |
 | **Total** | | **≈ 101 typical, ≈ 111 if the log cap is hit every day** |
 
 **This design sits at the budget line and does not fit ~100 USD with margin.** The owner accepted this
@@ -421,11 +423,13 @@ Two further caveats:
 5. Actions → *Deploy Azure PILOT* → Run workflow on `main`: `tested_git_sha=<head SHA>`,
    `foundation_run_id=<run id>`, `custom_domain_phase=none`.
 6. The first run creates the vault, then stops with *"lacks authcenter-paquetenvia-client-secret"*. The
-   workflow requires three owner secrets and reports the first one missing. Write all three straight into
+   workflow requires four owner secrets and reports the first one missing. Write all four straight into
    the vault (§6.6) and run again:
    - `authcenter-paquetenvia-client-secret`;
    - `google-maps-api-key`;
-   - `public-tracking-link-key`.
+   - `public-tracking-link-key`;
+   - `paquetenvia-telemetry-pseudonym-key-1` (OBS-003; also needed by a vault populated before OBS-003: the
+     next run stops with *"lacks paquetenvia-telemetry-pseudonym-key-1"* until it exists).
 7. The run summary shows the DNS records. At the DNS host of `paquetenvia.com`, create:
    - `A` `@` → the environment static IP;
    - `TXT` `asuid` → the custom-domain verification id.
@@ -551,6 +555,10 @@ shred -u /tmp/gm; unset GOOGLE_MAPS_KEY
 umask 077 && openssl rand -base64 32 | tr -d '\n' > /tmp/tl && \
 az keyvault secret set --vault-name <kv> --name public-tracking-link-key --file /tmp/tl --encoding utf-8 --output none; \
 shred -u /tmp/tl
+# OBS-003-TENANT-PSEUDONYM-2026-10-12: 32 random bytes, base64, generated in place and never shown.
+umask 077 && openssl rand -base64 32 | tr -d '\n' > /tmp/tp && \
+az keyvault secret set --vault-name <kv> --name paquetenvia-telemetry-pseudonym-key-1 --file /tmp/tp --encoding utf-8 --output none; \
+shred -u /tmp/tp
 bash deploy/azure/pilot/kv-firewall.sh close <kv>
 ```
 
@@ -560,6 +568,16 @@ refuse to show existing links (it fails closed). To rotate, store the new key un
 map it as `PublicTracking:LinkKeys:2`, set `PublicTracking__CurrentLinkKeyVersion=2` and keep version 1
 mapped while its links should still be shown to operators; links already sent keep working either way,
 because the public lookup only compares hashes. Rotation is a template change reviewed like any other.
+
+`paquetenvia-telemetry-pseudonym-key-1` keys the organization pseudonym (OBS-003, HMAC-SHA256) that the API's log
+lines, and its request spans once the export is on, carry instead of the organization id. The API and the Worker
+refuse to start without it. Write it once. To rotate, store `paquetenvia-telemetry-pseudonym-key-2`, then one reviewed
+PR maps it to `TelemetryPseudonym:Keys:2` in `apps.bicep` (API and Worker), sets
+`TelemetryPseudonym__CurrentKeyVersion='2'` and drops version 1; exactly one key is configured. The same PR sets
+`TELEMETRY_PSEUDONYM_KEY_VERSION = "2"` in `tools/azr-001/env001_pilot_guards.py` (P06, P21 and P23 follow it), changes
+the workflow's `has_secret` check in window 2 to the new name (P21 requires it), and updates the tests that name
+version 1. Pseudonyms carry their key version (`v1-…`, `v2-…`) and do not match across versions. Keep the old secret until the logs carrying its
+version are past the 30-day retention. Details: `docs/development/obs-003-appinsights-export.md`.
 
 The workflow stops before deploying while any owner secret is missing. The API reads
 `google-maps-api-key` at startup even while `Locations__GeocodingProvider=Manual`, so the key must exist
@@ -604,10 +622,18 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
 - **An OBS-002 alert fired:** open the workbook *Paquetenvia pilot operations (OBS-002)* or run the
   rule's query from Azure Monitor → Alerts → the alert → *View query results*. The query shows the
   lane, job, app or status counts that tripped it (§10).
-- **PostgreSQL connections:** B1ms allows about 50. API and Worker pools are capped at 5 per data
-  source (`Maximum Pool Size=5;Minimum Pool Size=0`); the API's realtime dispatcher login is one more data
-  source of 5 (it replaces the Worker connection the dispatchers would otherwise have opened).
-  `too many connections` means lowering those or moving to B2s (+≈41 USD/month, over budget).
+- **PostgreSQL connections:** B1ms has `max_connections` 50, of which Azure reserves 15, so 35 are user
+  connections. SCL-007 gives each process one pool per database role: the API's `paqueteria_app` pool (10) and its
+  realtime dispatcher pool (`paqueteria_realtime`, 4), and the Worker's `paqueteria_worker` pool (10), 24 in all
+  (`docs/development/scl-007-pool-per-role.md`). The sizes come from `DatabasePools` (defaults in each image's
+  `appsettings.json`) and replace the `Maximum Pool Size=5` of the runtime secrets. Each process refuses to start when
+  the three values of its own configuration sum to more than 24, but it cannot see the other process's values, so the
+  24 holds only when both apps carry the same three. Change the sizes only by setting all three variables,
+  `DatabasePools__ApplicationMaximumPoolSize`, `DatabasePools__RealtimeMaximumPoolSize` and
+  `DatabasePools__WorkerMaximumPoolSize`, with identical values on both `ca-pv-pilot-api` and `ca-pv-pilot-worker`;
+  never on one app alone. Today the Bicep sets none. The other 11 are for the migrate, verify and logins jobs
+  (`Maximum Pool Size=4`), the restore drill and administration. `too many connections` means lowering all three
+  `DatabasePools__*` on both apps, identically, or moving to B2s (+≈41 USD/month, over budget).
 - **Realtime dispatcher not ready:** `/health/ready` reports `realtime_outbox_dispatcher` unhealthy when
   `pg-realtime-runtime-connection` is missing or its login is not `pv_pilot_realtime` (member of
   `paqueteria_realtime` only), when the Notifications lane step `20261012000100_AddRealtimeDispatcherRole` has not
@@ -721,6 +747,8 @@ The 24 guards (P00–P23) run on the compiled ARM output and the workflow:
   - Every job that runs a guard tool first sets up Python and installs `PyYAML==6.0.3` (P20).
 - **Secrets and settings:**
   - Secrets come only from Key Vault, read by the application. The per-workload mappings equal the per-secret RBAC, and there are no Container Apps secrets or `secretRef`.
+    P06 includes `TelemetryPseudonym:Keys:1` for the API and the Worker and treats `TelemetryPseudonym__Keys__*` as
+    sensitive, so the key can never be a plain setting.
   - Workloads run as `Production`/`PILOT_REAL_PEOPLE`, with no Mock or Synthetic values.
 - **Replicas and migrations:** a single API and Worker replica on `InProcess`. Migrations run only
   through the canonical migrator jobs, and the pilot db-ops image contains no DevSeed.
@@ -734,7 +762,8 @@ The 24 guards (P00–P23) run on the compiled ARM output and the workflow:
 - **Cost:** the 100 USD budget exists and the log cap is set.
 - **ADP-001 and web:**
   - The ADP-001 configuration contract is wired.
-  - Business settings cannot override platform settings.
+  - Business settings cannot override platform settings (P17; `TelemetryExport__` and `TelemetryPseudonym__` are
+    platform-managed).
   - The web image is a BFF build.
 - **Observability (P21, OBS-002):**
   - exactly the five alert rules, every 5–15 minutes, costing at most 5 USD per month;
@@ -742,13 +771,23 @@ The 24 guards (P00–P23) run on the compiled ARM output and the workflow:
   - one action group, e-mail only, bound to a parameter without a default;
   - queries read only the Container Apps log tables and the allowlisted event properties;
   - the workflow checks the parameters file.
+- **Application Insights (P21, OBS-003):**
+  - exactly one `Microsoft.Insights/components`, in `platform.bicep`, in the pilot region, workspace-based on the
+    pilot workspace (`IngestionMode: LogAnalytics`), IP masking kept, no ingestion sampling or own retention;
+  - the API and the Worker get `TelemetryExport__Enabled` as a literal `true`/`false`, the connection string only from
+    that component (by its managed name, with the same suffix as `platform.bicep`) and
+    `TelemetryPseudonym__CurrentKeyVersion='1'`, and no other telemetry or `OTEL_` setting; no other
+    workload gets telemetry settings;
+  - alert and workbook queries read no Application Insights table and no pseudonym or role kind;
+  - the workflow stops in window 2 while `paquetenvia-telemetry-pseudonym-key-1` is missing.
 - **Accepted terms and privacy versions (P22, UI-001):** the web receives `PAQUETERIA_TERMS_VERSION` and
   `PAQUETERIA_PRIVACY_VERSION` from `apps.bicep` parameters without a default (1 to 64 characters), no
   other workload receives them, `web.parameters.json` is well formed, and the workflow checks and deploys it.
 - **API realtime dispatcher credential (P23, RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12):** with the PostgreSQL
   dispatcher on, the API maps `ConnectionStrings:PaqueteriaRealtime` from `pg-realtime-runtime-connection`; it never
-  maps `ConnectionStrings:PaqueteriaWorker` or a Worker secret; no other workload maps the realtime secret; and the
-  workflow generates exactly the `api`, `worker` and `realtime` runtime logins.
+  maps `ConnectionStrings:PaqueteriaWorker` or a Worker secret (the shared OBS-003 pseudonym key is not a Worker
+  credential and is exempt); no other workload maps the realtime secret; and the workflow generates exactly the
+  `api`, `worker` and `realtime` runtime logins.
 
 The unit tests compile the real templates whenever the pinned Bicep CLI is present (the azr-static CI
 job installs it). They mutate the ARM output to prove that each guard fails closed.
@@ -784,6 +823,10 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
   - ARM acceptance of the alert rules, action group and workbook;
   - that the JSON console line reaches `Log_s` unchanged;
   - the exact `Reason_s` values Container Apps uses for probe failures and restarts.
+- OBS-003:
+  - ARM acceptance of the workspace-based component;
+  - that the exporter reaches the Mexico Central ingestion endpoint from inside the VNet, and the real volume
+    against the 0.3 GB/day cap once the export is on.
 
 ## 10. Observability (OBS-002)
 
@@ -816,3 +859,25 @@ Details, event schema, thresholds and tests: `docs/development/obs-002-pilot-obs
   exact backlog gauge would need a new maintenance function and a normative change.
 - **Workbook:** *Paquetenvia pilot operations (OBS-002)*. It shows API responses by status class,
   Worker job outcomes, outbox lanes, and probe failures and restarts.
+
+### 10.1 Application Insights (OBS-003)
+
+Details, allowlist, pseudonym and tests: `docs/development/obs-003-appinsights-export.md`.
+
+- **Component:** `appi-pv-pilot-<suffix>` in `platform.bicep`, workspace-based on the pilot workspace, so its data
+  counts against the same 0.3 GB/day cap and 30-day retention. Ingestion uses the instrumentation key in the
+  connection string (Q-PR6-2, "Llave en la conexión (Recommended)"); it lives only in the API and Worker settings.
+  Whoever obtains it can send fake telemetry, not read it, and fake telemetry counts against the daily cap.
+- **Off until a reviewed PR:** `apps.bicep` passes `TelemetryExport__Enabled='false'`. Turning it on is a PR that
+  changes that one literal to `'true'`; guard P21 refuses a parameter or any other value.
+- **What goes out once on:** traces and metrics only (no logs; the logs stay in Log Analytics as in OBS-002).
+  - 10 % of traces by trace id: API requests (not `/health/*`) and the ADR-034 scheduled job cycles (Q-PR6-1,
+    "Solo tareas programadas (Recommended)"), with their outgoing HTTP calls. Never the outbox dispatch loops,
+    the proof-validation poll or database spans.
+  - Span attributes are allowlisted (method, route template, status, peer host and port, error type, and on
+    requests with an organization the pseudonym and role kind).
+  - Metrics: the application meters and the ASP.NET Core meters, with only the OBS-002 metric tag allowlist.
+- **Organization pseudonym:** `v1-<32 hex>`, HMAC of the organization id under `paquetenvia-telemetry-pseudonym-key-1`.
+  It is on the API's log lines (`State.OrganizationPseudonym`, `State.ActorRoleKind`) whenever a request selected an
+  organization, also with the export off. It is never an alert, workbook or metric dimension.
+- **Alerts:** none added.

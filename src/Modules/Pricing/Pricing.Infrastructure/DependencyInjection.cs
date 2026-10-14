@@ -3,11 +3,11 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
-using Npgsql;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
 using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Paqueteria.Infrastructure.Tenancy;
 using Pricing.Application.Quotes;
 using Pricing.Infrastructure.Persistence;
@@ -37,13 +37,8 @@ public static class DependencyInjection
                 "Pricing:Provider=PostgreSql requires ConnectionStrings:Paqueteria.")
             .ValidateOnStart();
 
-        services.AddSingleton(serviceProvider =>
-        {
-            var connectionString = serviceProvider.GetRequiredService<IConfiguration>()
-                .GetConnectionString("Paqueteria")
-                ?? throw new InvalidOperationException("PostgreSQL pricing requires a configured connection string.");
-            return new PricingDataSource(new NpgsqlDataSourceBuilder(connectionString).Build());
-        });
+        // SCL-007: the API's one paqueteria_app pool, shared with every other API module.
+        services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Application);
         services.TryAddScoped<TenantDatabaseExecutionState>();
         services.TryAddScoped<TenantTransactionGuardInterceptor>();
         services.TryAddScoped<TenantSaveChangesGuardInterceptor>();
@@ -51,7 +46,7 @@ public static class DependencyInjection
         {
             var pricingOptions = serviceProvider.GetRequiredService<IOptions<PricingOptions>>().Value;
             dbOptions.UseNpgsql(
-                    serviceProvider.GetRequiredService<PricingDataSource>().Value,
+                    serviceProvider.GetRuntimeDataSource(RuntimeDatabaseRole.Application),
                     postgres =>
                     {
                         postgres.CommandTimeout(pricingOptions.CommandTimeoutSeconds);
@@ -78,10 +73,4 @@ public static class DependencyInjection
             });
         return services;
     }
-}
-
-internal sealed class PricingDataSource(NpgsqlDataSource value) : IAsyncDisposable
-{
-    internal NpgsqlDataSource Value { get; } = value;
-    public ValueTask DisposeAsync() => Value.DisposeAsync();
 }

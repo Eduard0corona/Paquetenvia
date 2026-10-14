@@ -3,7 +3,6 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
-using Npgsql;
 using Organizations.Application;
 using Organizations.Application.Auditing;
 using Organizations.Application.OrganizationContexts;
@@ -12,6 +11,7 @@ using Organizations.Infrastructure.Auditing;
 using Organizations.Infrastructure.OrganizationContexts;
 using Organizations.Infrastructure.OrganizationRoles;
 using Organizations.Infrastructure.Persistence;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Paqueteria.Infrastructure.Tenancy;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
@@ -41,16 +41,15 @@ public static class DependencyInjection
                 "Tenancy:Provider=PostgreSql requires ConnectionStrings:Paqueteria.")
             .ValidateOnStart();
 
-        services.TryAddSingleton(serviceProvider => NpgsqlDataSource.Create(
-            serviceProvider.GetRequiredService<IConfiguration>().GetConnectionString("Paqueteria")
-            ?? throw new InvalidOperationException("PostgreSQL tenancy requires a configured connection string.")));
+        // SCL-007: the API's one paqueteria_app pool, shared with every other API module.
+        services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Application);
 
         services.AddScoped<TenantDatabaseExecutionState>();
         services.AddScoped<TenantTransactionGuardInterceptor>();
         services.AddScoped<TenantSaveChangesGuardInterceptor>();
         services.AddDbContext<OrganizationsDbContext>((serviceProvider, options) =>
             options.UseNpgsql(
-                    serviceProvider.GetRequiredService<NpgsqlDataSource>(),
+                    serviceProvider.GetRuntimeDataSource(RuntimeDatabaseRole.Application),
                     postgres =>
                     {
                         postgres.MigrationsAssembly(typeof(OrganizationsDbContext).Assembly.FullName);

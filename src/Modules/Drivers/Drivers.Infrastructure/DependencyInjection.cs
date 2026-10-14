@@ -16,6 +16,7 @@ using Npgsql;
 using Paqueteria.Application.Auditing;
 using Paqueteria.Application.Voice;
 using Paqueteria.Infrastructure.Auditing;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Paqueteria.Infrastructure.Security.Pii;
 using Paqueteria.Infrastructure.Tenancy;
 
@@ -59,15 +60,12 @@ public static class DependencyInjection
                 "organization at most once.")
             .ValidateOnStart();
 
-        services.TryAddSingleton(serviceProvider =>
-        {
-            var builder = new NpgsqlDataSourceBuilder(
-                serviceProvider.GetRequiredService<IConfiguration>().GetConnectionString("Paqueteria")
-                ?? throw new InvalidOperationException(
-                    "A PostgreSQL drivers provider requires a configured connection string."));
-            builder.UseNetTopologySuite();
-            return builder.Build();
-        });
+        // SCL-007: the API's one paqueteria_app pool, shared with every other API module; PostGIS types on it.
+        services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Application);
+        services.AddRuntimeDataSourcePlugin(
+            RuntimeDatabaseRole.Application,
+            RuntimeDataSourcePlugin.NetTopologySuite,
+            static builder => builder.UseNetTopologySuite());
         services.TryAddScoped<TenantDatabaseExecutionState>();
         services.TryAddScoped<TenantTransactionGuardInterceptor>();
         services.TryAddScoped<TenantSaveChangesGuardInterceptor>();
@@ -75,7 +73,7 @@ public static class DependencyInjection
         {
             var options = serviceProvider.GetRequiredService<IOptions<DriversOptions>>().Value;
             dbOptions.UseNpgsql(
-                    serviceProvider.GetRequiredService<NpgsqlDataSource>(),
+                    serviceProvider.GetRuntimeDataSource(RuntimeDatabaseRole.Application),
                     postgres =>
                     {
                         postgres.CommandTimeout(options.CommandTimeoutSeconds);

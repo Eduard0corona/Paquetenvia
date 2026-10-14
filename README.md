@@ -137,6 +137,10 @@ dotnet test .\tests\Paqueteria.IntegrationTests\Paqueteria.IntegrationTests.cspr
 dotnet test .\tests\Paqueteria.ArchitectureTests\Paqueteria.ArchitectureTests.csproj
 ```
 
+La suite de punta a punta vive en `tests/Paqueteria.IntegrationTests/PlatformEndToEnd` (categoría `PlatformEndToEnd`)
+y necesita Docker, las dependencias web y Chromium; la [guía OPS-005](docs/development/ops-005-end-to-end-suite.md)
+explica cómo correrla. `tests/Paqueteria.EndToEndTests` sigue reservado y vacío.
+
 ## Frontend
 
 El primer install sin lockfile puede ejecutarse sin `--frozen-lockfile`. Una vez
@@ -170,7 +174,7 @@ git diff --exit-code -- docs/normative/v0.6
 ```
 
 El validador debe terminar en `VALIDATION_OK` y el hash de AI-06 debe ser
-`f069b455894eb825f252f59c1a50373cd6a0d13d50d6b4493c53024f0d4b7ba7`.
+`3a491699ee7462ffd6071bcf2a1092d66654916ed2502bf474b9e4fac78b6754`.
 
 ## Contratos runtime ARC-002
 
@@ -317,6 +321,9 @@ productivo:
   (ORD-AUTO-CLOSE-2026-10-10, [guía](docs/development/ord-auto-close-delivered-orders.md)).
 - **OPS-004** retención acotada del outbox
   ([runbook](docs/development/ops-004-outbox-retention.md)).
+- **OPS-005** pruebas de punta a punta de la plataforma: el recorrido principal por las pantallas reales y las
+  comprobaciones de traza, 429, conexiones, aviso tras reposo y exportación apagada, dentro del job `driver-stops-pwa`
+  ([guía](docs/development/ops-005-end-to-end-suite.md)).
 
 El registro de merges y autorizaciones está en
 `docs/normative/v0.6/decision-log.md`.

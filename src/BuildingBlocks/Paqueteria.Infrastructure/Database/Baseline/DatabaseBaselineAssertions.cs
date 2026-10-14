@@ -216,6 +216,16 @@ public sealed class DatabaseBaselineAssertions
         "platform.outbox_events.topic:SELECT",
     });
 
+    /// <summary>
+    /// OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13: the operator outbox executor column grant the Dispatch lane step
+    /// 20261013000100_AddOutboxTraceContext adds to <see cref="OperatorOutboxExecutorGrants"/> once it is recorded (owned
+    /// by that step, not by AI-18, because the published DSP-OPERATOR-OWNER-OUTBOX step verifies exactly the AI-18 set).
+    /// </summary>
+    public static IReadOnlyList<string> OperatorOutboxExecutorTraceContextGrants { get; } = Array.AsReadOnly(new[]
+    {
+        "platform.outbox_events.trace_parent:INSERT",
+    });
+
     /// <summary>MDM-001-OPERATOR-LOADER: the executor's exact column grants (schema.table.column:privilege).</summary>
     private static readonly string[] MasterDataExecutorColumnGrants =
     [
@@ -1615,7 +1625,9 @@ public sealed class DatabaseBaselineAssertions
     /// can reach it, and it owns no relation, schema or type and no function but its two. Each installed function
     /// is a SECURITY DEFINER with search_path=pg_catalog, pg_temp, contains no dynamic SQL and no RETURNING, and
     /// its ACL is exactly the owner and <c>paqueteria_app</c>. Privileges are read from the catalog ACLs. The role
-    /// may exist without the functions (fresh AI-18 before the lane, or after the lane is rolled back).
+    /// may exist without the functions (fresh AI-18 before the lane, or after the lane is rolled back). Once the Dispatch
+    /// OBS-003-OUTBOX-TRACE-CONTEXT step is recorded (history, not the catalog, decides), the exact grants also include
+    /// <see cref="OperatorOutboxExecutorTraceContextGrants"/>.
     /// </summary>
     private static async Task AssertOperatorOutboxExecutorBoundaryAsync(
         NpgsqlConnection connection,
@@ -1623,6 +1635,10 @@ public sealed class DatabaseBaselineAssertions
         ICollection<string> violations,
         CancellationToken cancellationToken)
     {
+        var grants = await E002OperatorOutboxStateReader
+            .IsOutboxTraceContextAppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false)
+            ? OperatorOutboxExecutorGrants.Concat(OperatorOutboxExecutorTraceContextGrants).ToArray()
+            : OperatorOutboxExecutorGrants.ToArray();
         await AddRowsAsync(
             violations,
             connection,
@@ -1719,7 +1735,7 @@ public sealed class DatabaseBaselineAssertions
             WHERE c.present = 1
             """,
             cancellationToken,
-            new NpgsqlParameter<string[]>("grants", OperatorOutboxExecutorGrants.ToArray()),
+            new NpgsqlParameter<string[]>("grants", grants),
             new NpgsqlParameter<string[]>("functions", OperatorOutboxFunctions.ToArray()),
             new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray())).ConfigureAwait(false);
     }

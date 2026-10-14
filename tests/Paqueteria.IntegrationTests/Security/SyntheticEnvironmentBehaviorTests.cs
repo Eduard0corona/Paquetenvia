@@ -19,6 +19,7 @@ using Paqueteria.Infrastructure.Database.Baseline;
 using Realtime.Application.Configuration;
 using Realtime.Infrastructure;
 using WorkerProgram = WorkerHost::WorkerProgram;
+using Paqueteria.IntegrationTests.Observability;
 
 namespace Paqueteria.IntegrationTests.Security;
 
@@ -165,6 +166,9 @@ public sealed class SyntheticEnvironmentBehaviorTests(
         ["ASPNETCORE_ENVIRONMENT"] = SyntheticEnvironmentPolicy.EnvironmentName,
         [SyntheticEnvironmentPolicy.DeploymentClassVariable] = SyntheticEnvironmentPolicy.DeploymentClass,
         ["ConnectionStrings__Paqueteria"] = database.WorkerConnectionString,
+        // SCL-007: the Worker's one pool is paqueteria_worker, read from ConnectionStrings:PaqueteriaWorker as the pilot
+        // Worker receives it (deploy/azure/pilot/apps.bicep maps the same secret to both names).
+        ["ConnectionStrings__PaqueteriaWorker"] = database.WorkerConnectionString,
         ["ProofStorage__Provider"] = "Disabled",
         ["ProofStorage__ThreatScanner"] = "Disabled",
         ["Notifications__Provider"] = "Disabled",
@@ -386,14 +390,22 @@ public sealed class DevSyntheticSeedPostgreSqlFactory : PostgreSqlSecurityWebApp
 
 internal sealed class DevSyntheticApiWebApplicationFactory : WebApplicationFactory<Program>
 {
-    protected override void ConfigureWebHost(IWebHostBuilder builder) =>
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
         builder.UseEnvironment(SyntheticEnvironmentPolicy.EnvironmentName);
+        // OBS-003 PR 6: outside Development and Testing the host needs the organization pseudonym key.
+        builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(TelemetryPseudonymTestKey.Settings));
+    }
 }
 
 internal sealed class DevSyntheticWorkerWebApplicationFactory : WebApplicationFactory<WorkerProgram>
 {
-    protected override void ConfigureWebHost(IWebHostBuilder builder) =>
+    protected override void ConfigureWebHost(IWebHostBuilder builder)
+    {
         builder.UseEnvironment(SyntheticEnvironmentPolicy.EnvironmentName);
+        // OBS-003 PR 6: outside Development and Testing the host needs the organization pseudonym key.
+        builder.ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(TelemetryPseudonymTestKey.Settings));
+    }
 }
 
 internal sealed class ProcessEnvironmentScope : IDisposable

@@ -153,6 +153,13 @@ Aplica en FIFO únicamente operaciones válidas cuya fuente y versión coinciden
 con el siguiente estado esperado. Muestra por separado “Estado confirmado” y
 “Proyección pendiente”.
 
+Una transición que REST ya muestra aplicada (su estado destino en una versión
+posterior) y que no está retenida para el repartidor no se proyecta ni se
+muestra como conflicto: el scheduler la elimina sin reenviarla, y la pantalla
+ya no la presenta en atención en el instante entre la lectura de confirmación y
+esa eliminación, que reemplazaba el paso siguiente y perdía la foto en vista
+previa (ver `driver-photo-selection-refresh.md`).
+
 Una operación `NEEDS_ATTENTION` no se proyecta. Las operaciones posteriores de
 esa orden quedan `BLOCKED`; otras órdenes continúan sincronizando. El usuario
 puede, con confirmación visible:

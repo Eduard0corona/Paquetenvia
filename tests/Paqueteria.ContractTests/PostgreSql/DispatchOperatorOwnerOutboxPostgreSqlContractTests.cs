@@ -4,6 +4,7 @@ using Npgsql;
 using NpgsqlTypes;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
 using Paqueteria.Infrastructure.Database.Baseline;
+using Paqueteria.Infrastructure.Database.Pooling;
 using Realtime.Infrastructure.Dispatching;
 
 namespace Paqueteria.ContractTests.PostgreSql;
@@ -334,8 +335,14 @@ public sealed partial class DispatchPostgreSqlContractTests
             await ExecuteAsync(connection, transaction, "ROLLBACK TO SAVEPOINT direct_insert");
             await ExecuteAsync(connection, transaction, "RESET ROLE");
 
-            // Up reinstalls both functions with the exact boundary, and refuses a widened executor.
+            // Up reinstalls both functions with the exact boundary, and refuses a widened executor. The published step
+            // verifies exactly the AI-18 grants, so the OBS-003-OUTBOX-TRACE-CONTEXT executor grant is taken out first
+            // and that later step is applied again after it (its column stays; it adopts it).
+            await ExecuteAsync(connection, transaction,
+                "REVOKE INSERT (trace_parent) ON platform.outbox_events FROM paqueteria_operator_outbox_executor");
             await ExecuteAsync(connection, transaction, AddOperatorOwnerOutboxExecutor.UpSql);
+            await ExecuteAsync(connection, transaction, "RESET ROLE");
+            await ExecuteAsync(connection, transaction, AddOutboxTraceContext.UpSql);
             await ExecuteAsync(connection, transaction, "RESET ROLE");
             await DatabaseBaselineAssertions.AssertOperatorOutboxExecutorInstalledAsync(connection, transaction);
             await ExecuteAsync(connection, transaction, "SAVEPOINT widened");
@@ -391,7 +398,9 @@ public sealed partial class DispatchPostgreSqlContractTests
         {
             var created = await CreateAssignmentService(fixture.AppDataSource)
                 .CreateOwnDriverAssignmentAsync(Command(scenario) with { OrganizationId = operatorId }, default);
-            await using var connections = new RealtimeDispatcherConnectionFactory(fixture.RealtimeConnectionString);
+            await using var realtimePool = RuntimeDataSource.Create(
+                RuntimeDatabaseRole.Realtime, fixture.RealtimeConnectionString, maximumPoolSize: 4);
+            var connections = new RealtimeDispatcherConnectionFactory(realtimePool);
             var evidence = new PostgreSqlRealtimeOutboxEvidenceReader(connections);
 
             // The owner's operations audience reads the assignment; the operator's driver is the driver audience.
@@ -475,7 +484,9 @@ public sealed partial class DispatchPostgreSqlContractTests
         {
             var created = await CreateAssignmentService(fixture.AppDataSource)
                 .CreateOwnDriverAssignmentAsync(Command(scenario) with { OrganizationId = operatorId }, default);
-            await using var connections = new RealtimeDispatcherConnectionFactory(fixture.RealtimeConnectionString);
+            await using var realtimePool = RuntimeDataSource.Create(
+                RuntimeDatabaseRole.Realtime, fixture.RealtimeConnectionString, maximumPoolSize: 4);
+            var connections = new RealtimeDispatcherConnectionFactory(realtimePool);
             var evidence = new PostgreSqlRealtimeOutboxEvidenceReader(connections);
 
             var active = await evidence.ReadAssignmentAsync(scenario.OrganizationId, created.Id, default);
