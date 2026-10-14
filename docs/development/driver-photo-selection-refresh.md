@@ -121,7 +121,8 @@ revisión del PR #271 (comentario 4267541135) se preguntó Q6c: "Solo paradas ya
 camino ignora la parada solo si la lectura que la quitó salió cuando la app ya tenía esa parada. Corrige el caso del
 revisor (una parada quitada ya no regresa con datos viejos) y una parada recién asignada nunca queda oculta más que
 hoy. Queda un hueco raro: con tres lecturas cruzadas, la parada quitada podría reaparecer una vez, hasta la siguiente
-lectura.").
+lectura."). Tras el comentario de revisión 4267824654 se preguntó Q6d, sobre el contador del día: "Corregir en este PR
+(Recommended)" ("Si una lectura que salió antes llega después de una más nueva, el contador se queda con el valor de la más nueva. Mismo criterio que las paradas: una lectura pedida después siempre se aplica. Con prueba de regresión; el PR tarda un poco más.").
 Severidad **MAJOR** (AI-01 §7, operación), cambio reversible; sin cambio de API, base de datos, cola ni reglas de
 DRV-002.
 
@@ -156,6 +157,11 @@ DRV-002.
   asignación después y sin tocar la orden (`PostgreSqlAssignmentLifecycleReactor.CloseAsync`), así que la parada
   sale en la misma versión que la app tiene. Una asignación nueva sí sube la versión
   (`PostgreSqlAssignmentToOrderCoordinator`).
+- Visto en la revisión del PR #271 (comentario 4267824654): `acceptRead` tomaba `completed_today` de cada lectura
+  aceptada, así que "Hoy · N paradas · K hechas" bajaba (por ejemplo de 1 a 0) cuando una lectura que salió antes
+  llegaba después de una más nueva, hasta la siguiente lectura. El servidor
+  (`PostgreSqlDriverStopsQuery.CountCompletedTodayAsync`) cuenta los eventos del día en Mazatlán de
+  `orders.order_events`, que es de solo agregar, así que dentro de un día ese número sólo sube.
 
 ### Evidencia
 
@@ -187,6 +193,16 @@ DRV-002.
     como hoy.
   - La de la parada recién asignada falla con la opción no elegida de Q6c (anotar cualquier parada que falte); la del
     cierre de D8 falla si también se descarta la versión que la app tenía + 1.
+- Pruebas unitarias de Q6d ("today's completed count (Q6d)") y la primera de "stale stop reads":
+  - "keeps the newer stop when a full read that left before the confirmation lands after it" ahora espera que el
+    contador se quede en 1, el valor de la confirmación, en pantalla y en la instantánea. En d144aa4 quedaba en 0;
+  - una lectura que salió antes con un contador mayor (2, antes de medianoche) que llega después de una más nueva (0)
+    no lo cambia: se queda en 0, en pantalla y en la instantánea;
+  - una lectura pedida después de la que se muestra se toma aunque traiga un contador menor (de 2 a 0, un día nuevo).
+    Falla si el contador se quedara con el mayor;
+  - tras mostrar la instantánea porque falló una lectura, una lectura que salió antes sigue sin cambiar el contador.
+    Falla si mostrar la instantánea olvidara la lectura cuyo contador se muestra;
+  - en d144aa4 fallan la primera, la segunda y la cuarta.
 - Playwright no cubre la parada quitada: el backend sintético de `DriverOfflineOperationsPwa` sirve una sola orden y no
   puede quitarla de la lista. Quitarla durante la sincronización llevaría además la acción en cola al camino de parada
   faltante de DRV-002, que la prueba tendría que modelar. Lo cubren las pruebas de `DriverStopsController` de arriba.
@@ -209,6 +225,18 @@ DRV-002.
     que la siguiente lectura la trae de vuelta, también una que ya iba en camino.
 - Las respuestas se toman de una en una, en el orden en que llegan: cada una se compara y se mezcla con lo que dejó la
   anterior, y la instantánea y la pantalla se escriben en ese mismo orden.
+- El contador "Hoy · N paradas · K hechas" (Q6d): cada lectura de paradas, completa o de confirmación, recibe un número
+  de orden al salir, y el controlador recuerda el de la lectura cuyo `completed_today` muestra
+  (`shownCompletedToday`).
+  - Una lectura que salió antes que esa no cambia el contador, ni en pantalla ni en la instantánea: se queda el valor
+    de la más nueva, sea el suyo menor o mayor.
+  - Cualquier otra lectura trae su contador y pasa a ser la recordada. Una lectura pedida después de la que se muestra
+    se toma siempre, aunque traiga un número menor (un día nuevo).
+  - Al abrir, la instantánea que se muestra no es una lectura: no hay ninguna recordada y la primera lectura que se
+    toma trae su contador. Mostrar la instantánea porque falló una lectura no olvida la recordada: desde la primera
+    lectura tomada, cada escritura de la instantánea guarda el contador de la lectura recordada.
+  - Lo demás de la lectura sigue las reglas de arriba: las paradas por versión (Q6, Q6b, Q6c) y la hora de
+    sincronización como antes.
 - Queda igual que antes:
   - con versión igual de una parada que la app tiene, la lectura se toma. Lo que cambia es una parada que ya salió de
     la lista: una lectura que ya iba en camino no la regresa con su última versión aceptada (Q6c, arriba);
@@ -218,7 +246,7 @@ DRV-002.
   - la memoria vive en el controlador de la sesión: cerrar sesión, cambiar de organización o de repartidor, o un
     401/403 la terminan;
   - el scheduler sigue confirmando con la respuesta de REST tal como llegó (DRV-002 sin cambios);
-  - "Hoy · N paradas · K hechas" y la hora de sincronización siguen la lectura como antes;
+  - la hora de sincronización sigue cada lectura que se toma, también una que salió antes (el contador no, arriba);
   - el cursor del tiempo real recibe las versiones que la app conservó.
 
 ### Riesgo residual
@@ -238,12 +266,20 @@ DRV-002.
     quitada. Si una lectura que ya iba en camino la trae válida con la misma versión, no se toma.
 - Con versión igual, una lectura vieja puede traer un dato que cambió sin subir la versión (por ejemplo el cobro
   registrado, que no cambia la versión de la orden); se toma como antes.
+- Contador (Q6d): el orden es el de salida, no el momento en que el servidor contó. Si el servidor cuenta una lectura
+  que salió antes después de que cuente la más nueva, y entre las dos se completó una parada, la que salió antes trae
+  el número correcto y no se toma. El contador se corrige con la siguiente lectura; la acción que completa la parada
+  la sigue una lectura de confirmación.
+- La hora de sincronización sigue cada lectura que se toma, así que una lectura que salió antes y llega justo después
+  de medianoche puede mostrar como de hoy el contador de ayer de la más nueva. Ya pasaba antes con su propio contador
+  de ayer; lo corrige la siguiente lectura.
 
 ### Rollback
 
 Revertir los commits de DRV-STALE-STOP-READ-2026-10-14. Vuelve el riesgo descrito arriba: una lectura completa que
 llega después de la confirmación regresa la parada y la foto en vista previa se pierde. Revertir sólo el commit de Q6c
-devuelve el caso del revisor: una parada quitada puede volver con datos viejos hasta la siguiente lectura.
+devuelve el caso del revisor: una parada quitada puede volver con datos viejos hasta la siguiente lectura. Revertir
+sólo el commit de Q6d devuelve el contador que baja un momento cuando una lectura que salió antes llega después.
 
 ## Rollback
 

@@ -384,11 +384,13 @@ describe("stale stop reads (DRV-STALE-STOP-READ-2026-10-14)", () => {
     stale.release();
     const cursors = await resync;
 
-    // The stop stays AT_PICKUP at version 4, with the details it had; the other
-    // stop of the read and today's count are taken as before.
+    // The stop stays AT_PICKUP at version 4, with the details it had, and the
+    // other stop of the read is taken as before. Today's count keeps the
+    // confirmation's value (Q6d), on screen and in the snapshot.
     expect(harness.controller.current.stops).toEqual([confirmed, secondStop]);
-    expect(harness.controller.current.completedToday).toBe(0);
+    expect(harness.controller.current.completedToday).toBe(1);
     expect(cache.onlySnapshot()?.stops).toEqual([confirmed, secondStop]);
+    expect(cache.onlySnapshot()?.completedToday).toBe(1);
     // The realtime cursor gets the version the phone kept.
     expect(cursors).toEqual([confirmed, secondStop]);
   });
@@ -629,6 +631,77 @@ describe("stale stop reads (DRV-STALE-STOP-READ-2026-10-14)", () => {
     });
   });
 
+  describe("today's completed count (Q6d)", () => {
+    it("keeps the newer read's count when a read that left before it lands later with a higher one", async () => {
+      const cache = new MemoryCache();
+      const harness = await gatedHarness(cache, [firstStop]);
+      // A full read leaves just before midnight in Mazatlán, with two done.
+      harness.api.completedToday = 2;
+      const stale = harness.controller.retry();
+      const full = await harness.api.read(2);
+      // After midnight the confirmation read counts none, and it lands first.
+      harness.api.completedToday = 0;
+      const confirmation = harness.controller.refreshForSync();
+      (await harness.api.read(3)).release();
+      await confirmation;
+      expect(harness.controller.current.completedToday).toBe(0);
+
+      full.release();
+      await stale;
+
+      expect(harness.controller.current.completedToday).toBe(0);
+      expect(cache.onlySnapshot()?.completedToday).toBe(0);
+    });
+
+    it("takes a lower count from a read sent after the one shown (a new day)", async () => {
+      const cache = new MemoryCache();
+      const harness = await gatedHarness(cache, [firstStop]);
+      harness.api.completedToday = 2;
+      const full = harness.controller.retry();
+      const before = await harness.api.read(2);
+      // Midnight in Mazatlán: a confirmation read sent after it counts none.
+      harness.api.completedToday = 0;
+      const confirmation = harness.controller.refreshForSync();
+      const after = await harness.api.read(3);
+      before.release();
+      await full;
+      expect(harness.controller.current.completedToday).toBe(2);
+
+      after.release();
+      await confirmation;
+
+      expect(harness.controller.current.completedToday).toBe(0);
+      expect(cache.onlySnapshot()?.completedToday).toBe(0);
+    });
+
+    it("still keeps the newer read's count after showing the saved snapshot", async () => {
+      const cache = new MemoryCache();
+      const harness = await gatedHarness(cache, [firstStop]);
+      // A confirmation read leaves before the stop is picked up.
+      const stale = harness.controller.refreshForSync();
+      const confirmation = await harness.api.read(2);
+      harness.api.completedToday = 1;
+      const newer = harness.controller.retry();
+      (await harness.api.read(3)).release();
+      await newer;
+      // The next full read fails: the app shows the snapshot it just saved.
+      harness.api.failWith = new DriverStopsApiError("recoverable");
+      const failed = harness.controller.retry();
+      (await harness.api.read(4)).release();
+      await failed;
+      expect(harness.controller.current).toMatchObject({
+        phase: "offline",
+        completedToday: 1,
+      });
+
+      confirmation.release();
+      await stale;
+
+      expect(harness.controller.current.completedToday).toBe(1);
+      expect(cache.onlySnapshot()?.completedToday).toBe(1);
+    });
+  });
+
   it("keeps the held stop, drops a stale stop that is not held and takes the rest", () => {
     const held = [atPickup];
     const incoming = [firstStop, { ...secondStop, aggregate_version: 3 }];
@@ -768,6 +841,8 @@ function createHarness(
 class GatedStopsApi implements DriverStopsApi {
   public server: readonly DriverStop[];
   public completedToday = 0;
+  /** When set, the server answers each read that arrives with this error. */
+  public failWith: DriverStopsApiError | null = null;
   private readonly reads: { readonly release: () => void }[] = [];
 
   public constructor(server: readonly DriverStop[]) {
@@ -789,6 +864,7 @@ class GatedStopsApi implements DriverStopsApi {
       this.server.map((stop) => (details ? stop : withoutStopDetails(stop))),
       this.completedToday,
     );
+    const failure = this.failWith;
     let release: () => void = () => undefined;
     const arrived = new Promise<void>((resolve) => {
       release = resolve;
@@ -796,6 +872,7 @@ class GatedStopsApi implements DriverStopsApi {
     this.reads.push({ release });
     await arrived;
     if (signal?.aborted) throw new DriverStopsApiError("cancelled");
+    if (failure) throw failure;
     return answer;
   }
 }

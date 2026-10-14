@@ -122,7 +122,15 @@ export function withoutStaleStops(
 
 /** One stops read on its way; see withoutStaleStops. */
 interface StopsRead {
+  /** When it was sent among this controller's stops reads (Q6d). */
+  readonly sentOrder: number;
   readonly newerWhileInFlight: Map<string, number>;
+}
+
+/** Today's completed count and the send order of the read that brought it. */
+interface CompletedTodayRead {
+  readonly sentOrder: number;
+  readonly completedToday: number;
 }
 
 /** Keeps, per order, the highest version recorded for a read on its way. */
@@ -169,6 +177,15 @@ export class DriverStopsController {
   private disposed = false;
   /** Every stops read on its way (full and confirmation reads). */
   private readonly readsInFlight = new Set<StopsRead>();
+  /** Stops reads sent so far, full and confirmation reads alike. */
+  private readsSent = 0;
+  /**
+   * DRV-STALE-STOP-READ-2026-10-14, Q6d "Corregir en este PR (Recommended)":
+   * the read whose `completedToday` is shown and saved. A read sent before it
+   * leaves that count as it is; null until a read is taken (the saved
+   * snapshot shown on opening is not a read).
+   */
+  private shownCompletedToday: CompletedTodayRead | null = null;
   /**
    * Answers are taken one at a time, in the order they arrive: each one is
    * compared with, and merged into, what the previous one left, and the
@@ -347,7 +364,11 @@ export class DriverStopsController {
   }
 
   private beginRead(): StopsRead {
-    const read: StopsRead = { newerWhileInFlight: new Map() };
+    this.readsSent += 1;
+    const read: StopsRead = {
+      sentOrder: this.readsSent,
+      newerWhileInFlight: new Map(),
+    };
     this.readsInFlight.add(read);
     return read;
   }
@@ -357,8 +378,9 @@ export class DriverStopsController {
    * `acceptance`): drops what is stale in it (withoutStaleStops), keeps the
    * details the phone holds (mergeConfirmedStops), saves the snapshot, shows
    * the stops and then tells every other read still on its way which versions
-   * were accepted and which held stops were removed. Resolves null, without
-   * taking anything, when the read was cancelled meanwhile.
+   * were accepted and which held stops were removed. Today's count is taken
+   * unless the read was sent before the one whose count is shown (Q6d). Resolves
+   * null, without taking anything, when the read was cancelled meanwhile.
    */
   private acceptRead(
     read: StopsRead,
@@ -378,7 +400,14 @@ export class DriverStopsController {
         current.stops,
       );
       if (cancelled()) return null;
-      await this.acceptAuthoritativeStops(merged.stops, list.completedToday);
+      // Q6d: a read sent before the one whose count is shown keeps that count,
+      // lower or higher; a read sent after it always brings its own.
+      const shown = this.shownCompletedToday;
+      const completedToday =
+        shown !== null && read.sentOrder < shown.sentOrder
+          ? shown
+          : { sentOrder: read.sentOrder, completedToday: list.completedToday };
+      await this.acceptAuthoritativeStops(merged.stops, completedToday);
       // Q6c: a held stop this read no longer brings counts as removed only when
       // this read left after the app accepted it (no entry of its own for it).
       // A removal can keep the order's version (D8 closes the assignment after
@@ -508,7 +537,7 @@ export class DriverStopsController {
 
   private async acceptAuthoritativeStops(
     stops: readonly DriverStop[],
-    completedToday: number,
+    count: CompletedTodayRead,
   ): Promise<void> {
     if (!this.partition || this.disposed) return;
     const synchronizedAt = this.now().toISOString();
@@ -516,20 +545,21 @@ export class DriverStopsController {
       schemaVersion: DriverStopsSchemaVersion,
       synchronizedAt,
       stops,
-      completedToday,
+      completedToday: count.completedToday,
     });
     await this.options.cache.replaceSnapshot(this.partition, snapshot);
     this.options.telemetry.loadCompleted(
       "rest",
       driverStopCountBucket(stops.length),
     );
+    this.shownCompletedToday = count;
     this.setState({
       phase: stops.length === 0 ? "empty" : "ready",
       stops,
       synchronizedAt,
       realtime: "updated",
       refreshing: false,
-      completedToday,
+      completedToday: count.completedToday,
     });
   }
 
