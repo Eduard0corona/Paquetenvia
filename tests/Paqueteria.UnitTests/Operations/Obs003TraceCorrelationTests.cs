@@ -245,6 +245,8 @@ public sealed class Obs003TraceCorrelationTests
             processor,
             options,
             lanes,
+            SyntheticPseudonymizer.Create(),
+            TimeProvider.System,
             lines.Factory.CreateLogger<AssignmentLifecycleDispatcher>());
 
         await dispatcher.StartAsync(CancellationToken.None);

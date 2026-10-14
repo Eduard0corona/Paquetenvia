@@ -137,8 +137,15 @@ AUTHORIZED_RESOURCE_TYPES = frozenset(
         "Microsoft.Insights/workbooks",
         # OBS-003 (platform.bicep): one workspace-based Application Insights on the pilot workspace (checked by P21).
         "Microsoft.Insights/components",
+        # SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14 (observability.bicep only, RESOURCE_TYPE_TEMPLATES): the two
+        # PostgreSQL connection alerts, pinned by P21; every other metric alert is refused.
+        "Microsoft.Insights/metricAlerts",
     }
 )
+# Authorized types that only one template may declare.
+RESOURCE_TYPE_TEMPLATES = {
+    "Microsoft.Insights/metricAlerts": "observability",
+}
 PROHIBITED_TYPE_PREFIXES = (
     "Microsoft.Cache/",  # GATE-013: no Redis
     "Microsoft.SignalRService/",  # GATE-013: no Azure SignalR Service
@@ -383,6 +390,8 @@ def guard_01_resource_set(ctx: Context) -> GuardResult:
         resource_type = str(resource.get("type", ""))
         if resource_type not in AUTHORIZED_RESOURCE_TYPES:
             failures.append(f"{template} declares unauthorized {resource_type}")
+        elif RESOURCE_TYPE_TEMPLATES.get(resource_type, template) != template:
+            failures.append(f"{template} declares {resource_type}, allowed only in {RESOURCE_TYPE_TEMPLATES[resource_type]}.bicep")
         if any(resource_type.startswith(prefix) for prefix in PROHIBITED_TYPE_PREFIXES):
             failures.append(f"{template} declares prohibited {resource_type}")
     names = sorted(w.name for w in ctx.workloads)
@@ -918,6 +927,85 @@ def _iso_minutes(value: Any) -> int | None:
     return int(match.group(1) or 0) * 60 + int(match.group(2) or 0)
 
 
+# SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14: the only metric alerts of the pilot. Owner answers: "Sí, 80 % y 95 %
+# (Recommended)" (28 and 33 of the 35 B1ms user connections, AI-15 connection_pool_utilization 0.8 and 0.95) and
+# "Máximo en 5 min, cada minuto (Recommended)". Each watches one time series (one server, no dimension); metric alerts
+# are billed per series whatever the frequency, 10 free and then about 0.10 USD per series and month
+# (azure.microsoft.com/en-us/pricing/details/monitor), counted here at that worst case.
+METRIC_ALERT_TYPE = "Microsoft.Insights/metricAlerts"
+METRIC_ALERT_SERIES_MONTHLY_USD = 0.10
+POSTGRES_SKU = "Standard_B1ms"
+POSTGRES_USER_CONNECTIONS = 35
+POSTGRES_SERVER_ID = "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('pg-pv-pilot-{0}', variables('suffix')))]"
+PILOT_ACTION_GROUP_ID = "[resourceId('Microsoft.Insights/actionGroups', 'ag-pv-pilot-ops')]"
+# name -> (severity, threshold): 28 = 80 % and 33 = 95 % (rounded down) of the 35 user connections.
+REQUIRED_CONNECTION_ALERTS = {
+    "mar-pv-pilot-pg-connections-warning": (2, 28),
+    "mar-pv-pilot-pg-connections-critical": (1, 33),
+}
+CONNECTION_ALERT_PROPERTIES = {
+    "description", "severity", "enabled", "scopes", "evaluationFrequency", "windowSize", "autoMitigate", "criteria", "actions",
+}
+CONNECTION_CRITERION = {
+    "criterionType": "StaticThresholdCriterion",
+    "name": "active-connections",
+    "metricNamespace": "Microsoft.DBforPostgreSQL/flexibleServers",
+    "metricName": "active_connections",
+    "timeAggregation": "Maximum",
+    "operator": "GreaterThanOrEqual",
+}
+EMAIL_LITERAL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+")
+
+
+def _connection_alert_failures(ctx: Context) -> tuple[list[str], int]:
+    """SCL-007: exactly the two PostgreSQL connection alerts, on the pilot server's active_connections, through the
+    pilot action group; returns the failures and the number of monitored time series."""
+    failures: list[str] = []
+    alerts = ctx.resources(METRIC_ALERT_TYPE)
+    names = sorted(str(resource.get("name")) for _, resource in alerts)
+    if names != sorted(REQUIRED_CONNECTION_ALERTS):
+        failures.append(f"metric alerts must be exactly {sorted(REQUIRED_CONNECTION_ALERTS)}, found {names}")
+    for template, resource in alerts:
+        name = str(resource.get("name"))
+        expected = REQUIRED_CONNECTION_ALERTS.get(name)
+        if expected is None:
+            continue
+        severity, threshold = expected
+        properties = resource.get("properties", {}) or {}
+        if template != "observability" or resource.get("copy") or resource.get("location") != "global":
+            failures.append(f"{name} must be one literal global resource of observability.bicep")
+        extra = sorted(set(properties) - CONNECTION_ALERT_PROPERTIES)
+        if extra:
+            failures.append(f"{name} sets unexpected properties {extra}")
+        if properties.get("enabled") is not True or properties.get("autoMitigate") is not True:
+            failures.append(f"{name} must be enabled and stateful (autoMitigate)")
+        if properties.get("severity") != severity:
+            failures.append(f"{name} must have severity {severity}, found {properties.get('severity')}")
+        if properties.get("evaluationFrequency") != "PT1M" or properties.get("windowSize") != "PT5M":
+            failures.append(f"{name} must be evaluated every minute (PT1M) over 5 minutes (PT5M)")
+        if properties.get("scopes") != [POSTGRES_SERVER_ID]:
+            failures.append(f"{name} must watch only the pilot PostgreSQL server pg-pv-pilot-<suffix>, found {properties.get('scopes')}")
+        criteria = properties.get("criteria", {}) or {}
+        criterion = dict(CONNECTION_CRITERION, threshold=threshold)
+        found = criteria.get("allOf")
+        if (criteria.get("odata.type") != "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria" or set(criteria) != {"odata.type", "allOf"}
+                or not isinstance(found, list) or len(found) != 1 or found[0] != criterion or type(found[0].get("threshold")) is not int):
+            failures.append(f"{name} must alert on the Maximum of active_connections >= {threshold}, with no dimension or other criterion")
+        if properties.get("actions") != [{"actionGroupId": PILOT_ACTION_GROUP_ID}]:
+            failures.append(f"{name} must notify only through the pilot action group ag-pv-pilot-ops")
+        if EMAIL_LITERAL.search(json.dumps(resource)):
+            failures.append(f"{name} must not contain an e-mail address")
+    servers = ctx.resources("Microsoft.DBforPostgreSQL/flexibleServers")
+    sku = (servers[0][1].get("sku", {}) or {}).get("name") if len(servers) == 1 else None
+    if sku != POSTGRES_SKU:
+        failures.append(f"the PostgreSQL connection alerts (28 and 33) are 80 % and 95 % of the {POSTGRES_USER_CONNECTIONS} user "
+                        f"connections of {POSTGRES_SKU}; revisit them with the server SKU, found {sku}")
+    suffix = ctx.templates.get("observability", {}).get("variables", {}).get("suffix")
+    if suffix is None or suffix != ctx.templates.get("platform", {}).get("variables", {}).get("suffix"):
+        failures.append("observability.bicep must name the PostgreSQL server and the workspace with the same suffix as platform.bicep")
+    return failures, len(alerts)
+
+
 def _alert_rules(template: dict[str, Any], resource: dict[str, Any]) -> list[dict[str, Any]] | str:
     """The rule list behind the scheduledQueryRules copy loop (`for rule in rules`), kept literal."""
     variable = _copy_count_variable(resource)
@@ -1009,7 +1097,9 @@ def guard_21_observability(ctx: Context) -> GuardResult:
     """OBS-002: the pilot alerts exist, run every 5-15 minutes within their cost bound, notify only the
     owner's e-mail (a parameter without default) and read only the PII-free structured events. OBS-003: one
     workspace-based Application Insights on the pilot workspace, the export switch of the API and the Worker is a
-    reviewed literal, and no query reads Application Insights tables or the organization pseudonym."""
+    reviewed literal, and no query reads Application Insights tables or the organization pseudonym. SCL-007: exactly
+    the two PostgreSQL connection metric alerts (28 and 33, Maximum over 5 minutes every minute) on the pilot server,
+    through the same action group, counted in the cost bound; no e-mail address in the template."""
     failures: list[str] = _observability_obs003_failures(ctx)
     template = ctx.templates.get("observability", {})
     parameter = (template.get("parameters", {}) or {}).get("alertEmailAddress")
@@ -1048,7 +1138,11 @@ def guard_21_observability(ctx: Context) -> GuardResult:
     names = sorted(str(r.get("name")) for r in rules)
     if set(names) != REQUIRED_ALERTS or len(names) != len(REQUIRED_ALERTS):
         failures.append(f"alert rules must be exactly {sorted(REQUIRED_ALERTS)}, found {names}")
-    monthly = 0.0
+    connection_failures, series = _connection_alert_failures(ctx)
+    failures.extend(connection_failures)
+    if EMAIL_LITERAL.search(json.dumps(template)):
+        failures.append("observability.bicep must not contain an e-mail address; the owner's goes in observability.parameters.json")
+    monthly = series * METRIC_ALERT_SERIES_MONTHLY_USD
     for rule in rules:
         frequency, window = rule.get("frequency"), rule.get("window")
         if frequency not in ALERT_MONTHLY_USD:
@@ -1070,8 +1164,9 @@ def guard_21_observability(ctx: Context) -> GuardResult:
         failures.append(f"queries read structured-log properties outside the OBS-002 allowlist: {sorted(properties_read - OBSERVABILITY_STATE_PROPERTIES)}")
     if "observability-check" not in ctx.workflow_text or "observability.parameters.json" not in ctx.workflow_text:
         failures.append("workflow must check and deploy observability.parameters.json")
-    return _result(21, "OBS-002 alerts, e-mail action group and cost bound; OBS-003 Application Insights", failures,
-                   f"{len(rules)} alert rules at {monthly:.2f} USD/month, e-mail only; workspace-based Application Insights")
+    return _result(21, "OBS-002 alerts, e-mail action group and cost bound; OBS-003 Application Insights; SCL-007 PostgreSQL connection alerts",
+                   failures, f"{len(rules)} log alert rules and {series} PostgreSQL connection alerts (28 Sev 2, 33 Sev 1) at most "
+                   f"{monthly:.2f} USD/month, e-mail only; workspace-based Application Insights")
 
 
 # ---------------------------------------------------------------------------------------------- UI-001 web

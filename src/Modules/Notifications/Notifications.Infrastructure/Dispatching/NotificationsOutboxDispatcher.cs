@@ -1,15 +1,24 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Paqueteria.Application.Scaling;
 using Paqueteria.Infrastructure.Observability;
 
 namespace Notifications.Infrastructure.Dispatching;
 
+/// <summary>
+/// NTF-001 Worker loop: recover stale leases, claim the owned and the unowned rows, process them. Between polls it
+/// waits adaptively (SCL-007-WORKER-ADAPTIVE-WAIT-2026-10-14): at once after work, then from the poll interval up to the
+/// maximum idle wait while both claims come back empty. Each claimed message runs in the trace that wrote it and, from
+/// OBS-003-WORKER-PSEUDONYM-2026-10-14, in the organization context of its owner (pseudonym and role kind SYSTEM).
+/// </summary>
 internal sealed class NotificationsOutboxDispatcher(
     INotificationsStore store,
     NotificationsOutboxProcessor processor,
     IOptions<NotificationsOptions> options,
     OutboxLaneMonitor lanes,
+    IOrganizationPseudonymizer pseudonymizer,
+    TimeProvider timeProvider,
     ILogger<NotificationsOutboxDispatcher> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -19,6 +28,10 @@ internal sealed class NotificationsOutboxDispatcher(
             return;
         }
 
+        // SCL-007-WORKER-ADAPTIVE-WAIT-2026-10-14: this lane's own wait between polls.
+        var idle = new OutboxIdleWait(
+            options.Value.PollIntervalMilliseconds,
+            options.Value.MaximumIdleWaitMilliseconds);
         var nextRecovery = DateTimeOffset.MinValue;
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -27,7 +40,7 @@ internal sealed class NotificationsOutboxDispatcher(
             using var cycle = TraceCorrelation.StartOutboxDispatchCycle(OutboxLanes.Notifications);
             try
             {
-                if (DateTimeOffset.UtcNow >= nextRecovery)
+                if (timeProvider.GetUtcNow() >= nextRecovery)
                 {
                     var recovered = await store.RecoverStaleAsync(
                         options.Value.EffectiveWorkerId,
@@ -41,7 +54,7 @@ internal sealed class NotificationsOutboxDispatcher(
                         stoppingToken);
                     RecordClaimed(recovered);
                     await ProcessBatchAsync(recovered, processor.ProcessRecoveredAsync, stoppingToken);
-                    nextRecovery = DateTimeOffset.UtcNow.AddSeconds(options.Value.StaleRecoveryIntervalSeconds);
+                    nextRecovery = timeProvider.GetUtcNow().AddSeconds(options.Value.StaleRecoveryIntervalSeconds);
                 }
 
                 var owned = await store.ClaimNotificationsAsync(
@@ -58,9 +71,12 @@ internal sealed class NotificationsOutboxDispatcher(
                 RecordClaimed(unowned);
                 await ProcessBatchAsync(owned, processor.ProcessOwnedAsync, stoppingToken);
                 await ProcessBatchAsync(unowned, processor.ProcessUnownedAsync, stoppingToken);
-                if (owned.Count == 0 && unowned.Count == 0)
+                // SCL-007: a poll whose claims returned work (owned or unowned, a full or a partial batch) polls again
+                // at once and starts the wait over; an empty poll waits longer each time, up to the maximum idle wait.
+                var wait = idle.After(owned.Count + unowned.Count);
+                if (wait > TimeSpan.Zero)
                 {
-                    await Task.Delay(options.Value.PollIntervalMilliseconds, stoppingToken);
+                    await Task.Delay(wait, timeProvider, stoppingToken);
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -71,7 +87,7 @@ internal sealed class NotificationsOutboxDispatcher(
             {
                 lanes.LoopFailed(OutboxLanes.Notifications);
                 logger.LogError("Notifications dispatcher loop failed with outcome {Outcome}.", "LOOP_FAILURE");
-                await Task.Delay(options.Value.PollIntervalMilliseconds, stoppingToken);
+                await Task.Delay(idle.Shortest, timeProvider, stoppingToken);
             }
         }
     }
@@ -100,6 +116,9 @@ internal sealed class NotificationsOutboxDispatcher(
                 // OBS-003 PR 7: each message is processed in the trace that wrote it (its trace_parent), so its log
                 // lines carry the trace id of the originating request; the cycle keeps its own root trace.
                 using var activity = TraceCorrelation.StartOutboxMessage(OutboxLanes.Notifications, message.TraceParent);
+                // OBS-003-WORKER-PSEUDONYM-2026-10-14: every line of the message carries the pseudonym of its owner
+                // organization and the role kind SYSTEM (never the id; never a metric tag or an OBS-002 dimension).
+                using var organization = TelemetryOrganizationContext.EnterSystem(pseudonymizer, message.OwnerOrganizationId);
                 try
                 {
                     await handler(message, token);

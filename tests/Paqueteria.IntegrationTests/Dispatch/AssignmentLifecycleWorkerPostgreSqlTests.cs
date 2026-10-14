@@ -28,6 +28,8 @@ public sealed class AssignmentLifecycleWorkerPostgreSqlTests(PostgreSqlSecurityW
     private const string CheckName = "dispatch_assignment_lifecycle";
     private static readonly Guid OrderId = Guid.Parse("66666666-6666-6666-6666-666666666666");
     private static readonly Guid OwnerId = PostgreSqlSecurityWebApplicationFactory.ViewerOrganizationId;
+    private const string RequestTraceId = "5c6f1e9a2b3d4c5e8f7a6b5c4d3e2f1a";
+    private const string RequestTraceParent = "00-" + RequestTraceId + "-1a2b3c4d5e6f7081-00";
 
     [Fact]
     public async Task Worker_is_registered_disabled_by_default_and_ready()
@@ -66,8 +68,10 @@ public sealed class AssignmentLifecycleWorkerPostgreSqlTests(PostgreSqlSecurityW
         var closing = await CommitClosingEventAsync(scenario.AggregateVersion + 1);
         var reaction = Guid.NewGuid();
         var duplicate = Guid.NewGuid();
-        await InsertReactionAsync(reaction, scenario.AssignmentId, closing);
-        await InsertReactionAsync(duplicate, scenario.AssignmentId, closing);
+        // OBS-003-WORKER-AUDIT-TRACE-2026-10-14: both rows were written inside the same request's trace (a duplicate
+        // delivery of one fact); whichever closes the assignment writes that request's trace id as request_id.
+        await InsertReactionAsync(reaction, scenario.AssignmentId, closing, RequestTraceParent);
+        await InsertReactionAsync(duplicate, scenario.AssignmentId, closing, RequestTraceParent);
         try
         {
             await using var worker = new DispatchLifecycleWorkerFactory(new()
@@ -112,8 +116,10 @@ public sealed class AssignmentLifecycleWorkerPostgreSqlTests(PostgreSqlSecurityW
                 """
                 SELECT count(*) FROM platform.audit_logs
                 WHERE entity_id=@assignment AND action='ASSIGNMENT_CLOSED' AND actor_id IS NULL
+                  AND request_id=@trace
                 """,
-                ("assignment", scenario.AssignmentId)));
+                ("assignment", scenario.AssignmentId),
+                ("trace", RequestTraceId)));
 
             await using var realtimePool = RuntimeDataSource.Create(
                 RuntimeDatabaseRole.Realtime, database.RealtimeConnectionString, maximumPoolSize: 4);
@@ -152,19 +158,19 @@ public sealed class AssignmentLifecycleWorkerPostgreSqlTests(PostgreSqlSecurityW
         return new(id, version, occurredAt);
     }
 
-    private Task InsertReactionAsync(Guid id, Guid assignmentId, ClosingEvent closing) =>
+    private Task InsertReactionAsync(Guid id, Guid assignmentId, ClosingEvent closing, string? traceParent = null) =>
         ExecuteAsync(
             """
             INSERT INTO platform.outbox_events(
               id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,aggregate_version,payload,
-              priority,status,attempts,available_at,created_at)
+              priority,status,attempts,available_at,created_at,trace_parent)
             VALUES (@id,@owner,jsonb_build_object('organization_ids',jsonb_build_array(@owner::text)),
               'dispatch.order-status-reaction-requested','Order',@order,@version,
               jsonb_build_object(
                 'schema_version','order-status-reaction-v1','order_event_id',@event::text,
                 'order_id',@order::text,'previous_status','ASSIGNED','new_status','CANCELLED',
                 'occurred_at',@occurred,'assignment_id',@assignment::text),
-              50,'PENDING',0,clock_timestamp(),@occurred)
+              50,'PENDING',0,clock_timestamp(),@occurred,@trace_parent)
             """,
             ("id", id),
             ("owner", OwnerId),
@@ -172,7 +178,8 @@ public sealed class AssignmentLifecycleWorkerPostgreSqlTests(PostgreSqlSecurityW
             ("version", closing.Version),
             ("event", closing.Id),
             ("occurred", closing.OccurredAt),
-            ("assignment", assignmentId));
+            ("assignment", assignmentId),
+            ("trace_parent", (object?)traceParent ?? DBNull.Value));
 
     private async Task ExecuteAsync(string sql, params (string Name, object Value)[] parameters)
     {

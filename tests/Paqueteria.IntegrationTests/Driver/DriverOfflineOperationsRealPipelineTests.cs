@@ -9,6 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Playwright;
 using Npgsql;
+using Paqueteria.Infrastructure.Observability;
 using Paqueteria.IntegrationTests.Custody;
 using Paqueteria.IntegrationTests.Realtime;
 using Paqueteria.IntegrationTests.Security;
@@ -353,6 +354,8 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton<IConfiguration>(configuration);
+        // OBS-003-WORKER-PSEUDONYM-2026-10-14: proof validation needs the organization pseudonymizer, as in the Worker.
+        services.AddTelemetryOrganizationPseudonym(configuration, new TestHostEnvironment());
         services.AddCustodyInfrastructure(configuration, new TestHostEnvironment());
         return services.BuildServiceProvider(
             new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });

@@ -9,6 +9,7 @@ using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
 using Paqueteria.Application.Tenancy;
 using Paqueteria.Infrastructure.Database.Outbox;
+using Paqueteria.Infrastructure.Observability;
 using Paqueteria.Infrastructure.Tenancy;
 
 namespace Dispatch.Infrastructure.Lifecycle;
@@ -27,7 +28,9 @@ public interface IAssignmentLifecycleReactor
 /// applies. In that single transaction it closes the assignment the fact names, writes the
 /// <c>AssignmentChanged</c> outbox row (<c>AI12-ASSIGNMENT-TERMINAL-STATES</c>) and the audit record
 /// through the shared append-only writer, and settles the claimed DISPATCH row with its lease token.
-/// A lost lease rolls everything back.
+/// A lost lease rolls everything back. From OBS-003-WORKER-AUDIT-TRACE-2026-10-14 the audit record's
+/// <c>request_id</c> is the trace id of the claimed message (its stored <c>trace_parent</c>), the trace of the request
+/// or job that wrote it, in the API's format; a message without a valid stored context keeps NULL.
 /// </summary>
 /// <remarks>
 /// Idempotency: only the assignment Orders found active under the order lock is eligible, and only while
@@ -215,7 +218,10 @@ public sealed class PostgreSqlAssignmentLifecycleReactor(
                 AuditAction,
                 "Assignment",
                 fact.AssignmentId,
-                null,
+                // OBS-003-WORKER-AUDIT-TRACE-2026-10-14: the trace id of the request or job that wrote the message
+                // (32 lowercase hex, as the API writes request_id); NULL without a valid stored context, never the
+                // dispatch cycle's own trace.
+                OutboxTraceContext.TraceIdOf(message.TraceParent),
                 payload,
                 UtcMicrosecondPrecision.Normalize(clock.UtcNow)),
             cancellationToken);

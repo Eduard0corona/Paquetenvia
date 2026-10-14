@@ -64,8 +64,10 @@ The guards keep these values reviewed:
 - P17 refuses any `TelemetryExport__` or `TelemetryPseudonym__` setting in `apps.settings.json`;
 - P21 requires the switch to be a literal and the connection string to come from the pilot component.
 
-**To turn the export on**, after the owner created the pseudonym secret (see "Owner's deploy actions"), change the one
-literal `TelemetryExport__Enabled` from `'false'` to `'true'` in `deploy/azure/pilot/apps.bicep`. The change goes
+**To turn the export on**, after the owner created the pseudonym secret (see "Owner's deploy actions") and after one
+week of pilot, once the daily log volume against the 0.3 GB cap has been measured
+(`OBS-003-EXPORT-AFTER-PILOT-WEEK-2026-10-14`), change the one literal `TelemetryExport__Enabled` from `'false'` to
+`'true'` in `deploy/azure/pilot/apps.bicep`. The change goes
 through the usual PR, promotion to `main` and pilot deploy; the new revisions start exporting. Locally, set
 `TelemetryExport__Enabled=true` and a connection string as environment variables. The hosts read the section while
 they compose, so in a `WebApplicationFactory` test pass it with `UseSetting`.
@@ -232,17 +234,21 @@ No metric tag carries the organization pseudonym, the actor role type, a subject
       `v1-92d9e53b9ba938cafe99ce9cbd949926`;
     - the synthetic key gives `v0-a7d07edf91e714c657196d1683f30a96`.
 - **Actor role kind:** the actor's roles in the selected organization, as their contract values, sorted and comma
-  separated (for example `DISPATCHER,FINANCE`). Never the user, the subject or the e-mail.
+  separated (for example `DISPATCHER,FINANCE`). Never the user, the subject or the e-mail. On the Worker's lines it is
+  the fixed value `SYSTEM` (`OBS-003-WORKER-PSEUDONYM-2026-10-14`, "SYSTEM (Recommended)").
 - **Where it goes:** only where there is an organization context, which is a request that passed
-  `TenantContextMiddleware` with a selected organization (`X-Organization-Id`). Two places:
+  `TenantContextMiddleware` with a selected organization (`X-Organization-Id`), or, since
+  `OBS-003-WORKER-PSEUDONYM-2026-10-14`, one Worker outbox message or one photo with valid signed metadata (log lines
+  only; see below). Two places:
   - the JSON console lines of the rest of the request, as `State.OrganizationPseudonym` and `State.ActorRoleKind`,
     also when the export is off;
   - the request span, when sampled, as `paqueteria.organization.pseudonym` and `paqueteria.actor.role_kind`.
 
-  Requests without a selected organization carry neither: public tracking, sign-in and the probes. Neither do the
-  Worker's lines, because its cycles span many organizations. PR 7 gives each outbox message the trace of the request
-  or job that wrote it, not its organization pseudonym (an open question in `obs-003-outbox-trace-context.md`). The
-  Worker still validates the key at start.
+  Requests without a selected organization carry neither: public tracking, sign-in and the probes. The Worker's cycle
+  lines carry neither either, because its cycles span many organizations. Since `OBS-003-WORKER-PSEUDONYM-2026-10-14`
+  (`obs-003-worker-correlation.md`) the lines of each claimed outbox message of the two Worker lanes carry the
+  pseudonym of the message's owner organization with the role kind `SYSTEM`, and so does proof validation's per-photo
+  line when the photo's signed metadata is valid. The scheduled jobs and the API realtime lanes carry neither.
 - **Where it never goes:** a metric tag, an OBS-002 event or `TelemetryDimensions.Allowed`, an alert, a
   workbook.
   - The log enrichment skips every event an alert or the workbook reads or may read
@@ -309,8 +315,11 @@ weeks after the export is turned on. If metrics crowd the cap, a later decision 
    without it the API and the Worker do not start.
 2. **Deploy as usual.** Stage 2 creates the Application Insights component. Stage 4 passes its connection string with
    `TelemetryExport__Enabled='false'`, so nothing is exported yet. The logs already carry the pseudonym.
-3. **Turn the export on** with a reviewed PR that changes the one literal in `apps.bicep` to `'true'`. Promote it and
-   deploy. Check in Application Insights, under transaction search, that requests show the route template only.
+3. **Turn the export on after one week of pilot** (`OBS-003-EXPORT-AFTER-PILOT-WEEK-2026-10-14`, owner: "Tras una
+   semana de piloto (Recommended)"). First deploy without exporting and measure, for one week, how much of the 0.3 GB
+   daily cap the logs use (`_LogOperation` and the workspace usage). With that number, a reviewed PR changes the one
+   literal in `apps.bicep` to `'true'`. Promote it and deploy. Check in Application Insights, under transaction search,
+   that requests show the route template only.
 4. **No alert.** Nothing reads Application Insights in an alert or the workbook. Any alert on exported data needs its
    own owner decision and `alertEmailAddress`.
 
@@ -447,7 +456,9 @@ weeks after the export is turned on. If metrics crowd the cap, a later decision 
     is refused.
   - `TrackingTokenLogRedactionArchitectureTests` lists the export as a reviewed request-path sink.
 - `tools/azr-001/test_env001_pilot_guards.py`:
-  - P01 allows the component and still refuses other Insights types, a metric alert included;
+  - P01 allows the component and still refuses other Insights types. Since
+    `SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14`, P01 allows metric alerts in `observability.bicep` only, and P21
+    refuses every metric alert other than the two PostgreSQL connection alerts, including one on Application Insights;
   - P06 requires the pseudonym mapping in both hosts and refuses the key in plain environment;
   - P17 refuses the telemetry settings in `apps.settings.json`;
   - P21 fails closed on each of these:

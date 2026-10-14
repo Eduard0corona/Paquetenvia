@@ -216,7 +216,9 @@ dígitos hexadecimales.
 AI-03 §18 pide `trace_id` y `correlation_id` en cada evento. Con "ninguno", cada evento lleva su propia traza, pero no
 la de la petición que lo originó. Con la columna, el `trace_id` de cada evento es el de la petición o tarea que lo
 produjo, y §18 no necesita cambio para `trace_id` y `correlation_id`. El seudónimo de empresa en las líneas por
-mensaje del Worker queda pendiente del owner (AI-08 OBS-003).
+mensaje del Worker y el trace id en sus filas de auditoría se decidieron después, como seguimiento
+(`OBS-003-WORKER-PSEUDONYM-2026-10-14` y `OBS-003-WORKER-AUDIT-TRACE-2026-10-14`,
+`docs/development/obs-003-worker-correlation.md`).
 
 ### PR 8: un pool de conexiones por rol (SCL-007)
 
@@ -245,7 +247,9 @@ Lo aplicado está en `docs/development/scl-007-pool-per-role.md` (`SCL-007-POOL-
 
 Lo aplicado está en `docs/development/scl-007-adaptive-outbox-wait.md` (`SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13`):
 los despachadores de tiempo real de la API esperan 250 ms, 500 ms y luego 1 s (negocio) o 500 ms y luego 1 s
-(ubicación) mientras no hay trabajo; los pollers del Worker no cambian.
+(ubicación) mientras no hay trabajo. Como seguimiento, las colas de notificaciones y del ciclo de vida de asignaciones
+del Worker esperan igual, 250 ms, 500 ms y luego 1 s (`SCL-007-WORKER-ADAPTIVE-WAIT-2026-10-14`, respuesta del owner
+"1 segundo en ambas (Recommended)"); la validación de fotos y las tareas programadas no cambian.
 
 - Mientras los lotes regresan llenos, el despachador vuelve a reclamar de inmediato. Mientras regresan vacíos, espera
   cada vez más, hasta una espera máxima. Al encontrar trabajo, vuelve a empezar.

@@ -1,8 +1,10 @@
-// ENV-001 pilot (PILOT-REAL-PEOPLE), stage 5 of 5: OBS-002 alerts, action group and workbook.
-// Everything here reads the Container Apps console and system logs that platform.bicep already sends
-// to Log Analytics. The queries use only the OBS-002 structured events (fixed lane, job and outcome
+// ENV-001 pilot (PILOT-REAL-PEOPLE), stage 5 of 5: OBS-002 alerts, action group and workbook, and the SCL-007
+// PostgreSQL connection alerts.
+// The OBS-002 alerts and the workbook read the Container Apps console and system logs that platform.bicep already
+// sends to Log Analytics. The queries use only the OBS-002 structured events (fixed lane, job and outcome
 // names, status classes and counts; see docs/development/obs-002-pilot-observability.md), so no alert,
-// notification or workbook ever shows a payload, token, tenant or personal datum.
+// notification or workbook ever shows a payload, token, tenant or personal datum. The SCL-007 alerts read one
+// platform metric of the PostgreSQL server, a connection count.
 targetScope = 'resourceGroup'
 
 param location string = resourceGroup().location
@@ -41,6 +43,9 @@ var tags = {
 // Log search alerts are billed per rule by evaluation frequency (Azure Retail Prices API, mexicocentral,
 // 2026-09-28): PT15M 0.55, PT10M 1.10, PT5M 1.65 USD per month. Five rules, all at PT15M = 2.75 USD per
 // month (OBS-002-ALERTS-15MIN-COST-2026-10-02: readiness also every 15 minutes, window 15 minutes). The workbook is free and the first 1,000 alert e-mails per month are free.
+// Metric alerts are billed per monitored time series, whatever the frequency
+// (azure.microsoft.com/en-us/pricing/details/monitor): the two SCL-007 rules are 2 series, inside the 10 free,
+// otherwise about 0.10 USD per series per month (SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14).
 
 // Event ids in the queries: 4601 OutboxLaneSummary, 4602 ScheduledJobCycle, 4603 HttpStatusSummary
 // (Paqueteria.Infrastructure.Observability.TelemetryEvents) and 4004 OutboxRetentionLaneCompleted (OPS-004).
@@ -48,6 +53,11 @@ var tags = {
 
 resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2025-02-01' existing = {
   name: 'law-pv-pilot-${suffix}'
+}
+
+// platform.bicep (stage 2) creates the server; the SCL-007 connection alerts watch it.
+resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' existing = {
+  name: 'pg-pv-pilot-${suffix}'
 }
 
 resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
@@ -216,6 +226,89 @@ resource alertRules 'Microsoft.Insights/scheduledQueryRules@2023-12-01' = [for r
   }
 }]
 
+// ---------------------------------------------------------------- SCL-007 PostgreSQL connections (metric alerts)
+// SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14 (owner: "Sí, 80 % y 95 % (Recommended)" and "Máximo en 5 min, cada
+// minuto (Recommended)"). The B1ms server has 35 user connections (50 max_connections, 15 reserved by Azure); the
+// runtime pools hold 24 at most (docs/development/scl-007-pool-per-role.md). The alerts are the backstop when the
+// pools are unbalanced by hand or a revision change briefly holds two sets of pools.
+// Metric `active_connections` (Microsoft.DBforPostgreSQL/flexibleServers, Count, PT1M; learn.microsoft.com
+// azure-monitor/reference/supported-metrics/microsoft-dbforpostgresql-flexibleservers-metrics): every connection
+// in pg_stat_activity, whatever its state. Maximum of the one-minute samples in the last 5 minutes, checked every
+// minute, so a single sample at the threshold fires. Stateful: one e-mail when it fires and one when it resolves.
+// Thresholds are literal on purpose (guard P21 pins them): 28 = 80 % and 33 = 95 % of the 35 user connections
+// (AI-15 connection_pool_utilization warning 0.8 and critical 0.95).
+resource postgresConnectionsWarning 'Microsoft.Insights/metricAlerts@2018-03-01' = {
+  name: 'mar-pv-pilot-pg-connections-warning'
+  location: 'global'
+  tags: tags
+  properties: {
+    description: 'SCL-007: the pilot PostgreSQL server reached 28 connections (80 % of its 35 user connections) in the last 5 minutes.'
+    severity: 2
+    enabled: true
+    scopes: [
+      postgres.id
+    ]
+    evaluationFrequency: 'PT1M'
+    windowSize: 'PT5M'
+    autoMitigate: true
+    criteria: {
+      'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
+      allOf: [
+        {
+          criterionType: 'StaticThresholdCriterion'
+          name: 'active-connections'
+          metricNamespace: 'Microsoft.DBforPostgreSQL/flexibleServers'
+          metricName: 'active_connections'
+          timeAggregation: 'Maximum'
+          operator: 'GreaterThanOrEqual'
+          threshold: 28
+        }
+      ]
+    }
+    actions: [
+      {
+        actionGroupId: actionGroup.id
+      }
+    ]
+  }
+}
+
+resource postgresConnectionsCritical 'Microsoft.Insights/metricAlerts@2018-03-01' = {
+  name: 'mar-pv-pilot-pg-connections-critical'
+  location: 'global'
+  tags: tags
+  properties: {
+    description: 'SCL-007: the pilot PostgreSQL server reached 33 connections (95 % of its 35 user connections) in the last 5 minutes.'
+    severity: 1
+    enabled: true
+    scopes: [
+      postgres.id
+    ]
+    evaluationFrequency: 'PT1M'
+    windowSize: 'PT5M'
+    autoMitigate: true
+    criteria: {
+      'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
+      allOf: [
+        {
+          criterionType: 'StaticThresholdCriterion'
+          name: 'active-connections'
+          metricNamespace: 'Microsoft.DBforPostgreSQL/flexibleServers'
+          metricName: 'active_connections'
+          timeAggregation: 'Maximum'
+          operator: 'GreaterThanOrEqual'
+          threshold: 33
+        }
+      ]
+    }
+    actions: [
+      {
+        actionGroupId: actionGroup.id
+      }
+    ]
+  }
+}
+
 // ---------------------------------------------------------------- workbook (free)
 var workbookQueries = {
   httpByStatusClass: '''
@@ -348,3 +441,7 @@ resource workbook 'Microsoft.Insights/workbooks@2023-06-01' = {
 output actionGroupName string = actionGroup.name
 output alertRuleNames array = [for (rule, i) in rules: alertRules[i].name]
 output workbookName string = workbook.name
+output connectionAlertNames array = [
+  postgresConnectionsWarning.name
+  postgresConnectionsCritical.name
+]

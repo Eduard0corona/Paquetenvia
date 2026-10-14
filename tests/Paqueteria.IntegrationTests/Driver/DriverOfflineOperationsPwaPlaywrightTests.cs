@@ -1516,6 +1516,97 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         Assert.Equal(1, backend.UploadCount);
     }
 
+    /// <summary>
+    /// DRV-STALE-STOP-READ-2026-10-14: a full stops read the server answered before the check-in, delivered only after
+    /// the sync read the stop at AT_PICKUP version 4 and the photo is in preview, is stale for that stop: the stop
+    /// stays AT_PICKUP (screen and saved snapshot), the photo stays in its preview and "Usar esta foto" sends it
+    /// (docs/development/driver-photo-selection-refresh.md, residual risk now fixed). The check-in is saved offline
+    /// and the page that sends it is a fresh one, whose opening read is the stale one.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Previewed_photo_survives_a_stale_stop_read()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        const string cacheNamespace = "opaque-stale-stop-read";
+        var backend = new SyntheticOfflineBackend();
+        var first = await context.NewPageAsync();
+        await InstallSessionAsync(first, cacheNamespace);
+        await backend.RouteAsync(first);
+        await first.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(first, "Llegué a recolección");
+        await context.SetOfflineAsync(true);
+        try
+        {
+            await EnqueueButtonAsync(first, "Llegué a recolección");
+            await WaitForOperationCountAsync(first, 1);
+            await first.CloseAsync();
+        }
+        finally
+        {
+            await context.SetOfflineAsync(false);
+        }
+
+        // The opening read of the next page is answered at ASSIGNED version 3 and delivered later; the check-in it
+        // sends waits until that read reached the server.
+        backend.HoldNextFullReadAsStale();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, cacheNamespace);
+        await backend.RouteAsync(page);
+        var photoSha256 = Convert.ToHexStringLower(SHA256.HashData(FirstPreviewPng));
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await backend.StaleFullReadArrived.WaitAsync(TimeSpan.FromSeconds(15));
+
+        // The sync applies the check-in and reads AT_PICKUP version 4; the photo goes to its preview.
+        await WaitUntilAsync(() => backend.TransitionTargets.Count == 1);
+        await WaitForOperationCountAsync(page, 0);
+        await ExpectTextAsync(page, "Confirmar recolección");
+        var confirmed = await ReadSnapshotAsync(page);
+        Assert.EndsWith("|AT_PICKUP/4", confirmed);
+        await page.Locator("input[type=file]").SetInputFilesAsync(
+            new FilePayload
+            {
+                Name = "previewed-before-stale-read.png",
+                MimeType = "image/png",
+                Buffer = FirstPreviewPng,
+            });
+        var previewUrl = await WaitForDecodedPreviewAsync(page);
+
+        // The stale read lands: the app takes it (the snapshot is saved again) but keeps the stop at version 4.
+        backend.ReleaseStaleFullRead();
+        await backend.StaleFullReadDelivered.WaitAsync(TimeSpan.FromSeconds(15));
+        var afterStale = await WaitForSnapshotChangeAsync(page, confirmed);
+        Assert.EndsWith("|AT_PICKUP/4", afterStale);
+        await ExpectTextAsync(page, "Confirmar recolección");
+        Assert.Equal(
+            0,
+            await page.GetByRole(AriaRole.Button, new() { Name = "Llegué a recolección" }).CountAsync());
+        Assert.True(await page.GetByRole(
+                AriaRole.Heading,
+                new() { Name = "Vista previa de la foto" })
+            .IsVisibleAsync());
+        Assert.Equal(
+            previewUrl,
+            await page.GetByRole(AriaRole.Img, new() { Name = "Foto de evidencia tomada" })
+                .GetAttributeAsync("src"));
+
+        // "Usar esta foto" queues and sends exactly that photo.
+        await page.GetByRole(AriaRole.Button, new() { Name = "Usar esta foto" })
+            .ClickAsync();
+        await ExpectTextAsync(page, "Iniciar traslado");
+        await WaitUntilAsync(() => backend.TransitionTargets.Count == 2);
+        await WaitForOperationCountAsync(page, 0);
+        await WaitForProofCountAsync(page, 0);
+        Assert.Equal(["AT_PICKUP", "PICKED_UP"], backend.TransitionTargets);
+        Assert.Equal([photoSha256], backend.SessionSha256.Distinct());
+        Assert.Equal(1, backend.UploadCount);
+    }
+
     [Fact]
     [Trait("Category", "DriverOfflineOperationsPwa")]
     public async Task Lost_transition_response_is_confirmed_by_rest_before_resend()
@@ -2194,6 +2285,58 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
     }
 
     /// <summary>
+    /// The saved stops snapshot of the page's only partition as "synchronizedAt|STATUS/version,...", without any other
+    /// stop field.
+    /// </summary>
+    private static Task<string> ReadSnapshotAsync(IPage page) =>
+        page.EvaluateAsync<string>(
+            """
+            () => new Promise((resolve, reject) => {
+              const open = indexedDB.open("paquetenvia-driver-stops-v1", 5);
+              open.onerror = () => reject(open.error);
+              open.onsuccess = () => {
+                const database = open.result;
+                const request = database.transaction("snapshots", "readonly")
+                  .objectStore("snapshots").getAll();
+                request.onerror = () => {
+                  database.close();
+                  reject(request.error);
+                };
+                request.onsuccess = () => {
+                  database.close();
+                  if (request.result.length !== 1) {
+                    reject(new Error("expected exactly one stops snapshot"));
+                    return;
+                  }
+                  const snapshot = request.result[0];
+                  resolve(snapshot.synchronizedAt + "|" + snapshot.stops
+                    .map(stop => `${stop.status}/${stop.aggregate_version}`)
+                    .join(","));
+                };
+              };
+            })
+            """);
+
+    /// <summary>Waits until the app saves the stops snapshot again and returns it (see <see cref="ReadSnapshotAsync"/>).</summary>
+    private static async Task<string> WaitForSnapshotChangeAsync(IPage page, string previous)
+    {
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(15);
+        while (true)
+        {
+            var current = await ReadSnapshotAsync(page);
+            if (current != previous)
+            {
+                return current;
+            }
+            if (DateTimeOffset.UtcNow >= deadline)
+            {
+                throw new TimeoutException($"The stops snapshot was not saved again: {current}");
+            }
+            await Task.Delay(50);
+        }
+    }
+
+    /// <summary>
     /// Queue diagnostics without proof bytes, tokens or signed URLs.
     /// </summary>
     private static Task<string> ReadOperationsAsync(IPage page) =>
@@ -2363,6 +2506,11 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         private readonly object gate = new();
         private readonly TaskCompletionSource heldReadArrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private readonly TaskCompletionSource heldReadsReleased = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource staleFullReadArrived = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource staleFullReadReleased = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource staleFullReadDelivered = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private bool staleFullReadRequested;
+        private bool holdNextFullRead;
         private readonly ConcurrentDictionary<string, int> finalizeAttempts = new();
         private readonly Dictionary<string, string> sessionsByKey = [];
         private readonly Dictionary<string, FinalizedProof> proofsByKey = [];
@@ -2397,6 +2545,25 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         internal bool HoldReadsAfterTransition { get; init; }
         internal Task HeldReadArrived => heldReadArrived.Task;
         internal void ReleaseHeldReads() => heldReadsReleased.TrySetResult();
+
+        /// <summary>
+        /// DRV-STALE-STOP-READ-2026-10-14: the next full stops read (not the <c>details=false</c> read the sync
+        /// confirms with) is answered with the order as it is when that read arrives and reaches the page only after
+        /// <see cref="ReleaseStaleFullRead"/>. Transitions wait until that read has arrived, so its answer is older
+        /// than any transition the page sends meanwhile.
+        /// </summary>
+        internal void HoldNextFullReadAsStale()
+        {
+            lock (gate)
+            {
+                staleFullReadRequested = true;
+                holdNextFullRead = true;
+            }
+        }
+
+        internal Task StaleFullReadArrived => staleFullReadArrived.Task;
+        internal Task StaleFullReadDelivered => staleFullReadDelivered.Task;
+        internal void ReleaseStaleFullRead() => staleFullReadReleased.TrySetResult();
 
         /// <summary>UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: cash the DELIVERY stop expects; 0 means none.</summary>
         internal long CodExpectedCents { get; init; }
@@ -2488,9 +2655,25 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         private async Task HoldThenRouteStopsAsync(IRoute route)
         {
             bool hold;
+            bool stale;
             lock (gate)
             {
                 hold = HoldReadsAfterTransition && TransitionTargets.Count > 0;
+                stale = holdNextFullRead && new Uri(route.Request.Url).Query != "?details=false";
+                if (stale)
+                {
+                    holdNextFullRead = false;
+                }
+            }
+            if (stale)
+            {
+                // Answered now, delivered later.
+                var answer = StopsResponse(route.Request);
+                staleFullReadArrived.TrySetResult();
+                await staleFullReadReleased.Task;
+                await route.FulfillAsync(answer);
+                staleFullReadDelivered.TrySetResult();
+                return;
             }
             if (hold)
             {
@@ -2500,16 +2683,18 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             await RouteStopsAsync(route);
         }
 
-        private Task RouteStopsAsync(IRoute route)
+        private Task RouteStopsAsync(IRoute route) => route.FulfillAsync(StopsResponse(route.Request));
+
+        private RouteFulfillOptions StopsResponse(IRequest request)
         {
             if (StopsFailureStatus is int failure)
             {
-                return route.FulfillAsync(new RouteFulfillOptions
+                return new RouteFulfillOptions
                 {
                     Status = failure,
                     ContentType = "application/problem+json",
                     Body = """{"code":"ACCESS_UNAVAILABLE"}""",
-                });
+                };
             }
             object[] payload;
             lock (gate)
@@ -2534,16 +2719,25 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
                             codRecorded: codRecorded),
                     ];
             }
-            return route.FulfillAsync(new RouteFulfillOptions
+            return new RouteFulfillOptions
             {
                 Status = 200,
                 ContentType = "application/json; charset=utf-8",
-                Body = DriverStopsPwaPlaywrightTests.StopsBody(route.Request, payload),
-            });
+                Body = DriverStopsPwaPlaywrightTests.StopsBody(request, payload),
+            };
         }
 
         private async Task RouteTransitionAsync(IRoute route)
         {
+            bool waitForStaleRead;
+            lock (gate)
+            {
+                waitForStaleRead = staleFullReadRequested;
+            }
+            if (waitForStaleRead)
+            {
+                await staleFullReadArrived.Task;
+            }
             var request = JsonDocument.Parse(route.Request.PostData ?? "{}").RootElement;
             var target = request.GetProperty("target_status").GetString()!;
             var key = await route.Request.HeaderValueAsync("Idempotency-Key") ?? string.Empty;

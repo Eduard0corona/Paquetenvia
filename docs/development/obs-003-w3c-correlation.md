@@ -118,17 +118,19 @@ Every audit row written while handling an API request carries the request's trac
 webhooks included. These rows do not, on purpose or for now:
 
 - **Worker writers.** `ProofValidationProcessor` (`custody.proof_upload_session.ready` and `.rejected`) and
-  `PostgreSqlAssignmentLifecycleReactor` (the assignment lifecycle audit) write `request_id = NULL`. They run in a
+  `PostgreSqlAssignmentLifecycleReactor` (the assignment lifecycle audit) wrote `request_id = NULL`. They run in a
   Worker cycle, not in a request. PR 7 (`obs-003-outbox-trace-context.md`) runs each outbox message in the trace of
-  the request or job that wrote it, for its log lines; these audit rows still write `NULL`, and writing that trace id
-  into them is a separate, open question.
+  the request or job that wrote it, for its log lines. Since `OBS-003-WORKER-AUDIT-TRACE-2026-10-14`
+  (`obs-003-worker-correlation.md`) the reactor's `ASSIGNMENT_CLOSED` row writes that trace id, NULL when the message
+  has no stored context, never the cycle's own trace; proof validation and the scheduled order auto-close keep NULL.
 - **`PENDING_MEMBERSHIP_ACCEPTED` (REG-002).** `security.apply_pending_memberships(text,bytea[],integer[])` writes it
   during the AuthCenter sign-in callback, which is an API request, with `request_id = NULL`: the SECURITY DEFINER
   function takes no request id. Passing one changes the function's signature (a migration, AI-06 and AI-18), so it
   is left for a separate change.
 - **The master data loader** (`MASTER_DATA_LOADED`) is a command-line tool, not a request; it writes `mdm-001`.
 
-AI-05 (`Problem.traceId` and the `OBS-003-W3C-CORRELATION` contract delta) says exactly this.
+AI-05 `Problem.traceId` states the current rule; the `OBS-003-W3C-CORRELATION` and `OBS-003-WORKER-AUDIT-TRACE`
+contract deltas record each change.
 
 ## Found, not changed here
 

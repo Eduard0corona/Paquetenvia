@@ -123,7 +123,11 @@ schema es `1`. Cada registro contiene únicamente:
 La key es un SHA-256 base64url del namespace opaco y la organización. No contiene
 el token, el tenant en claro ni PII. Un 200 válido reemplaza atómicamente el
 snapshot completo, conserva el orden REST y elimina paradas que dejaron de
-estar asignadas. El orden REST sigue la ruta del conductor (RTE-001): primero las
+estar asignadas. Actualización DRV-STALE-STOP-READ-2026-10-14: de una respuesta
+que ya iba en camino cuando la app aceptó una versión más nueva de una parada,
+esa parada no se toma (se queda la que la app tiene y una parada que ya salió
+no vuelve); las respuestas se toman de una en una, en el orden en que llegan.
+Ver `driver-photo-selection-refresh.md`. El orden REST sigue la ruta del conductor (RTE-001): primero las
 asignaciones ligadas a una ruta, por ruta y `sequence` de la parada del tipo al que
 se dirige el conductor (`PICKUP` antes de la custodia, `DELIVERY` después, `RETURN`
 al devolver; si la ruta no tiene parada de ese tipo, la primera de la orden); después las

@@ -1,5 +1,125 @@
 # Changelog
 
+## Repartidor: lecturas viejas de la parada (DRV-STALE-STOP-READ-2026-10-14) — 2026-10-14
+
+- Respuestas literales del project owner (2026-10-14), registradas en `decision-log.md` con su contexto y las opciones
+  no elegidas: Q6 "Sí, en un PR aparte (Recommended)" ("La app descarta una lectura de la parada más vieja que la última aceptada (por versión). No cambia lo que ve el repartidor salvo evitar ese parpadeo. Con prueba de regresión."), Q6b "Se aplica, como hoy (Recommended)" ("La app solo descarta una lectura que ya iba en camino cuando aceptó una versión más nueva de esa parada; una lectura pedida después siempre se aplica. Evita igual el parpadeo. Tras una restauración, el repartidor ve lo que dice el servidor desde la siguiente lectura."); en la revisión del PR
+  #271, Q6c "Solo paradas ya vistas (Recommended)" ("Una lectura en camino ignora la parada solo si la lectura que la quitó salió cuando la app ya tenía esa parada. Corrige el caso del revisor (una parada quitada ya no regresa con datos viejos) y una parada recién asignada nunca queda oculta más que hoy. Queda un hueco raro: con tres lecturas cruzadas, la parada quitada podría reaparecer una vez, hasta la siguiente lectura.") y, tras el comentario de revisión 4267824654, Q6d "Corregir en este PR (Recommended)" ("Si una lectura que salió antes llega después de una más nueva, el contador se queda con el valor de la más nueva. Mismo criterio que las paradas: una lectura pedida después siempre se aplica. Con prueba de regresión; el PR tarda un poco más.").
+- La PWA del repartidor ya no toma una parada de una lectura que iba en camino cuando la app aceptó una versión más
+  nueva de esa parada: la parada que tiene se queda y una parada que ya salió de la lista no vuelve. Las respuestas se
+  toman de una en una, en el orden en que llegan, así que la pantalla y la instantánea se escriben en ese orden.
+  Corrige el riesgo residual de `docs/development/driver-photo-selection-refresh.md` (PR #268): una lectura completa
+  respondida antes del check-in que llegaba después de su confirmación regresaba la parada y perdía la foto en vista
+  previa.
+- Una parada quitada (Q6c): si una lectura que salió cuando la app ya tenía la parada deja de traerla, cada otra
+  lectura en camino la anota en la versión que la app tenía + 1. No la regresa con esa versión ni con una menor, y la
+  toma con esa + 1 o una mayor (una asignación nueva). Una parada puede salir de la lista sin subir la versión de la
+  orden: D8 cierra la asignación tras FAILED_ATTEMPT→RESCHEDULED sin tocar la orden.
+- El contador "Hoy · N paradas · K hechas" (Q6d): cada lectura de paradas, completa o de confirmación, recibe un
+  número de orden al salir y la app recuerda el de la lectura cuyo contador muestra. Una lectura que salió antes que
+  esa no cambia el contador, ni en pantalla ni en la instantánea, sea el suyo menor o mayor; cualquier otra lectura
+  trae el suyo, así que una lectura pedida después se toma siempre, aunque traiga un número menor (un día nuevo). Al
+  abrir no hay ninguna recordada: la primera lectura que se toma trae su contador. La hora de sincronización sigue
+  cada lectura como antes.
+- Sin cambio: versión igual de una parada que la app tiene, una parada que la lectura no trae (sale de la lista,
+  DRV-001), una lectura pedida después (también tras restaurar la base), la cola y sus reglas (DRV-002), API, SQL,
+  migraciones e IndexedDB. Pruebas de regresión en Vitest y en `DriverOfflineOperationsPwa`; la parada quitada y el
+  contador sólo en Vitest.
+
+## Esperas encadenadas del Worker y del tiempo real aceptadas (SCL-007-WORKER-CHAINED-WAIT-2026-10-14) — 2026-10-14
+
+- Respuesta literal del project owner (2026-10-14), registrada en `decision-log.md` con su contexto y las opciones no
+  elegidas: "Dejarlo así (Recommended)" ("Se acepta hasta unos 2 s en el peor caso para esos avisos tras un rato sin
+  trabajo. Con trabajo no hay espera. La pantalla de quien asigna se actualiza al momento con su propia respuesta; el
+  retraso es para las otras pantallas y la app del repartidor.").
+- Los avisos en pantalla de cambio de asignación y de estado de notificación pasan por la cola del Worker y luego por la
+  de tiempo real. Tras un rato sin trabajo, las dos esperas pueden sumar unos 2 s en el peor caso (antes unos 0.5 s). El
+  owner lo acepta; las dos colas del Worker conservan su espera máxima de 1 s.
+- Sin cambios de código, configuración, SQL, permisos, migraciones, Bicep ni paquetes. AI-08 SCL-007 registra la
+  aceptación junto al criterio de la espera del Worker. Nota: `docs/development/scl-007-adaptive-outbox-wait.md`.
+
+## Traza y seudónimo en el Worker, y momento de la exportación (OBS-003-WORKER-AUDIT-TRACE-2026-10-14, OBS-003-WORKER-PSEUDONYM-2026-10-14 y OBS-003-EXPORT-AFTER-PILOT-WEEK-2026-10-14, seguimiento de la fase 4) — 2026-10-14
+
+- Respuestas literales del project owner (2026-10-14), registradas en `decision-log.md` con su contexto, la corrección
+  que se le dio antes de QA–QC y las opciones no elegidas:
+  - auditoría del Worker (Q1): "Sí, en un PR aparte (Recommended)" ("Desde ese PR, esas filas guardan el trace id del
+    mensaje. Las filas que ya existen no cambian (la auditoría es de solo agregar). Cambia el contenido de la evidencia
+    de auditoría desde ese momento."); validación de fotos (QA): "Se quedan vacías (Recommended)";
+  - logs del Worker (Q2): "Sí, en un PR aparte (Recommended)" ("Mismo seudónimo HMAC de la fase 4, nunca el id real, y
+    nunca como dimensión de métricas o alertas. Permite filtrar en Log Analytics los mensajes de una organización.");
+    tipo de actor (QB): "SYSTEM (Recommended)"; validación de fotos (QC): "Sí, si los metadatos son válidos
+    (Recommended)";
+  - exportación (Q5): "Tras una semana de piloto (Recommended)" ("Primero se despliega sin exportar y se mide una semana
+    cuánto ocupan los logs del tope diario. Con ese dato se enciende en un PR. Así no arriesgamos los logs de las
+    alertas en los primeros días.").
+- La fila `ASSIGNMENT_CLOSED` que escribe el Worker guarda en `platform.audit_logs.request_id` el trace id del mensaje
+  que procesa (el de la petición o tarea que lo escribió, 32 hexadecimales en minúscula, igual que la API). Un mensaje
+  sin contexto de traza guardado deja NULL, nunca la traza de la vuelta del Worker. La validación de fotos y el cierre
+  automático de órdenes siguen con NULL. Las filas existentes no cambian; sin cambios de base de datos, acciones ni
+  actores.
+- Cada línea que el Worker escribe al procesar un mensaje de notificaciones o del ciclo de vida de asignaciones lleva el
+  seudónimo HMAC de la organización dueña del mensaje (`owner_org_id`, que las funciones de claim ya devuelven) y el tipo
+  de actor `SYSTEM`. La línea por foto de la validación lleva lo mismo cuando los metadatos firmados son válidos. Un
+  dueño desconocido o metadatos inválidos no llevan organización. Nunca el id real, ni etiqueta de métrica, ni dimensión
+  de alerta, libro de trabajo o `TelemetryDimensions`. Los lanes de tiempo real de la API no cambian.
+- La exportación a Application Insights sigue apagada (`TelemetryExport__Enabled='false'`). Se enciende en un PR
+  posterior tras una semana de piloto, cuando se haya medido el volumen diario de logs contra el tope de 0.3 GB. Sin
+  cambio de código.
+- AI-08 OBS-003: los dos criterios PENDING pasan a DECIDED y se agrega el criterio de Q5. AI-05: la descripción de
+  `Problem.traceId` dice la regla actual de las filas del Worker y la entrada `OBS-003-WORKER-AUDIT-TRACE` de
+  `x-pilot-contract-deltas` registra el cambio de solo descripción. AI-03 §18 no cambia. Notas:
+  `docs/development/obs-003-worker-correlation.md`.
+
+## Alerta de conexiones de PostgreSQL en el piloto (SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14) — 2026-10-14
+
+- Respuestas literales del project owner (2026-10-14), registradas en `decision-log.md` con su contexto y las opciones
+  no elegidas:
+  - "¿Creamos la alerta de Azure Monitor sobre conexiones de PostgreSQL? Es el respaldo si alguien desbalancea los pools a mano." Respuesta: "Sí, 80 % y 95 % (Recommended)" ("Dos reglas sobre las 35 conexiones de usuario: aviso en 28 y crítico en 33, como pide AI-15. Son 2 series, dentro de las 10 gratis por recurso; si no, unos 0.10 USD por serie al mes. Avisa al correo de alertas que pongas al desplegar.");
+  - "Alerta de conexiones de PostgreSQL (aviso en 28, crítico en 33): ¿con qué cálculo y cada cuánto la evaluamos? Es la primera alerta de métrica del piloto; las de OBS-002 son de logs cada 15 min, y ese ritmo se eligió por costo. Esta alerta cuesta lo mismo con cualquier frecuencia, porque se cobra por serie y no por evaluación." Respuesta: "Máximo en 5 min, cada minuto (Recommended)".
+- `deploy/azure/pilot/observability.bicep` (etapa 5 del flujo del piloto, sin cambios en el flujo) declara dos alertas de
+  métrica de Azure Monitor sobre `active_connections` del servidor `pg-pv-pilot-<suffix>`: `mar-pv-pilot-pg-connections-warning`
+  (28 o más, severidad 2) y `mar-pv-pilot-pg-connections-critical` (33 o más, severidad 1). Son el 80 % y el 95 % de las
+  35 conexiones de usuario del B1ms, el `connection_pool_utilization` 0.8 y 0.95 de AI-15. Cada una toma el máximo de las
+  muestras de un minuto de los últimos 5 minutos y se evalúa cada minuto; avisan al grupo de acciones `ag-pv-pilot-ops`
+  (un correo al dispararse y otro al resolverse). El correo sigue siendo el parámetro `alertEmailAddress`
+  (OWNER_DECISION_REQUIRED); no se escribe ninguna dirección.
+- Costo: 2 series, dentro de las 10 gratis por recurso; si no, unos 0.10 USD por serie al mes
+  (azure.microsoft.com/en-us/pricing/details/monitor). El precio no depende de la frecuencia.
+- Guardas del piloto: P01 admite `Microsoft.Insights/metricAlerts` solo en `observability.bicep`; P21 exige exactamente
+  estas dos reglas (servidor, métrica, agregación, ventana, frecuencia, umbral, severidad, grupo de acciones), rechaza
+  cualquier otra alerta de métrica y cualquier correo escrito en la plantilla, exige el SKU Standard_B1ms y suma las dos
+  series al tope de 5 USD de las alertas. Las pruebas prueban que cada desviación falla cerrada.
+- AI-08 SCL-007: el criterio PENDING pasa a DECIDED y se agrega la prueba de la guarda. AI-15 no lista reglas de alerta y
+  no cambia. Sin cambios de código, esquema, roles, permisos, paquetes ni topología de CI. Riesgo residual: Microsoft no
+  documenta si `active_connections` cuenta las conexiones propias de Azure (`azure_superuser`); el primer despliegue lo
+  compara con `pg_stat_activity` por usuario. Notas: `docs/operations/env-001-pilot/README.md` §10 y
+  `docs/development/scl-007-pool-per-role.md`.
+
+## Espera adaptativa en las colas del Worker (SCL-007-WORKER-ADAPTIVE-WAIT-2026-10-14, seguimiento de la fase 4) — 2026-10-14
+
+- Respuesta literal del project owner (2026-10-14), registrada en `decision-log.md` con su contexto y las opciones no
+  elegidas: "1 segundo en ambas (Recommended)" ("Sin trabajo bajan a unas 2 consultas por segundo. La primera
+  notificación o evento después de un rato sin trabajo tarda hasta 1 s más. Igual que lo que elegiste para los avisos
+  en tiempo real.").
+- Las colas de notificaciones y del ciclo de vida de asignaciones del Worker usan la misma espera adaptativa que los
+  despachadores de tiempo real (`OutboxIdleWait`, que pasa a `Paqueteria.Application.Scaling` para que los cuatro lanes
+  usen una sola implementación). Cuando una consulta trae trabajo, lleno o parcial (en notificaciones, propio o sin
+  dueño), vuelven a consultar de inmediato y la espera empieza de nuevo; tras una consulta vacía esperan 250 ms, 500 ms
+  y luego 1 s. Cada lane tiene su propia espera.
+- Sin trabajo pasan de unas 8 a unas 2 consultas por segundo entre las dos colas. Cada consulta de notificaciones son
+  dos claims (propios y sin dueño), así que en transacciones de claim pasan de unas 12 a unas 3 por segundo.
+- Configuración validada al arrancar: `Notifications:MaximumIdleWaitMilliseconds` y
+  `Dispatch:AssignmentLifecycle:MaximumIdleWaitMilliseconds`, 1000 por defecto. Un valor menor que el intervalo de poll
+  del lane, mayor que 1000 ms o que no sea un número impide arrancar el Worker, con los mismos límites que los lanes de
+  tiempo real.
+- Se mantienen el latido por minuto de `OutboxLaneSummary` (OBS-002) y el aviso `oldest_outbox_age_seconds` de AI-15
+  (60 s). `MaxClaimAgeMs` incluye la espera. La primera notificación o reacción después de un rato sin trabajo espera
+  hasta 1 s (antes 250 ms).
+- Solo se usan las funciones existentes de claim, settle y requeue con `lease_token`. La validación de fotos y las tareas
+  programadas no cambian.
+- AI-08 SCL-007 registra la decisión y sus límites. Sin cambios en AI-04, AI-05, AI-06, AI-12, AI-13, AI-15, AI-18,
+  AI-24, SQL, permisos, migraciones, secretos, Bicep ni paquetes. Nota: `docs/development/scl-007-adaptive-outbox-wait.md`.
+
 ## Pruebas de punta a punta de la plataforma (OPS-005-JOURNEYS-2026-10-13, OPS-005-E2E-LOCKFILE-REL000-2026-10-14 y OPS-005-SUITE-IN-INTEGRATIONTESTS-2026-10-14, fase 4 PR 10) — 2026-10-14
 
 - Respuesta literal del project owner (2026-10-13), registrada en `decision-log.md` con su contexto y las opciones no

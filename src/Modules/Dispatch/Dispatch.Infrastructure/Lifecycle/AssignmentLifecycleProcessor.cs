@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Paqueteria.Application;
+using Paqueteria.Application.Scaling;
 using Paqueteria.Infrastructure.Observability;
 
 namespace Dispatch.Infrastructure.Lifecycle;
@@ -104,12 +105,19 @@ public sealed class AssignmentLifecycleProcessor(
     }
 }
 
-/// <summary>D8-OUTBOX-LANE-DISPATCH Worker loop: requeue stale leases, claim, react.</summary>
+/// <summary>
+/// D8-OUTBOX-LANE-DISPATCH Worker loop: requeue stale leases, claim, react. Between claims it waits adaptively
+/// (SCL-007-WORKER-ADAPTIVE-WAIT-2026-10-14): at once after work, then from the poll interval up to the maximum idle
+/// wait while claims come back empty. Each claimed message runs in the trace that wrote it and, from
+/// OBS-003-WORKER-PSEUDONYM-2026-10-14, in the organization context of its owner (pseudonym and role kind SYSTEM).
+/// </summary>
 public sealed class AssignmentLifecycleDispatcher(
     IDispatchOutboxStore store,
     AssignmentLifecycleProcessor processor,
     IOptions<AssignmentLifecycleOptions> options,
     OutboxLaneMonitor lanes,
+    IOrganizationPseudonymizer pseudonymizer,
+    TimeProvider timeProvider,
     ILogger<AssignmentLifecycleDispatcher> logger) : BackgroundService
 {
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -119,6 +127,10 @@ public sealed class AssignmentLifecycleDispatcher(
             return;
         }
 
+        // SCL-007-WORKER-ADAPTIVE-WAIT-2026-10-14: this lane's own wait between claims.
+        var idle = new OutboxIdleWait(
+            options.Value.PollIntervalMilliseconds,
+            options.Value.MaximumIdleWaitMilliseconds);
         var nextRecovery = DateTimeOffset.MinValue;
         while (!stoppingToken.IsCancellationRequested)
         {
@@ -127,13 +139,13 @@ public sealed class AssignmentLifecycleDispatcher(
             using var cycle = TraceCorrelation.StartOutboxDispatchCycle(OutboxLanes.Dispatch);
             try
             {
-                if (DateTimeOffset.UtcNow >= nextRecovery)
+                if (timeProvider.GetUtcNow() >= nextRecovery)
                 {
                     await store.RequeueStaleAsync(
                         options.Value.BatchSize,
                         options.Value.MaximumAttempts,
                         stoppingToken);
-                    nextRecovery = DateTimeOffset.UtcNow.AddSeconds(options.Value.StaleRecoveryIntervalSeconds);
+                    nextRecovery = timeProvider.GetUtcNow().AddSeconds(options.Value.StaleRecoveryIntervalSeconds);
                 }
 
                 var claimed = await store.ClaimAsync(
@@ -157,6 +169,9 @@ public sealed class AssignmentLifecycleDispatcher(
                         // OBS-003 PR 7: each message is processed in the trace that wrote it (its trace_parent), so
                         // its log lines carry the trace id of the originating request; the cycle keeps its own root.
                         using var activity = TraceCorrelation.StartOutboxMessage(OutboxLanes.Dispatch, message.TraceParent);
+                        // OBS-003-WORKER-PSEUDONYM-2026-10-14: every line of the message carries the pseudonym of its
+                        // owner organization and the role kind SYSTEM (never the id, a metric tag or an OBS-002 dimension).
+                        using var organization = TelemetryOrganizationContext.EnterSystem(pseudonymizer, message.OwnerOrganizationId);
                         try
                         {
                             await processor.ProcessAsync(message, token);
@@ -172,9 +187,12 @@ public sealed class AssignmentLifecycleDispatcher(
                                 "MESSAGE_FAILURE");
                         }
                     });
-                if (claimed.Count == 0)
+                // SCL-007: a claim that returned work (a full or a partial batch) claims again at once and starts the
+                // wait over; an empty claim waits longer each time, up to the maximum idle wait.
+                var wait = idle.After(claimed.Count);
+                if (wait > TimeSpan.Zero)
                 {
-                    await Task.Delay(options.Value.PollIntervalMilliseconds, stoppingToken);
+                    await Task.Delay(wait, timeProvider, stoppingToken);
                 }
             }
             catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
@@ -185,7 +203,7 @@ public sealed class AssignmentLifecycleDispatcher(
             {
                 lanes.LoopFailed(OutboxLanes.Dispatch);
                 logger.LogError("Dispatch lifecycle loop failed with outcome {Outcome}.", "LOOP_FAILURE");
-                await Task.Delay(options.Value.PollIntervalMilliseconds, stoppingToken);
+                await Task.Delay(idle.Shortest, timeProvider, stoppingToken);
             }
         }
     }
