@@ -324,7 +324,9 @@ Worker) instead of about 18 before SCL-007 (6 realtime, 12 Worker).
   idle system the two idle waits can add up: up to 1 s on the Worker lane, then up to 1 s on the realtime lane, about
   2 s in the worst case before the screen updates (before: 250 ms and 250 ms). The AI-15 `event_delivery_p95_seconds`
   warning (2 s) applies to the realtime lane from its own row, whose wait does not change. The order notices the API
-  writes itself (for example `orders.status-changed`) do not go through a Worker lane.
+  writes itself (for example `orders.status-changed`) do not go through a Worker lane. The owner accepted this effect
+  after #269 merged (`SCL-007-WORKER-CHAINED-WAIT-2026-10-14`, "Dejarlo así (Recommended)"); both Worker lanes keep
+  their 1 s maximum.
 
 ### `MaxClaimAgeMs` includes the wait
 
@@ -388,6 +390,12 @@ was taken by the poll after the 1 s wait reports `MaxClaimAgeMs` 1000.
 - In a quiet pilot, most first notifications and Dispatch reactions start up to 1 s later than before (up to 750 ms
   more). The owner accepted this in the chosen option.
 - An assignment or notification status notice on the screens can wait for both idle lanes, about 2 s in the worst case
-  on a fully idle system (before about 0.5 s). The order notices the API writes itself are not affected.
+  on a fully idle system (before about 0.5 s). The order notices the API writes itself are not affected. **Accepted by
+  the owner** on 2026-10-14 (`SCL-007-WORKER-CHAINED-WAIT-2026-10-14`), literal answer "Dejarlo así (Recommended)":
+  "Se acepta hasta unos 2 s en el peor caso para esos avisos tras un rato sin trabajo. Con trabajo no hay espera. La
+  pantalla de quien asigna se actualiza al momento con su propia respuesta; el retraso es para las otras pantallas y la
+  app del repartidor." The options not chosen (the Dispatch lane at 500 ms, or back to a fixed 250 ms) are in the
+  decision row. If the delay is ever a problem, lowering `Dispatch__AssignmentLifecycle__MaximumIdleWaitMilliseconds`
+  is a configuration change that needs a new owner decision.
 - At about 1 poll a second per lane, the Worker replica is still active for Container Apps billing, so the pilot cost
   table does not change.
