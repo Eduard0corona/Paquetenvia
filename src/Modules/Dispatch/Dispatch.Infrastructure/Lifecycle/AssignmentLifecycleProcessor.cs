@@ -108,13 +108,15 @@ public sealed class AssignmentLifecycleProcessor(
 /// <summary>
 /// D8-OUTBOX-LANE-DISPATCH Worker loop: requeue stale leases, claim, react. Between claims it waits adaptively
 /// (SCL-007-WORKER-ADAPTIVE-WAIT-2026-10-14): at once after work, then from the poll interval up to the maximum idle
-/// wait while claims come back empty.
+/// wait while claims come back empty. Each claimed message runs in the trace that wrote it and, from
+/// OBS-003-WORKER-PSEUDONYM-2026-10-14, in the organization context of its owner (pseudonym and role kind SYSTEM).
 /// </summary>
 public sealed class AssignmentLifecycleDispatcher(
     IDispatchOutboxStore store,
     AssignmentLifecycleProcessor processor,
     IOptions<AssignmentLifecycleOptions> options,
     OutboxLaneMonitor lanes,
+    IOrganizationPseudonymizer pseudonymizer,
     TimeProvider timeProvider,
     ILogger<AssignmentLifecycleDispatcher> logger) : BackgroundService
 {
@@ -167,6 +169,9 @@ public sealed class AssignmentLifecycleDispatcher(
                         // OBS-003 PR 7: each message is processed in the trace that wrote it (its trace_parent), so
                         // its log lines carry the trace id of the originating request; the cycle keeps its own root.
                         using var activity = TraceCorrelation.StartOutboxMessage(OutboxLanes.Dispatch, message.TraceParent);
+                        // OBS-003-WORKER-PSEUDONYM-2026-10-14: every line of the message carries the pseudonym of its
+                        // owner organization and the role kind SYSTEM (never the id, a metric tag or an OBS-002 dimension).
+                        using var organization = TelemetryOrganizationContext.EnterSystem(pseudonymizer, message.OwnerOrganizationId);
                         try
                         {
                             await processor.ProcessAsync(message, token);

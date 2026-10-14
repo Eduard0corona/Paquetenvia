@@ -26,6 +26,50 @@
   migraciones e IndexedDB. Pruebas de regresión en Vitest y en `DriverOfflineOperationsPwa`; la parada quitada y el
   contador sólo en Vitest.
 
+## Esperas encadenadas del Worker y del tiempo real aceptadas (SCL-007-WORKER-CHAINED-WAIT-2026-10-14) — 2026-10-14
+
+- Respuesta literal del project owner (2026-10-14), registrada en `decision-log.md` con su contexto y las opciones no
+  elegidas: "Dejarlo así (Recommended)" ("Se acepta hasta unos 2 s en el peor caso para esos avisos tras un rato sin
+  trabajo. Con trabajo no hay espera. La pantalla de quien asigna se actualiza al momento con su propia respuesta; el
+  retraso es para las otras pantallas y la app del repartidor.").
+- Los avisos en pantalla de cambio de asignación y de estado de notificación pasan por la cola del Worker y luego por la
+  de tiempo real. Tras un rato sin trabajo, las dos esperas pueden sumar unos 2 s en el peor caso (antes unos 0.5 s). El
+  owner lo acepta; las dos colas del Worker conservan su espera máxima de 1 s.
+- Sin cambios de código, configuración, SQL, permisos, migraciones, Bicep ni paquetes. AI-08 SCL-007 registra la
+  aceptación junto al criterio de la espera del Worker. Nota: `docs/development/scl-007-adaptive-outbox-wait.md`.
+
+## Traza y seudónimo en el Worker, y momento de la exportación (OBS-003-WORKER-AUDIT-TRACE-2026-10-14, OBS-003-WORKER-PSEUDONYM-2026-10-14 y OBS-003-EXPORT-AFTER-PILOT-WEEK-2026-10-14, seguimiento de la fase 4) — 2026-10-14
+
+- Respuestas literales del project owner (2026-10-14), registradas en `decision-log.md` con su contexto, la corrección
+  que se le dio antes de QA–QC y las opciones no elegidas:
+  - auditoría del Worker (Q1): "Sí, en un PR aparte (Recommended)" ("Desde ese PR, esas filas guardan el trace id del
+    mensaje. Las filas que ya existen no cambian (la auditoría es de solo agregar). Cambia el contenido de la evidencia
+    de auditoría desde ese momento."); validación de fotos (QA): "Se quedan vacías (Recommended)";
+  - logs del Worker (Q2): "Sí, en un PR aparte (Recommended)" ("Mismo seudónimo HMAC de la fase 4, nunca el id real, y
+    nunca como dimensión de métricas o alertas. Permite filtrar en Log Analytics los mensajes de una organización.");
+    tipo de actor (QB): "SYSTEM (Recommended)"; validación de fotos (QC): "Sí, si los metadatos son válidos
+    (Recommended)";
+  - exportación (Q5): "Tras una semana de piloto (Recommended)" ("Primero se despliega sin exportar y se mide una semana
+    cuánto ocupan los logs del tope diario. Con ese dato se enciende en un PR. Así no arriesgamos los logs de las
+    alertas en los primeros días.").
+- La fila `ASSIGNMENT_CLOSED` que escribe el Worker guarda en `platform.audit_logs.request_id` el trace id del mensaje
+  que procesa (el de la petición o tarea que lo escribió, 32 hexadecimales en minúscula, igual que la API). Un mensaje
+  sin contexto de traza guardado deja NULL, nunca la traza de la vuelta del Worker. La validación de fotos y el cierre
+  automático de órdenes siguen con NULL. Las filas existentes no cambian; sin cambios de base de datos, acciones ni
+  actores.
+- Cada línea que el Worker escribe al procesar un mensaje de notificaciones o del ciclo de vida de asignaciones lleva el
+  seudónimo HMAC de la organización dueña del mensaje (`owner_org_id`, que las funciones de claim ya devuelven) y el tipo
+  de actor `SYSTEM`. La línea por foto de la validación lleva lo mismo cuando los metadatos firmados son válidos. Un
+  dueño desconocido o metadatos inválidos no llevan organización. Nunca el id real, ni etiqueta de métrica, ni dimensión
+  de alerta, libro de trabajo o `TelemetryDimensions`. Los lanes de tiempo real de la API no cambian.
+- La exportación a Application Insights sigue apagada (`TelemetryExport__Enabled='false'`). Se enciende en un PR
+  posterior tras una semana de piloto, cuando se haya medido el volumen diario de logs contra el tope de 0.3 GB. Sin
+  cambio de código.
+- AI-08 OBS-003: los dos criterios PENDING pasan a DECIDED y se agrega el criterio de Q5. AI-05: la descripción de
+  `Problem.traceId` dice la regla actual de las filas del Worker y la entrada `OBS-003-WORKER-AUDIT-TRACE` de
+  `x-pilot-contract-deltas` registra el cambio de solo descripción. AI-03 §18 no cambia. Notas:
+  `docs/development/obs-003-worker-correlation.md`.
+
 ## Alerta de conexiones de PostgreSQL en el piloto (SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14) — 2026-10-14
 
 - Respuestas literales del project owner (2026-10-14), registradas en `decision-log.md` con su contexto y las opciones
