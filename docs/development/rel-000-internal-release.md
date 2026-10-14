@@ -540,8 +540,8 @@ marca explícita o se rechaza.
 `fbc77db`) es la primera remediación de seguridad sólo NuGet desde el congelamiento MVP-0. El owner
 decidió "Remediar con la tabla", "Los 4 en un PR", "Fijado transitivo" e "Incluir los 6"
 (2026-10-13). La fila `SEC-2026-12-NUGET-REMEDIATION-2026-10-13` del decision-log y su entrada del
-CHANGELOG entran con el PR de retiro hacia `development`, como en #208. Así el PR de remediación a
-`main` no toca `docs/normative/**` y el back-sync no tiene conflictos. El cambio es:
+CHANGELOG entraron con el PR de retiro hacia `development`, como en #208. Así el PR de remediación a
+`main` no tocó `docs/normative/**` y el back-sync no tuvo conflictos. El cambio es:
 
 - `Microsoft.AspNetCore.SignalR.Client` pasa de 10.0.10 a 10.0.13;
 - `CentralPackageTransitivePinningEnabled` queda activo en todo el repositorio;
@@ -575,6 +575,31 @@ Todo lo demás se juzga como antes y cualquier otra deriva falla cerrada. Los ca
 (`NUGET_REMEDIATION_GRAPH_FIELDS`) sólo pueden aparecer en la autorización exacta de SEC-2026-12,
 activa o retirada, y sólo con exactamente sus movimientos. La evidencia de liberación nunca pasa
 `nuget_remediations`, así que el código del modo normal y de las admisiones no cambia.
+
+Historia de la remediación:
+
+- **Fusión.** Entró a `main` con #261 (merge `a29ab4a`).
+- **Back-sync.** Llegó a `development` con #262 (merge `b5a1fc9`). El primer intento de PR Validation del
+  back-sync falló REL-000 con `DEPENDENCY_ADMISSION_VERSION_MISMATCH`: Pkcs 10.0.13 frente al 10.0.10 que
+  admite ADP-001-AZURE.
+  - La causa: la corrida de Foundation por `push` en `main` (`a29ab4a`) aún no terminaba, así que el
+    clasificador cayó a `FULL:MAIN_BACKSYNC_UNCERTIFIED` y REL-000 corrió en modo normal contra una base sin la
+    remediación.
+  - Con esa corrida en 13/13, una re-ejecución completa lo clasificó `MAIN_BACKSYNC:CERTIFIED_MAIN_HEAD` y
+    pasó.
+- **Retiro.** La autorización quedó en `historical_remediations` con:
+  - `status` `MERGED`;
+  - `tracked_pull_request` 261;
+  - `validated_target_sha` `bfe9c1b`, la cabeza que Foundation CI validó 13/13 (como #208 fijó la cabeza
+    de #206); su árbol es idéntico al de `a29ab4a`.
+
+  Las pruebas de SEC-2026-12 reproducen ese commit. El grafo permanente sigue leyendo la entrada retirada.
+- **Después del retiro.** Un PR hacia `development` en modo normal se juzga contra una base que ya tiene
+  esos nodos:
+  - los locks que no cambia no se juzgan;
+  - un cambio legítimo de uno de los cuatro locks (sólo nodos `Project`, o un paquete admitido) pasa;
+  - volver a mover Xml, Pkcs o un paquete SignalR de esa tabla falla cerrado, igual que un consumidor nuevo
+    de Xml o Pkcs.
 
 Lo que sí cambia es lo que una admisión futura puede admitir, porque el fijado transitivo queda
 activo en todo el repositorio. Dos casos fallan cerrados:
