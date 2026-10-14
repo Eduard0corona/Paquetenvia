@@ -1588,7 +1588,7 @@ items:
   - PWA button and account form (Vitest)
   approval_gate: GATE-007
 - id: OBS-003
-  decision: PHASE4-PLATFORM-APPROVAL-2026-10-12, OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12, OBS-003-TENANT-PSEUDONYM-2026-10-12 and OBS-003-APPINSIGHTS-EXPORT-2026-10-13 (project owner)
+  decision: PHASE4-PLATFORM-APPROVAL-2026-10-12, OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12, OBS-003-TENANT-PSEUDONYM-2026-10-12, OBS-003-APPINSIGHTS-EXPORT-2026-10-13 and OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13 (project owner)
   epic: Observability
   release: MVP-1
   title: Trazas y correlación con OpenTelemetry y Application Insights
@@ -1603,6 +1603,8 @@ items:
   - OpenTelemetry traces and metrics exported through the official Azure Monitor exporter to a workspace-based Application Insights in Mexico Central on the pilot Log Analytics workspace, off by default, with 10 % sampling (phase 4 PR 6)
   - a privacy allowlist of span attributes, and the pseudonymous organization code and actor role kind on traces and logs only (phase 4 PR 6)
   - "the workspace-based component appi-pv-pilot-<suffix> in platform.bicep; its connection string, the literal TelemetryExport__Enabled='false' and the Key Vault mapping of the owner-written pseudonym secret paquetenvia-telemetry-pseudonym-key-1 for the API and the Worker in apps.bicep; guards P01, P06, P17, P21 and P23 and the workflow check that the secret exists (phase 4 PR 6)"
+  - the producing W3C trace context in a nullable trace_parent column of platform.outbox_events and platform.location_outbox_events (00-{trace id}-{span id}-{00|01}, CHECK on the exact shape), written by every producer in its own transaction and returned by every claim function; the Dispatch lane step 20261013000100_AddOutboxTraceContext (column and check where the baseline predates them, the content guards that compare the column, the operator outbox executor's INSERT on the column and its definer reading the transaction-local app.trace_parent) and the Notifications lane step 20261013000200_CarryOutboxTraceContext (the two Notifications writers copy the originating row's context) (phase 4 PR 7)
+  - each claimed outbox message processed in its own activity, a child of the stored context, in the Worker and in the API realtime lanes (phase 4 PR 7)
   acceptance_criteria:
   - 'DECIDED PHASE4-PLATFORM-APPROVAL-2026-10-12 (literal): "Sí, avanza con la fase 4 (Recommended)" - "Empiezo por OpenTelemetry y correlación, y por los límites de tasa en endpoints pesados, que son lo que más ayuda a operar el piloto."'
   - 'DECIDED OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12 (literal): "Application Insights (Recommended)" - "OpenTelemetry con el exportador oficial de Azure, en México Central, sobre el mismo Log Analytics con muestreo de 10 %. Aprox. 0–5 USD/mes; el peor caso del presupuesto no sube por el tope diario. Admite 7 paquetes nuevos y sube Azure.Core 1.61→1.63 (admisión explícita)."'
@@ -1622,7 +1624,16 @@ items:
   - the API and the Worker send with the instrumentation key of the connection string, which reaches only their settings; residual risk recorded - whoever obtains it can send fake telemetry, not read it, and fake telemetry counts against the 0.3 GB daily cap of the pilot workspace
   - the 10 % is ParentBasedSampler(TraceIdRatioBasedSampler(0.10)) fixed in code and decided per trace from the trace id; Live Metrics, Statsbeat, customer SDK stats, standard metrics, performance counters, offline storage and the resource metric stay off, so the configured ingestion endpoint is the only destination; the exported metrics keep only the OBS-002 metric tag allowlist, the tags of aspnetcore.rate_limiting.requests included
   - in the pilot the export is turned on only by a reviewed change of the literal TelemetryExport__Enabled in apps.bicep; the settings file cannot set it, and the API and the Worker refuse to start outside Development and Testing without the pseudonym key
-  - 'PENDING OWNER DECISION (blocks phase 4 PR 7): trace context through the outbox - an outbox column (AI-06/AI-18 change and migration), a member of the immutable payload, or none (the Worker starts a new trace per message); carrying it on to SignalR clients also meets AI-12 correlation_id, typed uuid optional'
+  - 'DECIDED OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13, Q-PR7 (literal): "Columna nueva (Recommended)" - "Una columna con la traza en las dos tablas del outbox (migración con ida y vuelta probadas). Los logs del Worker llevan la traza de la petición original, así que una sola búsqueda en Log Analytics muestra API y Worker juntos, aunque haya muestreo. No toca el contenido del evento ni lo que reciben los clientes. Cumple AI-03 §18 tal como está."'
+  - every producer of a platform outbox row supplies trace_parent from its own current W3C activity in the same transaction (ValueGeneratedNever, no RETURNING), NULL outside any trace; the stored value is version 00, trace id, the producing span id and the sampled flag only - never tracestate, baggage, a tenant, a user or request data - and a CHECK on both tables refuses any other shape
+  - the operator outbox definer keeps its published signature and receives the context through the transaction-local app.trace_parent; the Notifications writers copy the trace_parent of the event the new rows derive from (none once it is purged)
+  - every claim function returns trace_parent with the row; settle, requeue, recovery and purge never read or change it, and purge removes rows that carry it like any other; the content guards of both tables refuse any UPDATE that changes it
+  - the Worker and the API realtime lanes process each claimed message in its own activity, a local child of the stored context, so every log line of that message carries the trace id of the request or job that wrote it; without a stored context the message stays in its dispatch cycle, and every dispatch cycle still runs in its own trace and is never exported
+  - with the export on, a message's activity follows the stored sampled flag (exported only when the producing trace was sampled), named after its fixed lane with no attribute; a context is never taken as remote
+  - trace_parent never enters an outbox payload, a SignalR message (AI-12 unchanged) or a notification; for trace_id and correlation_id AI-03 §18 needs no wording change - the trace_id of an event is the trace id of the request or job that produced it and correlation_id keeps its meaning; the tenant pseudonym and actor role kind on the Worker's per-message lines are not delivered by phase 4 PR 7 (pending below)
+  - 'PENDING OWNER DECISION: whether the Worker''s per-message log lines carry the organization pseudonym and actor role kind of the message''s owner (AI-03 §18 tenant and technical actor; widens OBS-003-TENANT-PSEUDONYM-2026-10-12, which PR 6 applied to requests only)'
+  - 'PENDING OWNER DECISION: whether the Worker''s audit rows (assignment lifecycle, proof validation) write the trace id of the message they process in platform.audit_logs.request_id instead of NULL'
+  - Down runs the Notifications step first (the Dispatch step refuses with OBS003_TRACE_CONTEXT_DOWNGRADE_ORDER while it is recorded), restores the published functions and grants exactly and drops both columns and checks without rewriting any other row data
   - 'PENDING OWNER DECISION: the alert e-mail address the owner sets at deploy (alertEmailAddress, still OWNER_DECISION_REQUIRED); no new alert rule on exported metrics is added without its own owner decision'
   required_tests:
   - inbound trace headers ignored and no trace header on outbound requests (fake HTTP handler)
@@ -1632,6 +1643,10 @@ items:
   - fixed HMAC pseudonym vector and start failure without a key outside Development and Testing
   - only API requests and scheduled job cycles are sampled, and the exported metric tags stay within the OBS-002 metric tag allowlist, rate-limiting tags included
   - ENV-001 pilot guards fail closed on the Application Insights component, the export switch, its connection string and the pseudonym key mapping
+  - architecture test proving every runtime outbox INSERT and every SQL function that writes an outbox row carries the trace context, every claim reader reads it and every consumer processes in it, and that it never reaches a payload, SignalR or notification code
+  - the trace_parent CHECK, every claim function returning it, settle, requeue and purge leaving it, the operator definer and both Notifications writers storing the expected context, and both lane steps Up, Down and Up again with an identical catalog (PostgreSQL)
+  - consumers process under the producer's trace and their log lines carry it; the SignalR envelope and the rendered notification carry no trace context
+  - a message's span is exported exactly when its producing trace was sampled, with no attribute; dispatch cycles and messages without a stored context never are (test exporter)
   approval_gate: owner_technology_operations
 - id: SEC-004
   decision: PHASE4-PLATFORM-APPROVAL-2026-10-12 and SEC-004-RATE-LIMITS-2026-10-12 (project owner)

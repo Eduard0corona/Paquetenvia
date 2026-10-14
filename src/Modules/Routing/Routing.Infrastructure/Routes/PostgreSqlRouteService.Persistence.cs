@@ -7,6 +7,7 @@ using Npgsql;
 using NpgsqlTypes;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
+using Paqueteria.Infrastructure.Database.Outbox;
 using Routing.Application.Routes;
 
 namespace Routing.Infrastructure.Routes;
@@ -724,9 +725,9 @@ public sealed partial class PostgreSqlRouteService
             INSERT INTO platform.outbox_events(
               id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,
               aggregate_version,payload,priority,status,attempts,available_at,
-              locked_at,locked_by,lease_token,lease_expires_at,last_error,created_at,processed_at)
+              locked_at,locked_by,lease_token,lease_expires_at,last_error,created_at,processed_at,trace_parent)
             VALUES (@id,@organization,@tenant,@topic,'Route',@route,@version,@payload,
-                    50,'PENDING',0,@now,NULL,NULL,NULL,NULL,NULL,@now,NULL)
+                    50,'PENDING',0,@now,NULL,NULL,NULL,NULL,NULL,@now,NULL,@trace_parent)
             """);
         command.Parameters.Add(P("id", NpgsqlDbType.Uuid, Guid.NewGuid()));
         command.Parameters.Add(P("organization", NpgsqlDbType.Uuid, organizationId));
@@ -736,6 +737,7 @@ public sealed partial class PostgreSqlRouteService
         command.Parameters.Add(P("version", NpgsqlDbType.Integer, routeVersion));
         command.Parameters.Add(P("payload", NpgsqlDbType.Jsonb, payload));
         command.Parameters.Add(P("now", NpgsqlDbType.TimestampTz, occurredAt));
+        command.Parameters.Add(OutboxTraceContextColumn.Parameter());
         RequireOne(await command.ExecuteNonQueryAsync(cancellationToken), "Route outbox insert failed.");
         await failureInjector.OnStageAsync(RoutingTransactionStage.OutboxInserted, cancellationToken);
     }

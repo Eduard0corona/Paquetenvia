@@ -53,16 +53,16 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20261002000100_RequireMazatlanTimeZoneInMasterDataLoader.cs"),
         ("Orders", "__ef_migrations_history_orders", AddOrderAutoCloseDiscovery.MigrationId,
             "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20261010000100_AddOrderAutoCloseDiscovery.cs"),
-        ("Dispatch", "__ef_migrations_history_dispatch", AddOperatorOwnerOutboxExecutor.MigrationId,
-            "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20261003000100_AddOperatorOwnerOutboxExecutor.cs"),
+        ("Dispatch", "__ef_migrations_history_dispatch", AddOutboxTraceContext.MigrationId,
+            "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20261013000100_AddOutboxTraceContext.cs"),
         ("Custody", "__ef_migrations_history_custody", AddBffSessionPurge.MigrationId,
             "src/Modules/Custody/Custody.Infrastructure/Persistence/Migrations/20260927000400_AddBffSessionPurge.cs"),
         ("Incidents", "__ef_migrations_history_incidents", AllowDispatchDecidedNextAction.MigrationId,
             "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20261011000100_AllowDispatchDecidedNextAction.cs"),
         ("Finance", "__ef_migrations_history_finance", EnforceSettlementLedgerIntegrity.MigrationId,
             "src/Modules/Finance/Finance.Infrastructure/Persistence/Migrations/20260925000100_EnforceSettlementLedgerIntegrity.cs"),
-        ("Notifications", "__ef_migrations_history_notifications", AddRealtimeDispatcherRole.MigrationId,
-            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261012000100_AddRealtimeDispatcherRole.cs"),
+        ("Notifications", "__ef_migrations_history_notifications", CarryOutboxTraceContext.MigrationId,
+            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261013000200_CarryOutboxTraceContext.cs"),
         ("DataProtection", PlatformDataProtectionSchema.MigrationsHistoryTable,
             AddDistributedDataProtectionKeyRing.MigrationId,
             "src/BuildingBlocks/Paqueteria.Infrastructure/DataProtection/Migrations/20260922000100_AddDistributedDataProtectionKeyRing.cs"),
@@ -104,10 +104,11 @@ internal sealed class ModuleMigrationCoordinator
                 // America/Mazatlan only); its rollback restores the previous function. No grant, table, role or
                 // row is added, dropped, deleted or rewritten.
                 "Pricing" => IsMazatlanTimeZoneLoaderSource(source),
-                // RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the lane's latest step only grants the API's realtime
-                // dispatcher role its exact privileges (the role itself is declared by AI-18); its rollback revokes
-                // exactly those grants and keeps the role. Earlier steps are verified below with the NTF-001 rule.
-                "Notifications" => IsRealtimeDispatcherRoleSource(source),
+                // OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13: the lane's latest step only replaces the bodies of the two
+                // Notifications outbox writers with ones derived from the published NTF-001 bodies by reviewed edits;
+                // its rollback restores the published bodies. RTM-API-REALTIME-DISPATCHER-ROLE and the earlier steps are
+                // verified below with their own rules.
+                "Notifications" => IsNotificationsTraceContextSource(source),
                 // SET-001: the settlement ledger is append-only, so the lane only ever adds guards to
                 // the canonical tables and its rollback fails closed.
                 "Finance" =>
@@ -137,11 +138,12 @@ internal sealed class ModuleMigrationCoordinator
                 // row; its rollback refuses while any organization left the starting version. REG-001 and REG-002
                 // are verified below with their own rules.
                 "Organizations" => IsOrganizationPolicyVersionsSource(source),
-                // DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: the lane's latest migration only adds the operator
-                // outbox executor, its column grants and its two functions; its rollback drops exactly those two
-                // functions (role and grants are declared by AI-18 and stay inert). No table, column, policy, role
-                // or row is dropped, deleted or rewritten.
-                "Dispatch" => IsOperatorOwnerOutboxSource(source),
+                // OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13: the lane's latest migration only adds the nullable
+                // trace_parent column and its check to both outbox tables, one executor column grant and the operator
+                // outbox definer body derived from the published one; its rollback, refused while the Notifications
+                // step that writes the column is recorded, restores the definer and drops exactly those two columns.
+                // DSP-OPERATOR-OWNER-OUTBOX is verified below with its own rule.
+                "Dispatch" => IsOutboxTraceContextDispatchSource(source),
                 // VOICE-001-MASKED-CALLS-2026-10-11: the lane's latest migration only adds the driver phone columns
                 // and the recipient call request table; its rollback refuses while any request or phone exists and
                 // otherwise drops exactly those objects. DRV-003 is verified below as an adoption.
@@ -297,6 +299,18 @@ internal sealed class ModuleMigrationCoordinator
             root,
             FailStaleWhatsAppNotificationLeases.MigrationId,
             "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261003000100_FailStaleWhatsAppNotificationLeases.cs");
+        VerifyLaneSource(
+            root,
+            "Notifications",
+            AddRealtimeDispatcherRole.MigrationId,
+            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261012000100_AddRealtimeDispatcherRole.cs",
+            IsRealtimeDispatcherRoleSource);
+        VerifyLaneSource(
+            root,
+            "Dispatch",
+            AddOperatorOwnerOutboxExecutor.MigrationId,
+            "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20261003000100_AddOperatorOwnerOutboxExecutor.cs",
+            IsOperatorOwnerOutboxSource);
         VerifyIncidentsSource(
             root,
             IndexIncidentEvidenceByOrderProof.MigrationId,
@@ -532,6 +546,7 @@ internal sealed class ModuleMigrationCoordinator
                     FailAmbiguousWhatsAppNotifications.MigrationId,
                     FailStaleWhatsAppNotificationLeases.MigrationId,
                     AddRealtimeDispatcherRole.MigrationId,
+                    CarryOutboxTraceContext.MigrationId,
                 ],
             "Identity" =>
                 [AdoptCanonicalIdentityBaseline.MigrationId, AddBffSessionStore.MigrationId],
@@ -555,7 +570,11 @@ internal sealed class ModuleMigrationCoordinator
                     AllowDispatchDecidedNextAction.MigrationId,
                 ],
             "Dispatch" =>
-                [AdoptCanonicalDispatchAssignmentsBaseline.MigrationId, AddOperatorOwnerOutboxExecutor.MigrationId],
+                [
+                    AdoptCanonicalDispatchAssignmentsBaseline.MigrationId,
+                    AddOperatorOwnerOutboxExecutor.MigrationId,
+                    AddOutboxTraceContext.MigrationId,
+                ],
             "DataProtection" =>
                 [AddDistributedDataProtectionKeyRing.MigrationId],
             "PlatformEvolution" =>
@@ -707,6 +726,70 @@ internal sealed class ModuleMigrationCoordinator
         !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13 (Dispatch lane): the nullable trace_parent column and its check on
+    /// both outbox tables, one executor column grant and the operator outbox definer derived from the published one; the
+    /// rollback is ordered after the Notifications step and drops exactly the two columns and their checks. No table,
+    /// role, function, policy or row is dropped, deleted or rewritten.</summary>
+    private static bool IsOutboxTraceContextDispatchSource(string source) =>
+        source.Contains(AddOutboxTraceContext.DecisionId, StringComparison.Ordinal) &&
+        source.Contains(AddOutboxTraceContext.DowngradeOrderRefused, StringComparison.Ordinal) &&
+        source.Contains("AddOperatorOwnerOutboxExecutor.OutboxFunctionSql", StringComparison.Ordinal) &&
+        source.Contains("GRANT INSERT (trace_parent) ON platform.outbox_events TO paqueteria_operator_outbox_executor;", StringComparison.Ordinal) &&
+        source.Split("DROP COLUMN", StringSplitOptions.None).Length - 1 == 2 &&
+        source.Contains("ALTER TABLE platform.outbox_events DROP COLUMN IF EXISTS trace_parent;", StringComparison.Ordinal) &&
+        source.Contains("ALTER TABLE platform.location_outbox_events DROP COLUMN IF EXISTS trace_parent;", StringComparison.Ordinal) &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP INDEX", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("ROW LEVEL SECURITY;", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE platform", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("WITH GRANT OPTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13 (Notifications lane): only the two outbox writer bodies, derived
+    /// from the published NTF-001 ones; its rollback restores them. No grant, table, column, role, function or row is
+    /// added, dropped, deleted or rewritten.</summary>
+    private static bool IsNotificationsTraceContextSource(string source) =>
+        source.Contains(CarryOutboxTraceContext.DecisionId, StringComparison.Ordinal) &&
+        source.Contains("NTF-001 rollback blocked", StringComparison.Ordinal) &&
+        source.Contains("AddTenantSafeOutboxNotifications.UpSql", StringComparison.Ordinal) &&
+        !source.Contains("DROP ", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("ALTER TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("ALTER FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("GRANT EXECUTE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("REVOKE EXECUTE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE platform", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>An earlier migration of a lane, held to the rule that applied when it was the lane's latest.</summary>
+    private static void VerifyLaneSource(
+        string root, string module, string migrationId, string sourcePath, Func<string, bool> isValid)
+    {
+        var path = Path.Combine(root, sourcePath.Replace('/', Path.DirectorySeparatorChar));
+        if (!File.Exists(path))
+        {
+            throw new BaselineVerificationException($"{module} evolution migration is missing.");
+        }
+
+        var source = File.ReadAllText(path);
+        if (!source.Contains(migrationId, StringComparison.Ordinal) || !isValid(source))
+        {
+            throw new BaselineVerificationException(
+                $"{module} evolution migration is destructive or has an unexpected identifier.");
+        }
+    }
 
     /// <summary>MDM-001-OPERATOR-LOADER: only the two master-data roles, their grants and the loader function;
     /// its rollback removes only the function. Loaded rows and audit rows stay.</summary>

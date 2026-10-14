@@ -2,6 +2,7 @@ using System.Text.Json;
 using Npgsql;
 using NpgsqlTypes;
 using Notifications.Application.Dispatching;
+using Paqueteria.Infrastructure.Database.Outbox;
 
 namespace Notifications.Infrastructure.Dispatching;
 
@@ -292,7 +293,9 @@ internal sealed class PostgreSqlNotificationsStore(NotificationsWorkerConnection
                 reader.GetGuid(reader.GetOrdinal("lease_token")),
                 reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("lease_expires_at")),
                 reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("created_at")),
-                reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("available_at"))));
+                reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("available_at")),
+                // OBS-003 PR 7: the producing trace context, parent of this message's processing activity.
+                OutboxTraceContextColumn.Read(reader)));
         }
 
         return result;

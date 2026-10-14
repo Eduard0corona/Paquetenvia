@@ -350,6 +350,115 @@ public sealed class Obs003TelemetryExportTests
     }
 
     [Fact]
+    public void Outbox_messages_are_exported_only_inside_a_sampled_producer_trace_as_children_without_attributes()
+    {
+        // OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13 with the PR 6 sampler: a message's processing follows the sampling
+        // decision of the trace that wrote it, stored with the row; dispatch cycles and messages without a stored context
+        // are never exported, and a context taken as remote would never be either.
+        TraceCorrelation.ConfigureProcess();
+        var collector = new CollectingExporter();
+        using var provider = Sdk.CreateTracerProviderBuilder()
+            .AddPaqueteriaTracing(TelemetryExportProfile.Worker)
+            .AddProcessor(new SimpleActivityExportProcessor(collector))
+            .Build();
+
+        // Producers: scheduled job cycles (an exported root, sampled 10 % by trace id) store their own context.
+        var stored = new List<(string TraceParent, string TraceId, string SpanId, bool Sampled)>();
+        for (var index = 0; index < 1_500; index++)
+        {
+            using var job = TraceCorrelation.StartJobCycle("orders.claim-window-finalization");
+            var traceParent = OutboxTraceContext.Current();
+            Assert.NotNull(traceParent);
+            stored.Add((traceParent, job.TraceId.ToHexString(), job.SpanId.ToHexString(), job.Recorded));
+        }
+
+        // Consumers: each claimed message inside its lane's dispatch cycle, as a child of the stored context. The
+        // message's provider call (WhatsApp Cloud API, e-mail) is an outgoing HTTP child of the message.
+        using var outgoing = new ActivitySource(TelemetryExportPolicy.OutgoingHttpActivitySourceName);
+        var cycles = new HashSet<string>(StringComparer.Ordinal);
+        var messageSpans = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var message in stored)
+        {
+            using var cycle = TraceCorrelation.StartOutboxDispatchCycle(OutboxLanes.Notifications);
+            cycles.Add(cycle.TraceId.ToHexString());
+            using var processing = TraceCorrelation.StartOutboxMessage(OutboxLanes.Notifications, message.TraceParent);
+            Assert.Same(processing, Activity.Current);
+            Assert.Equal(message.TraceId, processing.TraceId.ToHexString());
+            Assert.Equal(message.SpanId, processing.ParentSpanId.ToHexString());
+            Assert.Equal(message.Sampled, processing.Recorded);
+            processing.SetTag("messaging.message.id", "synthetic-message-id");
+            messageSpans[message.TraceId] = processing.SpanId.ToHexString();
+            using var send = outgoing.StartActivity("System.Net.Http.HttpRequestOut", ActivityKind.Client);
+            send?.SetTag("http.request.method", "POST");
+            send?.SetTag("url.full", "https://graph.facebook.invalid/v20.0/synthetic-sender-id/messages");
+        }
+
+        // Rows written before the column or outside any trace: the message stays in the dispatch cycle's trace.
+        var withoutContext = new HashSet<string>(StringComparer.Ordinal);
+        for (var index = 0; index < 300; index++)
+        {
+            using var cycle = TraceCorrelation.StartOutboxDispatchCycle(OutboxLanes.Dispatch);
+            using var processing = TraceCorrelation.StartOutboxMessage(OutboxLanes.Dispatch, null);
+            Assert.Equal(cycle.TraceId, processing.TraceId);
+            Assert.False(processing.Recorded);
+            withoutContext.Add(processing.TraceId.ToHexString());
+        }
+
+        // Control: the same sampled contexts taken as remote parents are dropped (PR 6), which is why the stored
+        // context is read as a local parent.
+        using var remoteSource = new ActivitySource(TraceCorrelation.ActivitySourceName);
+        var remote = 0;
+        foreach (var message in stored.Where(item => item.Sampled).Take(20))
+        {
+            Activity.Current = null;
+            var parent = new ActivityContext(
+                ActivityTraceId.CreateFromString(message.TraceId),
+                ActivitySpanId.CreateFromString(message.SpanId),
+                ActivityTraceFlags.Recorded,
+                traceState: null,
+                isRemote: true);
+            using var taken = remoteSource.StartActivity("Obs003.RemoteControl", ActivityKind.Consumer, parent);
+            Assert.False(taken?.Recorded ?? false);
+            remote++;
+        }
+
+        Assert.True(provider.ForceFlush(10_000));
+
+        var sampled = stored.Where(item => item.Sampled).ToArray();
+        Assert.InRange(sampled.Length, 90, 220);
+        Assert.InRange(remote, 1, 20);
+        Assert.All(stored, item => Assert.Equal(IsSampled(item.TraceId), item.Sampled));
+        var exported = collector.Items.Where(item => item.Operation == TraceCorrelation.OutboxMessageOperation).ToArray();
+        Assert.Equal(
+            sampled.Select(item => item.TraceId).Order(StringComparer.Ordinal),
+            exported.Select(item => item.TraceId).Order(StringComparer.Ordinal));
+        Assert.All(exported, item =>
+        {
+            Assert.Equal(TraceCorrelation.ActivitySourceName, item.Source);
+            Assert.Equal(OutboxLanes.Notifications, item.DisplayName);
+            Assert.Equal(ActivityKind.Consumer, item.Kind);
+            Assert.Empty(item.Tags);
+            Assert.Equal(sampled.Single(message => message.TraceId == item.TraceId).SpanId, item.ParentSpanId);
+        });
+
+        // The message's provider call goes out with it, under the PR 6 allowlist (method only, never the URL), and only
+        // inside a sampled producing trace.
+        var calls = collector.Items
+            .Where(item => item.Source == TelemetryExportPolicy.OutgoingHttpActivitySourceName && messageSpans.ContainsKey(item.TraceId))
+            .ToArray();
+        Assert.Equal(
+            sampled.Select(item => item.TraceId).Order(StringComparer.Ordinal),
+            calls.Select(item => item.TraceId).Order(StringComparer.Ordinal));
+        Assert.All(calls, item =>
+        {
+            Assert.Equal(messageSpans[item.TraceId], item.ParentSpanId);
+            Assert.Equal(["http.request.method=POST"], item.Tags);
+        });
+        Assert.DoesNotContain(collector.Items, item => cycles.Contains(item.TraceId) || withoutContext.Contains(item.TraceId));
+        Assert.DoesNotContain(collector.Items, item => item.Operation == "Obs003.RemoteControl");
+    }
+
+    [Fact]
     public async Task The_worker_exports_metrics_and_no_request_or_dispatch_cycle()
     {
         var capture = new IngestionCapture();
@@ -666,7 +775,14 @@ public sealed class Obs003TelemetryExportTests
         }
     }
 
-    private sealed record ExportedSpan(string Source, string Operation, string TraceId, string[] Tags);
+    private sealed record ExportedSpan(
+        string Source,
+        string Operation,
+        string TraceId,
+        string[] Tags,
+        string DisplayName,
+        string ParentSpanId,
+        ActivityKind Kind);
 
     /// <summary>An exporter that keeps what the pipeline hands it, after the allowlist ran.</summary>
     private sealed class CollectingExporter : BaseExporter<Activity>
@@ -683,7 +799,10 @@ public sealed class Obs003TelemetryExportTests
                     activity.Source.Name,
                     activity.OperationName,
                     activity.TraceId.ToHexString(),
-                    activity.TagObjects.Select(tag => $"{tag.Key}={tag.Value}").Order(StringComparer.Ordinal).ToArray()));
+                    activity.TagObjects.Select(tag => $"{tag.Key}={tag.Value}").Order(StringComparer.Ordinal).ToArray(),
+                    activity.DisplayName,
+                    activity.ParentSpanId.ToHexString(),
+                    activity.Kind));
             }
 
             return ExportResult.Success;

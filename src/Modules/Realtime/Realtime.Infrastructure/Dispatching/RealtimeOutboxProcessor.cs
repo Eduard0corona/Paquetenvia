@@ -25,6 +25,10 @@ internal sealed class RealtimeOutboxProcessor(
         CancellationToken cancellationToken)
     {
         const string lane = "business";
+        // OBS-003 PR 7: the message is processed in the trace that wrote it (its trace_parent), not the cycle's.
+        using var activity = TraceCorrelation.StartOutboxMessage(
+            RealtimeOutboxLanes.Monitored(lane),
+            message.TraceParent);
         telemetry.BeginMessage(lane);
         try
         {
@@ -113,6 +117,10 @@ internal sealed class RealtimeOutboxProcessor(
         CancellationToken cancellationToken)
     {
         const string lane = "location";
+        // OBS-003 PR 7: the message is processed in the trace that wrote it (its trace_parent), not the cycle's.
+        using var activity = TraceCorrelation.StartOutboxMessage(
+            RealtimeOutboxLanes.Monitored(lane),
+            message.TraceParent);
         telemetry.BeginMessage(lane);
         try
         {

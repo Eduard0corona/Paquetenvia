@@ -13,6 +13,9 @@ namespace Paqueteria.ContractTests.PostgreSql;
 [Trait("Category", "PostgreSqlContract")]
 public sealed class EfOutboxInsertContractTests(PostgreSqlContractFixture fixture)
 {
+    /// <summary>OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13: a synthetic producing context the model writes like any column.</summary>
+    private const string SyntheticTraceParent = "00-0af7651916cd43dd8448eb211c80319c-b7ad6b7169203331-01";
+
     [PostgreSqlContractFact]
     public async Task Ef_core_emits_insert_without_returning_for_both_outbox_lanes()
     {
@@ -27,12 +30,14 @@ public sealed class EfOutboxInsertContractTests(PostgreSqlContractFixture fixtur
             var businessSql = await InsertBusinessOutboxWithEfAsync(organizationId, businessId);
             AssertInsertOnlySql(businessSql, "platform.outbox_events");
             Assert.Equal(1, await CountAsAdminAsync("platform.outbox_events", businessId));
+            Assert.Equal(SyntheticTraceParent, await TraceParentAsAdminAsync("platform.outbox_events", businessId));
             await AssertRuntimeCannotReadAsync("platform.outbox_events", organizationId);
 
             var locationId = Guid.NewGuid();
             var locationSql = await InsertLocationOutboxWithEfAsync(organizationId, locationId);
             AssertInsertOnlySql(locationSql, "platform.location_outbox_events");
             Assert.Equal(1, await CountAsAdminAsync("platform.location_outbox_events", locationId));
+            Assert.Equal(SyntheticTraceParent, await TraceParentAsAdminAsync("platform.location_outbox_events", locationId));
             await AssertRuntimeCannotReadAsync("platform.location_outbox_events", organizationId);
         }
         finally
@@ -97,6 +102,7 @@ public sealed class EfOutboxInsertContractTests(PostgreSqlContractFixture fixtur
             Attempts = 0,
             AvailableAt = DateTimeOffset.UtcNow,
             CreatedAt = DateTimeOffset.UtcNow,
+            TraceParent = SyntheticTraceParent,
         });
         Assert.Equal(1, await context.SaveChangesAsync());
         await transaction.CommitAsync();
@@ -118,6 +124,7 @@ public sealed class EfOutboxInsertContractTests(PostgreSqlContractFixture fixtur
         Attempts = 0,
         AvailableAt = DateTimeOffset.UtcNow,
         CreatedAt = DateTimeOffset.UtcNow,
+        TraceParent = SyntheticTraceParent,
     };
 
     private static async Task SetRuntimeContextAsync(
@@ -149,6 +156,7 @@ public sealed class EfOutboxInsertContractTests(PostgreSqlContractFixture fixtur
         Assert.Contains(table, insert.Replace("\"", string.Empty, StringComparison.Ordinal), StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("RETURNING", insert, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("SELECT", insert, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("trace_parent", insert, StringComparison.Ordinal);
     }
 
     private async Task AssertRuntimeCannotReadAsync(string table, Guid organizationId)
@@ -168,6 +176,13 @@ public sealed class EfOutboxInsertContractTests(PostgreSqlContractFixture fixtur
         await using var command = fixture.AdminDataSource.CreateCommand($"SELECT count(*)::integer FROM {table} WHERE id=@id");
         command.Parameters.Add(new NpgsqlParameter<Guid>("id", id));
         return (int)(await command.ExecuteScalarAsync())!;
+    }
+
+    private async Task<string?> TraceParentAsAdminAsync(string table, Guid id)
+    {
+        await using var command = fixture.AdminDataSource.CreateCommand($"SELECT trace_parent FROM {table} WHERE id=@id");
+        command.Parameters.Add(new NpgsqlParameter<Guid>("id", id));
+        return await command.ExecuteScalarAsync() as string;
     }
 
     private async Task ExecuteAdminAsync(string sql, params NpgsqlParameter[] parameters)

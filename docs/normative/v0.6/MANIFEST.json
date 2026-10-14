@@ -4,7 +4,7 @@
   "bundle_revision": "v0.6-full-canonical-sync-7-fin001-mvp1",
   "date": "2026-07-31",
   "status": "NORMATIVE_BASELINE_CANONICAL_SYNC_FIN001_MVP1",
-  "canonical_sql_sha256": "f069b455894eb825f252f59c1a50373cd6a0d13d50d6b4493c53024f0d4b7ba7",
+  "canonical_sql_sha256": "3a491699ee7462ffd6071bcf2a1092d66654916ed2502bf474b9e4fac78b6754",
   "file_count": 74,
   "files": [
     {
@@ -25,7 +25,7 @@
     {
       "path": "CANONICAL_SOURCE_OF_TRUTH.md",
       "bytes": 4696,
-      "sha256": "5d6061c517485558767d460835fc553d5a79c40fc79a2d8c2153fb6e169a67ca"
+      "sha256": "48e662a5630013c15aa38a94872fc888a3a9d2c8dd82a311501520613500810e"
     },
     {
       "path": "CHANGED_FILES_SINCE_V0.5.md",
@@ -34,18 +34,18 @@
     },
     {
       "path": "CHANGELOG.md",
-      "bytes": 172724,
-      "sha256": "3e509693d8bf7c947094e8512fbc05b7cbec18d6f0af043811d7d74746a52c59"
+      "bytes": 175819,
+      "sha256": "3e56a910749f03a0509d89fa21fda7b5d02d2b8525aa9fbad81b9c8bc6b042ed"
     },
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "ced676d03d6207be2f2efa8749784815a69e10e00a209cf33bebdf0c48857760"
+      "sha256": "c1bccf6436bf5048032bb841eb053a6926f72c571814716aebdfe9ddab749353"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
       "bytes": 2634,
-      "sha256": "92d4b18f60d1117bf77b52e11418c434233eec3af3506558ca0845fd18a7d3dd"
+      "sha256": "37b2cad9e82f43db2b6490545e8bff846afbd71ca12eb84881e082656b0b7fb4"
     },
     {
       "path": "VALIDATION_RESULTS.txt",
@@ -64,18 +64,18 @@
     },
     {
       "path": "database/AI-06_SCHEMA.sql",
-      "bytes": 68528,
-      "sha256": "f069b455894eb825f252f59c1a50373cd6a0d13d50d6b4493c53024f0d4b7ba7"
+      "bytes": 70691,
+      "sha256": "3a491699ee7462ffd6071bcf2a1092d66654916ed2502bf474b9e4fac78b6754"
     },
     {
       "path": "database/AI-18_DATABASE_ROLE_MODEL.sql",
-      "bytes": 54453,
-      "sha256": "2a95220f8934f0431da096bb66028b60e2ab00fcdaa8b2c44d39bb43ec8f5700"
+      "bytes": 55434,
+      "sha256": "ef05f7ce5e11a5b1fc8fb71d3ae0bb9d3f10074d7eb8e438c3a72c9493435580"
     },
     {
       "path": "decision-log.md",
-      "bytes": 332187,
-      "sha256": "d6b6d0b19f1b13d8a4abb5db402a45ebcd131497d3164f82720fe457655bd0cc"
+      "bytes": 338517,
+      "sha256": "db5e24539e4cd5350e5740fc86df7179f5cbca27b88a067f00045611f87efe18"
     },
     {
       "path": "docs/AI-14_TECH_REFERENCES.md",
@@ -339,8 +339,8 @@
     },
     {
       "path": "specs/AI-08_BACKLOG.yaml",
-      "bytes": 77663,
-      "sha256": "4e26dc86e00491be9f389151e1822758f9f68934b2342b7e8e945fece62f05af"
+      "bytes": 82161,
+      "sha256": "5328118912a92e2054df073cb8c39aabad69c4dac30974de9872e0ace733ae8b"
     },
     {
       "path": "specs/AI-10_DECISIONS_AND_GATES.yaml",

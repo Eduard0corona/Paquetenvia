@@ -190,9 +190,15 @@ Son tres pasos, con su propio PR cada uno (GOV-DEPENDENCY-ROUTE-001, `branching-
   - prueba de arquitectura: el seudónimo y el tipo de rol no llegan a métricas, a eventos OBS-002 ni a consultas de
     alertas.
 
-### PR 7: contexto de traza a través del outbox (OBS-003, pendiente)
+### PR 7: contexto de traza a través del outbox (OBS-003)
 
-Decisión pendiente del owner, sin recomendación todavía:
+Lo aplicado está en `docs/development/obs-003-outbox-trace-context.md` (`OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13`). El
+owner decidió el 2026-10-13: "Columna nueva (Recommended)". Cada productor guarda el contexto W3C de su traza en la
+columna `trace_parent` de las dos tablas del outbox, y cada mensaje se procesa en una actividad hija de ese contexto:
+los logs del Worker y de los lanes de tiempo real llevan la traza de la petición original. AI-03 §18 y AI-12 no
+cambian.
+
+Las opciones que se presentaron:
 
 - **Columna:** columna nueva en `platform.outbox_events` y `platform.location_outbox_events`.
   - Es un cambio de AI-06/AI-18 con migración por módulo.
@@ -208,7 +214,9 @@ Llevar el contexto hasta los clientes SignalR toca AI-12: `correlation_id` es `u
 dígitos hexadecimales.
 
 AI-03 §18 pide `trace_id` y `correlation_id` en cada evento. Con "ninguno", cada evento lleva su propia traza, pero no
-la de la petición que lo originó. Si el owner elige esa opción, el PR 7 revisa si §18 necesita una aclaración.
+la de la petición que lo originó. Con la columna, el `trace_id` de cada evento es el de la petición o tarea que lo
+produjo, y §18 no necesita cambio para `trace_id` y `correlation_id`. El seudónimo de empresa en las líneas por
+mensaje del Worker queda pendiente del owner (AI-08 OBS-003).
 
 ### PR 8: un pool de conexiones por rol (SCL-007)
 
@@ -272,7 +280,6 @@ los despachadores de tiempo real de la API esperan 250 ms, 500 ms y luego 1 s (n
 | --- | --- | --- |
 | Lista exacta de paquetes (admisión explícita por paquete) | PR 4 | AI-08 OBS-003, `OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12` |
 | Correo de alertas (`alertEmailAddress`) | despliegue de las alertas (ya pendiente desde OBS-002) | AI-08 OBS-003 y SCL-007 |
-| Contexto de traza a través del outbox: columna, payload o ninguno | PR 7 | AI-08 OBS-003 |
 | Alerta de métrica sobre conexiones de PostgreSQL | PR 8 (la alerta, no el pool) | AI-08 SCL-007 |
 | Espera máxima del outbox por lane | PR 9 | AI-08 SCL-007 |
 | Recorridos de negocio de la suite de punta a punta | PR 10 | AI-08 OPS-005 |
