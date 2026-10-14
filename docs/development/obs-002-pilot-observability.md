@@ -72,8 +72,9 @@ No SQL was added for this. Lag is measured cheaply from what the claim functions
   ready message waited before a dispatcher took it. A retry's backoff is not counted as lag, because
   `available_at` is the retry time. The Dispatch store now also reads `available_at` from the
   `claim_dispatch_outbox` result row, which was already `RETURNING o.*`. `now` is read when the claim
-  returns, so the age includes the dispatcher's wait between claims: on the two realtime lanes, the
-  SCL-007 adaptive idle wait of up to 1 s (`docs/development/scl-007-adaptive-outbox-wait.md`).
+  returns, so the age includes the dispatcher's wait between claims: on all four lanes (realtime
+  business and location, Worker Notifications and Dispatch), the SCL-007 adaptive idle wait of up to
+  1 s (`docs/development/scl-007-adaptive-outbox-wait.md`).
 - **A stalled lane** writes no `OutboxLaneSummary`. The summary is driven by the dispatcher loop, so a
   blocked loop stops its heartbeat instead of reporting zeros.
 - **`LoopFailures`** counts loop iterations that failed, for example because the database is

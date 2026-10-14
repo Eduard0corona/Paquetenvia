@@ -1,5 +1,30 @@
 # Changelog
 
+## Espera adaptativa en las colas del Worker (SCL-007-WORKER-ADAPTIVE-WAIT-2026-10-14, seguimiento de la fase 4) — 2026-10-14
+
+- Respuesta literal del project owner (2026-10-14), registrada en `decision-log.md` con su contexto y las opciones no
+  elegidas: "1 segundo en ambas (Recommended)" ("Sin trabajo bajan a unas 2 consultas por segundo. La primera
+  notificación o evento después de un rato sin trabajo tarda hasta 1 s más. Igual que lo que elegiste para los avisos
+  en tiempo real.").
+- Las colas de notificaciones y del ciclo de vida de asignaciones del Worker usan la misma espera adaptativa que los
+  despachadores de tiempo real (`OutboxIdleWait`, que pasa a `Paqueteria.Application.Scaling` para que los cuatro lanes
+  usen una sola implementación). Cuando una consulta trae trabajo, lleno o parcial (en notificaciones, propio o sin
+  dueño), vuelven a consultar de inmediato y la espera empieza de nuevo; tras una consulta vacía esperan 250 ms, 500 ms
+  y luego 1 s. Cada lane tiene su propia espera.
+- Sin trabajo pasan de unas 8 a unas 2 consultas por segundo entre las dos colas. Cada consulta de notificaciones son
+  dos claims (propios y sin dueño), así que en transacciones de claim pasan de unas 12 a unas 3 por segundo.
+- Configuración validada al arrancar: `Notifications:MaximumIdleWaitMilliseconds` y
+  `Dispatch:AssignmentLifecycle:MaximumIdleWaitMilliseconds`, 1000 por defecto. Un valor menor que el intervalo de poll
+  del lane, mayor que 1000 ms o que no sea un número impide arrancar el Worker, con los mismos límites que los lanes de
+  tiempo real.
+- Se mantienen el latido por minuto de `OutboxLaneSummary` (OBS-002) y el aviso `oldest_outbox_age_seconds` de AI-15
+  (60 s). `MaxClaimAgeMs` incluye la espera. La primera notificación o reacción después de un rato sin trabajo espera
+  hasta 1 s (antes 250 ms).
+- Solo se usan las funciones existentes de claim, settle y requeue con `lease_token`. La validación de fotos y las tareas
+  programadas no cambian.
+- AI-08 SCL-007 registra la decisión y sus límites. Sin cambios en AI-04, AI-05, AI-06, AI-12, AI-13, AI-15, AI-18,
+  AI-24, SQL, permisos, migraciones, secretos, Bicep ni paquetes. Nota: `docs/development/scl-007-adaptive-outbox-wait.md`.
+
 ## Pruebas de punta a punta de la plataforma (OPS-005-JOURNEYS-2026-10-13, OPS-005-E2E-LOCKFILE-REL000-2026-10-14 y OPS-005-SUITE-IN-INTEGRATIONTESTS-2026-10-14, fase 4 PR 10) — 2026-10-14
 
 - Respuesta literal del project owner (2026-10-13), registrada en `decision-log.md` con su contexto y las opciones no
