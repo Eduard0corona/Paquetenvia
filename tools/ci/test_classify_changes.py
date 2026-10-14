@@ -294,6 +294,14 @@ class ImpactModelTests(unittest.TestCase):
         plan = classify(["tests/Paqueteria.IntegrationTests/Driver/StopsTests.cs"])
         self.assertEqual({"secret-scan", *BACKEND}, jobs(plan))
 
+    def test_end_to_end_suite_runs_in_its_host_job(self):
+        # OPS-005: the suite runs inside driver-stops-pwa (no job of its own); dotnet builds it and runs its
+        # instrument tests.
+        plan = classify(["tests/Paqueteria.EndToEndTests/MainJourneyEndToEndTests.cs"])
+        self.assertEqual({"secret-scan", "dotnet", "driver-stops-pwa"}, jobs(plan))
+        self.assertEqual(["TESTS_END_TO_END"], plan["domains"])
+        self.assertEqual("SELECTIVE", plan["classification"])
+
     def test_mixed_independent_domains_union(self):
         plan = classify(["apps/web/src/driver/a.tsx", "apps/web/src/tracking/b.tsx", "docs/adr/c.md"])
         self.assertEqual({"secret-scan", "web", "driver-stops-pwa", "public-tracking", "azr-static"}, jobs(plan))

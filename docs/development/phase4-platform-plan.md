@@ -48,7 +48,7 @@ Cada PR que cambie AI-05, AI-06, AI-07 u otro documento normativo lleva su fila 
 | 7 | OBS-003 | Contexto de traza a través del outbox | PR 1 (PR 6 para verlo) | columna, payload o ninguno |
 | 8 | SCL-007 | Un pool de conexiones por rol | ninguno (mejor después del PR 6) | alerta de conexiones de PostgreSQL y correo |
 | 9 | SCL-007 | Espera adaptativa del outbox | ninguno (mejor después del PR 8) | espera máxima por lane |
-| 10 | OPS-005 | Pruebas de punta a punta de la plataforma | PR 1 a PR 9 | recorridos de negocio de la suite |
+| 10 | OPS-005 | Pruebas de punta a punta de la plataforma | PR 1 a PR 9 | ninguna (recorridos decididos: `OPS-005-JOURNEYS-2026-10-13`) |
 
 Los PR 1 a 6 van primero, como pidió el owner ("Empiezo por OpenTelemetry y correlación, y por los límites de tasa en
 endpoints pesados"). Los PR 7 a 10 vienen después.
@@ -264,7 +264,18 @@ los despachadores de tiempo real de la API esperan 250 ms, 500 ms y luego 1 s (n
 - Solo datos sintéticos (SEC-003). Sin pruebas de relleno: lo prohíbe el README del proyecto.
 - Corre dentro de un job de CI existente: un job nuevo cambiaría la topología de 13 jobs de Foundation y necesitaría su
   propia decisión.
-- Pendiente del owner: los recorridos de negocio que corre la suite además de esas comprobaciones.
+- El owner decidió los recorridos el 2026-10-13 (`OPS-005-JOURNEYS-2026-10-13`): "Recorrido principal
+  (Recommended)", "Cotizar, crear y confirmar la orden, asignar repartidor, recoger, entregar con foto y ver 'Entregada'
+  en el seguimiento público. Un recorrido completo; suma unos minutos al job de CI existente."
+
+Lo aplicado está en `docs/development/ops-005-end-to-end-suite.md`:
+
+- El recorrido corre por las pantallas reales del build de producción de la web: el asistente "Nueva orden", el detalle
+  de la orden ("Liberar para recolección", "Asignar repartidor", "Ver enlace"), la PWA del repartidor con sus dos fotos
+  por carga firmada, y el seguimiento público, que muestra "Entregado".
+- Las cinco comprobaciones de plataforma se miden en la misma corrida; el 429 tiene su propia prueba.
+- La suite corre dentro del job `driver-stops-pwa`, que ya prepara PostgreSQL, el almacenamiento S3, las dependencias
+  web y Chromium. Los jobs `dotnet` la excluyen por categoría (`PlatformEndToEnd`).
 
 ## Decisiones pendientes del owner
 
@@ -275,7 +286,7 @@ los despachadores de tiempo real de la API esperan 250 ms, 500 ms y luego 1 s (n
 | Contexto de traza a través del outbox: columna, payload o ninguno | PR 7 | AI-08 OBS-003 |
 | Alerta de métrica sobre conexiones de PostgreSQL | PR 8 (la alerta, no el pool) | AI-08 SCL-007 |
 | Espera máxima del outbox por lane | PR 9 | AI-08 SCL-007 |
-| Recorridos de negocio de la suite de punta a punta | PR 10 | AI-08 OPS-005 |
+| Recorridos de negocio de la suite de punta a punta | decidida 2026-10-13 (`OPS-005-JOURNEYS-2026-10-13`, "Recorrido principal (Recommended)") | AI-08 OPS-005 |
 
 ## Invariantes que ningún PR de la fase 4 cambia
 

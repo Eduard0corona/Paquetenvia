@@ -50,6 +50,9 @@ public sealed class CorsCapableS3Fixture : IAsyncLifetime
             .WithEnvironment("CEPH_DEMO_UID", "drv002")
             .WithEnvironment("CEPH_DEMO_ACCESS_KEY", AccessKey)
             .WithEnvironment("CEPH_DEMO_SECRET_KEY", SecretKey)
+            // The monitor refuses to start when the host disk has less than 5 % free, a percentage a large developer
+            // disk misses with gigabytes still free; the throwaway test cluster only needs room for a few objects.
+            .WithEnvironment("CEPH_ARGS", "--mon_data_avail_crit=1")
             .WithPortBinding(8080, true)
             .WithWaitStrategy(Wait.ForUnixContainer().UntilCommandIsCompleted(
                 ["s3cmd", "ls"],

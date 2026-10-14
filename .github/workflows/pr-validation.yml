@@ -380,7 +380,7 @@ jobs:
           dotnet test
           --configuration Release
           --no-build
-          --filter "Category!=PostgreSqlContract&Category!=OutboxSignalRDelivery&Category!=SecureProofUpload&Category!=DriverStopsPwa&Category!=DriverOfflineOperationsPwa&Category!=PublicTrackingPostgreSql&Category!=PublicTrackingPwa&Category!=OperationsDashboardPostgreSql&Category!=OperationsDashboardPwa&Category!=OpsDeliverySimulation"
+          --filter "Category!=PostgreSqlContract&Category!=OutboxSignalRDelivery&Category!=SecureProofUpload&Category!=DriverStopsPwa&Category!=DriverOfflineOperationsPwa&Category!=PublicTrackingPostgreSql&Category!=PublicTrackingPwa&Category!=OperationsDashboardPostgreSql&Category!=OperationsDashboardPwa&Category!=OpsDeliverySimulation&Category!=PlatformEndToEnd"
           --logger "trx;LogFilePrefix=dotnet"
           --results-directory ./TestResults/dotnet
 
@@ -862,6 +862,19 @@ jobs:
           --configuration Release
           --no-restore
 
+      - name: Restore locked platform end-to-end dependencies
+        run: >-
+          dotnet restore
+          ./tests/Paqueteria.EndToEndTests/Paqueteria.EndToEndTests.csproj
+          --locked-mode
+
+      - name: Build platform end-to-end suite
+        run: >-
+          dotnet build
+          ./tests/Paqueteria.EndToEndTests/Paqueteria.EndToEndTests.csproj
+          --configuration Release
+          --no-restore
+
       - name: Install frozen web dependencies
         run: pnpm --dir apps/web install --frozen-lockfile
 
@@ -897,6 +910,18 @@ jobs:
           --logger "trx;LogFileName=driver-offline-operations-pwa.trx"
           --results-directory ./TestResults/driver-stops-pwa
 
+      - name: Execute platform end-to-end suite (OPS-005)
+        env:
+          MSBUILDDISABLENODEREUSE: "1"
+        run: >-
+          dotnet test
+          ./tests/Paqueteria.EndToEndTests/Paqueteria.EndToEndTests.csproj
+          --configuration Release
+          --no-build
+          --filter "Category=PlatformEndToEnd"
+          --logger "trx;LogFileName=platform-end-to-end.trx"
+          --results-directory ./TestResults/driver-stops-pwa
+
       - name: Correlate executed driver tests
         run: >-
           python ./tools/rel-000/rel000.py collect-results
@@ -909,6 +934,7 @@ jobs:
           --base-main-sha "$REL000_BASE_MAIN_SHA"
           --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|DriverStopsPwa=./TestResults/driver-stops-pwa/driver-stops-pwa.trx"
           --trx "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|DriverOfflineOperationsPwa=./TestResults/driver-stops-pwa/driver-offline-operations-pwa.trx"
+          --trx "tests/Paqueteria.EndToEndTests/Paqueteria.EndToEndTests.csproj|PlatformEndToEnd=./TestResults/driver-stops-pwa/platform-end-to-end.trx"
           --output ./TestResults/driver-stops-pwa/rel000-execution-results.json
 
       - name: Publish structured driver execution evidence
