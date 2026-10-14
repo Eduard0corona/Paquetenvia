@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import type { DriverCachePartition } from "../cache/driver-stops-cache";
+import type { DriverStop } from "../contracts/driver-stop";
 import type { DriverOfflineQueue } from "../offline/driver-offline-queue";
 import type { DriverSyncApi } from "../offline/driver-sync-api";
 import {
@@ -239,6 +240,88 @@ describe("driver operations enqueue result (photo preview)", () => {
 
     expect(harness.queue.operations).toEqual([]);
     await harness.controller.dispose();
+  });
+});
+
+describe("the stop screen while the previous action syncs (photo step kept)", () => {
+  /**
+   * What the stop detail renders through one sync pass of "Llegué a
+   * recolección" (CHECK_IN, saved at version 3): the screen holds the stops of
+   * the last REST read (DriverStopsController takes each confirmation read
+   * before the scheduler sees it) and the queue the controller last
+   * published, and projects them. The photo step of "Confirmar recolección" is
+   * rendered for AT_PICKUP without attention (StopAction, keyed by the
+   * projected status); any other value unmounts it and drops the photo the
+   * driver is previewing (docs/development/driver-photo-selection-refresh.md).
+   */
+  async function shownDuringPass(): Promise<readonly string[]> {
+    let server: { status: DriverStop["status"]; version: number } = {
+      status: "ASSIGNED",
+      version: 3,
+    };
+    const stopNow = () =>
+      withStopDetails({
+        order_id: orderId,
+        aggregate_version: server.version,
+        order_public_id: "ORD_SYNTHETIC_PHOTO_STEP",
+        stop_type: "PICKUP",
+        status: server.status,
+        address_summary: "Zona sintética",
+      });
+    const queue = new MemoryQueue([operation("CHECK_IN", 3)]);
+    const page = trackedPage();
+    let shownStops: readonly DriverStop[] = [stopNow()];
+    let shownOperations: readonly DriverOfflineOperation[] | null = null;
+    const shown: string[] = [];
+    const render = () => {
+      if (shownOperations === null) return;
+      const [stop] = projectDriverOperations(shownStops, shownOperations).stops;
+      shown.push(`${stop.projectedStatus}/attention=${stop.attentionCount}`);
+    };
+    const controller = new DriverOperationsController({
+      session,
+      queue,
+      api: {
+        // The server applies the check-in: AT_PICKUP at version 4.
+        transitionOrder: vi.fn(async () => {
+          server = { status: "AT_PICKUP", version: 4 };
+          return { id: orderId, status: "AT_PICKUP" as const, version: 4 };
+        }),
+        createProofUploadSession: vi.fn(),
+        finalizeProof: vi.fn(),
+        recordCodCollection: vi.fn(),
+        openFailedDeliveryIncident: vi.fn(),
+      } as DriverSyncApi,
+      refreshStops: async () => {
+        const list = stopList([stopNow()]);
+        shownStops = list.stops;
+        render();
+        return list;
+      },
+      onAccessRevoked: vi.fn(),
+      schedulerFactory: (options) =>
+        new DriverSyncScheduler({ ...options, window: page.window }),
+      now: () => new Date("2026-07-26T12:01:00.000Z"),
+      randomUuid: () => replacementId,
+    });
+    controller.subscribe((state) => {
+      if (state.loading) return;
+      shownOperations = state.operations;
+      render();
+    });
+    await controller.start();
+    await vi.waitFor(() => expect(queue.operations).toEqual([]));
+    await controller.dispose();
+    return shown;
+  }
+
+  it("never shows the confirmed action as a conflict between the confirmation read and its removal", async () => {
+    const shown = await shownDuringPass();
+
+    // Saved, read before sending, read after the 200, removed: four renders
+    // at least, and every one keeps "Confirmar recolección" and its photo.
+    expect(shown.length).toBeGreaterThanOrEqual(4);
+    expect(shown).toEqual(shown.map(() => "AT_PICKUP/attention=0"));
   });
 });
 
