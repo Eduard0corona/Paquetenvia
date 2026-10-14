@@ -13,6 +13,7 @@ using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Npgsql;
+using Paqueteria.Infrastructure.Observability;
 using Paqueteria.IntegrationTests.Security;
 
 namespace Paqueteria.IntegrationTests.Custody;
@@ -249,6 +250,8 @@ public sealed class Adp001AzureBlobDefenderPipelineTests :
         services.AddLogging();
         services.AddSingleton<IConfiguration>(configuration);
         services.AddSingleton<IProofBlobGateway>(gateway);
+        // OBS-003-WORKER-PSEUDONYM-2026-10-14: proof validation needs the organization pseudonymizer, as in the Worker.
+        services.AddTelemetryOrganizationPseudonym(configuration, new TestHostEnvironment());
         services.AddCustodyInfrastructure(configuration, new TestHostEnvironment(), addValidationWorker: worker);
         return services.BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
     }

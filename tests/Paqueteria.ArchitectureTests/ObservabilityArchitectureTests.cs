@@ -381,12 +381,90 @@ public sealed partial class ObservabilityArchitectureTests
                 "src/BuildingBlocks/Paqueteria.Infrastructure/Observability/OrganizationPseudonym.cs",
                 "src/BuildingBlocks/Paqueteria.Infrastructure/Observability/TelemetryExportPolicy.cs",
                 "src/BuildingBlocks/Paqueteria.Infrastructure/Observability/TraceCorrelatedLogging.cs",
+                .. WorkerOrganizationContextSites.Keys,
                 "src/Paqueteria.Api/Program.cs",
                 "src/Paqueteria.Api/Tenancy/TelemetryOrganizationContextMiddleware.cs",
                 "src/Paqueteria.Worker/Program.cs",
             ],
             users);
     }
+
+    /// <summary>
+    /// OBS-003-WORKER-PSEUDONYM-2026-10-14: the only Worker sites that enter an organization context, each with the
+    /// exact call it makes. The two outbox lanes enter it per claimed message, right after the message's activity, from
+    /// the owner organization the claim function returned; proof validation enters it per photo, after the signed
+    /// metadata was read and found valid, from the owner organization the metadata names (QC).
+    /// </summary>
+    private static readonly IReadOnlyDictionary<string, string> WorkerOrganizationContextSites =
+        new SortedDictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["src/Modules/Custody/Custody.Infrastructure/Proofs/ProofValidationProcessor.cs"] =
+                "TelemetryOrganizationContext.EnterSystem(pseudonymizer, metadata.OwnerOrganizationId)",
+            ["src/Modules/Dispatch/Dispatch.Infrastructure/Lifecycle/AssignmentLifecycleProcessor.cs"] =
+                "TelemetryOrganizationContext.EnterSystem(pseudonymizer, message.OwnerOrganizationId)",
+            ["src/Modules/Notifications/Notifications.Infrastructure/Dispatching/NotificationsOutboxDispatcher.cs"] =
+                "TelemetryOrganizationContext.EnterSystem(pseudonymizer, message.OwnerOrganizationId)",
+        };
+
+    /// <summary>
+    /// OBS-003-WORKER-PSEUDONYM-2026-10-14 (Q2, QB "SYSTEM (Recommended)", QC): the Worker carries the pseudonym and the
+    /// fixed role kind SYSTEM only on the lines of one message or one photo, entered once per unit of work at the
+    /// reviewed sites; it never enters a context with any other role kind, and the API realtime lanes stay unchanged.
+    /// </summary>
+    [Fact]
+    public void The_worker_enters_the_organization_context_only_per_message_or_photo_with_role_kind_system()
+    {
+        Assert.Equal("SYSTEM", TelemetryOrganizationContext.SystemRoleKind);
+        var enterers = AllSourceFiles()
+            .Where(file => file.Text.Contains("TelemetryOrganizationContext.Enter", StringComparison.Ordinal))
+            .Select(file => file.Path)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(
+            WorkerOrganizationContextSites.Keys.Append("src/Paqueteria.Api/Tenancy/TelemetryOrganizationContextMiddleware.cs")
+                .Order(StringComparer.Ordinal),
+            enterers);
+
+        foreach (var (path, call) in WorkerOrganizationContextSites)
+        {
+            var code = CodeWithoutComments(File.ReadAllText(TestRepository.GetPath(path)));
+            Assert.Equal(1, Regex.Count(code, Regex.Escape("TelemetryOrganizationContext.Enter")));
+            Assert.Equal(1, Regex.Count(code, Regex.Escape(call)));
+            Assert.DoesNotContain("TelemetryOrganizationContext.Enter(", code, StringComparison.Ordinal);
+            Assert.DoesNotContain("SetOrganization", code, StringComparison.Ordinal);
+        }
+
+        // The lanes: right after the message's activity, inside the per-message body, disposed with it.
+        foreach (var path in WorkerOrganizationContextSites.Keys.Where(path => !path.Contains("/Custody/", StringComparison.Ordinal)))
+        {
+            var code = CodeWithoutComments(File.ReadAllText(TestRepository.GetPath(path)));
+            Assert.Matches(
+                @"using var activity = TraceCorrelation\.StartOutboxMessage\([^;]+\);\s*using var organization = " +
+                Regex.Escape(WorkerOrganizationContextSites[path]) + ";",
+                code);
+        }
+
+        // Proof validation: only after the signed metadata was read and found valid.
+        var proofs = CodeWithoutComments(File.ReadAllText(TestRepository.GetPath(
+            "src/Modules/Custody/Custody.Infrastructure/Proofs/ProofValidationProcessor.cs")));
+        Assert.True(
+            proofs.IndexOf("TryReadExpectedMetadata(descriptor, out var metadata)", StringComparison.Ordinal) is var read and >= 0 &&
+            read < proofs.IndexOf("TelemetryOrganizationContext.EnterSystem(", StringComparison.Ordinal),
+            "proof validation must enter the organization context only after reading valid signed metadata");
+
+        // The one Worker entry point always uses the fixed role kind, and the API realtime lanes enter nothing.
+        var pseudonym = CodeWithoutComments(File.ReadAllText(TestRepository.GetPath(
+            "src/BuildingBlocks/Paqueteria.Infrastructure/Observability/OrganizationPseudonym.cs")));
+        Assert.Contains("Enter(pseudonymizer.Pseudonymize(ownerOrganizationId), SystemRoleKind)", pseudonym, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "TelemetryOrganizationContext",
+            File.ReadAllText(TestRepository.GetPath("src/Modules/Realtime/Realtime.Infrastructure/Dispatching/RealtimeOutboxProcessor.cs")),
+            StringComparison.Ordinal);
+    }
+
+    private static string CodeWithoutComments(string text) => string.Join(
+        '\n',
+        text.Split('\n').Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)));
 
     [Fact]
     public void Observability_code_never_reads_the_outbox_or_the_database()

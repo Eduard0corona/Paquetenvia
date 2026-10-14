@@ -15,6 +15,8 @@ using Notifications.Infrastructure.Persistence;
 using Npgsql;
 using Organizations.Infrastructure.Notifications;
 using Paqueteria.Infrastructure.Database.Baseline;
+using Paqueteria.Infrastructure.Observability;
+using Paqueteria.IntegrationTests.Observability;
 using Testcontainers.PostgreSql;
 
 namespace Paqueteria.IntegrationTests.Notifications;
@@ -189,6 +191,8 @@ public sealed class Scl001TwoWorkerNoDuplicateEffectTests : IAsyncLifetime
 
     private IHost CreateHost(string workerId, ExternalEffectSink sink, bool crashAfterEffect) =>
         Host.CreateDefaultBuilder()
+            // OBS-003-WORKER-PSEUDONYM-2026-10-14: the dispatcher needs the organization pseudonymizer, as in the Worker.
+            .ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(TelemetryPseudonymTestKey.Settings))
             .ConfigureAppConfiguration(configuration => configuration.AddInMemoryCollection(
                 new Dictionary<string, string?>
                 {
@@ -208,6 +212,7 @@ public sealed class Scl001TwoWorkerNoDuplicateEffectTests : IAsyncLifetime
             {
                 services.AddOrganizationsNotificationAudienceReader(context.Configuration);
                 services.AddIdentityNotificationAudienceReader(context.Configuration);
+                services.AddTelemetryOrganizationPseudonym(context.Configuration, context.HostingEnvironment);
                 services.AddNotificationsInfrastructure(context.Configuration);
                 services.RemoveAll<ISyntheticInAppProvider>();
                 services.AddSingleton<ISyntheticInAppProvider>(

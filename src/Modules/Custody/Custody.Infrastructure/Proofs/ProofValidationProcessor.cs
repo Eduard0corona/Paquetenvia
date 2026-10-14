@@ -13,10 +13,21 @@ using NpgsqlTypes;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
 using Paqueteria.Application.Tenancy;
+using Paqueteria.Infrastructure.Observability;
 using Paqueteria.Infrastructure.Tenancy;
 
 namespace Custody.Infrastructure.Proofs;
 
+/// <summary>
+/// POD-001 validation of the quarantined proof objects, one poll cycle at a time (<see cref="ProofValidationWorker"/>).
+/// OBS-003-WORKER-PSEUDONYM-2026-10-14 (QC, project owner: "Sí, si los metadatos son válidos (Recommended)"): each
+/// object whose signed metadata is valid is processed in the organization context of its owner organization, read from
+/// that metadata (no query), with the role kind SYSTEM, so its per-photo line carries the pseudonym; an object with
+/// invalid metadata names no organization and its line carries none. OBS-003-WORKER-AUDIT-TRACE-2026-10-14 (QA, "Se
+/// quedan vacías (Recommended)"): the ready and rejected audit rows keep <c>request_id</c> NULL, because no outbox
+/// message or stored trace context reaches this poll; they link to the request through the upload session id, whose
+/// creation row carries that request's trace id.
+/// </summary>
 public sealed class ProofValidationProcessor(
     WorkerTenantTransactionContext<CustodyDbContext> transactionContext,
     IProofObjectStorage storage,
@@ -26,6 +37,7 @@ public sealed class ProofValidationProcessor(
     IOptions<ProofStorageOptions> options,
     IClock clock,
     IProofTelemetry telemetry,
+    IOrganizationPseudonymizer pseudonymizer,
     ILogger<ProofValidationProcessor> logger) : IProofValidationProcessor
 {
     public async Task ProcessAvailableAsync(CancellationToken cancellationToken)
@@ -55,9 +67,27 @@ public sealed class ProofValidationProcessor(
         SemaphoreSlim concurrency,
         CancellationToken cancellationToken)
     {
+        IDisposable? organization = null;
         try
         {
-            await ProcessOneAsync(descriptor, cancellationToken);
+            var stopwatch = Stopwatch.StartNew();
+            if (!TryReadExpectedMetadata(descriptor, out var metadata))
+            {
+                telemetry.ProcessingCompleted(
+                    "unknown",
+                    "rejected",
+                    "metadata_mismatch",
+                    stopwatch.Elapsed.TotalMilliseconds);
+                // QC: invalid signed metadata names no organization, so this line carries none.
+                logger.LogWarning(
+                    "Ignoring a quarantine object with invalid signed metadata.");
+                return false;
+            }
+
+            // OBS-003-WORKER-PSEUDONYM-2026-10-14 (QC): the rest of this object's flow, its failure line included,
+            // carries the pseudonym of the owner organization its signed metadata names and the role kind SYSTEM.
+            organization = TelemetryOrganizationContext.EnterSystem(pseudonymizer, metadata.OwnerOrganizationId);
+            await ProcessOneAsync(descriptor, metadata, stopwatch, cancellationToken);
             return false;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -72,27 +102,17 @@ public sealed class ProofValidationProcessor(
         }
         finally
         {
+            organization?.Dispose();
             concurrency.Release();
         }
     }
 
     private async Task ProcessOneAsync(
         ProofObjectDescriptor descriptor,
+        SignedObjectMetadata metadata,
+        Stopwatch stopwatch,
         CancellationToken cancellationToken)
     {
-        var stopwatch = Stopwatch.StartNew();
-        if (!TryReadExpectedMetadata(descriptor, out var metadata))
-        {
-            telemetry.ProcessingCompleted(
-                "unknown",
-                "rejected",
-                "metadata_mismatch",
-                stopwatch.Elapsed.TotalMilliseconds);
-            logger.LogWarning(
-                "Ignoring a quarantine object with invalid signed metadata.");
-            return;
-        }
-
         // ADP-001: an out-of-band scanner (Defender for Storage) may not have a verdict yet. The
         // object then stays in quarantine and the session is not touched; a later pass retries.
         if (await threatScanner.IsVerdictPendingAsync(descriptor, cancellationToken))
