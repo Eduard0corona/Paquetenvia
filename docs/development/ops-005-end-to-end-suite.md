@@ -128,8 +128,11 @@ Foundation keeps 13 jobs.
   or build step of the suite's own and no workflow naming `tests/Paqueteria.EndToEndTests`, the evidence spec run
   through rel000 `collect_execution_results`, the `dotnet` exclusions, the classifier routing of every suite file, the
   category constant).
-- Minutes added: measured on the PR Validation run of this pull request (the host job against the same job of the
-  base), recorded here once that run completes.
+- Minutes added, measured on PR Validation run 38502715574 (head 79813ef) against the base run 38497087488 (#265 at
+  99dd73d, the last `development` change merged here): the step "Execute platform end-to-end suite (OPS-005)" took
+  53 s (2/2 passed, 23 s of test time; the rest is PostgreSQL, the storage container and the web build and start). The
+  `driver-stops-pwa` job took 5 min 5 s against 4 min 35 s on the base, +30 s, because its other steps ran 23 s faster
+  in that run (runner variance). Plan for about one minute more per run of the job.
 
 A pull request that changes only operations or tracking web screens does not run `driver-stops-pwa` in PR Validation
 (their domains route to `operations-dashboard` and `public-tracking`); the suite runs there on the next change that
