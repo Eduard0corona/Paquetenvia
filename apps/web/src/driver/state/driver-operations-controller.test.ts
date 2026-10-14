@@ -1,5 +1,10 @@
 import { describe, expect, it, vi } from "vitest";
-import type { DriverCachePartition } from "../cache/driver-stops-cache";
+import type { DriverStopsApi } from "../api/driver-stops-api";
+import type {
+  DriverCachePartition,
+  DriverStopsCache,
+  DriverStopsSnapshot,
+} from "../cache/driver-stops-cache";
 import type { DriverStop } from "../contracts/driver-stop";
 import type { DriverOfflineQueue } from "../offline/driver-offline-queue";
 import type { DriverSyncApi } from "../offline/driver-sync-api";
@@ -15,11 +20,16 @@ import {
 import { projectDriverOperations } from "../offline/operation-projection";
 import type { ValidatedDriverProof } from "../proofs/proof-file";
 import { stopList, withStopDetails } from "../contracts/driver-stop.fixtures";
+import type {
+  DriverStopsRealtimeCallbacks,
+  DriverStopsRealtimeFactory,
+} from "../realtime/driver-stops-realtime";
 import type { DriverSession } from "../session/driver-session";
 import {
   DriverOperationsController,
   driverOperationExpiredMessage,
 } from "./driver-operations-controller";
+import { DriverStopsController } from "./driver-stops-controller";
 
 const partitionKey = "E".repeat(43);
 const orderId = "11111111-1111-4111-8111-111111111111";
@@ -322,6 +332,134 @@ describe("the stop screen while the previous action syncs (photo step kept)", ()
     // at least, and every one keeps "Confirmar recolección" and its photo.
     expect(shown.length).toBeGreaterThanOrEqual(4);
     expect(shown).toEqual(shown.map(() => "AT_PICKUP/attention=0"));
+  });
+});
+
+describe("a stale stop read that lands after the confirmation (photo step kept)", () => {
+  /**
+   * The residual risk of docs/development/driver-photo-selection-refresh.md:
+   * a full read (here the REST resynchronization after a SignalR reconnect)
+   * leaves while the stop is ASSIGNED at version 3 and the server answers it
+   * then, but its answer reaches the phone only after the sync pass of "Llegué
+   * a recolección" read AT_PICKUP at version 4 and removed the check-in. The
+   * real DriverStopsController takes both reads; the screen projects its stops
+   * with the queue the operations controller publishes, as StopAction does.
+   */
+  async function shownAroundStaleRead(): Promise<{
+    readonly shown: readonly string[];
+    readonly saved: readonly string[];
+  }> {
+    let server: { status: DriverStop["status"]; version: number } = {
+      status: "ASSIGNED",
+      version: 3,
+    };
+    const stopNow = () =>
+      withStopDetails({
+        order_id: orderId,
+        aggregate_version: server.version,
+        order_public_id: "ORD_SYNTHETIC_STALE_READ",
+        stop_type: "PICKUP",
+        status: server.status,
+        address_summary: "Zona sintética",
+      });
+    let releaseFullReads: (() => void) | null = null;
+    const fullReadsHeld = new Promise<void>((resolve) => {
+      releaseFullReads = resolve;
+    });
+    let holdFullReads = false;
+    const stopsApi: DriverStopsApi = {
+      listStops: async (_signal, options) => {
+        // The server answers when the request arrives; only the delivery of a
+        // held full read waits.
+        const answer = stopList([stopNow()]);
+        if (options?.details !== false && holdFullReads) await fullReadsHeld;
+        return answer;
+      },
+    };
+    const realtime = new StopsRealtimeHarness();
+    const stopsCache = new MemoryStopsCache();
+    const stops = new DriverStopsController({
+      baseUrl: "https://api.synthetic.test",
+      session,
+      api: stopsApi,
+      cache: stopsCache,
+      realtimeFactory: realtime,
+      telemetry: {
+        loadCompleted: vi.fn(),
+        loadFailed: vi.fn(),
+        realtimeStateChanged: vi.fn(),
+      },
+      now: () => new Date("2026-07-26T12:01:00.000Z"),
+    });
+    await stops.start();
+
+    // The reconnect read leaves now, while the stop is ASSIGNED at version 3.
+    holdFullReads = true;
+    const staleRead = realtime.callbacks!.resynchronizeFromRest();
+
+    const queue = new MemoryQueue([operation("CHECK_IN", 3)]);
+    const page = trackedPage();
+    let shownStops: readonly DriverStop[] = stops.current.stops;
+    let shownOperations: readonly DriverOfflineOperation[] | null = null;
+    const shown: string[] = [];
+    const render = () => {
+      if (shownOperations === null) return;
+      const [stop] = projectDriverOperations(shownStops, shownOperations).stops;
+      shown.push(`${stop.projectedStatus}/attention=${stop.attentionCount}`);
+    };
+    stops.subscribe((state) => {
+      shownStops = state.stops;
+      render();
+    });
+    const operations = new DriverOperationsController({
+      session,
+      queue,
+      api: {
+        // The server applies the check-in: AT_PICKUP at version 4.
+        transitionOrder: vi.fn(async () => {
+          server = { status: "AT_PICKUP", version: 4 };
+          return { id: orderId, status: "AT_PICKUP" as const, version: 4 };
+        }),
+        createProofUploadSession: vi.fn(),
+        finalizeProof: vi.fn(),
+        recordCodCollection: vi.fn(),
+        openFailedDeliveryIncident: vi.fn(),
+      } as DriverSyncApi,
+      refreshStops: (signal) => stops.refreshForSync(signal),
+      onAccessRevoked: vi.fn(),
+      schedulerFactory: (options) =>
+        new DriverSyncScheduler({ ...options, window: page.window }),
+      now: () => new Date("2026-07-26T12:01:00.000Z"),
+      randomUuid: () => replacementId,
+    });
+    operations.subscribe((state) => {
+      if (state.loading) return;
+      shownOperations = state.operations;
+      render();
+    });
+    await operations.start();
+    await vi.waitFor(() => expect(queue.operations).toEqual([]));
+    await vi.waitFor(() =>
+      expect(shown.at(-1)).toBe("AT_PICKUP/attention=0"),
+    );
+    // "Confirmar recolección" is on screen: from here the driver may be
+    // previewing the pickup photo. The stale read lands now.
+    const fromPhotoStep = shown.length - 1;
+    releaseFullReads!();
+    await staleRead;
+    const saved = stopsCache
+      .onlySnapshot()!
+      .stops.map((stop) => `${stop.status}/v${stop.aggregate_version}`);
+    await operations.dispose();
+    await stops.dispose();
+    return { shown: shown.slice(fromPhotoStep), saved };
+  }
+
+  it("never takes the stop back to ASSIGNED once AT_PICKUP version 4 was read", async () => {
+    const { shown, saved } = await shownAroundStaleRead();
+
+    expect(shown).toEqual(shown.map(() => "AT_PICKUP/attention=0"));
+    expect(saved).toEqual(["AT_PICKUP/v4"]);
   });
 });
 
@@ -936,5 +1074,43 @@ class MemoryQueue implements DriverOfflineQueue {
 
   public async releaseLease(): Promise<void> {
     return;
+  }
+}
+
+class MemoryStopsCache implements DriverStopsCache {
+  private readonly records = new Map<string, DriverStopsSnapshot>();
+
+  public onlySnapshot(): DriverStopsSnapshot | null {
+    return [...this.records.values()][0] ?? null;
+  }
+
+  public async readSnapshot(
+    partition: DriverCachePartition,
+  ): Promise<DriverStopsSnapshot | null> {
+    return this.records.get(partition.key) ?? null;
+  }
+
+  public async replaceSnapshot(
+    partition: DriverCachePartition,
+    snapshot: DriverStopsSnapshot,
+  ): Promise<void> {
+    this.records.set(partition.key, structuredClone(snapshot));
+  }
+
+  public async clearPartition(partition: DriverCachePartition): Promise<void> {
+    this.records.delete(partition.key);
+  }
+}
+
+class StopsRealtimeHarness implements DriverStopsRealtimeFactory {
+  public callbacks: DriverStopsRealtimeCallbacks | null = null;
+
+  public create(
+    _baseUrl: string,
+    _session: DriverSession,
+    callbacks: DriverStopsRealtimeCallbacks,
+  ) {
+    this.callbacks = callbacks;
+    return { start: async () => undefined, stop: async () => undefined };
   }
 }
