@@ -368,7 +368,8 @@ public sealed partial class DispatchPostgreSqlContractTests
         scenario.OrderId,
         null);
 
-    private PostgreSqlAssignableDriversQuery CreateAssignableDriversQuery()
+    private PostgreSqlAssignableDriversQuery CreateAssignableDriversQuery(
+        DispatchDriverEligibilityOptions? eligibility = null)
     {
         var state = new TenantDatabaseExecutionState();
         var dbOptions = new DbContextOptionsBuilder<DispatchDbContext>()
@@ -380,7 +381,7 @@ public sealed partial class DispatchPostgreSqlContractTests
         var context = new DispatchDbContext(dbOptions, state);
         return new PostgreSqlAssignableDriversQuery(
             new TenantTransactionContext<DispatchDbContext>(context, state),
-            Options.Create(EligibilityOptions()),
+            Options.Create(eligibility ?? EligibilityOptions()),
             new DispatchAssignmentAuthorizer(),
             new PostgreSqlDispatchAuthorizationReader(),
             new FixedClock(OccurredAt),

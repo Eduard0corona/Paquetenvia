@@ -200,8 +200,9 @@ las carreras.
 
 Los paquetes nunca vienen del cliente. Se exige al menos uno y se calcula con
 aritmética checked: cantidad, peso total `int64`, máximo individual y máximos
-de `length_mm`, `width_mm`, `height_mm`. Dimensión ausente permanece nula;
-JSON/tipo/peso inválido u overflow falla cerrado.
+de `length_mm`, `width_mm`, `height_mm`. Dimensión ausente (clave omitida o
+`null`) permanece nula; JSON/tipo/peso inválido u overflow falla cerrado
+(`docs/development/fix-package-dimensions-null.md`).
 
 DSP-001 se reevalúa con la misma conexión/transacción: perfil OWN activo,
 usuario, membresía DRIVER, ciudad, área opcional, documento más reciente por
