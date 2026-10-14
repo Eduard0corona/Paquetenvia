@@ -20,6 +20,7 @@ import type { DriverStopsTelemetry } from "../telemetry/driver-stops-telemetry";
 import {
   DriverStopsController,
   mergeConfirmedStops,
+  withoutStaleStops,
 } from "./driver-stops-controller";
 import {
   stopList,
@@ -357,6 +358,180 @@ describe("DriverStopsController", () => {
   });
 });
 
+describe("stale stop reads (DRV-STALE-STOP-READ-2026-10-14)", () => {
+  const atPickup: DriverStop = {
+    ...firstStop,
+    aggregate_version: 4,
+    status: "AT_PICKUP",
+  };
+
+  it("keeps the newer stop when a full read that left before the confirmation lands after it", async () => {
+    const cache = new MemoryCache();
+    const harness = await gatedHarness(cache, [firstStop, secondStop]);
+
+    // The reconnect read leaves while the stop is ASSIGNED at version 3.
+    const resync = harness.realtime.callbacks!.resynchronizeFromRest();
+    const stale = await harness.api.read(2);
+    // The check-in is applied and its confirmation read is taken first.
+    harness.api.server = [atPickup, secondStop];
+    harness.api.completedToday = 1;
+    const confirmation = harness.controller.refreshForSync();
+    (await harness.api.read(3)).release();
+    await confirmation;
+    const confirmed = harness.controller.current.stops[0];
+    expect(confirmed).toMatchObject({ status: "AT_PICKUP", aggregate_version: 4 });
+
+    stale.release();
+    const cursors = await resync;
+
+    // The stop stays AT_PICKUP at version 4, with the details it had; the other
+    // stop of the read and today's count are taken as before.
+    expect(harness.controller.current.stops).toEqual([confirmed, secondStop]);
+    expect(harness.controller.current.completedToday).toBe(0);
+    expect(cache.onlySnapshot()?.stops).toEqual([confirmed, secondStop]);
+    // The realtime cursor gets the version the phone kept.
+    expect(cursors).toEqual([confirmed, secondStop]);
+  });
+
+  it("takes an equal version as before", async () => {
+    const harness = await gatedHarness(new MemoryCache(), [atPickup]);
+    const stale = harness.controller.retry();
+    const full = await harness.api.read(2);
+    // Same version, other data (for example a zone renamed meanwhile).
+    harness.api.server = [{ ...atPickup, zone_name: "Zona sintética nueva" }];
+    const confirmation = harness.controller.refreshForSync();
+    (await harness.api.read(3)).release();
+    await confirmation;
+    expect(harness.controller.current.stops[0].zone_name).toBe("Zona sintética nueva");
+
+    full.release();
+    await stale;
+
+    expect(harness.controller.current.stops).toEqual([atPickup]);
+  });
+
+  it("never brings back, from an older version, a stop that left the list meanwhile", async () => {
+    const harness = await gatedHarness(new MemoryCache(), [firstStop, secondStop]);
+    const stale = harness.controller.retry();
+    const full = await harness.api.read(2);
+    harness.api.server = [atPickup, secondStop];
+    const checkIn = harness.controller.refreshForSync();
+    (await harness.api.read(3)).release();
+    await checkIn;
+    // Dispatch takes the order away: it leaves the driver's list.
+    harness.api.server = [secondStop];
+    const unassigned = harness.controller.refreshForSync();
+    (await harness.api.read(4)).release();
+    await unassigned;
+    expect(harness.controller.current.stops).toEqual([secondStop]);
+
+    full.release();
+    await stale;
+
+    expect(harness.controller.current.stops).toEqual([secondStop]);
+  });
+
+  it("brings a stop that left back as before when the late read has its last accepted version", async () => {
+    const harness = await gatedHarness(new MemoryCache(), [firstStop, secondStop]);
+    harness.api.server = [atPickup, secondStop];
+    const checkIn = harness.controller.refreshForSync();
+    const confirmation = await harness.api.read(2);
+    // This full read leaves after the server answered version 4 too.
+    const stale = harness.controller.retry();
+    const full = await harness.api.read(3);
+    confirmation.release();
+    await checkIn;
+    harness.api.server = [secondStop];
+    const unassigned = harness.controller.refreshForSync();
+    (await harness.api.read(4)).release();
+    await unassigned;
+
+    full.release();
+    await stale;
+
+    expect(harness.controller.current.stops).toEqual([atPickup, secondStop]);
+  });
+
+  it("drops, as before (DRV-001), a stop the late read does not bring", async () => {
+    const harness = await gatedHarness(new MemoryCache(), [firstStop]);
+    const stale = harness.controller.retry();
+    const full = await harness.api.read(2);
+    // A stop assigned meanwhile arrives with the confirmation read.
+    harness.api.server = [firstStop, secondStop];
+    const confirmation = harness.controller.refreshForSync();
+    (await harness.api.read(3)).release();
+    await confirmation;
+    expect(harness.controller.current.stops).toHaveLength(2);
+
+    full.release();
+    await stale;
+
+    // Residual risk: it is missing until the next read brings it again.
+    expect(harness.controller.current.stops).toEqual([firstStop]);
+  });
+
+  it("applies a lower version from a read sent after the higher one was accepted (version reset)", async () => {
+    const cache = new MemoryCache();
+    const harness = await gatedHarness(cache, [atPickup]);
+    // The database was restored from a backup: the order is at version 3 again.
+    harness.api.server = [firstStop];
+
+    const read = harness.controller.retry();
+    (await harness.api.read(2)).release();
+    await read;
+
+    expect(harness.controller.current.stops).toEqual([firstStop]);
+    expect(cache.onlySnapshot()?.stops).toEqual([firstStop]);
+  });
+
+  it("takes answers one at a time, so a stale one waiting for a snapshot write still loses", async () => {
+    const cache = new GatedWriteCache();
+    const harness = await gatedHarness(cache, [firstStop]);
+    const stale = harness.controller.retry();
+    const full = await harness.api.read(2);
+    harness.api.server = [atPickup];
+    const confirmation = harness.controller.refreshForSync();
+    // The confirmation arrives first and its snapshot write is slow.
+    cache.holdWrites = true;
+    (await harness.api.read(3)).release();
+    await vi.waitFor(() => expect(cache.heldWrites).toBe(1));
+    // The stale answer arrives while that write is still pending.
+    full.release();
+    cache.releaseWrites();
+    await confirmation;
+    await stale;
+
+    expect(harness.controller.current.stops[0]).toMatchObject({
+      status: "AT_PICKUP",
+      aggregate_version: 4,
+    });
+    expect(cache.onlySnapshot()?.stops[0]).toMatchObject({
+      status: "AT_PICKUP",
+      aggregate_version: 4,
+    });
+  });
+
+  it("keeps the held stop, drops a stale stop that is not held and takes the rest", () => {
+    const held = [atPickup];
+    const incoming = [firstStop, { ...secondStop, aggregate_version: 3 }];
+    const newer = new Map([
+      [firstStop.order_id, 4],
+      [secondStop.order_id, 5],
+    ]);
+    expect(withoutStaleStops(held, incoming, newer)).toEqual({
+      stops: [atPickup],
+      taken: [],
+    });
+    expect(withoutStaleStops(held, incoming, new Map())).toEqual({
+      stops: incoming,
+      taken: incoming,
+    });
+    expect(
+      withoutStaleStops(held, [atPickup], new Map([[atPickup.order_id, 4]])),
+    ).toEqual({ stops: [atPickup], taken: [atPickup] });
+  });
+});
+
 class MemoryCache implements DriverStopsCache {
   private readonly records = new Map<string, DriverStopsSnapshot>();
   public replacements = 0;
@@ -464,5 +639,92 @@ function createHarness(
     telemetry: stopsTelemetry,
     now: () => new Date("2026-07-26T12:00:00.000Z"),
   });
+  return { controller, api, realtime };
+}
+
+/**
+ * A stops API whose server answers when the request arrives (the current
+ * `server` stops, without details for a confirmation read) and whose answer
+ * reaches the app only when the test releases it.
+ */
+class GatedStopsApi implements DriverStopsApi {
+  public server: readonly DriverStop[];
+  public completedToday = 0;
+  private readonly reads: { readonly release: () => void }[] = [];
+
+  public constructor(server: readonly DriverStop[]) {
+    this.server = server;
+  }
+
+  /** The n-th read (1-based) once it was sent. */
+  public async read(count: number): Promise<{ readonly release: () => void }> {
+    await vi.waitFor(() => expect(this.reads.length).toBeGreaterThanOrEqual(count));
+    return this.reads[count - 1];
+  }
+
+  public async listStops(
+    signal?: AbortSignal,
+    options?: DriverStopsListOptions,
+  ): Promise<DriverStopList> {
+    const details = options?.details !== false;
+    const answer = stopList(
+      this.server.map((stop) => (details ? stop : withoutStopDetails(stop))),
+      this.completedToday,
+    );
+    let release: () => void = () => undefined;
+    const arrived = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    this.reads.push({ release });
+    await arrived;
+    if (signal?.aborted) throw new DriverStopsApiError("cancelled");
+    return answer;
+  }
+}
+
+/** A snapshot store whose writes can be held, to make one answer slow to take. */
+class GatedWriteCache extends MemoryCache {
+  public holdWrites = false;
+  public heldWrites = 0;
+  private release: () => void = () => undefined;
+  private readonly released = new Promise<void>((resolve) => {
+    this.release = resolve;
+  });
+
+  public releaseWrites(): void {
+    this.release();
+  }
+
+  public override async replaceSnapshot(
+    partition: DriverCachePartition,
+    snapshot: DriverStopsSnapshot,
+  ): Promise<void> {
+    if (this.holdWrites) {
+      this.heldWrites += 1;
+      await this.released;
+    }
+    await super.replaceSnapshot(partition, snapshot);
+  }
+}
+
+/** A started controller over GatedStopsApi; its first read already answered `initial`. */
+async function gatedHarness(
+  cache: DriverStopsCache,
+  initial: readonly DriverStop[],
+) {
+  const api = new GatedStopsApi(initial);
+  const realtime = new RealtimeHarness(false);
+  const controller = new DriverStopsController({
+    baseUrl: "https://api.synthetic.test",
+    session,
+    api,
+    cache,
+    realtimeFactory: realtime,
+    telemetry,
+    now: () => new Date("2026-07-26T12:00:00.000Z"),
+  });
+  const started = controller.start();
+  (await api.read(1)).release();
+  await started;
   return { controller, api, realtime };
 }

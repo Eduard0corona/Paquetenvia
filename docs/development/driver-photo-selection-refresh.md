@@ -100,16 +100,98 @@ Lo que no cambia (no se inventa comportamiento):
 
 ## Riesgo residual
 
-- Visto al revisar, no observado: `DriverStopsController.refresh` (lecturas completas por aviso de tiempo real o
-  reconexión) y `refreshForSync` no se ordenan entre sí. Una lectura completa que el servidor respondió antes de una
-  transición y que llega después de la lectura de confirmación podría regresar la parada a su estado anterior por un
-  momento, con el mismo efecto sobre el paso de la foto. Necesita que esa lectura tarde más que la transición y su
-  confirmación juntas. No se corrige aquí; seguimiento sugerido: descartar una lectura más vieja que la última
-  aceptada.
+- Corregido aparte (DRV-STALE-STOP-READ-2026-10-14, sección siguiente): visto al revisar, no observado en una
+  corrida. `DriverStopsController.refresh` (lecturas completas por aviso de tiempo real o reconexión) y
+  `refreshForSync` no se ordenaban entre sí. Una lectura completa que el servidor respondió antes de una transición y
+  que llegaba después de la lectura de confirmación regresaba la parada a su estado anterior, con el mismo efecto sobre
+  el paso de la foto.
 - Cuando la acción confirmada sale, desaparece la fila "Estado por sincronizar" y el paso de la foto sube unos
   píxeles. Un toque justo en ese instante puede caer fuera del botón; Playwright reintenta el click. Ya ocurría antes.
 - Entre la lectura de confirmación y el borrado en IndexedDB (milisegundos), "Sincronización pendiente" ya no cuenta la
   acción asentada, igual que con el reporte "No se pudo entregar".
+
+## Lecturas viejas de la parada (DRV-STALE-STOP-READ-2026-10-14)
+
+Respuestas literales del owner en `decision-log.md`: Q6 "Sí, en un PR aparte (Recommended)" ("La app descarta una
+lectura de la parada más vieja que la última aceptada (por versión). No cambia lo que ve el repartidor salvo evitar ese
+parpadeo. Con prueba de regresión.") y Q6b "Se aplica, como hoy (Recommended)" ("La app solo descarta una lectura que
+ya iba en camino cuando aceptó una versión más nueva de esa parada; una lectura pedida después siempre se aplica. Evita
+igual el parpadeo. Tras una restauración, el repartidor ve lo que dice el servidor desde la siguiente lectura.").
+Severidad **MAJOR** (AI-01 §7, operación), cambio reversible; sin cambio de API, base de datos, cola ni reglas de
+DRV-002.
+
+### Causa
+
+- Dos lecturas de paradas de `DriverStopsController` llegan por caminos que no se ordenan entre sí:
+  - la lectura completa `refresh` (con datos protegidos): al abrir, al reintentar, por aviso de tiempo real
+    (`scheduleRefresh`, 250 ms) o al reconectar (`resynchronizeFromRest`). Sólo cancela la lectura completa anterior;
+  - la lectura de confirmación `refreshForSync` (`details=false`), que el scheduler hace antes y después de cada
+    transición.
+- Las dos terminaban en `acceptAuthoritativeStops`, que reemplazaba las paradas en pantalla y la instantánea con lo
+  que llegara, sin mirar la versión. Entre la mezcla y el `setState` había además esperas (lectura y escritura de la
+  instantánea), así que dos respuestas que llegaban casi juntas podían mezclarse contra el mismo estado anterior.
+- El orden que falla:
+  1. la lectura completa sale con la parada en ASSIGNED v3 y el servidor la responde antes de aplicar el check-in. Es
+     la lectura lenta: descifra los datos protegidos y espera hasta 10 s;
+  2. mientras tanto terminan la lectura previa del scheduler, la transición (v4) y la lectura de confirmación
+     (AT_PICKUP v4), y el check-in sale de la cola;
+  3. llega la lectura completa: la parada vuelve a ASSIGNED v3 en pantalla y en la instantánea;
+  4. la proyección muestra "Llegué a recolección", `StopAction` cambia de `key` y `DriverProofCapture` se desmonta:
+     `release()` y la foto en vista previa se pierde.
+- No era sólo un instante: la parada quedaba así hasta la siguiente lectura (aviso, sincronización o reintento), y la
+  reconexión entregaba v3 como cursor del tiempo real.
+
+### Evidencia
+
+- Vitest, `driver-operations-controller.test.ts` ("a stale stop read that lands after the confirmation (photo step
+  kept)"), con `DriverStopsController`, `DriverOperationsController` y `DriverSyncScheduler` reales: sin la corrección
+  la pantalla pasa de `AT_PICKUP/attention=0` a `ASSIGNED/attention=0` y la instantánea queda `ASSIGNED/v3`. Con la
+  corrección todas quedan `AT_PICKUP/attention=0` y la instantánea `AT_PICKUP/v4`.
+- Playwright, `DriverOfflineOperationsPwaPlaywrightTests.Previewed_photo_survives_a_stale_stop_read`
+  (`Category=DriverOfflineOperationsPwa`): el check-in se guarda sin conexión; la página nueva que lo envía abre con
+  una lectura completa que el backend sintético responde en ASSIGNED v3 y entrega tarde, y las transiciones esperan a
+  que esa lectura haya llegado. Se suelta con la foto ya en vista previa.
+  - Sin la corrección falló 3 de 3: la instantánea pasa a `ASSIGNED/3`, y la pantalla muestra "Estado confirmado
+    Asignada", "Siguiente acción Llegué a recolección" y ninguna vista previa.
+  - Con la corrección pasó 3 de 3: la instantánea se vuelve a guardar con `AT_PICKUP/4`, sigue "Confirmar
+    recolección" con la misma vista previa (el mismo object URL), y "Usar esta foto" envía esa misma foto (un solo
+    upload con su SHA-256, transiciones AT_PICKUP y PICKED_UP).
+- Pruebas unitarias, `driver-stops-controller.test.ts` ("stale stop reads"): versión igual, parada que salió de la
+  lista, parada que falta en la lectura vieja, reinicio de versión y una respuesta vieja que llega mientras otra
+  espera su escritura. Esta última falla si las respuestas no se toman de una en una.
+
+### Corrección
+
+- Cada lectura en camino (completa o de confirmación) anota, por orden, la versión más alta que la app aceptó de otras
+  lecturas mientras ella iba en camino (`withoutStaleStops`). Al llegar, una parada con una versión menor que esa no
+  se toma: la parada que la app tiene se queda como está, con sus datos protegidos, y una parada que ya salió de la
+  lista no vuelve. Lo demás de esa lectura se toma como antes.
+- Las respuestas se toman de una en una, en el orden en que llegan: cada una se compara y se mezcla con lo que dejó la
+  anterior, y la instantánea y la pantalla se escriben en ese mismo orden.
+- Queda igual que antes:
+  - con versión igual, la lectura se toma;
+  - una parada que la lectura no trae sale de la lista (DRV-001);
+  - una lectura pedida después de aceptar la versión más nueva se toma siempre, aunque traiga una versión menor. Eso
+    sólo pasaría tras restaurar la base desde un respaldo (Q6b);
+  - la memoria vive en el controlador de la sesión: cerrar sesión, cambiar de organización o de repartidor, o un
+    401/403 la terminan;
+  - el scheduler sigue confirmando con la respuesta de REST tal como llegó (DRV-002 sin cambios);
+  - "Hoy · N paradas · K hechas" y la hora de sincronización siguen la lectura como antes;
+  - el cursor del tiempo real recibe las versiones que la app conservó.
+
+### Riesgo residual
+
+- Una lectura vieja a la que le falta una parada recién asignada (que llegó con otra lectura mientras ella iba en
+  camino) la quita hasta la siguiente lectura. No lleva versión de esa parada, así que la regla no aplica y sale de la
+  lista como dice DRV-001. Perder una foto así exigiría abrir esa parada, llegar y previsualizar la foto antes de que
+  esa lectura llegue (máximo 10 s).
+- Con versión igual, una lectura vieja puede traer un dato que cambió sin subir la versión (por ejemplo el cobro
+  registrado, que no cambia la versión de la orden); se toma como antes.
+
+### Rollback
+
+Revertir el commit de DRV-STALE-STOP-READ-2026-10-14. Vuelve el riesgo descrito arriba: una lectura completa que
+llega después de la confirmación regresa la parada y la foto en vista previa se pierde.
 
 ## Rollback
 

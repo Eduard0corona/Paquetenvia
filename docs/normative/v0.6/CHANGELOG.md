@@ -1,5 +1,19 @@
 # Changelog
 
+## Repartidor: lecturas viejas de la parada (DRV-STALE-STOP-READ-2026-10-14) — 2026-10-14
+
+- Respuestas literales del project owner (2026-10-14), registradas en `decision-log.md` con su contexto y las opciones
+  no elegidas: Q6 "Sí, en un PR aparte (Recommended)" ("La app descarta una lectura de la parada más vieja que la última aceptada (por versión). No cambia lo que ve el repartidor salvo evitar ese parpadeo. Con prueba de regresión.") y Q6b "Se aplica, como hoy (Recommended)" ("La app solo descarta una lectura que ya iba en camino cuando aceptó una versión más nueva de esa parada; una lectura pedida después siempre se aplica. Evita igual el parpadeo. Tras una restauración, el repartidor ve lo que dice el servidor desde la siguiente lectura.").
+- La PWA del repartidor ya no toma una parada de una lectura que iba en camino cuando la app aceptó una versión más
+  nueva de esa parada: la parada que tiene se queda y una parada que ya salió de la lista no vuelve. Las respuestas se
+  toman de una en una, en el orden en que llegan, así que la pantalla y la instantánea se escriben en ese orden.
+  Corrige el riesgo residual de `docs/development/driver-photo-selection-refresh.md` (PR #268): una lectura completa
+  respondida antes del check-in que llegaba después de su confirmación regresaba la parada y perdía la foto en vista
+  previa.
+- Sin cambio: versión igual, una parada que la lectura no trae (sale de la lista, DRV-001), una lectura pedida después
+  (también tras restaurar la base), la cola y sus reglas (DRV-002), API, SQL, migraciones e IndexedDB. Pruebas de
+  regresión en Vitest y en `DriverOfflineOperationsPwa`.
+
 ## Pruebas de punta a punta de la plataforma (OPS-005-JOURNEYS-2026-10-13, OPS-005-E2E-LOCKFILE-REL000-2026-10-14 y OPS-005-SUITE-IN-INTEGRATIONTESTS-2026-10-14, fase 4 PR 10) — 2026-10-14
 
 - Respuesta literal del project owner (2026-10-13), registrada en `decision-log.md` con su contexto y las opciones no
