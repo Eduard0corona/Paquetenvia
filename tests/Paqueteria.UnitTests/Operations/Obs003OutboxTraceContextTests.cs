@@ -177,7 +177,7 @@ public sealed class Obs003OutboxTraceContextTests
             lanes,
             lines.Factory.CreateLogger<NotificationsOutboxProcessor>());
         using var dispatcher = new NotificationsOutboxDispatcher(
-            store, processor, options, lanes, lines.Factory.CreateLogger<NotificationsOutboxDispatcher>());
+            store, processor, options, lanes, TimeProvider.System, lines.Factory.CreateLogger<NotificationsOutboxDispatcher>());
 
         await dispatcher.StartAsync(CancellationToken.None);
         await WaitUntilAsync(() => store.Settled.Count >= 2);
@@ -235,7 +235,7 @@ public sealed class Obs003OutboxTraceContextTests
             lanes,
             lines.Factory.CreateLogger<AssignmentLifecycleProcessor>());
         using var dispatcher = new AssignmentLifecycleDispatcher(
-            store, processor, options, lanes, lines.Factory.CreateLogger<AssignmentLifecycleDispatcher>());
+            store, processor, options, lanes, TimeProvider.System, lines.Factory.CreateLogger<AssignmentLifecycleDispatcher>());
 
         await dispatcher.StartAsync(CancellationToken.None);
         await WaitUntilAsync(() => store.Settled.Count >= 3);
