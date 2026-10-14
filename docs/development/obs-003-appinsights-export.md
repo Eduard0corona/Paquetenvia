@@ -447,7 +447,9 @@ weeks after the export is turned on. If metrics crowd the cap, a later decision 
     is refused.
   - `TrackingTokenLogRedactionArchitectureTests` lists the export as a reviewed request-path sink.
 - `tools/azr-001/test_env001_pilot_guards.py`:
-  - P01 allows the component and still refuses other Insights types, a metric alert included;
+  - P01 allows the component and still refuses other Insights types. Since
+    `SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14`, P01 allows metric alerts in `observability.bicep` only, and P21
+    refuses every metric alert other than the two PostgreSQL connection alerts, including one on Application Insights;
   - P06 requires the pseudonym mapping in both hosts and refuses the key in plain environment;
   - P17 refuses the telemetry settings in `apps.settings.json`;
   - P21 fails closed on each of these:

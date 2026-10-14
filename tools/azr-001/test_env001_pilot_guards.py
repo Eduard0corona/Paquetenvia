@@ -891,10 +891,113 @@ class TemplateGuardTests(unittest.TestCase):
             t["observability"]["resources"].append({"type": "Microsoft.Insights/diagnosticSettings", "apiVersion": "2021-05-01-preview", "name": "d"})
         self.assert_fails(1, self.context(unknown_insights_type), "Microsoft.Insights/diagnosticSettings")
 
-        # OBS-003: no new alert without its own decision; a metric alert on the exported metrics is refused too.
+        # OBS-003: no new alert without its own decision; a metric alert on the exported metrics is refused too. Since
+        # SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14 the type is allowed in observability.bicep for the two
+        # PostgreSQL connection alerts only, so P21 refuses any other metric alert.
         def metric_alert(t):
             t["observability"]["resources"].append({"type": "Microsoft.Insights/metricAlerts", "apiVersion": "2018-03-01", "name": "m"})
-        self.assert_fails(1, self.context(metric_alert), "Microsoft.Insights/metricAlerts")
+        self.assert_fails(21, self.context(metric_alert), "metric alerts must be exactly")
+
+        def metric_alert_on_application_insights(t):
+            alert = copy.deepcopy(self.resource(t, "observability", "Microsoft.Insights/metricAlerts", "warning"))
+            alert["name"] = "mar-pv-pilot-appi-requests"
+            alert["properties"]["scopes"] = ["[resourceId('Microsoft.Insights/components', format('appi-pv-pilot-{0}', variables('suffix')))]"]
+            t["observability"]["resources"].append(alert)
+        self.assert_fails(21, self.context(metric_alert_on_application_insights), "metric alerts must be exactly")
+
+    def test_scl007_postgres_connection_alerts_fail_closed(self):
+        """SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14: two metric alerts on the pilot server's active_connections,
+        28 (Sev 2) and 33 (Sev 1), Maximum over 5 minutes every minute, stateful, through ag-pv-pilot-ops."""
+        def warning(t):
+            return self.resource(t, "observability", "Microsoft.Insights/metricAlerts", "warning")
+
+        def critical(t):
+            return self.resource(t, "observability", "Microsoft.Insights/metricAlerts", "critical")
+
+        def criterion(alert):
+            return alert["properties"]["criteria"]["allOf"][0]
+
+        compiled = self.context().templates["observability"]
+        alerts = {r["name"]: r for r in compiled["resources"] if r.get("type") == "Microsoft.Insights/metricAlerts"}
+        self.assertEqual({"mar-pv-pilot-pg-connections-warning", "mar-pv-pilot-pg-connections-critical"}, set(alerts))
+        for name, (severity, threshold) in guards.REQUIRED_CONNECTION_ALERTS.items():
+            properties = alerts[name]["properties"]
+            self.assertEqual((severity, threshold), (properties["severity"], criterion(alerts[name])["threshold"]))
+            self.assertEqual(("PT1M", "PT5M", "Maximum", "GreaterThanOrEqual", "active_connections"),
+                             (properties["evaluationFrequency"], properties["windowSize"], criterion(alerts[name])["timeAggregation"],
+                              criterion(alerts[name])["operator"], criterion(alerts[name])["metricName"]))
+        # 80 % and 95 % of the 35 B1ms user connections, rounded down (AI-15 connection_pool_utilization 0.8 and 0.95).
+        self.assertEqual((28, 33), (guards.POSTGRES_USER_CONNECTIONS * 80 // 100, guards.POSTGRES_USER_CONNECTIONS * 95 // 100))
+
+        def in_platform(t):
+            t["platform"]["resources"].append(copy.deepcopy(warning(t)))
+        self.assert_fails(1, self.context(in_platform), "allowed only in observability.bicep")
+
+        def dropped(t):
+            t["observability"]["resources"].remove(critical(t))
+        self.assert_fails(21, self.context(dropped), "metric alerts must be exactly")
+
+        def duplicated(t):
+            t["observability"]["resources"].append(copy.deepcopy(warning(t)))
+        self.assert_fails(21, self.context(duplicated), "metric alerts must be exactly")
+
+        mutations = {
+            "lower threshold": (lambda t: criterion(warning(t)).update(threshold=27), "active_connections >= 28"),
+            "higher threshold": (lambda t: criterion(critical(t)).update(threshold=35), "active_connections >= 33"),
+            "fractional threshold": (lambda t: criterion(warning(t)).update(threshold=28.0), "active_connections >= 28"),
+            "average": (lambda t: criterion(warning(t)).update(timeAggregation="Average"), "Maximum of active_connections"),
+            "strictly greater": (lambda t: criterion(critical(t)).update(operator="GreaterThan"), "active_connections >= 33"),
+            "other metric": (lambda t: criterion(warning(t)).update(metricName="connections_failed"), "active_connections >= 28"),
+            "dimension": (lambda t: criterion(warning(t)).update(dimensions=[{"name": "ServerName", "operator": "Include", "values": ["*"]}]),
+                          "no dimension"),
+            "dynamic threshold": (lambda t: criterion(critical(t)).update(criterionType="DynamicThresholdCriterion"), "active_connections >= 33"),
+            "second criterion": (lambda t: warning(t)["properties"]["criteria"]["allOf"].append(copy.deepcopy(criterion(warning(t)))),
+                                 "no dimension or other criterion"),
+            "multi-resource criteria": (lambda t: warning(t)["properties"]["criteria"].update(
+                {"odata.type": "Microsoft.Azure.Monitor.MultipleResourceMultipleMetricCriteria"}), "active_connections >= 28"),
+            "swapped severity": (lambda t: warning(t)["properties"].update(severity=1), "must have severity 2"),
+            "critical as Sev 0": (lambda t: critical(t)["properties"].update(severity=0), "must have severity 1"),
+            "every 5 minutes": (lambda t: warning(t)["properties"].update(evaluationFrequency="PT5M"), "every minute (PT1M)"),
+            "15-minute window": (lambda t: critical(t)["properties"].update(windowSize="PT15M"), "over 5 minutes (PT5M)"),
+            "stateless": (lambda t: warning(t)["properties"].update(autoMitigate=False), "stateful"),
+            "disabled": (lambda t: critical(t)["properties"].update(enabled=False), "enabled and stateful"),
+            "scope Application Insights": (lambda t: warning(t)["properties"].update(
+                scopes=["[resourceId('Microsoft.Insights/components', format('appi-pv-pilot-{0}', variables('suffix')))]"]),
+                "only the pilot PostgreSQL server"),
+            "scope another server": (lambda t: critical(t)["properties"].update(
+                scopes=["[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', 'pg-pv-other')]"]), "only the pilot PostgreSQL server"),
+            "scope the resource group": (lambda t: warning(t)["properties"].update(scopes=["[resourceGroup().id]"]),
+                                         "only the pilot PostgreSQL server"),
+            "multi-resource target": (lambda t: warning(t)["properties"].update(
+                targetResourceType="Microsoft.DBforPostgreSQL/flexibleServers", targetResourceRegion="mexicocentral"), "unexpected properties"),
+            "webhook": (lambda t: critical(t)["properties"]["actions"][0].update(webHookProperties={"route": "x"}),
+                        "only through the pilot action group"),
+            "other action group": (lambda t: warning(t)["properties"].update(
+                actions=[{"actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', 'ag-other')]"}]), "only through the pilot action group"),
+            "no action": (lambda t: critical(t)["properties"].update(actions=[]), "only through the pilot action group"),
+            "copy loop": (lambda t: warning(t).update(copy={"name": "c", "count": 1}), "one literal global resource"),
+            "regional": (lambda t: critical(t).update(location="mexicocentral"), "one literal global resource"),
+            "hard-coded e-mail": (lambda t: warning(t)["properties"].update(description="Write to ops@example.com"),
+                                  "must not contain an e-mail address"),
+            "other SKU": (lambda t: self.resource(t, "platform", "Microsoft.DBforPostgreSQL/flexibleServers")["sku"].update(name="Standard_B2s"),
+                          "revisit them with the server SKU"),
+            "other suffix": (lambda t: t["observability"]["variables"].update(suffix="[uniqueString(resourceGroup().id)]"), "same suffix as platform.bicep"),
+        }
+        for name, (mutate, fragment) in mutations.items():
+            with self.subTest(name=name):
+                self.assert_fails(21, self.context(mutate), fragment)
+
+        # An e-mail anywhere in the observability template, not only in the alerts, is refused.
+        def email_in_workbook(t):
+            self.edit(t, "observability", "Paquetenvia pilot operations (OBS-002)", "Paquetenvia pilot operations (ops@example.com)")
+        self.assert_fails(21, self.context(email_in_workbook), "observability.bicep must not contain an e-mail address")
+
+        # The two series count against the 5 USD bound (0.10 each at worst): log alerts at 4.95 USD pass alone, not with them.
+        def log_alerts_at_4_95(t):
+            for rule in t["observability"]["variables"]["rules"][:4]:
+                rule["frequency"] = "PT10M"
+                rule["window"] = "PT15M"
+        self.assert_fails(21, self.context(log_alerts_at_4_95), "alert rules cost 5.15 USD per month")
 
 
 if __name__ == "__main__":
