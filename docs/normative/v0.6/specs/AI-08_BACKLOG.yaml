@@ -1740,7 +1740,7 @@ items:
   - SEC-004
   - SCL-007
   expected_outputs:
-  - an end-to-end suite in tests/Paqueteria.EndToEndTests that runs the assembled API, Worker and Web against real PostgreSQL/PostGIS (phase 4 PR 10)
+  - an end-to-end suite in tests/Paqueteria.IntegrationTests (Category=PlatformEndToEnd) that runs the assembled API, Worker and Web against real PostgreSQL/PostGIS (phase 4 PR 10; location DECIDED OPS-005-SUITE-IN-INTEGRATIONTESTS-2026-10-14; tests/Paqueteria.EndToEndTests stays reserved and empty)
   acceptance_criteria:
   - 'DECIDED PHASE4-PLATFORM-APPROVAL-2026-10-12: end-to-end tests are part of phase 4'
   - one browser action yields one trace id across the API log lines, its audit row and, on an error, the problem traceId
@@ -1750,7 +1750,7 @@ items:
   - with the telemetry export off nothing leaves the process
   - synthetic data only (SEC-003) - no real PII, phone number, e-mail address or token in fixtures or evidence; no placeholder or always-passing test
   - the suite runs inside an existing CI job; adding a job changes the 13-job Foundation topology and needs its own decision
-  - 'PENDING OWNER DECISION (blocks phase 4 PR 10): the business journeys the suite runs beyond the platform checks above'
+  - 'DECIDED OPS-005-JOURNEYS-2026-10-13 (project owner, "Recorrido principal (Recommended)"): beyond the platform checks above the suite runs one complete main journey through the real web screens: quote, create and confirm the order, assign a driver, pick up, deliver with a photo (signed upload to storage, never multipart through the API) and see the order delivered on public tracking'
   required_tests:
   - the end-to-end suite itself, green in CI
   approval_gate: owner_technology_operations

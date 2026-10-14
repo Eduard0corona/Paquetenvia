@@ -34,7 +34,13 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
     private readonly bool _enableDispatch;
     private readonly bool _enableDriverApiCors;
     private readonly IReadOnlyDictionary<string, string?> _configurationOverrides;
+    private readonly string[] _corsExposedHeaders;
 
+    /// <param name="corsExposedHeaders">
+    /// Response headers the test CORS policy of <paramref name="enableDriverApiCors"/> exposes to the browser. The
+    /// pilot serves the web and the API on one origin, where a script reads every response header; a test that
+    /// serves them on two origins names here the headers the web must read, such as <c>Retry-After</c>.
+    /// </param>
     internal RealtimeKestrelWebApplicationFactory(
         string connectionString,
         RealtimeAuthorizationRecorder recorder,
@@ -46,7 +52,8 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
         bool enableDispatch = false,
         bool enableDriverApiCors = false,
         IReadOnlyDictionary<string, string?>? configurationOverrides = null,
-        bool useHttps = false)
+        bool useHttps = false,
+        IReadOnlyList<string>? corsExposedHeaders = null)
     {
         _connectionString = connectionString;
         _realtimeConnectionString = realtimeConnectionString;
@@ -58,6 +65,7 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
         _enableDriverApiCors = enableDriverApiCors;
         _configurationOverrides =
             configurationOverrides ?? new Dictionary<string, string?>();
+        _corsExposedHeaders = corsExposedHeaders?.ToArray() ?? [];
         if (useHttps)
         {
             UseKestrel(options => options.Listen(
@@ -188,6 +196,7 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
                 services.PostConfigure<CorsOptions>(options =>
                 {
                     options.AddDefaultPolicy(policy =>
+                    {
                         policy
                             .WithOrigins(_allowedOrigin)
                             .WithMethods("GET", "POST")
@@ -197,7 +206,12 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
                                 "Idempotency-Key",
                                 "X-Organization-Id",
                                 "X-SignalR-User-Agent")
-                            .AllowCredentials());
+                            .AllowCredentials();
+                        if (_corsExposedHeaders.Length > 0)
+                        {
+                            policy.WithExposedHeaders(_corsExposedHeaders);
+                        }
+                    });
                     options.AddPolicy(
                         RealtimeEndpointDefaults.CorsPolicy,
                         policy =>
