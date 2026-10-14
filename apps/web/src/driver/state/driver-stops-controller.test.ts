@@ -431,7 +431,7 @@ describe("stale stop reads (DRV-STALE-STOP-READ-2026-10-14)", () => {
     expect(harness.controller.current.stops).toEqual([secondStop]);
   });
 
-  it("brings a stop that left back as before when the late read has its last accepted version", async () => {
+  it("never brings back a stop that left the list meanwhile from its last accepted version either (Q6c)", async () => {
     const harness = await gatedHarness(new MemoryCache(), [firstStop, secondStop]);
     harness.api.server = [atPickup, secondStop];
     const checkIn = harness.controller.refreshForSync();
@@ -449,7 +449,125 @@ describe("stale stop reads (DRV-STALE-STOP-READ-2026-10-14)", () => {
     full.release();
     await stale;
 
-    expect(harness.controller.current.stops).toEqual([atPickup, secondStop]);
+    expect(harness.controller.current.stops).toEqual([secondStop]);
+  });
+
+  describe("a stop removed while another read is on its way (Q6c)", () => {
+    const heldStop: DriverStop = { ...firstStop, aggregate_version: 5 };
+
+    it("is not brought back, on screen or in the snapshot, by a slow full read that left before the removal", async () => {
+      const cache = new MemoryCache();
+      const harness = await gatedHarness(cache, [heldStop, secondStop]);
+      // A slow full read leaves while the stop is assigned at version 5.
+      const stale = harness.controller.retry();
+      const full = await harness.api.read(2);
+      // Dispatch takes the order away; the confirmation read is the first to
+      // see it, and nothing it brings carries the order.
+      harness.api.server = [secondStop];
+      const confirmation = harness.controller.refreshForSync();
+      (await harness.api.read(3)).release();
+      await confirmation;
+      expect(harness.controller.current.stops).toEqual([secondStop]);
+
+      full.release();
+      await stale;
+
+      expect(harness.controller.current.stops).toEqual([secondStop]);
+      expect(cache.onlySnapshot()?.stops).toEqual([secondStop]);
+    });
+
+    it("takes it again from a read sent after the removal (reassigned back), and the slow read still loses", async () => {
+      const cache = new MemoryCache();
+      const harness = await gatedHarness(cache, [heldStop, secondStop]);
+      const stale = harness.controller.retry();
+      const full = await harness.api.read(2);
+      harness.api.server = [secondStop];
+      const removal = harness.controller.refreshForSync();
+      (await harness.api.read(3)).release();
+      await removal;
+      // Dispatch assigns the order to this driver again (version 7).
+      const back: DriverStop = { ...heldStop, aggregate_version: 7 };
+      harness.api.server = [back, secondStop];
+      const after = harness.controller.refreshForSync();
+      (await harness.api.read(4)).release();
+      await after;
+      expect(
+        harness.controller.current.stops.map((stop) => [stop.order_id, stop.aggregate_version]),
+      ).toEqual([
+        [back.order_id, 7],
+        [secondStop.order_id, 4],
+      ]);
+      const shown = harness.controller.current.stops;
+
+      full.release();
+      await stale;
+
+      expect(harness.controller.current.stops).toEqual(shown);
+      expect(cache.onlySnapshot()?.stops).toEqual(shown);
+    });
+
+    it("takes it from a read already on its way that brings it at the held version + 1 (closed without a version bump, then reassigned)", async () => {
+      // D8 closes the assignment after FAILED_ATTEMPT -> RESCHEDULED without
+      // bumping the order: the stop leaves the list at the version the app holds.
+      const rescheduled: DriverStop = {
+        ...heldStop,
+        aggregate_version: 6,
+        status: "RESCHEDULED",
+      };
+      const harness = await gatedHarness(new MemoryCache(), [rescheduled, secondStop]);
+      harness.api.server = [secondStop];
+      const closing = harness.controller.refreshForSync();
+      const removal = await harness.api.read(2);
+      // A new assignment to this driver bumps the order to version 7; a full
+      // read answered after it is on its way when the removal is taken.
+      const reassigned: DriverStop = {
+        ...heldStop,
+        aggregate_version: 7,
+        status: "ASSIGNED",
+      };
+      harness.api.server = [reassigned, secondStop];
+      const newer = harness.controller.retry();
+      const full = await harness.api.read(3);
+      removal.release();
+      await closing;
+      expect(harness.controller.current.stops).toEqual([secondStop]);
+
+      full.release();
+      await newer;
+
+      expect(harness.controller.current.stops).toEqual([reassigned, secondStop]);
+    });
+
+    it("lets a read already on its way bring back, as today, a newly assigned stop that a stale read dropped", async () => {
+      const harness = await gatedHarness(new MemoryCache(), [secondStop]);
+      // A slow full read leaves before the order is assigned to this driver.
+      const stale = harness.controller.retry();
+      const full = await harness.api.read(2);
+      harness.api.server = [firstStop, secondStop];
+      const preRead = harness.controller.refreshForSync();
+      (await harness.api.read(3)).release();
+      await preRead;
+      // The sync's confirmation read is on its way when the stale read lands.
+      const transitioned: DriverStop = { ...secondStop, aggregate_version: 5 };
+      harness.api.server = [firstStop, transitioned];
+      const confirmation = harness.controller.refreshForSync();
+      const confirmed = await harness.api.read(4);
+
+      full.release();
+      await stale;
+      // Residual risk (DRV-001): the stale read drops the newly assigned stop.
+      expect(harness.controller.current.stops).toEqual([secondStop]);
+
+      confirmed.release();
+      await confirmation;
+
+      expect(
+        harness.controller.current.stops.map((stop) => [stop.order_id, stop.aggregate_version]),
+      ).toEqual([
+        [firstStop.order_id, 3],
+        [transitioned.order_id, 5],
+      ]);
+    });
   });
 
   it("drops, as before (DRV-001), a stop the late read does not bring", async () => {

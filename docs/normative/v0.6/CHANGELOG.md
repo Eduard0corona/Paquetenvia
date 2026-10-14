@@ -3,16 +3,22 @@
 ## Repartidor: lecturas viejas de la parada (DRV-STALE-STOP-READ-2026-10-14) — 2026-10-14
 
 - Respuestas literales del project owner (2026-10-14), registradas en `decision-log.md` con su contexto y las opciones
-  no elegidas: Q6 "Sí, en un PR aparte (Recommended)" ("La app descarta una lectura de la parada más vieja que la última aceptada (por versión). No cambia lo que ve el repartidor salvo evitar ese parpadeo. Con prueba de regresión.") y Q6b "Se aplica, como hoy (Recommended)" ("La app solo descarta una lectura que ya iba en camino cuando aceptó una versión más nueva de esa parada; una lectura pedida después siempre se aplica. Evita igual el parpadeo. Tras una restauración, el repartidor ve lo que dice el servidor desde la siguiente lectura.").
+  no elegidas: Q6 "Sí, en un PR aparte (Recommended)" ("La app descarta una lectura de la parada más vieja que la última aceptada (por versión). No cambia lo que ve el repartidor salvo evitar ese parpadeo. Con prueba de regresión."), Q6b "Se aplica, como hoy (Recommended)" ("La app solo descarta una lectura que ya iba en camino cuando aceptó una versión más nueva de esa parada; una lectura pedida después siempre se aplica. Evita igual el parpadeo. Tras una restauración, el repartidor ve lo que dice el servidor desde la siguiente lectura.") y, en la revisión del PR
+  #271, Q6c "Solo paradas ya vistas (Recommended)" ("Una lectura en camino ignora la parada solo si la lectura que la quitó salió cuando la app ya tenía esa parada. Corrige el caso del revisor (una parada quitada ya no regresa con datos viejos) y una parada recién asignada nunca queda oculta más que hoy. Queda un hueco raro: con tres lecturas cruzadas, la parada quitada podría reaparecer una vez, hasta la siguiente lectura.").
 - La PWA del repartidor ya no toma una parada de una lectura que iba en camino cuando la app aceptó una versión más
   nueva de esa parada: la parada que tiene se queda y una parada que ya salió de la lista no vuelve. Las respuestas se
   toman de una en una, en el orden en que llegan, así que la pantalla y la instantánea se escriben en ese orden.
   Corrige el riesgo residual de `docs/development/driver-photo-selection-refresh.md` (PR #268): una lectura completa
   respondida antes del check-in que llegaba después de su confirmación regresaba la parada y perdía la foto en vista
   previa.
-- Sin cambio: versión igual, una parada que la lectura no trae (sale de la lista, DRV-001), una lectura pedida después
-  (también tras restaurar la base), la cola y sus reglas (DRV-002), API, SQL, migraciones e IndexedDB. Pruebas de
-  regresión en Vitest y en `DriverOfflineOperationsPwa`.
+- Una parada quitada (Q6c): si una lectura que salió cuando la app ya tenía la parada deja de traerla, cada otra
+  lectura en camino la anota en la versión que la app tenía + 1. No la regresa con esa versión ni con una menor, y la
+  toma con esa + 1 o una mayor (una asignación nueva). Una parada puede salir de la lista sin subir la versión de la
+  orden: D8 cierra la asignación tras FAILED_ATTEMPT→RESCHEDULED sin tocar la orden.
+- Sin cambio: versión igual de una parada que la app tiene, una parada que la lectura no trae (sale de la lista,
+  DRV-001), una lectura pedida después (también tras restaurar la base), la cola y sus reglas (DRV-002), API, SQL,
+  migraciones e IndexedDB. Pruebas de regresión en Vitest y en `DriverOfflineOperationsPwa`; la parada quitada sólo
+  en Vitest.
 
 ## Alerta de conexiones de PostgreSQL en el piloto (SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14) — 2026-10-14
 

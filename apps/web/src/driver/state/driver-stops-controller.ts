@@ -90,9 +90,13 @@ export function mergeConfirmedStops(
  * for that stop. `newerWhileInFlight` holds, per order, the highest version the
  * app accepted from other reads while this one was on its way. A stale stop is
  * not taken: the stop the app holds stays as it is, and a stop that already
- * left the list is not brought back. An equal version, a stop the read does
- * not bring (it leaves the list, as DRV-001 says) and any read sent after the
- * newer version was accepted (also after a version reset) behave as before.
+ * left the list is not brought back. Q6c "Solo paradas ya vistas
+ * (Recommended)": when another read removed a stop the app held, it counts as
+ * accepted at the held version + 1 (see acceptRead), so this read does not
+ * bring it back at the held version or lower. An equal version of a held stop,
+ * a stop the read does not bring (it leaves the list, as DRV-001 says) and any
+ * read sent after the newer version was accepted (also after a version reset)
+ * behave as before.
  */
 export function withoutStaleStops(
   held: readonly DriverStop[],
@@ -119,6 +123,14 @@ export function withoutStaleStops(
 /** One stops read on its way; see withoutStaleStops. */
 interface StopsRead {
   readonly newerWhileInFlight: Map<string, number>;
+}
+
+/** Keeps, per order, the highest version recorded for a read on its way. */
+function recordNewer(read: StopsRead, orderId: string, version: number): void {
+  const newer = read.newerWhileInFlight.get(orderId);
+  if (newer === undefined || newer < version) {
+    read.newerWhileInFlight.set(orderId, version);
+  }
 }
 
 export interface DriverStopsControllerOptions {
@@ -345,8 +357,8 @@ export class DriverStopsController {
    * `acceptance`): drops what is stale in it (withoutStaleStops), keeps the
    * details the phone holds (mergeConfirmedStops), saves the snapshot, shows
    * the stops and then tells every other read still on its way which versions
-   * were accepted. Resolves null, without taking anything, when the read was
-   * cancelled meanwhile.
+   * were accepted and which held stops were removed. Resolves null, without
+   * taking anything, when the read was cancelled meanwhile.
    */
   private acceptRead(
     read: StopsRead,
@@ -355,8 +367,9 @@ export class DriverStopsController {
   ): Promise<ReturnType<typeof mergeConfirmedStops> | null> {
     const accepted = this.acceptance.then(async () => {
       if (cancelled()) return null;
+      const held = this.state.stops;
       const current = withoutStaleStops(
-        this.state.stops,
+        held,
         list.stops,
         read.newerWhileInFlight,
       );
@@ -366,13 +379,24 @@ export class DriverStopsController {
       );
       if (cancelled()) return null;
       await this.acceptAuthoritativeStops(merged.stops, list.completedToday);
+      // Q6c: a held stop this read no longer brings counts as removed only when
+      // this read left after the app accepted it (no entry of its own for it).
+      // A removal can keep the order's version (D8 closes the assignment after
+      // a reschedule) and a new assignment bumps it, so the other reads on
+      // their way record it at the held version + 1.
+      const kept = new Set(current.stops.map((stop) => stop.order_id));
+      const removed = held.filter(
+        (stop) =>
+          !kept.has(stop.order_id) &&
+          !read.newerWhileInFlight.has(stop.order_id),
+      );
       for (const other of this.readsInFlight) {
         if (other === read) continue;
         for (const stop of current.taken) {
-          const newer = other.newerWhileInFlight.get(stop.order_id);
-          if (newer === undefined || newer < stop.aggregate_version) {
-            other.newerWhileInFlight.set(stop.order_id, stop.aggregate_version);
-          }
+          recordNewer(other, stop.order_id, stop.aggregate_version);
+        }
+        for (const stop of removed) {
+          recordNewer(other, stop.order_id, stop.aggregate_version + 1);
         }
       }
       return merged;

@@ -116,7 +116,12 @@ Respuestas literales del owner en `decision-log.md`: Q6 "Sí, en un PR aparte (R
 lectura de la parada más vieja que la última aceptada (por versión). No cambia lo que ve el repartidor salvo evitar ese
 parpadeo. Con prueba de regresión.") y Q6b "Se aplica, como hoy (Recommended)" ("La app solo descarta una lectura que
 ya iba en camino cuando aceptó una versión más nueva de esa parada; una lectura pedida después siempre se aplica. Evita
-igual el parpadeo. Tras una restauración, el repartidor ve lo que dice el servidor desde la siguiente lectura.").
+igual el parpadeo. Tras una restauración, el repartidor ve lo que dice el servidor desde la siguiente lectura."). En la
+revisión del PR #271 (comentario 4267541135) se preguntó Q6c: "Solo paradas ya vistas (Recommended)" ("Una lectura en
+camino ignora la parada solo si la lectura que la quitó salió cuando la app ya tenía esa parada. Corrige el caso del
+revisor (una parada quitada ya no regresa con datos viejos) y una parada recién asignada nunca queda oculta más que
+hoy. Queda un hueco raro: con tres lecturas cruzadas, la parada quitada podría reaparecer una vez, hasta la siguiente
+lectura.").
 Severidad **MAJOR** (AI-01 §7, operación), cambio reversible; sin cambio de API, base de datos, cola ni reglas de
 DRV-002.
 
@@ -140,6 +145,17 @@ DRV-002.
      `release()` y la foto en vista previa se pierde.
 - No era sólo un instante: la parada quedaba así hasta la siguiente lectura (aviso, sincronización o reintento), y la
   reconexión entregaba v3 como cursor del tiempo real.
+- Visto en la revisión del PR #271: la primera versión de la corrección sólo comparaba las paradas que trae cada
+  lectura. Una parada que salía de la lista (despacho la quita o la reasigna) no dejaba nada anotado en las lecturas
+  que seguían en camino:
+  1. una lectura completa lenta sale con la parada A en v5;
+  2. despacho quita A y la lectura de confirmación, que ya no la trae, se toma: A sale de la pantalla;
+  3. llega la lectura lenta con A en v5 y, sin nada anotado para A, la vuelve a poner en pantalla y en la instantánea
+     con su estado y sus datos viejos, hasta la siguiente lectura.
+- Una parada no siempre sale de la lista con una versión nueva: tras FAILED_ATTEMPT→RESCHEDULED, D8 cierra la
+  asignación después y sin tocar la orden (`PostgreSqlAssignmentLifecycleReactor.CloseAsync`), así que la parada
+  sale en la misma versión que la app tiene. Una asignación nueva sí sube la versión
+  (`PostgreSqlAssignmentToOrderCoordinator`).
 
 ### Evidencia
 
@@ -159,6 +175,21 @@ DRV-002.
 - Pruebas unitarias, `driver-stops-controller.test.ts` ("stale stop reads"): versión igual, parada que salió de la
   lista, parada que falta en la lectura vieja, reinicio de versión y una respuesta vieja que llega mientras otra
   espera su escritura. Esta última falla si las respuestas no se toman de una en una.
+- Pruebas unitarias de Q6c ("a stop removed while another read is on its way"):
+  - el orden del revisor: la parada quitada no vuelve ni en pantalla ni en la instantánea. Sin la regla de Q6c falla,
+    igual que la prueba de una parada que salió y que la lectura vieja trae con su última versión aceptada (antes se
+    tomaba; ahora no vuelve);
+  - una lectura pedida después de quitarla que la trae otra vez (reasignada) se toma, y la lectura lenta sigue sin
+    tomarla;
+  - una lectura ya en camino que la trae en la versión que la app tenía + 1 (cerrada por D8 sin subir la versión y
+    asignada de nuevo) se toma;
+  - una parada recién asignada que una lectura vieja quitó vuelve con la lectura de confirmación que ya iba en camino,
+    como hoy.
+  - Las dos últimas fallan con las opciones no elegidas: anotar cualquier parada que falte, o descartar también la
+    versión que la app tenía + 1.
+- Playwright no cubre la parada quitada: el backend sintético de `DriverOfflineOperationsPwa` sirve una sola orden y no
+  puede quitarla de la lista. Quitarla durante la sincronización llevaría además la acción en cola al camino de parada
+  faltante de DRV-002, que la prueba tendría que modelar. Lo cubren las pruebas de `DriverStopsController` de arriba.
 
 ### Corrección
 
@@ -166,10 +197,21 @@ DRV-002.
   lecturas mientras ella iba en camino (`withoutStaleStops`). Al llegar, una parada con una versión menor que esa no
   se toma: la parada que la app tiene se queda como está, con sus datos protegidos, y una parada que ya salió de la
   lista no vuelve. Lo demás de esa lectura se toma como antes.
+- Una parada quitada (Q6c): cuando se toma una lectura que ya no trae una parada que la app tenía, esa parada cuenta
+  como quitada sólo si esa lectura salió cuando la app ya la tenía, es decir, si la lectura no tiene nada anotado para
+  esa orden. Entonces cada otra lectura en camino anota esa orden en la versión que la app tenía + 1, y la compara como
+  cualquier otra versión anotada:
+  - con la versión que la app tenía o una menor, la parada no vuelve;
+  - con esa versión + 1 o una mayor, se toma. Así entra una parada asignada de nuevo, incluso tras el cierre de D8
+    que no sube la versión.
+  - Si la lectura que no la trae sí tiene algo anotado para esa orden, la app no sabe si la parada se quitó o si la
+    lectura salió antes de que se asignara. La parada sale de la lista como antes (DRV-001), pero no se anota nada, así
+    que la siguiente lectura la trae de vuelta, también una que ya iba en camino.
 - Las respuestas se toman de una en una, en el orden en que llegan: cada una se compara y se mezcla con lo que dejó la
   anterior, y la instantánea y la pantalla se escriben en ese mismo orden.
 - Queda igual que antes:
-  - con versión igual, la lectura se toma;
+  - con versión igual de una parada que la app tiene, la lectura se toma. Lo que cambia es una parada que ya salió de
+    la lista: una lectura que ya iba en camino no la regresa con su última versión aceptada (Q6c, arriba);
   - una parada que la lectura no trae sale de la lista (DRV-001);
   - una lectura pedida después de aceptar la versión más nueva se toma siempre, aunque traiga una versión menor. Eso
     sólo pasaría tras restaurar la base desde un respaldo (Q6b);
@@ -184,14 +226,24 @@ DRV-002.
 - Una lectura vieja a la que le falta una parada recién asignada (que llegó con otra lectura mientras ella iba en
   camino) la quita hasta la siguiente lectura. No lleva versión de esa parada, así que la regla no aplica y sale de la
   lista como dice DRV-001. Perder una foto así exigiría abrir esa parada, llegar y previsualizar la foto antes de que
-  esa lectura llegue (máximo 10 s).
+  esa lectura llegue (máximo 10 s). Q6c no lo alarga: esa lectura vieja no anota la parada como quitada, así que la
+  siguiente lectura la trae de vuelta, también una que ya iba en camino.
+- Huecos de la regla de Q6c. Son raros y cada uno se corrige con la siguiente lectura:
+  - con tres lecturas cruzadas, una lectura que no trae una parada aceptada por otra mientras ella iba en camino no la
+    anota como quitada. Una tercera lectura, más vieja y todavía en camino, podría regresarla una vez;
+  - si la app tenía una versión de la parada anterior a la de RESCHEDULED, D8 la quita en esa versión más nueva sin
+    subirla. Una lectura vieja con la versión de RESCHEDULED queda en la versión que la app tenía + 1 o más arriba, así
+    que podría regresarla una vez;
+  - una parada que el parser del cliente deja fuera (una parada que rompe el contrato, `droppedCount`) cuenta como
+    quitada. Si una lectura que ya iba en camino la trae válida con la misma versión, no se toma.
 - Con versión igual, una lectura vieja puede traer un dato que cambió sin subir la versión (por ejemplo el cobro
   registrado, que no cambia la versión de la orden); se toma como antes.
 
 ### Rollback
 
-Revertir el commit de DRV-STALE-STOP-READ-2026-10-14. Vuelve el riesgo descrito arriba: una lectura completa que
-llega después de la confirmación regresa la parada y la foto en vista previa se pierde.
+Revertir los commits de DRV-STALE-STOP-READ-2026-10-14. Vuelve el riesgo descrito arriba: una lectura completa que
+llega después de la confirmación regresa la parada y la foto en vista previa se pierde. Revertir sólo el commit de Q6c
+devuelve el caso del revisor: una parada quitada puede volver con datos viejos hasta la siguiente lectura.
 
 ## Rollback
 
