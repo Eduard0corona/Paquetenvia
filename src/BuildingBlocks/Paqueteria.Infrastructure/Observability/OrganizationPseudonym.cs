@@ -192,8 +192,11 @@ public sealed class HmacOrganizationPseudonymizer : IOrganizationPseudonymizer
 
 /// <summary>
 /// The organization context of the current flow, for the log lines written inside it: the pseudonym and the actor role
-/// kind, never the organization id. The API enters it after the tenant context middleware selected an organization;
-/// lines written outside (host start, the Worker, the OBS-002 summaries) carry neither.
+/// kind, never the organization id. The API enters it after the tenant context middleware selected an organization.
+/// The Worker enters it (<see cref="EnterSystem"/>, OBS-003-WORKER-PSEUDONYM-2026-10-14) for each claimed outbox message
+/// of its two lanes, from the message's owner organization, and for each quarantined proof whose signed metadata is
+/// valid, from the proof's owner organization, with the fixed role kind <see cref="SystemRoleKind"/>. Lines written
+/// outside (host start, the dispatch and poll cycles themselves, the OBS-002 summaries) carry neither.
 /// </summary>
 public static class TelemetryOrganizationContext
 {
@@ -202,6 +205,13 @@ public static class TelemetryOrganizationContext
 
     /// <summary>Structured log property of the actor role kind (never an OBS-002 telemetry dimension).</summary>
     public const string RoleKindLogProperty = "ActorRoleKind";
+
+    /// <summary>
+    /// OBS-003-WORKER-PSEUDONYM-2026-10-14 (QB, project owner: "SYSTEM (Recommended)"): the actor role kind of every
+    /// Worker line that carries the pseudonym. The Worker acts as the system, with no person or role, and the outbox
+    /// does not keep who asked; a fixed value tells Worker lines apart from API lines without new data.
+    /// </summary>
+    public const string SystemRoleKind = "SYSTEM";
 
     private static readonly AsyncLocal<Entry?> CurrentEntry = new();
 
@@ -221,6 +231,21 @@ public static class TelemetryOrganizationContext
         var previous = CurrentEntry.Value;
         CurrentEntry.Value = new Entry(pseudonym, roleKind);
         return new Restore(previous);
+    }
+
+    /// <summary>
+    /// OBS-003-WORKER-PSEUDONYM-2026-10-14: enters the organization context of one unit of Worker work (a claimed outbox
+    /// message, or a quarantined proof with valid signed metadata) for the rest of its flow: the pseudonym of
+    /// <paramref name="ownerOrganizationId"/> and the role kind <see cref="SystemRoleKind"/>. An unknown owner
+    /// (<see cref="Guid.Empty"/>) enters nothing and returns null, so those lines carry no organization. Dispose the
+    /// result to restore the previous context.
+    /// </summary>
+    public static IDisposable? EnterSystem(IOrganizationPseudonymizer pseudonymizer, Guid ownerOrganizationId)
+    {
+        ArgumentNullException.ThrowIfNull(pseudonymizer);
+        return ownerOrganizationId == Guid.Empty
+            ? null
+            : Enter(pseudonymizer.Pseudonymize(ownerOrganizationId), SystemRoleKind);
     }
 
     private sealed record Entry(string Pseudonym, string RoleKind);

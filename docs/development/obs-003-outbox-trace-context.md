@@ -162,8 +162,9 @@ row per position, so a sampled GPS request adds up to 20 spans. All of it stays 
 AI-03 §18 ("Toda petición/job/evento debe llevar `trace_id`, `correlation_id`, tenant y actor técnico redactado")
 needs no wording change for the two identifiers this PR covers. The `trace_id` of an event is now the trace id of the
 request or job that produced it, and `correlation_id` keeps its meaning (PR 1 made the W3C trace id the single
-identifier of logs, audit rows and problems). The tenant pseudonym and the actor role kind are not delivered here: the
-Worker's per-message lines still lack the pseudonym, an open question below.
+identifier of logs, audit rows and problems). The tenant pseudonym and the actor role kind are not delivered here; the
+follow-up `OBS-003-WORKER-PSEUDONYM-2026-10-14` adds them to the Worker's per-message lines (see "Decided after this
+PR" below).
 
 AI-12 does not change. The trace context never reaches a SignalR message: the realtime envelope is built from the
 AI-12 fields only, and the Notifications templates render only their allowed variables.
@@ -215,14 +216,19 @@ ContainerAppConsoleLogs_CL
 
 Every outbox row stays. The trace context of existing rows is lost with the column. Nothing else changes.
 
-## Open questions (not decided here)
+## Decided after this PR
 
-- Worker audit rows (`PostgreSqlAssignmentLifecycleReactor`, `ProofValidationProcessor`) still write
-  `request_id = NULL` (PR 1). They could write the message's trace id now. That changes audit evidence, so it needs the
-  owner.
-- The Worker's per-message log lines do not carry the organization pseudonym or the actor role kind (PR 6 left the
-  Worker without them), which AI-03 §18 asks for when there is an organization context. A message has an owner
-  organization, so they could. That widens OBS-003-TENANT-PSEUDONYM-2026-10-12, so it needs the owner.
+The two questions this PR left open were decided by the owner on 2026-10-14 and are applied by the follow-up described
+in `obs-003-worker-correlation.md`:
+
+- **Worker audit rows** (`OBS-003-WORKER-AUDIT-TRACE-2026-10-14`, "Sí, en un PR aparte (Recommended)", then "Se quedan
+  vacías (Recommended)" for proof validation): the `ASSIGNMENT_CLOSED` row of `PostgreSqlAssignmentLifecycleReactor`
+  writes the trace id of the claimed message as `request_id` (NULL without a stored context). `ProofValidationProcessor`
+  processes no outbox message and keeps NULL.
+- **Worker log lines** (`OBS-003-WORKER-PSEUDONYM-2026-10-14`, "Sí, en un PR aparte (Recommended)", "SYSTEM
+  (Recommended)" and "Sí, si los metadatos son válidos (Recommended)"): every line of a claimed message of the two Worker
+  lanes carries the pseudonym of the message's owner organization and the role kind `SYSTEM`; proof validation's
+  per-photo line does too when the photo's signed metadata is valid. The API realtime lanes are unchanged.
 
 ## Tests
 

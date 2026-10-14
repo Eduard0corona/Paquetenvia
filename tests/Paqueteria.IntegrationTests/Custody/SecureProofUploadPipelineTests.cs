@@ -10,6 +10,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
+using Paqueteria.Infrastructure.Observability;
 using Paqueteria.IntegrationTests.Security;
 
 namespace Paqueteria.IntegrationTests.Custody;
@@ -122,6 +123,9 @@ public sealed class SecureProofUploadPipelineTests :
         Assert.Equal("DELIVERING", evidence.OrderStatus);
         Assert.Equal(3, evidence.AuditCount);
         Assert.Equal(2, evidence.IdempotencyCount);
+        // OBS-003-WORKER-AUDIT-TRACE-2026-10-14 (QA, "Se quedan vacías (Recommended)"): proof validation processes no
+        // outbox message, so its ready row keeps request_id NULL; the session creation row carries the request's id.
+        Assert.Equal(1, evidence.ReadyWithoutRequestId);
 
         await using (var replayScope = apiProvider.CreateAsyncScope())
         {
@@ -252,6 +256,8 @@ public sealed class SecureProofUploadPipelineTests :
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton<IConfiguration>(configuration);
+        // OBS-003-WORKER-PSEUDONYM-2026-10-14: proof validation needs the organization pseudonymizer, as in the Worker.
+        services.AddTelemetryOrganizationPseudonym(configuration, new TestHostEnvironment());
         services.AddCustodyInfrastructure(
             configuration,
             new TestHostEnvironment());
@@ -268,7 +274,7 @@ public sealed class SecureProofUploadPipelineTests :
             new Microsoft.Extensions.FileProviders.NullFileProvider();
     }
 
-    private async Task<(string SessionStatus, int ProofCount, string OrderStatus, int AuditCount, int IdempotencyCount)>
+    private async Task<(string SessionStatus, int ProofCount, string OrderStatus, int AuditCount, int IdempotencyCount, int ReadyWithoutRequestId)>
         ReadEvidenceAsync(Guid sessionId, Guid proofId)
     {
         await using var connection = new NpgsqlConnection(postgres.ApplicationConnectionString);
@@ -288,7 +294,9 @@ public sealed class SecureProofUploadPipelineTests :
                    'custody.proof_upload_session.ready',
                    'custody.proof.finalized')),
               (SELECT count(*)::integer FROM platform.idempotency_keys
-               WHERE owner_org_id=@org AND scope LIKE 'POD-001:%')
+               WHERE owner_org_id=@org AND scope LIKE 'POD-001:%'),
+              (SELECT count(*)::integer FROM platform.audit_logs
+               WHERE entity_id=@session AND action='custody.proof_upload_session.ready' AND request_id IS NULL)
             """,
             connection,
             transaction);
@@ -303,7 +311,8 @@ public sealed class SecureProofUploadPipelineTests :
             reader.GetInt32(1),
             reader.GetString(2),
             reader.GetInt32(3),
-            reader.GetInt32(4));
+            reader.GetInt32(4),
+            reader.GetInt32(5));
     }
 
     private async Task AssertProofIsAppendOnlyAsync(Guid proofId)

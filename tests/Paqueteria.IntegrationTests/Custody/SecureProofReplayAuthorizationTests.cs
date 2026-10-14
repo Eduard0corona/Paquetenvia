@@ -17,6 +17,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Hosting;
 using Npgsql;
+using Paqueteria.Infrastructure.Observability;
 using Paqueteria.IntegrationTests.Security;
 
 namespace Paqueteria.IntegrationTests.Custody;
@@ -567,6 +568,8 @@ public sealed class SecureProofReplayAuthorizationTests :
         var services = new ServiceCollection();
         services.AddLogging();
         services.AddSingleton<IConfiguration>(configuration);
+        // OBS-003-WORKER-PSEUDONYM-2026-10-14: proof validation needs the organization pseudonymizer, as in the Worker.
+        services.AddTelemetryOrganizationPseudonym(configuration, new TestHostEnvironment());
         services.AddCustodyInfrastructure(configuration, new TestHostEnvironment());
         services.RemoveAll<IProofObjectStorage>();
         services.AddSingleton<IProofObjectStorage>(storage);
