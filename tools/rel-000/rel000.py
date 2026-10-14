@@ -669,6 +669,13 @@ SECURITY_REMEDIATION_DEPENDENCY_FILES = {
     "apps/web/pnpm-lock.yaml",
     "apps/web/pnpm-workspace.yaml",
 }
+# OPS-005-E2E-LOCKFILE-REL000-2026-10-14 (project owner, "Solo este proyecto (Recommended)"): FND-001 committed the
+# end-to-end project's lockfile with no package node. That one lockfile may take a package graph only while its base
+# graph has no package node, and only when each of its package nodes is identical (the whole node) to the node of the
+# IntegrationTests lockfile of the same tree, which REL-000 already audits and which must itself be accepted by the
+# same pass or unchanged from the base. Any other lockfile, path or difference keeps its rule and fails closed.
+END_TO_END_PLACEHOLDER_LOCKFILE = "tests/Paqueteria.EndToEndTests/packages.lock.json"
+END_TO_END_REFERENCE_LOCKFILE = "tests/Paqueteria.IntegrationTests/packages.lock.json"
 DEPENDENCY_FILE_NAMES = {
     "Directory.Packages.props",
     "package.json",
@@ -6518,10 +6525,12 @@ def package_graph_lockfile_diff(
     baseline_graph_only: list[str] = []
     usage: dict[str, set[str]] = {}
     changed_set = set(all_changed)
+    end_to_end_subset: dict[tuple[str, str], dict[str, Any]] | None = None
     for relative in lockfiles:
         current = load_json(repository_root / relative)
         if not isinstance(current, dict):
             fail("NUGET_LOCK_INVALID", "A NuGet lockfile must be a JSON object.", file=relative)
+        tree_packages = _nuget_package_nodes(current)
         current = _nuget_remediations_reverted_lock(relative, current, nuget_remediations)
         current_packages = _nuget_package_nodes(current)
         base_raw = run_git(
@@ -6542,6 +6551,10 @@ def package_graph_lockfile_diff(
                 )
             base_packages = _nuget_package_nodes(base)
             if current.get("version") != base.get("version"):
+                continue
+            if relative == END_TO_END_PLACEHOLDER_LOCKFILE and not base_packages and tree_packages:
+                # Judged after the pass, against the reference lockfile as the tree holds it.
+                end_to_end_subset = tree_packages
                 continue
             if current_packages != base_packages:
                 admitted = _existing_lock_admitted_diff(
@@ -6629,7 +6642,33 @@ def package_graph_lockfile_diff(
             )
             usage.setdefault(admitted["usage_key"], set()).add(relative)
         baseline_graph_only.append(relative)
+    if end_to_end_subset is not None and _end_to_end_lockfile_is_reference_subset(
+        repository_root, end_to_end_subset, changed_set, baseline_graph_only
+    ):
+        baseline_graph_only = sorted([*baseline_graph_only, END_TO_END_PLACEHOLDER_LOCKFILE])
     return baseline_graph_only, {package: sorted(files) for package, files in usage.items()}
+
+
+def _end_to_end_lockfile_is_reference_subset(
+    repository_root: Path,
+    packages: dict[tuple[str, str], dict[str, Any]],
+    changed: set[str],
+    accepted: list[str],
+) -> bool:
+    """OPS-005-E2E-LOCKFILE-REL000-2026-10-14: the end-to-end lockfile's first package graph.
+
+    Accepted only when the reference lockfile (IntegrationTests) is itself accepted by this pass or unchanged from the
+    base, and every package node of the end-to-end lockfile, framework included, is identical as a whole node (type,
+    requested, resolved, content hash and dependencies) to the reference node. No admission or amendment applies.
+    """
+
+    if END_TO_END_REFERENCE_LOCKFILE in changed and END_TO_END_REFERENCE_LOCKFILE not in accepted:
+        return False
+    reference_path = repository_root / END_TO_END_REFERENCE_LOCKFILE
+    if not reference_path.is_file():
+        return False
+    reference = _nuget_package_nodes(load_json(reference_path))
+    return all(reference.get(key) == node for key, node in packages.items())
 
 
 def validate_next_critical_remediation_diff(

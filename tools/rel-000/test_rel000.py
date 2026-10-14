@@ -4227,6 +4227,154 @@ class BaselinePackageGraphLockfileTests(unittest.TestCase):
             lambda: rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE),
         )
 
+    # OPS-005-E2E-LOCKFILE-REL000-2026-10-14 ("Solo este proyecto (Recommended)"): the FND-001 placeholder lockfile of
+    # tests/Paqueteria.EndToEndTests may take a package graph only while its base graph is empty, only as nodes
+    # identical to the IntegrationTests lockfile's of the same tree, and only while that lockfile is itself accepted.
+    PLACEHOLDER = rel000.END_TO_END_PLACEHOLDER_LOCKFILE
+    REFERENCE = rel000.END_TO_END_REFERENCE_LOCKFILE
+
+    def placeholder_repo(self, placeholder_path: str | None = None):
+        placeholder_path = placeholder_path or self.PLACEHOLDER
+        root = Path(self.temp.name) / "repo"
+        root.mkdir(parents=True)
+        (root / "Directory.Packages.props").write_text(
+            "<Project><PropertyGroup>"
+            "<ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>"
+            "</PropertyGroup><ItemGroup>"
+            '<PackageVersion Include="Baseline.Direct" Version="1.2.3" />'
+            "</ItemGroup></Project>\n",
+            encoding="utf-8",
+        )
+        reference_lock = {
+            "version": 2,
+            "dependencies": {
+                "net10.0": {
+                    "Baseline.Direct": {
+                        "type": "Direct",
+                        "requested": "[1.2.3, )",
+                        "resolved": "1.2.3",
+                        "contentHash": "baseline-direct-hash",
+                        "dependencies": {"Baseline.Transitive": "4.5.6"},
+                    },
+                    "Baseline.Transitive": {
+                        "type": "Transitive",
+                        "resolved": "4.5.6",
+                        "contentHash": "baseline-transitive-hash",
+                    },
+                    "Reference.Only": {
+                        "type": "Transitive",
+                        "resolved": "7.8.9",
+                        "contentHash": "reference-only-hash",
+                    },
+                }
+            },
+        }
+        reference = root / self.REFERENCE
+        reference.parent.mkdir(parents=True)
+        (reference.parent / "Paqueteria.IntegrationTests.csproj").write_text(
+            '<Project Sdk="Microsoft.NET.Sdk" />\n', encoding="utf-8"
+        )
+        self.write_lock(reference, reference_lock)
+        placeholder = root / placeholder_path
+        placeholder.parent.mkdir(parents=True, exist_ok=True)
+        project = placeholder.parent / "Placeholder.csproj"
+        project.write_text('<Project Sdk="Microsoft.NET.Sdk" />\n', encoding="utf-8")
+        self.write_lock(placeholder, {"version": 2, "dependencies": {"net10.0": {}}})
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.email", "rel000@example.invalid"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "REL-000 Tests"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        return root, base, project, placeholder, reference, copy.deepcopy(reference_lock)
+
+    @staticmethod
+    def subset_of(reference_lock: dict[str, Any], *names: str) -> dict[str, Any]:
+        graph = reference_lock["dependencies"]["net10.0"]
+        return {
+            "version": 2,
+            "dependencies": {
+                "net10.0": {
+                    **{name: copy.deepcopy(graph[name]) for name in names},
+                    "paqueteria.integrationtests": {"type": "Project"},
+                }
+            },
+        }
+
+    def test_v_end_to_end_placeholder_accepts_nodes_identical_to_the_integration_lockfile(self):
+        root, base, project, placeholder, _, reference_lock = self.placeholder_repo()
+        project.write_text(
+            '<Project Sdk="Microsoft.NET.Sdk"><ItemGroup><PackageReference Include="Baseline.Direct" />'
+            "</ItemGroup></Project>\n",
+            encoding="utf-8",
+        )
+        self.write_lock(placeholder, self.subset_of(reference_lock, "Baseline.Direct", "Baseline.Transitive"))
+        result = rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE)
+        self.assertEqual("CLEAN", result["dependency_diff_against_base"])
+        self.assertEqual([self.PLACEHOLDER], result["baseline_package_graph_lockfiles"])
+        self.assertEqual([], result["dependency_admission_ids"])
+
+    def test_w_end_to_end_placeholder_node_that_is_not_identical_fails_closed(self):
+        cases = {
+            "version": lambda graph: graph["Baseline.Transitive"].update(resolved="4.5.7"),
+            "hash": lambda graph: graph["Baseline.Transitive"].update(contentHash="other-hash"),
+            "type": lambda graph: graph["Baseline.Transitive"].update(type="CentralTransitive"),
+            "extra package": lambda graph: graph.update(
+                {"Extra.Package": {"type": "Transitive", "resolved": "1.0.0", "contentHash": "extra-hash"}}
+            ),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(difference=name):
+                shutil.rmtree(Path(self.temp.name) / "repo", ignore_errors=True)
+                root, base, _, placeholder, _, reference_lock = self.placeholder_repo()
+                current = self.subset_of(reference_lock, "Baseline.Direct", "Baseline.Transitive")
+                mutate(current["dependencies"]["net10.0"])
+                self.write_lock(placeholder, current)
+                self.assert_reason(
+                    "UNAUTHORIZED_DEPENDENCY_FILE_CHANGED",
+                    lambda: rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE),
+                )
+
+    def test_x_the_same_content_at_another_empty_lockfile_fails_closed(self):
+        for path in (
+            "src/BuildingBlocks/Paqueteria.Contracts/packages.lock.json",
+            "src/BuildingBlocks/Paqueteria.Domain/packages.lock.json",
+        ):
+            with self.subTest(path=path):
+                shutil.rmtree(Path(self.temp.name) / "repo", ignore_errors=True)
+                root, base, _, placeholder, _, reference_lock = self.placeholder_repo(path)
+                self.write_lock(placeholder, self.subset_of(reference_lock, "Baseline.Transitive"))
+                self.assert_reason(
+                    "UNAUTHORIZED_DEPENDENCY_FILE_CHANGED",
+                    lambda: rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE),
+                )
+
+    def test_y_end_to_end_lockfile_with_a_package_graph_in_the_base_keeps_the_existing_lock_rule(self):
+        root, base, _, placeholder, _, reference_lock = self.placeholder_repo()
+        self.write_lock(placeholder, self.subset_of(reference_lock, "Baseline.Transitive"))
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "graph"], cwd=root, check=True)
+        graph_base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        self.write_lock(placeholder, self.subset_of(reference_lock, "Baseline.Transitive", "Reference.Only"))
+        self.assert_reason(
+            "UNAUTHORIZED_DEPENDENCY_FILE_CHANGED",
+            lambda: rel000.validate_dependency_diff(root, graph_base, rel000.NORMAL_RELEASE_EVIDENCE),
+        )
+
+    def test_z_a_subset_of_a_rejected_integration_lockfile_fails_closed(self):
+        root, base, _, placeholder, reference, reference_lock = self.placeholder_repo()
+        drifted = copy.deepcopy(reference_lock)
+        drifted["dependencies"]["net10.0"]["Baseline.Transitive"]["resolved"] = "9.9.9"
+        self.write_lock(reference, drifted)
+        self.write_lock(placeholder, self.subset_of(drifted, "Baseline.Transitive"))
+        lockfiles, usage = rel000.package_graph_lockfile_diff(root, base, [self.PLACEHOLDER, self.REFERENCE])
+        self.assertEqual([], lockfiles)
+        self.assertEqual({}, usage)
+        self.assert_reason(
+            "UNAUTHORIZED_DEPENDENCY_FILE_CHANGED",
+            lambda: rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE),
+        )
+
 
 class DependencyAdmissionTests(unittest.TestCase):
     """GOV-DEPENDENCY-ADMISSION-001: baseline + exactly the admitted packages, nothing else."""

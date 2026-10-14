@@ -1,7 +1,8 @@
 # OPS-005: platform end-to-end suite
 
 Phase 4 PR 10 (`docs/development/phase4-platform-plan.md`, "PR 10: pruebas de punta a punta de la plataforma"), backlog
-item **OPS-005** in `AI-08_BACKLOG.yaml`. Decision row: `OPS-005-JOURNEYS-2026-10-13`.
+item **OPS-005** in `AI-08_BACKLOG.yaml`. Decision rows: `OPS-005-JOURNEYS-2026-10-13` (the journey) and
+`OPS-005-E2E-LOCKFILE-REL000-2026-10-14` (how REL-000 accepts the suite's lockfile).
 
 The owner's question and answer, literal (2026-10-13):
 
@@ -57,9 +58,10 @@ active driver's service area and valid identity document. The wizard's addresses
    the PWA finalizes it. The queue sends itself; the test presses "Sincronizar ahora" every 5 s while it waits.
 5. Recipient: the link opens public tracking, which shows the order delivered: "Entregado".
 
-The option's text says 'Entregada'. The public tracking label of `DELIVERED` is "Entregado" (AI-07,
-`publicStatusLabels`); "Entregada" is the driver app's label. The suite asserts the shipped label and no label
-changes.
+'Entregada' in the option text was the wording of the session that asked the question and meant the delivered state
+on public tracking (confirmed by that session on 2026-10-14). The shipped public tracking label of `DELIVERED` is
+"Entregado" (AI-07, `publicStatusLabels`; "Entregada" is the driver app's label). The suite asserts the shipped label
+and no label changes.
 
 At the end it checks the database: the order is `DELIVERED` with the tariff total in centavos, its status changes are
 exactly CONFIRMED, READY_FOR_PICKUP, ASSIGNED, AT_PICKUP, PICKED_UP, IN_TRANSIT, DELIVERING, DELIVERED, it has a
@@ -120,6 +122,26 @@ A pull request that changes only operations or tracking web screens does not run
 (their domains route to `operations-dashboard` and `public-tracking`); the suite runs there on the next change that
 routes to it and always on the promotion to `main`.
 
+## The suite's lockfile and REL-000
+
+The project's csproj references only packages that `tests/Paqueteria.IntegrationTests` already references, at the
+central versions of `Directory.Packages.props`. Its `packages.lock.json` (FND-001 committed it with no package node)
+now holds 116 package nodes, each identical as a whole node (type, requested range, resolved version, content hash and
+dependencies) to its node in the IntegrationTests lockfile of the same commit. No package or version is new.
+
+REL-000's permanent package graph treated the empty file as an existing lockfile and rejected every added node
+(`DEPENDENCY_ADMISSION_UNREGISTERED_PACKAGE`). The owner decided it in two rounds on 2026-10-14
+(`OPS-005-E2E-LOCKFILE-REL000-2026-10-14`, literal questions, options and context in the decision row): first
+"Archivo vacío = nuevo (Recommended)", then, because that option failed REL-000's permanent test (`test_k`) unless the
+SEC-2026-12 revert were widened, "Solo este proyecto (Recommended)", which replaces the first and is the one applied.
+
+`tools/rel-000/rel000.py` accepts `tests/Paqueteria.EndToEndTests/packages.lock.json` only when its base graph has no
+package node, only when every package node is identical to the IntegrationTests node of the same tree, and only when
+that IntegrationTests lockfile is itself accepted by the same pass or unchanged from the base. Any other path, a
+non-empty base, an extra or differing node and a rejected IntegrationTests lockfile still fail closed
+(`UNAUTHORIZED_DEPENDENCY_FILE_CHANGED`). Tests: `test_v` to `test_z` of `BaselinePackageGraphLockfileTests` in
+`tools/rel-000/test_rel000.py`; details in `docs/development/rel-000-internal-release.md`.
+
 ## Running it locally
 
 Needs Docker (the suite pulls `postgis/postgis:18-3.6` and the `quay.io/ceph/demo` image on first use), Node.js with
@@ -151,4 +173,5 @@ The test output prints each measurement. `next start` rewrites nothing tracked: 
 ## Rollback
 
 Revert the pull request. The suite adds no product code, SQL, migration, role, grant, secret, Bicep or package; the
-harness options it adds default to the previous behaviour.
+harness options it adds default to the previous behaviour. The REL-000 rule and the lockfile it accepts go back
+together: without the rule the lockfile must return to its empty graph.

@@ -1,5 +1,37 @@
 # Changelog
 
+## Pruebas de punta a punta de la plataforma (OPS-005-JOURNEYS-2026-10-13 y OPS-005-E2E-LOCKFILE-REL000-2026-10-14, fase 4 PR 10) — 2026-10-14
+
+- Respuesta literal del project owner (2026-10-13), registrada en `decision-log.md` con su contexto y las opciones no
+  elegidas: "Recorrido principal (Recommended)" ("Cotizar, crear y confirmar la orden, asignar repartidor, recoger,
+  entregar con foto y ver 'Entregada' en el seguimiento público. Un recorrido completo; suma unos minutos al job de CI
+  existente."). 'Entregada' era la forma de nombrar el estado entregado en el seguimiento público; la suite comprueba
+  la etiqueta pública vigente de DELIVERED, "Entregado" (AI-07), y ninguna etiqueta cambia.
+- `tests/Paqueteria.EndToEndTests` arma la API, el Worker y la web de producción contra PostgreSQL/PostGIS y el
+  almacenamiento S3 de prueba, con el arnés de IntegrationTests y solo datos sintéticos. El recorrido corre por las
+  pantallas reales: "Nueva orden" cotiza, crea y confirma; el detalle libera para recolección y asigna al repartidor;
+  la PWA del repartidor recoge y entrega con sus dos fotos por carga firmada; el seguimiento público muestra
+  "Entregado".
+- En la misma corrida mide las comprobaciones de AI-08 OPS-005: una traza por acción del navegador (logs y auditoría;
+  el `traceId` del 429), el 429 `problem+json` con `Retry-After` y el texto aprobado en el asistente, las conexiones de
+  PostgreSQL por rol dentro del presupuesto de SCL-007, un aviso tras 3 s sin trabajo en menos de 2 s y nada que salga
+  del proceso con la exportación apagada.
+- Corre dentro del job `driver-stops-pwa` (categoría `PlatformEndToEnd`, excluida de los jobs `dotnet`); su TRX entra
+  en la evidencia REL-000 de ese job. Ningún job nuevo: Foundation sigue con 13.
+- REL-000 y el archivo de paquetes de la suite (`OPS-005-E2E-LOCKFILE-REL000-2026-10-14`). Dos respuestas literales
+  del project owner (2026-10-14), registradas en `decision-log.md` con su contexto y las opciones no elegidas; la
+  segunda reemplaza a la primera, que no se aplicó:
+  - Primera pregunta: "PR 10: el control de dependencias de REL-000 rechaza los paquetes del proyecto de pruebas de punta a punta, aunque son exactamente los mismos que ya usan las pruebas de integración (tabla de arriba). ¿Cómo lo resolvemos?" Respuesta: "Archivo vacío = nuevo (Recommended)" ("En este PR, REL-000 trata un archivo de paquetes que en la base está vacío igual que uno nuevo: solo acepta paquetes que ya están en el repositorio, idénticos (nombre, versión y hash). Cualquier otro cambio sigue rechazado. Aplica a los 3 proyectos que hoy tienen el archivo vacío (EndToEndTests, Contracts y Domain). Con pruebas en REL-000.").
+  - Segunda pregunta: "Corrección: la opción \"Archivo vacío = nuevo\" falla la prueba permanente de REL-000, salvo que también se cambie cómo esa prueba deshace la remediación de seguridad SEC-2026-12. ¿Cómo seguimos con el archivo de paquetes de la suite de punta a punta?" Respuesta: "Solo este proyecto (Recommended)" ("REL-000 acepta solo el archivo de EndToEndTests, solo si en la base está vacío y solo si cada paquete es idéntico (nombre, versión y hash) al de las pruebas de integración del mismo commit, que REL-000 ya audita. Cualquier otro cambio sigue rechazado. Pasa la evidencia de release y la prueba permanente, ya probado. Deja en REL-000 un caso especial para una ruta.").
+- REL-000 acepta `tests/Paqueteria.EndToEndTests/packages.lock.json` solo si en la base no tiene ningún paquete, solo si
+  cada nodo es idéntico completo al de `tests/Paqueteria.IntegrationTests/packages.lock.json` del mismo commit y solo
+  si ese archivo de IntegrationTests también se acepta o no cambia. Cualquier otro caso sigue fallando cerrado. Con
+  pruebas en `tools/rel-000/test_rel000.py`; `test_k` y la evidencia de liberación siguen verdes. Nota:
+  `docs/development/rel-000-internal-release.md`.
+- AI-08 OPS-005 registra el recorrido decidido. Sin cambios en AI-04, AI-05, AI-06, AI-07, AI-12, AI-13, AI-15, AI-18,
+  roles, permisos ni migraciones; ningún paquete nuevo ni versión nueva. Nota:
+  `docs/development/ops-005-end-to-end-suite.md`.
+
 ## Exportación de trazas y métricas a Application Insights (OBS-003-APPINSIGHTS-EXPORT-2026-10-13, fase 4 PR 6) — 2026-10-13
 
 - Aplica `OBS-003-TELEMETRY-APPINSIGHTS-2026-10-12` ("Application Insights (Recommended)") y

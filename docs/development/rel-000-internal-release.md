@@ -587,6 +587,45 @@ activo en todo el repositorio. Dos casos fallan cerrados:
 
 Esos casos necesitan una regla nueva del owner.
 
+### Lock file de la suite de punta a punta (OPS-005-E2E-LOCKFILE-REL000-2026-10-14)
+
+FND-001 creó `tests/Paqueteria.EndToEndTests` con un `packages.lock.json` sin nodos de paquete
+(`"net10.0": {}`). Para la capa 1 ese archivo es un lock existente: cualquier paquete que gane se
+juzga contra el catálogo de admisiones y falla con `DEPENDENCY_ADMISSION_UNREGISTERED_PACKAGE`,
+aunque sea idéntico a uno que el repositorio ya usa. OPS-005 (PR 10 de la fase 4) le da su primer
+grafo: 116 nodos, cada uno idéntico al de `tests/Paqueteria.IntegrationTests/packages.lock.json`.
+
+El owner eligió "Solo este proyecto (Recommended)" (2026-10-14, segunda ronda; la primera,
+"Archivo vacío = nuevo", fallaba `test_k` sin ampliar cómo se deshace SEC-2026-12). La regla de
+`package_graph_lockfile_diff`, con `_end_to_end_lockfile_is_reference_subset`, acepta ese lock sólo si
+se cumplen las cuatro condiciones:
+
+- la ruta es exactamente `END_TO_END_PLACEHOLDER_LOCKFILE`
+  (`tests/Paqueteria.EndToEndTests/packages.lock.json`);
+- el grafo de ese archivo en la base no tiene ningún nodo de paquete (los nodos `Project` no
+  cuentan) y la `version` del lock no cambia;
+- cada nodo de paquete del árbol, framework incluido, es idéntico como nodo completo (`type`,
+  `requested`, `resolved`, `contentHash`, `dependencies`) al nodo del mismo framework e `id` en
+  `END_TO_END_REFERENCE_LOCKFILE` (`tests/Paqueteria.IntegrationTests/packages.lock.json`) del
+  mismo árbol;
+- ese lock de referencia está en el árbol y la misma pasada lo acepta o no cambia respecto de la
+  base. Si la pasada lo rechaza, el de punta a punta también queda fuera.
+
+El juicio se hace después de recorrer todos los locks y sobre el grafo del árbol tal como está:
+la reversión en memoria de SEC-2026-12 (`nuget_remediations`, sólo en `test_k`) no lo toca, porque
+ambos locks se comparan en el mismo commit. No aplica ninguna admisión ni enmienda, y el lock no
+cuenta como introducción de paquetes (`dependency_admission_ids` queda vacío y la evidencia
+registra `dependency_diff_against_base = CLEAN`). El lock aceptado aparece en
+`baseline_package_graph_lockfiles`.
+
+Todo lo demás sigue fallando cerrado con `UNAUTHORIZED_DEPENDENCY_FILE_CHANGED`: un nodo con otra
+versión, otro hash u otro tipo, un paquete que IntegrationTests no tiene, el mismo contenido en
+otro lock vacío (`Paqueteria.Contracts`, `Paqueteria.Domain`), un lock de punta a punta que ya tiene
+grafo en la base (se juzga con la regla de lock existente) y un lock de IntegrationTests rechazado.
+Las pruebas son `test_v` a `test_z` de `BaselinePackageGraphLockfileTests` en
+`tools/rel-000/test_rel000.py`; `test_k` contra el baseline MVP-0 `988926c7…` y la evidencia de
+liberación contra la base siguen verdes con el lock real.
+
 ## Rollback REL-000
 
 El rollback de este bloque es no destructivo:

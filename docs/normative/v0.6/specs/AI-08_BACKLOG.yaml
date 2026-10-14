@@ -1735,7 +1735,7 @@ items:
   - with the telemetry export off nothing leaves the process
   - synthetic data only (SEC-003) - no real PII, phone number, e-mail address or token in fixtures or evidence; no placeholder or always-passing test
   - the suite runs inside an existing CI job; adding a job changes the 13-job Foundation topology and needs its own decision
-  - 'PENDING OWNER DECISION (blocks phase 4 PR 10): the business journeys the suite runs beyond the platform checks above'
+  - 'DECIDED OPS-005-JOURNEYS-2026-10-13 (project owner, "Recorrido principal (Recommended)"): beyond the platform checks above the suite runs one complete main journey through the real web screens: quote, create and confirm the order, assign a driver, pick up, deliver with a photo (signed upload to storage, never multipart through the API) and see the order delivered on public tracking'
   required_tests:
   - the end-to-end suite itself, green in CI
   approval_gate: owner_technology_operations

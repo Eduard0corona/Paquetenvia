@@ -276,6 +276,9 @@ Lo aplicado está en `docs/development/ops-005-end-to-end-suite.md`:
 - Las cinco comprobaciones de plataforma se miden en la misma corrida; el 429 tiene su propia prueba.
 - La suite corre dentro del job `driver-stops-pwa`, que ya prepara PostgreSQL, el almacenamiento S3, las dependencias
   web y Chromium. Los jobs `dotnet` la excluyen por categoría (`PlatformEndToEnd`).
+- El archivo de paquetes de la suite repite, nodo por nodo, el de IntegrationTests. El owner decidió el 2026-10-14
+  cómo lo acepta REL-000 (`OPS-005-E2E-LOCKFILE-REL000-2026-10-14`, "Solo este proyecto (Recommended)"): solo ese
+  archivo, solo con la base vacía y solo con nodos idénticos a los de IntegrationTests del mismo commit.
 
 ## Decisiones pendientes del owner
 
@@ -287,6 +290,7 @@ Lo aplicado está en `docs/development/ops-005-end-to-end-suite.md`:
 | Alerta de métrica sobre conexiones de PostgreSQL | PR 8 (la alerta, no el pool) | AI-08 SCL-007 |
 | Espera máxima del outbox por lane | PR 9 | AI-08 SCL-007 |
 | Recorridos de negocio de la suite de punta a punta | decidida 2026-10-13 (`OPS-005-JOURNEYS-2026-10-13`, "Recorrido principal (Recommended)") | AI-08 OPS-005 |
+| Archivo de paquetes de la suite en REL-000 | decidida 2026-10-14 (`OPS-005-E2E-LOCKFILE-REL000-2026-10-14`, "Solo este proyecto (Recommended)") | `decision-log.md`, `docs/development/rel-000-internal-release.md` |
 
 ## Invariantes que ningún PR de la fase 4 cambia
 
