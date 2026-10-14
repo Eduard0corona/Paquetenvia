@@ -93,9 +93,10 @@ Two instrument tests (`PlatformInstrumentTests`, uncategorized) prove against th
 recorder sees a real request of the process and that the API log reader gets the method, path and multipart content
 type of a real Kestrel request. They run in the `dotnet` job, so the project always yields results there.
 
-Local results (two consecutive runs, this machine): journey 20 s and 25 s, 429 test 5 s each; delivery after 3 s idle
-725 ms and 651 ms; connection peaks app 4/10, realtime 4/4, worker 2/10, total 10/24; 3 log lines and 2 audit rows
-per trace; Retry-After 45 shown as 45; 25 and 26 outgoing requests, all on loopback.
+Local results (two consecutive runs on this branch after merging `development`, this machine): suite 66 s and 63 s
+including the containers and the web start; journey 25 s and 18 s, 429 test 6 s and 7 s; delivery after 3 s idle
+701 ms and 675 ms; connection peaks app 4/10, realtime 4/4, worker 2/10, total 10/24; 3 log lines and 2 audit rows
+per trace; Retry-After 45 shown as 45; 26 and 23 outgoing requests, all on loopback.
 
 ## CI
 
