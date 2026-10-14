@@ -716,204 +716,15 @@
       "require_sharp_runtime_smoke": true,
       "prohibited_prereleases": true,
       "manual_lockfile_edits_allowed": false
-    }
-  ],
-  "active_remediations": [
-    {
-      "id": "SEC-2026-08-SECURITY-BASELINE",
-      "mode": "SECURITY_REMEDIATION",
-      "authorized_base_sha": "efa7d59bf7781fb70307bda9a0be120aea21cf56",
-      "validated_target_sha": "988926c7892af98015be2be9559682f156b2748b",
-      "authorized_source_branch": "fix/security-2026-08-web-transitives",
-      "tracked_issue": 38,
-      "tracked_issue_title": "SEC-2026-08: remediate current web transitive dependency advisories",
-      "related_tracked_issue": 40,
-      "related_tracked_issue_title": "SEC-2026-08: remediate transitive SSH.NET advisory",
-      "issue_advisories": {
-        "38": [
-          "GHSA-fxqj-rqcc-2cmp",
-          "GHSA-rgw5-rvv9-x895",
-          "GHSA-2v37-7h3g-55p8",
-          "GHSA-5p4m-2wfm-xmqj"
-        ],
-        "40": ["GHSA-q939-rpr3-3284"]
-      },
-      "expected_base_advisories": [
-        "GHSA-fxqj-rqcc-2cmp",
-        "GHSA-rgw5-rvv9-x895",
-        "GHSA-2v37-7h3g-55p8",
-        "GHSA-5p4m-2wfm-xmqj",
-        "GHSA-q939-rpr3-3284"
-      ],
-      "expected_base_totals": {
-        "total": 5,
-        "critical": 0,
-        "high": 4,
-        "moderate": 1,
-        "low": 0
-      },
-      "expected_base_packages": {
-        "GHSA-fxqj-rqcc-2cmp": "postcss",
-        "GHSA-rgw5-rvv9-x895": "brace-expansion",
-        "GHSA-2v37-7h3g-55p8": "nanoid",
-        "GHSA-5p4m-2wfm-xmqj": "js-yaml",
-        "GHSA-q939-rpr3-3284": "SSH.NET"
-      },
-      "expected_branch_totals": {
-        "total": 0,
-        "critical": 0,
-        "high": 0,
-        "moderate": 0,
-        "low": 0
-      },
-      "allowed_direct_packages": [],
-      "allowed_dependency_files": [
-        "apps/web/pnpm-lock.yaml",
-        "apps/web/pnpm-workspace.yaml",
-        "Directory.Packages.props",
-        "tests/Paqueteria.ContractTests/packages.lock.json",
-        "tests/Paqueteria.IntegrationTests/packages.lock.json"
-      ],
-      "required_dependency_files": [
-        "apps/web/pnpm-lock.yaml",
-        "apps/web/pnpm-workspace.yaml",
-        "Directory.Packages.props",
-        "tests/Paqueteria.ContractTests/packages.lock.json",
-        "tests/Paqueteria.IntegrationTests/packages.lock.json"
-      ],
-      "allowed_non_dependency_files": [
-        ".github/workflows/ci.yml",
-        "tests/fixtures/rel-000/security-tracking.json",
-        "tools/rel-000/rel000.py",
-        "tools/rel-000/security-remediation-policy.json",
-        "tools/rel-000/test_rel000.py"
-      ],
-      "expected_direct_versions": {
-        "next": "16.2.11",
-        "eslint-config-next": "16.2.11",
-        "react": "19.2.7",
-        "react-dom": "19.2.7"
-      },
-      "allowed_overrides": {
-        "postcss": "8.5.23",
-        "brace-expansion@<1.1.18": "1.1.18",
-        "brace-expansion@>=4.0.0 <5.0.9": "5.0.9",
-        "nanoid@>=3.0.0 <3.3.18": "3.3.18",
-        "js-yaml@>=4.0.0 <4.3.1": "4.3.1",
-        "next@16.2.11>sharp": "0.35.3"
-      },
-      "expected_lock_version_replacements": {
-        "postcss": {"from": ["8.5.21"], "to": ["8.5.23"]},
-        "brace-expansion": {"from": ["1.1.17", "5.0.8"], "to": ["1.1.18", "5.0.9"]},
-        "nanoid": {"from": ["3.3.16"], "to": ["3.3.18"]},
-        "js-yaml": {"from": ["4.3.0"], "to": ["4.3.1"]},
-        "sharp": {"from": ["0.35.3"], "to": ["0.35.3"]}
-      },
-      "expected_lock_package_count": 475,
-      "expected_nuget_versions": {
-        "Testcontainers.PostgreSql": {"from": "4.13.0", "to": "4.14.0"},
-        "Testcontainers": {"from": "4.13.0", "to": "4.14.0"},
-        "SSH.NET": {"from": "2025.1.0", "to": "2026.0.0"},
-        "BouncyCastle.Cryptography": {"from": "2.6.2", "to": "2.7.0"}
-      },
-      "expected_nuget_dependency_path": "Testcontainers.PostgreSql 4.13.0 -> Testcontainers 4.13.0 -> SSH.NET 2025.1.0",
-      "expected_nuget_advisory": "GHSA-q939-rpr3-3284",
-      "expected_nuget_cve": "CVE-2026-48798",
-      "direct_ssh_net_pin_allowed": false,
-      "central_package_transitive_pinning_allowed": false,
-      "target_sharp_version": "0.35.3",
-      "require_sharp_runtime_smoke": true,
-      "prohibited_prereleases": true,
-      "manual_lockfile_edits_allowed": false,
-      "nanoid_source_reconciliation": {
-        "observed_on": "2026-08-14",
-        "github_advisory_id": "GHSA-2v37-7h3g-55p8",
-        "github_advisory_affected_range": "<3.3.18",
-        "github_advisory_first_patched_version": "3.3.18",
-        "upstream_3_3_17": "partial zero-size fix",
-        "upstream_3_3_18": "completes the missing async/index.native.js guard",
-        "pnpm_3_3_17_result": "ONE_HIGH_ADVISORY",
-        "pnpm_3_3_18_result": "AUDIT_ZERO"
-      }
-    },
-    {
-      "id": "SEC-2026-10-BRACES-DOS-TRACKED",
-      "mode": "SECURITY_REMEDIATION",
-      "authorized_base_sha": "8100c87e154203a24f43714a2082fe279f1094c7",
-      "authorized_source_branch": "fix/security-2026-10-braces-dos-tracked",
-      "tracked_issue": 180,
-      "tracked_issue_title": "SEC-2026-10: track braces stack-exhaustion advisory until a patched release ships",
-      "issue_advisories": {
-        "180": [
-          "GHSA-vfj7-8cjw-p6xm"
-        ]
-      },
-      "expected_base_advisories": [
-        "GHSA-vfj7-8cjw-p6xm"
-      ],
-      "expected_base_packages": {
-        "GHSA-vfj7-8cjw-p6xm": "braces"
-      },
-      "expected_base_totals": {
-        "total": 1,
-        "critical": 0,
-        "high": 1,
-        "moderate": 0,
-        "low": 0
-      },
-      "expected_branch_totals": {
-        "total": 1,
-        "critical": 0,
-        "high": 1,
-        "moderate": 0,
-        "low": 0
-      },
-      "allowed_direct_packages": [],
-      "allowed_dependency_files": [
-        "apps/web/pnpm-lock.yaml"
-      ],
-      "required_dependency_files": [],
-      "allowed_non_dependency_files": [
-        ".github/workflows/ci.yml",
-        ".github/workflows/pr-validation.yml",
-        "tests/fixtures/rel-000/security-tracking.json",
-        "tools/rel-000/rel000.py",
-        "tools/rel-000/security-remediation-policy.json",
-        "tools/rel-000/test_rel000.py"
-      ],
-      "accepted_known_advisory": {
-        "advisory_id": "GHSA-vfj7-8cjw-p6xm",
-        "package": "braces",
-        "severity": "high",
-        "installed_versions": ["3.0.3"],
-        "affected_range": "<=3.0.3",
-        "patched_range": ">=3.0.4",
-        "direct_or_transitive": "transitive",
-        "dependency_path_count": 1,
-        "dependency_scope": "dev",
-        "lock_path": [
-          "eslint-config-next@16.3.8",
-          "@next/eslint-plugin-next@16.3.8",
-          "fast-glob@3.3.1",
-          "micromatch@4.0.8",
-          "braces@3.0.3"
-        ],
-        "lockfile": "apps/web/pnpm-lock.yaml",
-        "expected_lockfile_sha256": "336b1c82c246994b45af1a0ba8c4ffa1b39c7279a827380883047c3c98b1e101",
-        "tracked_issue": 180,
-        "tracked_issue_title": "SEC-2026-10: track braces stack-exhaustion advisory until a patched release ships",
-        "exit_condition": "When braces>=3.0.4 is published on npm: add the override \"braces@<3.0.4\": 3.0.4 in apps/web/pnpm-workspace.yaml, regenerate apps/web/pnpm-lock.yaml with pnpm 11.15.1, verify a zero audit, retire this accepted known advisory and close Issue #180."
-      },
-      "target_sharp_version": "0.35.4",
-      "require_sharp_runtime_smoke": true,
-      "prohibited_prereleases": true,
-      "manual_lockfile_edits_allowed": false
     },
     {
       "id": "SEC-2026-12-SIGNALR-CRYPTOGRAPHY",
       "mode": "SECURITY_REMEDIATION",
+      "status": "MERGED",
       "authorized_base_sha": "fbc77db841a5ea32598b48d98a2ad95df0c28d6c",
       "authorized_source_branch": "fix/security-2026-12-signalr-common",
+      "validated_target_sha": "bfe9c1b671caa29aacd0db9eb2a2656a2fcd92fd",
+      "tracked_pull_request": 261,
       "tracked_issue": 260,
       "tracked_issue_title": "SEC-2026-12: remediate SignalR.Common, Cryptography.Pkcs and Cryptography.Xml NuGet advisories",
       "issue_advisories": {
@@ -1197,6 +1008,198 @@
         "tools/Paqueteria.DatabaseMigrator/packages.lock.json": "449408681f22439f37d969abfa18bcba56d4441ed55a422e2b63a073dc3e1925"
       },
       "require_sharp_runtime_smoke": false,
+      "prohibited_prereleases": true,
+      "manual_lockfile_edits_allowed": false
+    }
+  ],
+  "active_remediations": [
+    {
+      "id": "SEC-2026-08-SECURITY-BASELINE",
+      "mode": "SECURITY_REMEDIATION",
+      "authorized_base_sha": "efa7d59bf7781fb70307bda9a0be120aea21cf56",
+      "validated_target_sha": "988926c7892af98015be2be9559682f156b2748b",
+      "authorized_source_branch": "fix/security-2026-08-web-transitives",
+      "tracked_issue": 38,
+      "tracked_issue_title": "SEC-2026-08: remediate current web transitive dependency advisories",
+      "related_tracked_issue": 40,
+      "related_tracked_issue_title": "SEC-2026-08: remediate transitive SSH.NET advisory",
+      "issue_advisories": {
+        "38": [
+          "GHSA-fxqj-rqcc-2cmp",
+          "GHSA-rgw5-rvv9-x895",
+          "GHSA-2v37-7h3g-55p8",
+          "GHSA-5p4m-2wfm-xmqj"
+        ],
+        "40": ["GHSA-q939-rpr3-3284"]
+      },
+      "expected_base_advisories": [
+        "GHSA-fxqj-rqcc-2cmp",
+        "GHSA-rgw5-rvv9-x895",
+        "GHSA-2v37-7h3g-55p8",
+        "GHSA-5p4m-2wfm-xmqj",
+        "GHSA-q939-rpr3-3284"
+      ],
+      "expected_base_totals": {
+        "total": 5,
+        "critical": 0,
+        "high": 4,
+        "moderate": 1,
+        "low": 0
+      },
+      "expected_base_packages": {
+        "GHSA-fxqj-rqcc-2cmp": "postcss",
+        "GHSA-rgw5-rvv9-x895": "brace-expansion",
+        "GHSA-2v37-7h3g-55p8": "nanoid",
+        "GHSA-5p4m-2wfm-xmqj": "js-yaml",
+        "GHSA-q939-rpr3-3284": "SSH.NET"
+      },
+      "expected_branch_totals": {
+        "total": 0,
+        "critical": 0,
+        "high": 0,
+        "moderate": 0,
+        "low": 0
+      },
+      "allowed_direct_packages": [],
+      "allowed_dependency_files": [
+        "apps/web/pnpm-lock.yaml",
+        "apps/web/pnpm-workspace.yaml",
+        "Directory.Packages.props",
+        "tests/Paqueteria.ContractTests/packages.lock.json",
+        "tests/Paqueteria.IntegrationTests/packages.lock.json"
+      ],
+      "required_dependency_files": [
+        "apps/web/pnpm-lock.yaml",
+        "apps/web/pnpm-workspace.yaml",
+        "Directory.Packages.props",
+        "tests/Paqueteria.ContractTests/packages.lock.json",
+        "tests/Paqueteria.IntegrationTests/packages.lock.json"
+      ],
+      "allowed_non_dependency_files": [
+        ".github/workflows/ci.yml",
+        "tests/fixtures/rel-000/security-tracking.json",
+        "tools/rel-000/rel000.py",
+        "tools/rel-000/security-remediation-policy.json",
+        "tools/rel-000/test_rel000.py"
+      ],
+      "expected_direct_versions": {
+        "next": "16.2.11",
+        "eslint-config-next": "16.2.11",
+        "react": "19.2.7",
+        "react-dom": "19.2.7"
+      },
+      "allowed_overrides": {
+        "postcss": "8.5.23",
+        "brace-expansion@<1.1.18": "1.1.18",
+        "brace-expansion@>=4.0.0 <5.0.9": "5.0.9",
+        "nanoid@>=3.0.0 <3.3.18": "3.3.18",
+        "js-yaml@>=4.0.0 <4.3.1": "4.3.1",
+        "next@16.2.11>sharp": "0.35.3"
+      },
+      "expected_lock_version_replacements": {
+        "postcss": {"from": ["8.5.21"], "to": ["8.5.23"]},
+        "brace-expansion": {"from": ["1.1.17", "5.0.8"], "to": ["1.1.18", "5.0.9"]},
+        "nanoid": {"from": ["3.3.16"], "to": ["3.3.18"]},
+        "js-yaml": {"from": ["4.3.0"], "to": ["4.3.1"]},
+        "sharp": {"from": ["0.35.3"], "to": ["0.35.3"]}
+      },
+      "expected_lock_package_count": 475,
+      "expected_nuget_versions": {
+        "Testcontainers.PostgreSql": {"from": "4.13.0", "to": "4.14.0"},
+        "Testcontainers": {"from": "4.13.0", "to": "4.14.0"},
+        "SSH.NET": {"from": "2025.1.0", "to": "2026.0.0"},
+        "BouncyCastle.Cryptography": {"from": "2.6.2", "to": "2.7.0"}
+      },
+      "expected_nuget_dependency_path": "Testcontainers.PostgreSql 4.13.0 -> Testcontainers 4.13.0 -> SSH.NET 2025.1.0",
+      "expected_nuget_advisory": "GHSA-q939-rpr3-3284",
+      "expected_nuget_cve": "CVE-2026-48798",
+      "direct_ssh_net_pin_allowed": false,
+      "central_package_transitive_pinning_allowed": false,
+      "target_sharp_version": "0.35.3",
+      "require_sharp_runtime_smoke": true,
+      "prohibited_prereleases": true,
+      "manual_lockfile_edits_allowed": false,
+      "nanoid_source_reconciliation": {
+        "observed_on": "2026-08-14",
+        "github_advisory_id": "GHSA-2v37-7h3g-55p8",
+        "github_advisory_affected_range": "<3.3.18",
+        "github_advisory_first_patched_version": "3.3.18",
+        "upstream_3_3_17": "partial zero-size fix",
+        "upstream_3_3_18": "completes the missing async/index.native.js guard",
+        "pnpm_3_3_17_result": "ONE_HIGH_ADVISORY",
+        "pnpm_3_3_18_result": "AUDIT_ZERO"
+      }
+    },
+    {
+      "id": "SEC-2026-10-BRACES-DOS-TRACKED",
+      "mode": "SECURITY_REMEDIATION",
+      "authorized_base_sha": "8100c87e154203a24f43714a2082fe279f1094c7",
+      "authorized_source_branch": "fix/security-2026-10-braces-dos-tracked",
+      "tracked_issue": 180,
+      "tracked_issue_title": "SEC-2026-10: track braces stack-exhaustion advisory until a patched release ships",
+      "issue_advisories": {
+        "180": [
+          "GHSA-vfj7-8cjw-p6xm"
+        ]
+      },
+      "expected_base_advisories": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "expected_base_packages": {
+        "GHSA-vfj7-8cjw-p6xm": "braces"
+      },
+      "expected_base_totals": {
+        "total": 1,
+        "critical": 0,
+        "high": 1,
+        "moderate": 0,
+        "low": 0
+      },
+      "expected_branch_totals": {
+        "total": 1,
+        "critical": 0,
+        "high": 1,
+        "moderate": 0,
+        "low": 0
+      },
+      "allowed_direct_packages": [],
+      "allowed_dependency_files": [
+        "apps/web/pnpm-lock.yaml"
+      ],
+      "required_dependency_files": [],
+      "allowed_non_dependency_files": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/pr-validation.yml",
+        "tests/fixtures/rel-000/security-tracking.json",
+        "tools/rel-000/rel000.py",
+        "tools/rel-000/security-remediation-policy.json",
+        "tools/rel-000/test_rel000.py"
+      ],
+      "accepted_known_advisory": {
+        "advisory_id": "GHSA-vfj7-8cjw-p6xm",
+        "package": "braces",
+        "severity": "high",
+        "installed_versions": ["3.0.3"],
+        "affected_range": "<=3.0.3",
+        "patched_range": ">=3.0.4",
+        "direct_or_transitive": "transitive",
+        "dependency_path_count": 1,
+        "dependency_scope": "dev",
+        "lock_path": [
+          "eslint-config-next@16.3.8",
+          "@next/eslint-plugin-next@16.3.8",
+          "fast-glob@3.3.1",
+          "micromatch@4.0.8",
+          "braces@3.0.3"
+        ],
+        "lockfile": "apps/web/pnpm-lock.yaml",
+        "expected_lockfile_sha256": "336b1c82c246994b45af1a0ba8c4ffa1b39c7279a827380883047c3c98b1e101",
+        "tracked_issue": 180,
+        "tracked_issue_title": "SEC-2026-10: track braces stack-exhaustion advisory until a patched release ships",
+        "exit_condition": "When braces>=3.0.4 is published on npm: add the override \"braces@<3.0.4\": 3.0.4 in apps/web/pnpm-workspace.yaml, regenerate apps/web/pnpm-lock.yaml with pnpm 11.15.1, verify a zero audit, retire this accepted known advisory and close Issue #180."
+      },
+      "target_sharp_version": "0.35.4",
+      "require_sharp_runtime_smoke": true,
       "prohibited_prereleases": true,
       "manual_lockfile_edits_allowed": false
     }
