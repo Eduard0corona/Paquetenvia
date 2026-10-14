@@ -207,11 +207,47 @@ connections are not runtime pools and are not counted. The peaks are written to 
 - PostgreSQL (`Scl007SharedPoolSessionStateContractTests`) and the TEN-002 regression on the shared-pool builder, as
   above.
 
+## Connection alert (follow-up)
+
+Decision `SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14`. The owner answered "Sí, 80 % y 95 % (Recommended)" ("Dos
+reglas sobre las 35 conexiones de usuario: aviso en 28 y crítico en 33, como pide AI-15. Son 2 series, dentro de las 10
+gratis por recurso; si no, unos 0.10 USD por serie al mes. Avisa al correo de alertas que pongas al desplegar.") and,
+for the calculation, "Máximo en 5 min, cada minuto (Recommended)". The pilot now has two Azure Monitor metric alerts in
+`deploy/azure/pilot/observability.bicep`, on `active_connections` of `pg-pv-pilot-<suffix>`:
+
+| Rule | Fires when | Severity |
+| --- | --- | --- |
+| `mar-pv-pilot-pg-connections-warning` | 28 or more connections (80 % of the 35 user connections) | 2 |
+| `mar-pv-pilot-pg-connections-critical` | 33 or more (95 %) | 1 |
+
+- **Evaluation:** the Maximum of the one-minute samples of the last 5 minutes, every minute. They are stateful and
+  e-mail the existing pilot action group `ag-pv-pilot-ops`. Its address is still the deploy parameter
+  `alertEmailAddress` (`OWNER_DECISION_REQUIRED`).
+- **Metric:** `active_connections` counts every connection in `pg_stat_activity`, whatever its state
+  ([supported metrics](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/supported-metrics/microsoft-dbforpostgresql-flexibleservers-metrics),
+  [monitoring](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-monitoring)).
+- **What the thresholds mean:** with the default sizes the runtime pools hold 24. So 28 means the pools are full and
+  jobs or administration hold 4 more, or something is over its budget: a manual `DatabasePools__*` override that
+  differs between the apps, or two sets of pools during a revision change. 33 leaves 2 connections before PostgreSQL
+  refuses new ones.
+- **Cost:** 2 time series, inside the 10 free per resource, otherwise about 0.10 USD per series per month, whatever the
+  frequency ([Azure Monitor pricing](https://azure.microsoft.com/en-us/pricing/details/monitor/)).
+- **Guards:** guard P21 (`tools/azr-001/env001_pilot_guards.py`) pins the rules: target server, metric, aggregation,
+  window, frequency, thresholds, severities and action group, with no e-mail address. Every other metric alert is
+  refused.
+
+**When it fires** (runbook in `docs/operations/env-001-pilot/README.md` §10.2):
+
+1. Check whether a revision change, a pilot workflow run, a `job-pv-pilot-*` execution or the restore drill was running
+   then. A revision change resolves by itself.
+2. Look for `DatabasePools__*` on `ca-pv-pilot-api` and `ca-pv-pilot-worker`. The Bicep sets none. Any manual values
+   must be all three, identical on both apps and at most 24 in total; otherwise re-run the workflow for the current SHA.
+3. Close administration sessions that are no longer needed.
+4. If the runtime alone is using its whole budget under load, revisit the sizes within the 24 or the tier. That needs an
+   owner decision.
+
 ## Pending
 
-- An Azure Monitor metric alert on PostgreSQL connections is not added. It waits for the owner's alert decision and the
-  alert e-mail (`alertEmailAddress`, still `OWNER_DECISION_REQUIRED`). The threshold would be compared with AI-15
-  `connection_pool_utilization` (0.8 warning, 0.95 critical), and its monthly cost with PILOT-BUDGET-ACCEPT-98-108.
 - The sizes are a starting point inside the budget. Pool waits or exhaustion seen in the pilot are a reason to revisit
   them within the 24.
 
@@ -220,7 +256,7 @@ connections are not runtime pools and are not counted. The peaks are written to 
 No action in this PR; each is written here so the pilot can watch it.
 
 - Revision changes can briefly hold two sets of pools (see "Connection budget"); two full sets would exceed the 35 user
-  connections.
+  connections. The PostgreSQL connection alerts fire at 28 and 33 (see "Connection alert (follow-up)").
 - OPS-001 does not sample the real Worker pool. Its proof worker composes Custody the way the API does, so the
   connection count covers the API's `paqueteria_app` and `paqueteria_realtime` pools and that worker, not the Worker
   host's `paqueteria_worker` pool under load.
@@ -234,8 +270,14 @@ No action in this PR; each is written here so the pilot can watch it.
   processes with up to 36 connections (see "Connection budget"). The architecture test covers only the committed
   `appsettings*.json` files, and the operations rule (all three variables, identical, on both apps) is a procedure, not
   a check. The backstops are PostgreSQL `max_connections`, which refuses connections beyond the 35 user connections
-  (`too many connections`), and the Azure Monitor alert on PostgreSQL connections, still a PENDING owner decision in
-  AI-08 SCL-007 (see "Pending").
+  (`too many connections`), and the two Azure Monitor alerts on PostgreSQL connections at 28 and 33
+  (`SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14`, see "Connection alert (follow-up)").
+- Microsoft does not document whether `active_connections` includes Azure's own `azure_superuser` connections. If it
+  does, the alerts fire with fewer than 28 or 33 user connections, which is the safe direction. At the first deployment,
+  while the apps are idle, compare the metric (Max) with `pg_stat_activity` grouped by user, from an administration
+  session.
+- The metric is sampled once a minute, so a burst between two samples can go unseen by the alerts. *Failed
+  Connections* (`connections_failed`) counts the connections PostgreSQL refused.
 
 ## Rollback
 

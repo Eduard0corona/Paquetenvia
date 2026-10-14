@@ -1,5 +1,30 @@
 # Changelog
 
+## Alerta de conexiones de PostgreSQL en el piloto (SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14) — 2026-10-14
+
+- Respuestas literales del project owner (2026-10-14), registradas en `decision-log.md` con su contexto y las opciones
+  no elegidas:
+  - "¿Creamos la alerta de Azure Monitor sobre conexiones de PostgreSQL? Es el respaldo si alguien desbalancea los pools a mano." Respuesta: "Sí, 80 % y 95 % (Recommended)" ("Dos reglas sobre las 35 conexiones de usuario: aviso en 28 y crítico en 33, como pide AI-15. Son 2 series, dentro de las 10 gratis por recurso; si no, unos 0.10 USD por serie al mes. Avisa al correo de alertas que pongas al desplegar.");
+  - "Alerta de conexiones de PostgreSQL (aviso en 28, crítico en 33): ¿con qué cálculo y cada cuánto la evaluamos? Es la primera alerta de métrica del piloto; las de OBS-002 son de logs cada 15 min, y ese ritmo se eligió por costo. Esta alerta cuesta lo mismo con cualquier frecuencia, porque se cobra por serie y no por evaluación." Respuesta: "Máximo en 5 min, cada minuto (Recommended)".
+- `deploy/azure/pilot/observability.bicep` (etapa 5 del flujo del piloto, sin cambios en el flujo) declara dos alertas de
+  métrica de Azure Monitor sobre `active_connections` del servidor `pg-pv-pilot-<suffix>`: `mar-pv-pilot-pg-connections-warning`
+  (28 o más, severidad 2) y `mar-pv-pilot-pg-connections-critical` (33 o más, severidad 1). Son el 80 % y el 95 % de las
+  35 conexiones de usuario del B1ms, el `connection_pool_utilization` 0.8 y 0.95 de AI-15. Cada una toma el máximo de las
+  muestras de un minuto de los últimos 5 minutos y se evalúa cada minuto; avisan al grupo de acciones `ag-pv-pilot-ops`
+  (un correo al dispararse y otro al resolverse). El correo sigue siendo el parámetro `alertEmailAddress`
+  (OWNER_DECISION_REQUIRED); no se escribe ninguna dirección.
+- Costo: 2 series, dentro de las 10 gratis por recurso; si no, unos 0.10 USD por serie al mes
+  (azure.microsoft.com/en-us/pricing/details/monitor). El precio no depende de la frecuencia.
+- Guardas del piloto: P01 admite `Microsoft.Insights/metricAlerts` solo en `observability.bicep`; P21 exige exactamente
+  estas dos reglas (servidor, métrica, agregación, ventana, frecuencia, umbral, severidad, grupo de acciones), rechaza
+  cualquier otra alerta de métrica y cualquier correo escrito en la plantilla, exige el SKU Standard_B1ms y suma las dos
+  series al tope de 5 USD de las alertas. Las pruebas prueban que cada desviación falla cerrada.
+- AI-08 SCL-007: el criterio PENDING pasa a DECIDED y se agrega la prueba de la guarda. AI-15 no lista reglas de alerta y
+  no cambia. Sin cambios de código, esquema, roles, permisos, paquetes ni topología de CI. Riesgo residual: Microsoft no
+  documenta si `active_connections` cuenta las conexiones propias de Azure (`azure_superuser`); el primer despliegue lo
+  compara con `pg_stat_activity` por usuario. Notas: `docs/operations/env-001-pilot/README.md` §10 y
+  `docs/development/scl-007-pool-per-role.md`.
+
 ## Pruebas de punta a punta de la plataforma (OPS-005-JOURNEYS-2026-10-13, OPS-005-E2E-LOCKFILE-REL000-2026-10-14 y OPS-005-SUITE-IN-INTEGRATIONTESTS-2026-10-14, fase 4 PR 10) — 2026-10-14
 
 - Respuesta literal del project owner (2026-10-13), registrada en `decision-log.md` con su contexto y las opciones no

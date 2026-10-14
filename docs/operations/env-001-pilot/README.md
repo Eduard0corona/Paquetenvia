@@ -14,7 +14,7 @@ files (`deploy/azure/*.bicep`, `deploy-core.ps1`, `deploy-azure-dev.yml`) or gua
 | OBS-002 alert e-mail (owner) | `deploy/azure/pilot/observability.parameters.json` |
 | Accepted terms and privacy versions for the web (owner, UI-001) | `deploy/azure/pilot/web.parameters.json` |
 | Deployment workflow | `.github/workflows/deploy-azure-pilot.yml` (`workflow_dispatch`, GitHub Environment `azure-pilot`) |
-| Static guards | `tools/azr-001/env001_pilot_guards.py` (23 guards) and `test_env001_pilot_guards.py` |
+| Static guards | `tools/azr-001/env001_pilot_guards.py` (24 guards) and `test_env001_pilot_guards.py` |
 | Restore drill | `deploy/azure/pilot/restore-drill.sh` |
 | One-time bootstrap (owner) | [`bootstrap.md`](bootstrap.md) |
 
@@ -85,6 +85,7 @@ Otherwise the deploy job stops before logging in to Azure.
 | Container Apps environment | `cae-pv-pilot-<suffix>` |
 | Apps / jobs | `ca-pv-pilot-{api,worker,web}`, `job-pv-pilot-{migrate,logins,verify}` |
 | Alerts (OBS-002, §10) | `sqr-pv-pilot-{outbox-lag,outbox-dead,job-failure,readiness,api-5xx}`, action group `ag-pv-pilot-ops` (e-mail only), workbook *Paquetenvia pilot operations (OBS-002)* |
+| PostgreSQL connection alerts (SCL-007, §10.2) | `mar-pv-pilot-pg-connections-{warning,critical}` (metric alerts on `pg-pv-pilot-<suffix>`, same action group) |
 
 ### Database roles
 
@@ -378,6 +379,7 @@ hours a month. Sized for 50–100 real deliveries.
 | VNet, route, managed certificate, budget | free | 0.00 |
 | **Subtotal before OBS-002** | | **≈ 98 typical, ≈ 108 if the log cap is hit every day** |
 | Log search alerts (OBS-002, §10) | 5 rules at 15 min (0.55 each), Retail Prices API 2026-09-28; e-mails and workbook free; the extra ~0.3–0.45 GB/month of logs fits the 5 GB free tier | 2.75 |
+| PostgreSQL connection metric alerts (SCL-007, §10.2) | 2 time series, inside the 10 free per resource, otherwise about 0.10 USD per series per month, whatever the frequency ([pricing](https://azure.microsoft.com/en-us/pricing/details/monitor/)) | 0 – 0.20 |
 | Application Insights (OBS-003, §10) | workspace-based on the same workspace and inside the same 0.3 GB/day cap; component free; with the export on, about 1–2 GB/month of traces (10 %) and metrics; 0 while `TelemetryExport__Enabled='false'` | 0 – 5 (inside the Log Analytics row's worst case) |
 | **Total** | | **≈ 101 typical, ≈ 111 if the log cap is hit every day** |
 
@@ -385,7 +387,9 @@ hours a month. Sized for 50–100 real deliveries.
 sizing (PILOT-BUDGET-ACCEPT-98-108, 2026-09-28) without applying any lever. OBS-002 adds about
 2.75 USD per month on top of that accepted range, with every alert evaluated every 15 minutes; the
 owner accepted it on 2026-10-02 (OBS-002-ALERTS-15MIN-COST-2026-10-02, literal "Sí, revisar cada 15
-min"). The largest item is the
+min"). The two SCL-007 PostgreSQL connection alerts add at most 0.20 USD per month and usually nothing
+(SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14, literal "Sí, 80 % y 95 % (Recommended)"), so the totals stay the
+same. The largest item is the
 always-on API at 0.5 vCPU. For the record, the levers in order of impact:
 
 1. API at 0.25 vCPU / 0.5 GiB saves about 21 USD, at the risk of memory pressure in a 15-module .NET
@@ -634,6 +638,8 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
   never on one app alone. Today the Bicep sets none. The other 11 are for the migrate, verify and logins jobs
   (`Maximum Pool Size=4`), the restore drill and administration. `too many connections` means lowering all three
   `DatabasePools__*` on both apps, identically, or moving to B2s (+≈41 USD/month, over budget).
+- **A PostgreSQL connection alert fired** (`mar-pv-pilot-pg-connections-warning` at 28,
+  `mar-pv-pilot-pg-connections-critical` at 33): follow §10.2.
 - **Realtime dispatcher not ready:** `/health/ready` reports `realtime_outbox_dispatcher` unhealthy when
   `pg-realtime-runtime-connection` is missing or its login is not `pv_pilot_realtime` (member of
   `paqueteria_realtime` only), when the Notifications lane step `20261012000100_AddRealtimeDispatcherRole` has not
@@ -771,6 +777,17 @@ The 24 guards (P00–P23) run on the compiled ARM output and the workflow:
   - one action group, e-mail only, bound to a parameter without a default;
   - queries read only the Container Apps log tables and the allowlisted event properties;
   - the workflow checks the parameters file.
+- **PostgreSQL connection alerts (P01 and P21, SCL-007):**
+  - `Microsoft.Insights/metricAlerts` only in `observability.bicep` (P01), and there exactly
+    `mar-pv-pilot-pg-connections-warning` and `mar-pv-pilot-pg-connections-critical`, each one literal global
+    resource; any other metric alert is refused, one on Application Insights included;
+  - each watches only `pg-pv-pilot-<suffix>` (same suffix as `platform.bicep`): the Maximum of `active_connections`
+    over 5 minutes (`PT5M`), every minute (`PT1M`), `GreaterThanOrEqual` 28 with severity 2 and 33 with severity 1,
+    one static criterion with no dimension, enabled and stateful;
+  - the only action is the pilot action group, with no webhook, and the observability template contains no e-mail
+    address;
+  - the server SKU stays `Standard_B1ms`, whose 35 user connections the thresholds belong to;
+  - each rule counts as one time series at 0.10 USD in the 5 USD alert bound.
 - **Application Insights (P21, OBS-003):**
   - exactly one `Microsoft.Insights/components`, in `platform.bicep`, in the pilot region, workspace-based on the
     pilot workspace (`IngestionMode: LogAnalytics`), IP masking kept, no ingestion sampling or own retention;
@@ -800,8 +817,9 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
 **Verified without Azure:**
 
 - `bicep build` and `bicep lint` pass with the pinned v0.47.16, with no warnings.
-- 23/23 pilot guards (P00–P22) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
+- 24/24 pilot guards (P00–P23) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
   tooling tests. The gitleaks scan was not re-run for OBS-002.
+- The SCL-007 PostgreSQL connection alerts build and lint with no diagnostic, and P21 pins them.
 - The OBS-002 alert and workbook queries parse and type-check offline (Kusto language service).
 - The migrator changes pass contract tests on real PostgreSQL 18/PostGIS 3.6.
 - The BFF web build and `next start` with the CSP connect source work.
@@ -823,6 +841,9 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
   - ARM acceptance of the alert rules, action group and workbook;
   - that the JSON console line reaches `Log_s` unchanged;
   - the exact `Reason_s` values Container Apps uses for probe failures and restarts.
+- SCL-007 PostgreSQL connection alerts:
+  - ARM acceptance of the two metric alerts on the private server;
+  - whether `active_connections` counts Azure's own `azure_superuser` connections (§10.2).
 - OBS-003:
   - ARM acceptance of the workspace-based component;
   - that the exporter reaches the Mexico Central ingestion endpoint from inside the VNet, and the real volume
@@ -881,3 +902,56 @@ Details, allowlist, pseudonym and tests: `docs/development/obs-003-appinsights-e
   It is on the API's log lines (`State.OrganizationPseudonym`, `State.ActorRoleKind`) whenever a request selected an
   organization, also with the export off. It is never an alert, workbook or metric dimension.
 - **Alerts:** none added.
+
+### 10.2 PostgreSQL connections (SCL-007)
+
+Decision SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14 (owner: "Sí, 80 % y 95 % (Recommended)" and "Máximo en 5 min,
+cada minuto (Recommended)"). Pools and budget: `docs/development/scl-007-pool-per-role.md`.
+
+- **Rules:** two metric alerts in `observability.bicep`, deployed by stage 5 with the OBS-002 alerts.
+
+  | Rule | Fires when | Severity |
+  |---|---|---|
+  | `mar-pv-pilot-pg-connections-warning` | `active_connections` ≥ 28 (80 % of the 35 user connections) | 2 |
+  | `mar-pv-pilot-pg-connections-critical` | `active_connections` ≥ 33 (95 %) | 1 |
+
+  Both take the Maximum of the one-minute samples of the last 5 minutes and are evaluated every minute, so a single
+  sample at the threshold sends the e-mail about 1–3 minutes later. They are stateful: one e-mail when an alert fires
+  and one when it resolves, to the same action group and address as OBS-002. The thresholds are 80 % and 95 % of the
+  35 user connections of the B1ms server, as AI-15 `connection_pool_utilization` asks (0.8 and 0.95). They are literal
+  in the template and guard P21 pins them, so `observability.parameters.json` cannot change them.
+- **Metric:** `active_connections` of `Microsoft.DBforPostgreSQL/flexibleServers`, a count sampled every minute
+  ([supported metrics](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/supported-metrics/microsoft-dbforpostgresql-flexibleservers-metrics)).
+  Microsoft defines it as every connection in `pg_stat_activity`, whatever its state
+  ([monitoring](https://learn.microsoft.com/en-us/azure/postgresql/flexible-server/concepts-monitoring)).
+- **What 28 means:** the runtime pools hold 24 at most (API `paqueteria_app` 10 and `paqueteria_realtime` 4, Worker
+  `paqueteria_worker` 10). The other 11 are for the migrate, verify and logins jobs (`Maximum Pool Size=4`), the
+  restore drill (2) and administration. The count reaches 28 only when the pools are full and other sessions are open
+  at the same time, or when something holds more than its budget.
+- **Cost:** 2 time series, inside the 10 free per resource, otherwise about 0.10 USD per series per month, whatever
+  the frequency ([Azure Monitor pricing](https://azure.microsoft.com/en-us/pricing/details/monitor/)).
+- **When it fires:**
+  1. Look at the shape in Azure Monitor: the server → *Metrics* → *Active Connections* with aggregation *Max*, and
+     *Failed Connections* (`connections_failed`, which counts the connections PostgreSQL refused).
+  2. Check whether a revision change, a run of the pilot workflow, a `job-pv-pilot-*` execution or the restore drill
+     was running then (`az containerapp revision list`, `az containerapp job execution list`). A revision change can
+     hold two sets of pools for a moment; the alert then resolves by itself and sends the resolve e-mail.
+  3. Check for a manual pool override on both apps:
+     `az containerapp show -n <app> -g <rg> --query "properties.template.containers[0].env[?starts_with(name, 'DatabasePools__')]"`
+     for `ca-pv-pilot-api` and `ca-pv-pilot-worker`. The Bicep sets none, so any value there was set by hand. All three
+     variables must be identical on both apps and sum to 24 at most (§6.7); otherwise re-run the workflow for the
+     current SHA, which redeploys the apps without them.
+  4. Close administration or diagnostic sessions that are no longer needed.
+  5. If none of that explains it, the runtime is using its whole budget under load. Lowering the pools or moving to
+     B2s (+≈41 USD/month, over the budget) needs an owner decision.
+
+  At the critical threshold only 2 user connections are left. PostgreSQL then refuses new connections with
+  `too many connections`, which shows in the API and Worker logs and in *Failed Connections*.
+- **Residual risks:**
+  - Microsoft does not document whether `active_connections` includes Azure's own `azure_superuser` connections. If it
+    does, the alerts fire with fewer than 28 or 33 user connections, which is the safe direction. Check at the first
+    deployment: while the apps are idle, compare *Active Connections* (Max) with
+    `SELECT usename, count(*) FROM pg_stat_activity GROUP BY usename` run from an administration session, and record
+    the difference.
+  - The metric is sampled once a minute. A burst between two samples can be missed, and *Failed Connections* is
+    where it would show.

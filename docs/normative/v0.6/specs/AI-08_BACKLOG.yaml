@@ -1720,13 +1720,14 @@ items:
   - 'DECIDED SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13 (project owner, "1 segundo en ambos (Recommended)"): the maximum idle wait is 1 s on the business and the location lane; it must keep the per-minute OBS-002 heartbeat, the AI-15 oldest_outbox_age_seconds warning (60 s) and, for the realtime lanes, the AI-15 event_delivery_p95_seconds warning (2 s)'
   - the maximum idle wait is configuration validated at start (Realtime:OutboxDispatcher:Business:MaximumIdleWaitMilliseconds and Realtime:OutboxDispatcher:Location:MaximumIdleWaitMilliseconds, default 1000); a value below the lane's PollIntervalMilliseconds, above 1000 = half the AI-15 event_delivery_p95_seconds warning (the other half is kept for the claim, the evidence reads, the publish and the settle) or not a number refuses the start of the API
   - an idle realtime lane claims at least once a second, so its OBS-002 OutboxLaneSummary is still written once a minute and a ready row waits at most 1 s more for its claim; the OBS-002 MaxClaimAgeMs (now - min(available_at), read when the claim returns) includes that wait
-  - 'PENDING OWNER DECISION: an Azure Monitor metric alert on PostgreSQL connections (threshold against AI-15 connection_pool_utilization 0.8/0.95, monthly cost against PILOT-BUDGET-ACCEPT-98-108) and the alert e-mail address the owner sets at deploy'
+  - 'DECIDED SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14 (project owner, "Sí, 80 % y 95 % (Recommended)" and "Máximo en 5 min, cada minuto (Recommended)"): two Azure Monitor metric alerts on active_connections of the pilot PostgreSQL server (B1ms, 35 user connections) against AI-15 connection_pool_utilization 0.8/0.95 - a warning at 28 or more (severity 2) and a critical at 33 or more (severity 1); the Maximum of the one-minute samples over 5 minutes, evaluated every minute, stateful (one e-mail when it fires and one when it resolves); 2 time series, inside the 10 free per resource, otherwise about 0.10 USD per series per month against PILOT-BUDGET-ACCEPT-98-108; both notify the existing pilot action group, whose alert e-mail address the owner sets at deploy (alertEmailAddress, still OWNER_DECISION_REQUIRED)'
   required_tests:
   - architecture test - one data source per role, resolved by every module
   - pooled-connection tenant context regression on the shared pools (PostgreSQL)
   - connection count within the budget during the OPS-001 synthetic workflow
   - adaptive wait backoff, reset on work, heartbeat while idle and cancellation (fake clock)
   - a realtime notice committed after an idle period reaches a SignalR client within the AI-15 event_delivery_p95_seconds warning (PostgreSQL)
+  - pilot static guard - exactly the two PostgreSQL connection alerts (target server, metric, aggregation, window, frequency, thresholds, severities, action group, no e-mail address), failing closed on every drift
   approval_gate: owner_technology_operations
 - id: OPS-005
   decision: PHASE4-PLATFORM-APPROVAL-2026-10-12 (project owner)
