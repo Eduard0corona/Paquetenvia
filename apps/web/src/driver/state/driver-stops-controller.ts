@@ -83,6 +83,64 @@ export function mergeConfirmedStops(
   return { stops: Object.freeze(stops), missingDetails };
 }
 
+/**
+ * DRV-STALE-STOP-READ-2026-10-14 (owner answers Q6 "Sí, en un PR aparte
+ * (Recommended)" and Q6b "Se aplica, como hoy (Recommended)"): a read that was
+ * already on its way when the app accepted a newer version of a stop is stale
+ * for that stop. `newerWhileInFlight` holds, per order, the highest version the
+ * app accepted from other reads while this one was on its way. A stale stop is
+ * not taken: the stop the app holds stays as it is, and a stop that already
+ * left the list is not brought back. Q6c "Solo paradas ya vistas
+ * (Recommended)": when another read removed a stop the app held, it counts as
+ * accepted at the held version + 1 (see acceptRead), so this read does not
+ * bring it back at the held version or lower. An equal version of a held stop,
+ * a stop the read does not bring (it leaves the list, as DRV-001 says) and any
+ * read sent after the newer version was accepted (also after a version reset)
+ * behave as before.
+ */
+export function withoutStaleStops(
+  held: readonly DriverStop[],
+  incoming: readonly DriverStop[],
+  newerWhileInFlight: ReadonlyMap<string, number>,
+): { readonly stops: readonly DriverStop[]; readonly taken: readonly DriverStop[] } {
+  if (newerWhileInFlight.size === 0) return { stops: incoming, taken: incoming };
+  const holding = new Map(held.map((stop) => [stop.order_id, stop]));
+  const stops: DriverStop[] = [];
+  const taken: DriverStop[] = [];
+  for (const stop of incoming) {
+    const newer = newerWhileInFlight.get(stop.order_id);
+    if (newer === undefined || newer <= stop.aggregate_version) {
+      stops.push(stop);
+      taken.push(stop);
+      continue;
+    }
+    const current = holding.get(stop.order_id);
+    if (current) stops.push(current);
+  }
+  return { stops, taken };
+}
+
+/** One stops read on its way; see withoutStaleStops. */
+interface StopsRead {
+  /** When it was sent among this controller's stops reads (Q6d). */
+  readonly sentOrder: number;
+  readonly newerWhileInFlight: Map<string, number>;
+}
+
+/** Today's completed count and the send order of the read that brought it. */
+interface CompletedTodayRead {
+  readonly sentOrder: number;
+  readonly completedToday: number;
+}
+
+/** Keeps, per order, the highest version recorded for a read on its way. */
+function recordNewer(read: StopsRead, orderId: string, version: number): void {
+  const newer = read.newerWhileInFlight.get(orderId);
+  if (newer === undefined || newer < version) {
+    read.newerWhileInFlight.set(orderId, version);
+  }
+}
+
 export interface DriverStopsControllerOptions {
   readonly baseUrl: string;
   readonly session: DriverSession;
@@ -117,6 +175,23 @@ export class DriverStopsController {
   > | null = null;
   private refreshTimer: ReturnType<typeof setTimeout> | null = null;
   private disposed = false;
+  /** Every stops read on its way (full and confirmation reads). */
+  private readonly readsInFlight = new Set<StopsRead>();
+  /** Stops reads sent so far, full and confirmation reads alike. */
+  private readsSent = 0;
+  /**
+   * DRV-STALE-STOP-READ-2026-10-14, Q6d "Corregir en este PR (Recommended)":
+   * the read whose `completedToday` is shown and saved. A read sent before it
+   * leaves that count as it is; null until a read is taken (the saved
+   * snapshot shown on opening is not a read).
+   */
+  private shownCompletedToday: CompletedTodayRead | null = null;
+  /**
+   * Answers are taken one at a time, in the order they arrive: each one is
+   * compared with, and merged into, what the previous one left, and the
+   * snapshot and the state are written in that same order.
+   */
+  private acceptance: Promise<void> = Promise.resolve();
 
   public constructor(private readonly options: DriverStopsControllerOptions) {
     this.now = options.now ?? (() => new Date());
@@ -152,10 +227,12 @@ export class DriverStopsController {
    * (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11): without protected details, so
    * it never depends on the key service, and merged into the saved snapshot
    * without wiping the details it holds; a stop left without details gets a
-   * full read. A disposed controller (logout) or an aborted pass never
-   * answers with an empty list: it throws "cancelled", so no queued action is
-   * ever taken for missing. Before the controller started it throws
-   * "recoverable", so the action is retried.
+   * full read. Like a full read, it never takes a stop back to a version
+   * older than one accepted while it was on its way (withoutStaleStops); the
+   * scheduler still gets the answer as REST gave it. A disposed controller
+   * (logout) or an aborted pass never answers with an empty list: it throws
+   * "cancelled", so no queued action is ever taken for missing. Before the
+   * controller started it throws "recoverable", so the action is retried.
    */
   public async refreshForSync(signal?: AbortSignal): Promise<DriverStopList> {
     if (this.disposed || signal?.aborted) {
@@ -164,21 +241,28 @@ export class DriverStopsController {
     if (!this.partition) {
       throw new DriverStopsApiError("recoverable");
     }
-    const list = await this.options.api.listStops(signal, { details: false });
-    if (this.disposed || signal?.aborted) {
-      throw new DriverStopsApiError("cancelled");
+    const read = this.beginRead();
+    try {
+      const list = await this.options.api.listStops(signal, { details: false });
+      if (this.disposed || signal?.aborted) {
+        throw new DriverStopsApiError("cancelled");
+      }
+      this.reportRejected(list);
+      const merged = await this.acceptRead(
+        read,
+        list,
+        () => this.disposed || signal?.aborted === true,
+      );
+      if (merged === null) {
+        throw new DriverStopsApiError("cancelled");
+      }
+      if (merged.missingDetails) this.scheduleRefresh();
+      // The scheduler confirms with what REST answered (DRV-002), also when
+      // the screen kept a newer version of a stop.
+      return list;
+    } finally {
+      this.readsInFlight.delete(read);
     }
-    this.reportRejected(list);
-    const merged = mergeConfirmedStops(
-      await this.knownStops(list.stops),
-      list.stops,
-    );
-    if (this.disposed || signal?.aborted) {
-      throw new DriverStopsApiError("cancelled");
-    }
-    await this.acceptAuthoritativeStops(merged.stops, list.completedToday);
-    if (merged.missingDetails) this.scheduleRefresh();
-    return list;
   }
 
   public async revokeAccess(
@@ -242,6 +326,7 @@ export class DriverStopsController {
       refreshing: cause !== "initial",
     });
 
+    const read = this.beginRead();
     try {
       const list = await this.options.api.listStops(request.signal);
       if (this.disposed || request.signal.aborted) {
@@ -250,14 +335,14 @@ export class DriverStopsController {
       this.reportRejected(list);
       // A full read never schedules another one, even when some details are
       // still unavailable; the next confirmation or signal tries again.
-      const merged = mergeConfirmedStops(
-        await this.knownStops(list.stops),
-        list.stops,
+      const merged = await this.acceptRead(
+        read,
+        list,
+        () => this.disposed || request.signal.aborted,
       );
-      if (this.disposed || request.signal.aborted) {
+      if (merged === null) {
         return [];
       }
-      await this.acceptAuthoritativeStops(merged.stops, list.completedToday);
       await this.ensureRealtime();
       return merged.stops;
     } catch (error) {
@@ -271,10 +356,85 @@ export class DriverStopsController {
       }
       return [];
     } finally {
+      this.readsInFlight.delete(read);
       if (this.abortController === request) {
         this.abortController = null;
       }
     }
+  }
+
+  private beginRead(): StopsRead {
+    this.readsSent += 1;
+    const read: StopsRead = {
+      sentOrder: this.readsSent,
+      newerWhileInFlight: new Map(),
+    };
+    this.readsInFlight.add(read);
+    return read;
+  }
+
+  /**
+   * Takes one answer after the ones that arrived before it (see
+   * `acceptance`): drops what is stale in it (withoutStaleStops), keeps the
+   * details the phone holds (mergeConfirmedStops), saves the snapshot, shows
+   * the stops and then tells every other read still on its way which versions
+   * were accepted and which held stops were removed. Today's count is taken
+   * unless the read was sent before the one whose count is shown (Q6d). Resolves
+   * null, without taking anything, when the read was cancelled meanwhile.
+   */
+  private acceptRead(
+    read: StopsRead,
+    list: DriverStopList,
+    cancelled: () => boolean,
+  ): Promise<ReturnType<typeof mergeConfirmedStops> | null> {
+    const accepted = this.acceptance.then(async () => {
+      if (cancelled()) return null;
+      const held = this.state.stops;
+      const current = withoutStaleStops(
+        held,
+        list.stops,
+        read.newerWhileInFlight,
+      );
+      const merged = mergeConfirmedStops(
+        await this.knownStops(current.stops),
+        current.stops,
+      );
+      if (cancelled()) return null;
+      // Q6d: a read sent before the one whose count is shown keeps that count,
+      // lower or higher; a read sent after it always brings its own.
+      const shown = this.shownCompletedToday;
+      const completedToday =
+        shown !== null && read.sentOrder < shown.sentOrder
+          ? shown
+          : { sentOrder: read.sentOrder, completedToday: list.completedToday };
+      await this.acceptAuthoritativeStops(merged.stops, completedToday);
+      // Q6c: a held stop this read no longer brings counts as removed only when
+      // this read left after the app accepted it (no entry of its own for it).
+      // A removal can keep the order's version (D8 closes the assignment after
+      // a reschedule) and a new assignment bumps it, so the other reads on
+      // their way record it at the held version + 1.
+      const kept = new Set(current.stops.map((stop) => stop.order_id));
+      const removed = held.filter(
+        (stop) =>
+          !kept.has(stop.order_id) &&
+          !read.newerWhileInFlight.has(stop.order_id),
+      );
+      for (const other of this.readsInFlight) {
+        if (other === read) continue;
+        for (const stop of current.taken) {
+          recordNewer(other, stop.order_id, stop.aggregate_version);
+        }
+        for (const stop of removed) {
+          recordNewer(other, stop.order_id, stop.aggregate_version + 1);
+        }
+      }
+      return merged;
+    });
+    this.acceptance = accepted.then(
+      () => undefined,
+      () => undefined,
+    );
+    return accepted;
   }
 
   private async handleApiError(error: DriverStopsApiError): Promise<void> {
@@ -377,7 +537,7 @@ export class DriverStopsController {
 
   private async acceptAuthoritativeStops(
     stops: readonly DriverStop[],
-    completedToday: number,
+    count: CompletedTodayRead,
   ): Promise<void> {
     if (!this.partition || this.disposed) return;
     const synchronizedAt = this.now().toISOString();
@@ -385,20 +545,21 @@ export class DriverStopsController {
       schemaVersion: DriverStopsSchemaVersion,
       synchronizedAt,
       stops,
-      completedToday,
+      completedToday: count.completedToday,
     });
     await this.options.cache.replaceSnapshot(this.partition, snapshot);
     this.options.telemetry.loadCompleted(
       "rest",
       driverStopCountBucket(stops.length),
     );
+    this.shownCompletedToday = count;
     this.setState({
       phase: stops.length === 0 ? "empty" : "ready",
       stops,
       synchronizedAt,
       realtime: "updated",
       refreshing: false,
-      completedToday,
+      completedToday: count.completedToday,
     });
   }
 
