@@ -33,6 +33,9 @@ public static class E002NotificationStateReader
         // NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03: replaces only the recover_stale_notifications_outbox body.
         "20261003000100_FailStaleWhatsAppNotificationLeases",
         RealtimeDispatcherRoleMigrationId,
+        // OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13: replaces only the emit_notification_status_changed and
+        // expand_order_created_notifications bodies.
+        "20261013000200_CarryOutboxTraceContext",
     ];
 
     public static async Task<E002NotificationState> ReadAsync(

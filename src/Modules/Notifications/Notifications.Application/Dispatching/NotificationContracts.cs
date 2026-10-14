@@ -83,7 +83,8 @@ public sealed record ClaimedNotificationOutboxMessage(
     Guid LeaseToken,
     DateTimeOffset LeaseExpiresAt,
     DateTimeOffset CreatedAt,
-    DateTimeOffset AvailableAt);
+    DateTimeOffset AvailableAt,
+    string? TraceParent = null);
 
 public sealed record ParsedOrderCreated(
     Guid SourceEventId,

@@ -482,7 +482,12 @@ public sealed class AddOperatorOwnerOutboxExecutor : Migration
                    ORDER BY table_schema, table_name, column_name)
           INTO actual
           FROM information_schema.columns
-          WHERE (table_schema, table_name) IN (('platform','outbox_events'),('platform','audit_logs'));
+          WHERE (table_schema, table_name) IN (('platform','outbox_events'),('platform','audit_logs'))
+            -- OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13: AI-06 declares the nullable trace_parent column on fresh
+            -- installations; the Dispatch step 20261013000100_AddOutboxTraceContext, which runs after this one,
+            -- adds it elsewhere and verifies its exact shape and check.
+            AND NOT (table_name = 'outbox_events' AND column_name = 'trace_parent'
+                     AND data_type = 'text' AND is_nullable = 'YES');
           IF actual IS DISTINCT FROM ARRAY[
             'platform.audit_logs.action:text:NO',
             'platform.audit_logs.actor_id:uuid:YES',

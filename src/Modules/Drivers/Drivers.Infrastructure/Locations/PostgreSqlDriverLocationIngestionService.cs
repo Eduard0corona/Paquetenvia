@@ -16,6 +16,7 @@ using Npgsql;
 using NpgsqlTypes;
 using Paqueteria.Application;
 using Paqueteria.Application.Tenancy;
+using Paqueteria.Infrastructure.Database.Outbox;
 using Paqueteria.Infrastructure.Tenancy;
 
 namespace Drivers.Infrastructure.Locations;
@@ -436,10 +437,10 @@ public sealed class PostgreSqlDriverLocationIngestionService(
             """
             INSERT INTO platform.location_outbox_events
               (id,owner_org_id,driver_position_id,topic,payload,status,attempts,available_at,
-               locked_at,locked_by,lease_token,lease_expires_at,last_error,created_at,processed_at)
+               locked_at,locked_by,lease_token,lease_expires_at,last_error,created_at,processed_at,trace_parent)
             VALUES
               (@id,@owner_org_id,@driver_position_id,@topic,@payload::jsonb,'PENDING',0,@available_at,
-               NULL,NULL,NULL,NULL,NULL,@created_at,NULL);
+               NULL,NULL,NULL,NULL,NULL,@created_at,NULL,@trace_parent);
             """;
         await using var command = new NpgsqlCommand(sql, connection, transaction);
         AddUuid(command, "id", Guid.NewGuid());
@@ -452,6 +453,7 @@ public sealed class PostgreSqlDriverLocationIngestionService(
             CreatePayload(driver.Id, pending));
         command.Parameters.AddWithValue("available_at", NpgsqlDbType.TimestampTz, receivedAt);
         command.Parameters.AddWithValue("created_at", NpgsqlDbType.TimestampTz, receivedAt);
+        command.Parameters.Add(OutboxTraceContextColumn.Parameter());
         await command.ExecuteNonQueryAsync(cancellationToken);
     }
 

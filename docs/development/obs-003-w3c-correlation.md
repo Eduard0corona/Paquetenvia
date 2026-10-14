@@ -119,9 +119,9 @@ webhooks included. These rows do not, on purpose or for now:
 
 - **Worker writers.** `ProofValidationProcessor` (`custody.proof_upload_session.ready` and `.rejected`) and
   `PostgreSqlAssignmentLifecycleReactor` (the assignment lifecycle audit) write `request_id = NULL`. They run in a
-  Worker cycle, not in a request, and the cycle's trace id is not the trace of the request that produced the
-  message. Linking a message to its producer's trace is PR 7's decision (column, payload or none), so they stay
-  `NULL` until then.
+  Worker cycle, not in a request. PR 7 (`obs-003-outbox-trace-context.md`) runs each outbox message in the trace of
+  the request or job that wrote it, for its log lines; these audit rows still write `NULL`, and writing that trace id
+  into them is a separate, open question.
 - **`PENDING_MEMBERSHIP_ACCEPTED` (REG-002).** `security.apply_pending_memberships(text,bytea[],integer[])` writes it
   during the AuthCenter sign-in callback, which is an API request, with `request_id = NULL`: the SECURITY DEFINER
   function takes no request id. Passing one changes the function's signature (a migration, AI-06 and AI-18), so it
@@ -165,8 +165,10 @@ AI-05 (`Problem.traceId` and the `OBS-003-W3C-CORRELATION` contract delta) says 
     the alerts and the workbook should name the one it uses.
   - Keep `Microsoft.AspNetCore.SignalR.Server` unobserved unless hub-message trace context is ignored too.
   - Any request-path sink must be listed in `ReviewedRequestPathSinks`.
-- **PR 7.** Decide on trace context through the outbox. Until then every cycle and message has its own trace, and
-  correlation goes through the outbox id (already the SignalR `event_id`) and the aggregate.
+- **PR 7.** Done in `obs-003-outbox-trace-context.md` (OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13, "Columna nueva"):
+  every outbox row keeps its producer's W3C context in `trace_parent`, and each claimed message runs in a child
+  activity of it, so its log lines carry the producer's trace id. Every cycle still has its own trace; the outbox id
+  (the SignalR `event_id`) and the aggregate still correlate too.
 
 ## Tests
 

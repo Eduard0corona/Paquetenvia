@@ -142,8 +142,9 @@ Why this one:
   - a hosting request (`Microsoft.AspNetCore.Hosting.HttpRequestIn`, server kind);
   - an ADR-034 scheduled job cycle (`Paqueteria.JobCycle`).
 
-  Outbox dispatch cycles (`Paqueteria.OutboxDispatchCycle`) are dropped by this filter (Q-PR6-1, PR 7 decides their
-  traces). So are polls (`Paqueteria.PollCycle`, now used by proof validation instead of `StartJobCycle`) and the
+  Outbox dispatch cycles (`Paqueteria.OutboxDispatchCycle`) are dropped by this filter (Q-PR6-1). PR 7
+  (`obs-003-outbox-trace-context.md`) runs each claimed message in a child of the trace that wrote it, so a message is
+  exported only when that trace was sampled; the cycles themselves stay dropped. So are polls (`Paqueteria.PollCycle`, now used by proof validation instead of `StartJobCycle`) and the
   fallback request activity. A parentless HTTP or database span is dropped too.
 - The exporter's own `ApplicationInsightsSampler` would decide from a hash of the same trace id but keep the dropped
   90 % as "record only". That only helps standard metrics, which are off.
@@ -239,8 +240,9 @@ No metric tag carries the organization pseudonym, the actor role type, a subject
   - the request span, when sampled, as `paqueteria.organization.pseudonym` and `paqueteria.actor.role_kind`.
 
   Requests without a selected organization carry neither: public tracking, sign-in and the probes. Neither do the
-  Worker's lines, because its cycles span many organizations; PR 7 decides per-message traces. The Worker still
-  validates the key at start.
+  Worker's lines, because its cycles span many organizations. PR 7 gives each outbox message the trace of the request
+  or job that wrote it, not its organization pseudonym (an open question in `obs-003-outbox-trace-context.md`). The
+  Worker still validates the key at start.
 - **Where it never goes:** a metric tag, an OBS-002 event or `TelemetryDimensions.Allowed`, an alert, a
   workbook.
   - The log enrichment skips every event an alert or the workbook reads or may read

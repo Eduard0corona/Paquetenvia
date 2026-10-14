@@ -701,6 +701,11 @@ CREATE TABLE platform.outbox_events (
   last_error text,
   created_at timestamptz NOT NULL,
   processed_at timestamptz,
+  -- OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13: the W3C context of the trace that wrote the row, supplied by the producer
+  -- (00-{trace id}-{span id of the producing activity}-{00|01}); NULL for rows written outside any trace. Never trace
+  -- state, baggage or request data, never part of the payload. Claim functions return it with the row.
+  trace_parent text CONSTRAINT outbox_events_trace_parent_check
+    CHECK (trace_parent ~ '^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$' AND substr(trace_parent, 4, 32) <> repeat('0', 32) AND substr(trace_parent, 37, 16) <> repeat('0', 16)),
   CHECK (
     (status='PROCESSING' AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL AND locked_at IS NOT NULL AND locked_by IS NOT NULL)
     OR
@@ -730,6 +735,9 @@ CREATE TABLE platform.location_outbox_events (
   last_error text,
   created_at timestamptz NOT NULL,
   processed_at timestamptz,
+  -- OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13: same contract as platform.outbox_events.trace_parent.
+  trace_parent text CONSTRAINT location_outbox_events_trace_parent_check
+    CHECK (trace_parent ~ '^00-[0-9a-f]{32}-[0-9a-f]{16}-0[01]$' AND substr(trace_parent, 4, 32) <> repeat('0', 32) AND substr(trace_parent, 37, 16) <> repeat('0', 16)),
   CHECK (
     (status='PROCESSING' AND lease_token IS NOT NULL AND lease_expires_at IS NOT NULL AND locked_at IS NOT NULL AND locked_by IS NOT NULL)
     OR
@@ -898,7 +906,9 @@ BEGIN
   RETURN v_result;
 END $$;
 
--- Lease-protected outbox lifecycle. Ownership changes in AI-18.
+-- Lease-protected outbox lifecycle. Ownership changes in AI-18. Every claim returns the full row (RETURNING o.*), so the
+-- consumer receives trace_parent with it (OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13); settle, requeue and purge never
+-- read or change it.
 CREATE OR REPLACE FUNCTION security.claim_outbox(
   p_worker_id text,
   p_batch_size integer DEFAULT 50,
@@ -1239,12 +1249,21 @@ CREATE POLICY report_exports_tenant ON reporting.report_exports USING (security.
 -- operator of an order (operator_org_id <> owner_org_id) assigns it, the owner-tagged audit and outbox rows are
 -- written only by security.append_operator_order_audit and security.append_operator_order_outbox, owned by
 -- paqueteria_operator_outbox_executor (AI-18) and installed by the Dispatch lane after this baseline.
+-- OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13: the Dispatch lane step 20261013000100_AddOutboxTraceContext adds both
+-- trace_parent columns and checks where this baseline predates them, grants that executor INSERT (trace_parent) on
+-- platform.outbox_events, and makes security.append_operator_order_outbox store the caller's transaction-local
+-- app.trace_parent (set with set_config(..., true), like app.current_org_ids). The Notifications lane step
+-- 20261013000200_CarryOutboxTraceContext makes security.expand_order_created_notifications and
+-- security.emit_notification_status_changed copy the trace_parent of the event the new rows derive from.
 CREATE POLICY audit_logs_tenant ON platform.audit_logs USING (security.app_allowed_org(org_id)) WITH CHECK (security.app_allowed_org(org_id));
 CREATE POLICY outbox_tenant ON platform.outbox_events USING (security.app_allowed_org(owner_org_id)) WITH CHECK (security.app_allowed_org(owner_org_id));
 CREATE POLICY location_outbox_tenant ON platform.location_outbox_events USING (security.app_allowed_org(owner_org_id)) WITH CHECK (security.app_allowed_org(owner_org_id));
 CREATE POLICY idempotency_tenant ON platform.idempotency_keys USING (security.app_allowed_org(owner_org_id)) WITH CHECK (security.app_allowed_org(owner_org_id));
 
 -- Immutable content defense -----------------------------------------------------
+-- OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13: both content guards also compare trace_parent, so the stored producing
+-- trace context is as immutable as the content (the Dispatch lane step 20261013000100_AddOutboxTraceContext installs
+-- the same bodies where this baseline predates them; no lifecycle function sets the column).
 CREATE OR REPLACE FUNCTION platform.reject_runtime_mutation() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
@@ -1266,9 +1285,9 @@ CREATE TRIGGER audit_logs_append_only BEFORE UPDATE OR DELETE ON platform.audit_
 CREATE OR REPLACE FUNCTION platform.protect_outbox_content() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
-  IF (NEW.owner_org_id,NEW.tenant_context,NEW.topic,NEW.aggregate_type,NEW.aggregate_id,NEW.aggregate_version,NEW.payload,NEW.priority,NEW.created_at)
+  IF (NEW.owner_org_id,NEW.tenant_context,NEW.topic,NEW.aggregate_type,NEW.aggregate_id,NEW.aggregate_version,NEW.payload,NEW.priority,NEW.created_at,NEW.trace_parent)
      IS DISTINCT FROM
-     (OLD.owner_org_id,OLD.tenant_context,OLD.topic,OLD.aggregate_type,OLD.aggregate_id,OLD.aggregate_version,OLD.payload,OLD.priority,OLD.created_at) THEN
+     (OLD.owner_org_id,OLD.tenant_context,OLD.topic,OLD.aggregate_type,OLD.aggregate_id,OLD.aggregate_version,OLD.payload,OLD.priority,OLD.created_at,OLD.trace_parent) THEN
     RAISE EXCEPTION 'outbox event content is immutable' USING ERRCODE='42501';
   END IF;
   RETURN NEW;
@@ -1279,9 +1298,9 @@ CREATE TRIGGER outbox_content_immutable BEFORE UPDATE ON platform.outbox_events
 CREATE OR REPLACE FUNCTION platform.protect_location_outbox_content() RETURNS trigger
 LANGUAGE plpgsql AS $$
 BEGIN
-  IF (NEW.owner_org_id,NEW.driver_position_id,NEW.topic,NEW.payload,NEW.created_at)
+  IF (NEW.owner_org_id,NEW.driver_position_id,NEW.topic,NEW.payload,NEW.created_at,NEW.trace_parent)
      IS DISTINCT FROM
-     (OLD.owner_org_id,OLD.driver_position_id,OLD.topic,OLD.payload,OLD.created_at) THEN
+     (OLD.owner_org_id,OLD.driver_position_id,OLD.topic,OLD.payload,OLD.created_at,OLD.trace_parent) THEN
     RAISE EXCEPTION 'location outbox event content is immutable' USING ERRCODE='42501';
   END IF;
   RETURN NEW;

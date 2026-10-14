@@ -53,6 +53,7 @@ internal sealed class PlatformOutboxDbContext(DbContextOptions<PlatformOutboxDbC
         entity.Property(item => item.LastError).HasColumnName("last_error").ValueGeneratedNever();
         entity.Property(item => item.CreatedAt).HasColumnName("created_at").ValueGeneratedNever();
         entity.Property(item => item.ProcessedAt).HasColumnName("processed_at").ValueGeneratedNever();
+        entity.Property(item => item.TraceParent).HasColumnName("trace_parent").ValueGeneratedNever();
     }
 
     private static void ConfigureLocationOutbox(Microsoft.EntityFrameworkCore.Metadata.Builders.EntityTypeBuilder<LocationOutboxEventRecord> entity)
@@ -74,6 +75,7 @@ internal sealed class PlatformOutboxDbContext(DbContextOptions<PlatformOutboxDbC
         entity.Property(item => item.LastError).HasColumnName("last_error").ValueGeneratedNever();
         entity.Property(item => item.CreatedAt).HasColumnName("created_at").ValueGeneratedNever();
         entity.Property(item => item.ProcessedAt).HasColumnName("processed_at").ValueGeneratedNever();
+        entity.Property(item => item.TraceParent).HasColumnName("trace_parent").ValueGeneratedNever();
     }
 
     private void RejectLifecycleMutation()
