@@ -1,5 +1,17 @@
 # Changelog
 
+## Esperas encadenadas del Worker y del tiempo real aceptadas (SCL-007-WORKER-CHAINED-WAIT-2026-10-14) — 2026-10-14
+
+- Respuesta literal del project owner (2026-10-14), registrada en `decision-log.md` con su contexto y las opciones no
+  elegidas: "Dejarlo así (Recommended)" ("Se acepta hasta unos 2 s en el peor caso para esos avisos tras un rato sin
+  trabajo. Con trabajo no hay espera. La pantalla de quien asigna se actualiza al momento con su propia respuesta; el
+  retraso es para las otras pantallas y la app del repartidor.").
+- Los avisos en pantalla de cambio de asignación y de estado de notificación pasan por la cola del Worker y luego por la
+  de tiempo real. Tras un rato sin trabajo, las dos esperas pueden sumar unos 2 s en el peor caso (antes unos 0.5 s). El
+  owner lo acepta; las dos colas del Worker conservan su espera máxima de 1 s.
+- Sin cambios de código, configuración, SQL, permisos, migraciones, Bicep ni paquetes. AI-08 SCL-007 registra la
+  aceptación junto al criterio de la espera del Worker. Nota: `docs/development/scl-007-adaptive-outbox-wait.md`.
+
 ## Alerta de conexiones de PostgreSQL en el piloto (SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14) — 2026-10-14
 
 - Respuestas literales del project owner (2026-10-14), registradas en `decision-log.md` con su contexto y las opciones
