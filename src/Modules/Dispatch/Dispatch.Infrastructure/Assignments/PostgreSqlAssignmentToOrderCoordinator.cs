@@ -581,10 +581,17 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         }
     }
 
+    /// <summary>
+    /// A missing key and a JSON <c>null</c> are the same thing: no measurement, which the capacity policy
+    /// does not check unless the vehicle requires dimensions. Order creation stores a package without
+    /// measurements as <c>{"length_mm":null,"width_mm":null,"height_mm":null}</c>. Any other value must be a
+    /// positive <see cref="int"/>.
+    /// </summary>
     private static bool TryReadDimension(JsonElement element, string name, out int? value)
     {
         value = null;
-        if (!element.TryGetProperty(name, out var property))
+        if (!element.TryGetProperty(name, out var property) ||
+            property.ValueKind == JsonValueKind.Null)
         {
             return true;
         }
