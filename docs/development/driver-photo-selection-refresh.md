@@ -185,8 +185,8 @@ DRV-002.
     asignada de nuevo) se toma;
   - una parada recién asignada que una lectura vieja quitó vuelve con la lectura de confirmación que ya iba en camino,
     como hoy.
-  - Las dos últimas fallan con las opciones no elegidas: anotar cualquier parada que falte, o descartar también la
-    versión que la app tenía + 1.
+  - La de la parada recién asignada falla con la opción no elegida de Q6c (anotar cualquier parada que falte); la del
+    cierre de D8 falla si también se descarta la versión que la app tenía + 1.
 - Playwright no cubre la parada quitada: el backend sintético de `DriverOfflineOperationsPwa` sirve una sola orden y no
   puede quitarla de la lista. Quitarla durante la sincronización llevaría además la acción en cola al camino de parada
   faltante de DRV-002, que la prueba tendría que modelar. Lo cubren las pruebas de `DriverStopsController` de arriba.
