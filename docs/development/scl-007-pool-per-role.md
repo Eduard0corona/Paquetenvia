@@ -79,10 +79,19 @@ No `NpgsqlDataSource` is registered without a key, so a consumer that does not n
 - each size is between 1 and 24;
 - the sum of the three is at most 24 (`DatabasePoolOptions.RuntimeConnectionBudget`).
 
-Both processes bind all three values, so raising one value in one process alone also refuses that process's start.
-A value that is not a number refuses the start too. The defaults live in code and in both `appsettings.json` files.
-The Bicep sets none, so the pilot runs with the defaults. The pilot secrets keep `Maximum Pool Size=5`; the runtime
-replaces it.
+Each process validates the three values of its own configuration, and neither process can see the other's. The API
+opens only the `paqueteria_app` and `paqueteria_realtime` pools and the Worker only the `paqueteria_worker` pool, so
+the check bounds the total of both processes only when the API and the Worker carry the same three values. With the
+same values in both, a sum above 24 refuses both starts. With different values it may not: a Worker given 1, 1 and
+22 and an API left at 10, 4 and 10 both start, and together may hold 22 + 10 + 4 = 36 connections, above the budget
+and above the 35 user connections. The sum error therefore says that the three values must be identical in the API
+and the Worker.
+
+A value that is not a number refuses the start too. The defaults live in code and in both `appsettings.json` files,
+and `Scl007PoolBudgetConsistencyArchitectureTests` keeps the two `DatabasePools` sections identical and equal to the
+code defaults. The Bicep sets none, so the pilot runs with the defaults. A change of sizes sets all three
+`DatabasePools__*` variables, with identical values, on both container apps (see "Rollback"). The pilot secrets keep
+`Maximum Pool Size=5`; the runtime replaces it.
 
 Revision changes: Container Apps (single revision mode) starts the new replica before it removes the old one. During
 that overlap both revisions may hold pools. They start empty (`Minimum Pool Size=0`) and the old one drains, so
@@ -184,10 +193,17 @@ connections are not runtime pools and are not counted. The peaks are written to 
   named `*DbContextFactory.cs` (plus `PlatformEvolutionDbContext.cs`, listed by name) and only for the connection string
   it gives EF Core. Fixtures prove each bypass form is caught. Every runtime EF Core context uses a shared role pool;
   nothing registers or resolves an unkeyed pool; every injected pool names its role.
+- Architecture (`Scl007PoolBudgetConsistencyArchitectureTests`): the `DatabasePools` sections of
+  `src/Paqueteria.Api/appsettings.json` and `src/Paqueteria.Worker/appsettings.json` are identical and equal to the
+  code defaults (every settable size of `DatabasePoolOptions`, read by reflection), and no other `appsettings*.json`
+  profile of either host sets `DatabasePools`. The comparison is on parsed values: a missing, extra, repeated,
+  differently cased or non-numeric key, a flat `DatabasePools:` key and a section that is not an object all fail it.
+  Its cases include the asymmetric override of the review finding (Worker 1, 1 and 22 against API 10, 4 and 10), and
+  the profile check is proven on a nested, a differently cased and a flat `DatabasePools` key.
 - Integration (`Scl007PoolPerRoleCompositionTests`): the real API holds exactly the `paqueteria_app` and
   `paqueteria_realtime` pools, the real Worker exactly the `paqueteria_worker` pool, with no unkeyed data source; every
-  EF Core context of each host uses that one pool; the sizes replace the pilot secrets' `Maximum Pool Size=5`; a size
-  above the budget refuses either start.
+  EF Core context of each host uses that one pool; the sizes replace the pilot secrets' `Maximum Pool Size=5`; a sum
+  above the budget in a process's own configuration refuses that process's start, in either process.
 - PostgreSQL (`Scl007SharedPoolSessionStateContractTests`) and the TEN-002 regression on the shared-pool builder, as
   above.
 
@@ -213,9 +229,19 @@ No action in this PR; each is written here so the pilot can watch it.
   `SET LOCAL ROLE`, but other drift of its attributes is not reported by readiness.
 - Each process now has less pool capacity than before: the modules of a process compete for one pool of 10 (or 4)
   instead of holding several pools of 5. Pool waits under load are the signal to revisit the sizes within the 24.
+- A manual override that differs between the two container apps is not detectable by either process. Each validates
+  only its own `DatabasePools`, so, for example, `DatabasePools__*` set to 1, 1 and 22 on the Worker alone starts both
+  processes with up to 36 connections (see "Connection budget"). The architecture test covers only the committed
+  `appsettings*.json` files, and the operations rule (all three variables, identical, on both apps) is a procedure, not
+  a check. The backstops are PostgreSQL `max_connections`, which refuses connections beyond the 35 user connections
+  (`too many connections`), and the Azure Monitor alert on PostgreSQL connections, still a PENDING owner decision in
+  AI-08 SCL-007 (see "Pending").
 
 ## Rollback
 
-Revert the pull request. There is no schema, role, grant, migration, secret or Bicep change. To shrink the pools
-without a release, set `DatabasePools__ApplicationMaximumPoolSize`, `DatabasePools__RealtimeMaximumPoolSize` or
-`DatabasePools__WorkerMaximumPoolSize` to smaller values; the start validation refuses anything above the budget.
+Revert the pull request. There is no schema, role, grant, migration, secret or Bicep change. To change the pool sizes
+without a release, set all three variables, `DatabasePools__ApplicationMaximumPoolSize`,
+`DatabasePools__RealtimeMaximumPoolSize` and `DatabasePools__WorkerMaximumPoolSize`, with identical values on both
+container apps (`ca-pv-pilot-api` and `ca-pv-pilot-worker`), never on one alone and never only some of them. Today the
+Bicep sets none. Each process refuses a sum above 24 in its own configuration, but only identical values on both apps
+keep the total of both processes within the budget.
