@@ -573,8 +573,8 @@ map it as `PublicTracking:LinkKeys:2`, set `PublicTracking__CurrentLinkKeyVersio
 mapped while its links should still be shown to operators; links already sent keep working either way,
 because the public lookup only compares hashes. Rotation is a template change reviewed like any other.
 
-`paquetenvia-telemetry-pseudonym-key-1` keys the organization pseudonym (OBS-003, HMAC-SHA256) that the API's log
-lines, and its request spans once the export is on, carry instead of the organization id. The API and the Worker
+`paquetenvia-telemetry-pseudonym-key-1` keys the organization pseudonym (OBS-003, HMAC-SHA256) that the API's and the
+Worker's log lines, and the API's request spans once the export is on, carry instead of the organization id. The API and the Worker
 refuse to start without it. Write it once. To rotate, store `paquetenvia-telemetry-pseudonym-key-2`, then one reviewed
 PR maps it to `TelemetryPseudonym:Keys:2` in `apps.bicep` (API and Worker), sets
 `TelemetryPseudonym__CurrentKeyVersion='2'` and drops version 1; exactly one key is configured. The same PR sets
@@ -891,6 +891,9 @@ Details, allowlist, pseudonym and tests: `docs/development/obs-003-appinsights-e
   Whoever obtains it can send fake telemetry, not read it, and fake telemetry counts against the daily cap.
 - **Off until a reviewed PR:** `apps.bicep` passes `TelemetryExport__Enabled='false'`. Turning it on is a PR that
   changes that one literal to `'true'`; guard P21 refuses a parameter or any other value.
+- **When:** after one week of pilot (OBS-003-EXPORT-AFTER-PILOT-WEEK-2026-10-14, owner: "Tras una semana de piloto
+  (Recommended)"). Deploy without exporting, measure for one week how much of the 0.3 GB daily cap the logs use
+  (`_LogOperation` and the workspace usage), and then open the PR with that number.
 - **What goes out once on:** traces and metrics only (no logs; the logs stay in Log Analytics as in OBS-002).
   - 10 % of traces by trace id: API requests (not `/health/*`) and the ADR-034 scheduled job cycles (Q-PR6-1,
     "Solo tareas programadas (Recommended)"), with their outgoing HTTP calls. Never the outbox dispatch loops,
@@ -900,7 +903,9 @@ Details, allowlist, pseudonym and tests: `docs/development/obs-003-appinsights-e
   - Metrics: the application meters and the ASP.NET Core meters, with only the OBS-002 metric tag allowlist.
 - **Organization pseudonym:** `v1-<32 hex>`, HMAC of the organization id under `paquetenvia-telemetry-pseudonym-key-1`.
   It is on the API's log lines (`State.OrganizationPseudonym`, `State.ActorRoleKind`) whenever a request selected an
-  organization, also with the export off. It is never an alert, workbook or metric dimension.
+  organization, also with the export off, and on the Worker's lines of each outbox message and of each proof photo with
+  valid signed metadata, with the role kind `SYSTEM` (OBS-003-WORKER-PSEUDONYM-2026-10-14). It is never an alert,
+  workbook or metric dimension.
 - **Alerts:** none added.
 
 ### 10.2 PostgreSQL connections (SCL-007)

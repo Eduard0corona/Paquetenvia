@@ -5,6 +5,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Npgsql;
 using NpgsqlTypes;
+using Paqueteria.Infrastructure.Observability;
 using Paqueteria.IntegrationTests.Custody;
 using Paqueteria.IntegrationTests.Realtime;
 using Paqueteria.IntegrationTests.Security;
@@ -96,6 +97,8 @@ public sealed class Ops001DeliverySimulationFixture : IAsyncLifetime
         });
         builder.Logging.ClearProviders();
         builder.Configuration.AddInMemoryCollection(settings);
+        // OBS-003-WORKER-PSEUDONYM-2026-10-14: proof validation needs the organization pseudonymizer, as in the Worker.
+        builder.Services.AddTelemetryOrganizationPseudonym(builder.Configuration, builder.Environment);
         builder.Services.AddCustodyInfrastructure(
             builder.Configuration,
             builder.Environment);

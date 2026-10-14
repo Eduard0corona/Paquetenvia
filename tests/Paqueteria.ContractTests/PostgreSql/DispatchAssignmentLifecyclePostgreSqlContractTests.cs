@@ -518,7 +518,9 @@ public sealed partial class DispatchPostgreSqlContractTests
                   AND x.payload->>'assignment_status'=@status),
               (SELECT count(*) FROM platform.audit_logs a
                 WHERE a.org_id=@org AND a.entity_id=@assignment AND a.action='ASSIGNMENT_CLOSED'
-                  AND a.actor_id IS NULL AND a.payload_redacted->>'status'=@status)
+                  AND a.actor_id IS NULL AND a.payload_redacted->>'status'=@status
+                  -- OBS-003-WORKER-AUDIT-TRACE-2026-10-14: these reaction rows carry no stored trace context.
+                  AND a.request_id IS NULL)
             """);
         command.Parameters.AddWithValue("org", scenario.OrganizationId);
         command.Parameters.AddWithValue("assignment", assignmentId);

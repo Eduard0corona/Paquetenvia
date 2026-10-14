@@ -159,7 +159,9 @@ public sealed class Obs003OutboxTraceContextTests
         TraceCorrelation.ConfigureProcess();
         using var lines = new TraceJsonConsoleLines();
         var sendRequest = NotificationMessage(NotificationOutboxTopics.SendRequested, Sampled);
-        var unowned = NotificationMessage("synthetic.unrouted", Unsampled);
+        // OBS-003-WORKER-PSEUDONYM-2026-10-14: a message whose owner organization is unknown carries no organization.
+        var unowned = NotificationMessage("synthetic.unrouted", Unsampled, Guid.Empty);
+        var pseudonymizer = SyntheticPseudonymizer.Create();
         var store = new ScriptedNotificationsStore([sendRequest], [unowned]);
         var provider = new CapturingInAppProvider();
         var options = Options.Create(new NotificationsOptions
@@ -177,7 +179,7 @@ public sealed class Obs003OutboxTraceContextTests
             lanes,
             lines.Factory.CreateLogger<NotificationsOutboxProcessor>());
         using var dispatcher = new NotificationsOutboxDispatcher(
-            store, processor, options, lanes, TimeProvider.System, lines.Factory.CreateLogger<NotificationsOutboxDispatcher>());
+            store, processor, options, lanes, pseudonymizer, TimeProvider.System, lines.Factory.CreateLogger<NotificationsOutboxDispatcher>());
 
         await dispatcher.StartAsync(CancellationToken.None);
         await WaitUntilAsync(() => store.Settled.Count >= 2);
@@ -208,6 +210,22 @@ public sealed class Obs003OutboxTraceContextTests
         AssertNoTraceContext(rendered);
         AssertNoTraceContext(JsonSerializer.Serialize(request));
         AssertNoTraceMembers(typeof(SyntheticInAppRequest));
+
+        // OBS-003-WORKER-PSEUDONYM-2026-10-14: the message's line carries the pseudonym of its owner organization and
+        // the role kind SYSTEM; the message whose owner is unknown carries neither, and no line names an owner id.
+        var sent = completed.Single(line =>
+            line.GetProperty("State").GetProperty("Outcome").GetString() == NotificationDeliveryOutcome.Success).GetProperty("State");
+        Assert.Equal(
+            pseudonymizer.Pseudonymize(sendRequest.OwnerOrganizationId),
+            sent.GetProperty(TelemetryOrganizationContext.PseudonymLogProperty).GetString());
+        Assert.Equal("SYSTEM", sent.GetProperty(TelemetryOrganizationContext.RoleKindLogProperty).GetString());
+        var dead = completed.Single(line => line.GetProperty("State").GetProperty("Outcome").GetString() == "DEAD")
+            .GetProperty("State");
+        Assert.False(dead.TryGetProperty(TelemetryOrganizationContext.PseudonymLogProperty, out _));
+        Assert.False(dead.TryGetProperty(TelemetryOrganizationContext.RoleKindLogProperty, out _));
+        Assert.All(
+            Enumerable.Range(0, lines.Count).Select(index => lines.Parse(index).GetRawText()),
+            line => Assert.DoesNotContain(sendRequest.OwnerOrganizationId.ToString("D"), line, StringComparison.OrdinalIgnoreCase));
     }
 
     [Fact]
@@ -217,7 +235,9 @@ public sealed class Obs003OutboxTraceContextTests
         using var lines = new TraceJsonConsoleLines();
         var first = DispatchMessage(Sampled);
         var second = DispatchMessage(Unsampled);
-        var legacy = DispatchMessage(null);
+        // OBS-003-WORKER-PSEUDONYM-2026-10-14: a message whose owner organization is unknown carries no organization.
+        var legacy = DispatchMessage(null, Guid.Empty);
+        var pseudonymizer = SyntheticPseudonymizer.Create();
         var store = new ScriptedDispatchOutboxStore([first, second, legacy]);
         var options = Options.Create(new AssignmentLifecycleOptions
         {
@@ -235,18 +255,18 @@ public sealed class Obs003OutboxTraceContextTests
             lanes,
             lines.Factory.CreateLogger<AssignmentLifecycleProcessor>());
         using var dispatcher = new AssignmentLifecycleDispatcher(
-            store, processor, options, lanes, TimeProvider.System, lines.Factory.CreateLogger<AssignmentLifecycleDispatcher>());
+            store, processor, options, lanes, pseudonymizer, TimeProvider.System, lines.Factory.CreateLogger<AssignmentLifecycleDispatcher>());
 
         await dispatcher.StartAsync(CancellationToken.None);
         await WaitUntilAsync(() => store.Settled.Count >= 3);
         await dispatcher.StopAsync(CancellationToken.None);
 
-        var rejected = Enumerable.Range(0, lines.Count)
+        var rejectedLines = Enumerable.Range(0, lines.Count)
             .Select(lines.Parse)
             .Where(line => line.GetProperty("State").TryGetProperty("Outcome", out var outcome) &&
                            outcome.GetString() == "INVALID_PAYLOAD")
-            .Select(TraceIdOf)
             .ToArray();
+        var rejected = rejectedLines.Select(TraceIdOf).ToArray();
         Assert.Equal(3, rejected.Length);
         Assert.Contains(SampledTraceId, rejected);
         Assert.Contains(UnsampledTraceId, rejected);
@@ -256,6 +276,22 @@ public sealed class Obs003OutboxTraceContextTests
         var claimTrace = Assert.Single(store.ClaimTraceIds.Distinct(StringComparer.Ordinal));
         Assert.Equal(claimTrace, store.Settled[legacy.Id]);
         Assert.Contains(claimTrace, rejected);
+
+        // OBS-003-WORKER-PSEUDONYM-2026-10-14: each message's line carries the pseudonym of its own owner organization
+        // and the role kind SYSTEM; the message whose owner is unknown carries neither.
+        foreach (var (traceId, message) in new[] { (SampledTraceId, first), (UnsampledTraceId, second) })
+        {
+            var state = rejectedLines.Single(line => TraceIdOf(line) == traceId).GetProperty("State");
+            Assert.Equal(
+                pseudonymizer.Pseudonymize(message.OwnerOrganizationId),
+                state.GetProperty(TelemetryOrganizationContext.PseudonymLogProperty).GetString());
+            Assert.Equal("SYSTEM", state.GetProperty(TelemetryOrganizationContext.RoleKindLogProperty).GetString());
+            Assert.DoesNotContain(message.OwnerOrganizationId.ToString("D"), state.GetRawText(), StringComparison.OrdinalIgnoreCase);
+        }
+
+        var unknown = rejectedLines.Single(line => TraceIdOf(line) == claimTrace).GetProperty("State");
+        Assert.False(unknown.TryGetProperty(TelemetryOrganizationContext.PseudonymLogProperty, out _));
+        Assert.False(unknown.TryGetProperty(TelemetryOrganizationContext.RoleKindLogProperty, out _));
     }
 
     [Fact]
@@ -382,9 +418,9 @@ public sealed class Obs003OutboxTraceContextTests
         return listener;
     }
 
-    private static ClaimedNotificationOutboxMessage NotificationMessage(string topic, string traceParent)
+    private static ClaimedNotificationOutboxMessage NotificationMessage(string topic, string traceParent, Guid? owner = null)
     {
-        var organization = Guid.NewGuid();
+        var organization = owner ?? Guid.NewGuid();
         var notification = Guid.NewGuid();
         return new ClaimedNotificationOutboxMessage(
             Guid.NewGuid(),
@@ -403,10 +439,10 @@ public sealed class Obs003OutboxTraceContextTests
             traceParent);
     }
 
-    private static ClaimedDispatchOutboxMessage DispatchMessage(string? traceParent) =>
+    private static ClaimedDispatchOutboxMessage DispatchMessage(string? traceParent, Guid? owner = null) =>
         new(
             Guid.NewGuid(),
-            Guid.NewGuid(),
+            owner ?? Guid.NewGuid(),
             "synthetic.not-a-reaction",
             "Order",
             Guid.NewGuid(),

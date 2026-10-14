@@ -94,5 +94,32 @@ public sealed class Obs003ProblemTraceIdContractTests
         Assert.StartsWith("purely additive", delta.Scalar("delta"), StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// OBS-003-WORKER-AUDIT-TRACE-2026-10-14 (project owner: "Sí, en un PR aparte (Recommended)", then "Se quedan vacías
+    /// (Recommended)" for proof validation): the traceId text states the current rule for the audit rows the Worker
+    /// writes, and the contract delta records it as a description-only change.
+    /// </summary>
+    [Fact]
+    public void The_trace_id_text_states_the_worker_audit_rule_of_the_phase_4_follow_up()
+    {
+        var description = Contract.Mapping("components").Mapping("schemas").Mapping("Problem")
+            .Mapping("properties").Mapping(TraceCorrelation.ProblemMember).Scalar("description");
+        Assert.Contains(
+            "since OBS-003-WORKER-AUDIT-TRACE-2026-10-14 the assignment lifecycle row (ASSIGNMENT_CLOSED) carries the trace id of the request or job that wrote the outbox message it processes",
+            description,
+            StringComparison.Ordinal);
+        Assert.Contains("proof validation rows and the scheduled order auto-close rows keep request_id NULL", description, StringComparison.Ordinal);
+        Assert.DoesNotContain("until trace context crosses the outbox", description, StringComparison.Ordinal);
+
+        var delta = Contract.Mapping("x-pilot-contract-deltas").Sequence("entries").Children
+            .Cast<YamlMappingNode>()
+            .Single(entry => entry.Scalar("id") == "OBS-003-WORKER-AUDIT-TRACE");
+        Assert.Equal("DECIDED", delta.Scalar("status"));
+        Assert.StartsWith("OBS-003-WORKER-AUDIT-TRACE-2026-10-14", delta.Scalar("decision"), StringComparison.Ordinal);
+        Assert.StartsWith("\"Sí, en un PR aparte (Recommended)\"", delta.Scalar("literal"), StringComparison.Ordinal);
+        Assert.Contains("\"Se quedan vacías (Recommended)\"", delta.Scalar("literal"), StringComparison.Ordinal);
+        Assert.StartsWith("description only", delta.Scalar("delta"), StringComparison.Ordinal);
+    }
+
     private static string Value(YamlNode node) => ((YamlScalarNode)node).Value!;
 }

@@ -431,6 +431,7 @@ public sealed class Scl007WorkerAdaptiveWaitTests
                         processor,
                         _notifications,
                         Lanes,
+                        SyntheticPseudonymizer.Create(),
                         Clock,
                         NullLogger<NotificationsOutboxDispatcher>.Instance);
                 }
@@ -449,6 +450,7 @@ public sealed class Scl007WorkerAdaptiveWaitTests
                         processor,
                         _dispatch,
                         Lanes,
+                        SyntheticPseudonymizer.Create(),
                         Clock,
                         NullLogger<AssignmentLifecycleDispatcher>.Instance);
                 }

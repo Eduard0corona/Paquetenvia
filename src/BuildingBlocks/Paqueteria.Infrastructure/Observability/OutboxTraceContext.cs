@@ -76,6 +76,17 @@ public static class OutboxTraceContext
         value[54] is '0' or '1';
 
     /// <summary>
+    /// OBS-003-WORKER-AUDIT-TRACE-2026-10-14 (project owner: "Sí, en un PR aparte (Recommended)"): the trace id of a
+    /// stored value, in the exact form the API writes to <c>platform.audit_logs.request_id</c> (32 lowercase hex, as
+    /// <c>HttpTraceCorrelation</c> sets <c>HttpContext.TraceIdentifier</c>), or null when the value is absent or not of
+    /// the stored shape. A Worker audit row written for a claimed message stores this, so it carries the trace id of the
+    /// request or job that wrote the message; without a valid stored context it keeps NULL, never the trace of the
+    /// Worker's own dispatch cycle, which belongs to no request.
+    /// </summary>
+    public static string? TraceIdOf(string? value) =>
+        TryParse(value, out var context) ? context.TraceId.ToHexString() : null;
+
+    /// <summary>
     /// Parses a stored value into a local (never remote) parent context with its sampled flag. Anything that is not of
     /// the stored shape yields false, and the consumer then runs the message under its dispatch cycle.
     /// </summary>

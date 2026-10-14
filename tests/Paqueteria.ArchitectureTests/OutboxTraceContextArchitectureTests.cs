@@ -53,6 +53,43 @@ public sealed partial class OutboxTraceContextArchitectureTests
 
     private const string OutboxModel = "src/BuildingBlocks/Paqueteria.Infrastructure/Database/Outbox/PlatformOutboxDbContext.cs";
 
+    /// <summary>
+    /// OBS-003-WORKER-AUDIT-TRACE-2026-10-14: the one Worker audit writer that stores the trace id of the message it
+    /// processes in <c>platform.audit_logs.request_id</c>.
+    /// </summary>
+    private const string AuditTraceReader = "src/Modules/Dispatch/Dispatch.Infrastructure/Lifecycle/PostgreSqlAssignmentLifecycleReactor.cs";
+
+    /// <summary>
+    /// OBS-003-WORKER-AUDIT-TRACE-2026-10-14 (Q1 "Sí, en un PR aparte (Recommended)", QA "Se quedan vacías
+    /// (Recommended)"): the assignment lifecycle audit row takes the trace id of the claimed message, once, through
+    /// <c>OutboxTraceContext.TraceIdOf</c> (NULL without a valid stored context, never the cycle's trace or
+    /// <c>Activity.Current</c>); proof validation, which processes no outbox message, keeps request_id NULL, and no other
+    /// Worker audit writer reads the context.
+    /// </summary>
+    [Fact]
+    public void The_assignment_lifecycle_audit_row_takes_the_message_trace_id_and_proof_validation_keeps_null()
+    {
+        var reactor = CodeWithoutComments(TestRepository.GetPath(AuditTraceReader));
+        Assert.Equal(1, Regex.Count(reactor, Regex.Escape(".TraceParent")));
+        Assert.Equal(1, Regex.Count(reactor, Regex.Escape("OutboxTraceContext.TraceIdOf(message.TraceParent)")));
+        Assert.Equal(1, Regex.Count(reactor, Regex.Escape("new AuditEntry(")));
+        var entry = reactor[reactor.IndexOf("new AuditEntry(", StringComparison.Ordinal)..];
+        entry = entry[..entry.IndexOf("cancellationToken);", StringComparison.Ordinal)];
+        Assert.Contains("OutboxTraceContext.TraceIdOf(message.TraceParent)", entry, StringComparison.Ordinal);
+        Assert.DoesNotContain("Activity.Current", reactor, StringComparison.Ordinal);
+        Assert.DoesNotContain("CurrentTraceId", reactor, StringComparison.Ordinal);
+
+        // Proof validation: its one audit entry passes null as the request id (the seventh argument).
+        var proofs = CodeWithoutComments(TestRepository.GetPath(
+            "src/Modules/Custody/Custody.Infrastructure/Proofs/ProofValidationProcessor.cs"));
+        Assert.Equal(1, Regex.Count(proofs, Regex.Escape("new AuditEntry(")));
+        Assert.Matches(
+            @"new AuditEntry\(\s*Guid\.NewGuid\(\),\s*claim\.OwnerOrganizationId,\s*claim\.RequestedBy,\s*status == ""READY""[^;]*?""proof_upload_session"",\s*claim\.SessionId,\s*null,",
+            proofs);
+        Assert.DoesNotContain("TraceParent", proofs, StringComparison.Ordinal);
+        Assert.DoesNotContain("TraceIdOf", proofs, StringComparison.Ordinal);
+    }
+
     private static readonly IReadOnlyDictionary<string, int> Consumers = new Dictionary<string, int>(StringComparer.Ordinal)
     {
         ["src/Modules/Dispatch/Dispatch.Infrastructure/Lifecycle/AssignmentLifecycleProcessor.cs"] = 1,
@@ -178,15 +215,16 @@ public sealed partial class OutboxTraceContextArchitectureTests
     [Fact]
     public void The_trace_context_never_reaches_a_payload_a_signalr_message_or_a_notification()
     {
-        // Only the consumers (as the parent of the message's activity) and the EF column mapping read the member; the
-        // stores fill it from the claimed row through OutboxTraceContextColumn.Read.
+        // Only the consumers (as the parent of the message's activity), the EF column mapping and the assignment
+        // lifecycle audit writer (only its trace id, as request_id) read the member; the stores fill it from the claimed
+        // row through OutboxTraceContextColumn.Read.
         var readers = RuntimeSources()
             .Where(file => CodeWithoutComments(file).Contains(".TraceParent", StringComparison.Ordinal))
             .Select(Relative)
             .Order(StringComparer.Ordinal)
             .ToArray();
         Assert.Equal(
-            Consumers.Keys.Append(OutboxModel).Order(StringComparer.Ordinal),
+            Consumers.Keys.Append(OutboxModel).Append(AuditTraceReader).Order(StringComparer.Ordinal),
             readers);
 
         // No payload, envelope, hub, publisher, notification or messaging code names it.
