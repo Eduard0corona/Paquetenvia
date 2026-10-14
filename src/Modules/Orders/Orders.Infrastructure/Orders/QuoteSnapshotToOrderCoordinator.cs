@@ -17,6 +17,7 @@ using Paqueteria.Application.Auditing;
 using Paqueteria.Application.Idempotency;
 using Paqueteria.Application.Tenancy;
 using Paqueteria.Contracts.Legal;
+using Paqueteria.Infrastructure.Database.Outbox;
 using Paqueteria.Infrastructure.Tenancy;
 
 namespace Orders.Infrastructure.Orders;
@@ -1103,9 +1104,9 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             """
             INSERT INTO platform.outbox_events(
               id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,aggregate_version,payload,priority,status,
-              attempts,available_at,locked_at,locked_by,lease_token,lease_expires_at,last_error,created_at,processed_at)
+              attempts,available_at,locked_at,locked_by,lease_token,lease_expires_at,last_error,created_at,processed_at,trace_parent)
             VALUES (@id,@owner,@tenant,'orders.created','Order',@order,1,@payload,50,'PENDING',0,@available,
-                    NULL,NULL,NULL,NULL,NULL,@created,NULL)
+                    NULL,NULL,NULL,NULL,NULL,@created,NULL,@trace_parent)
             """);
         command.Parameters.Add(P("id", NpgsqlDbType.Uuid, outboxId));
         command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, order.OwnerOrganizationId));
@@ -1114,6 +1115,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         command.Parameters.Add(P("payload", NpgsqlDbType.Jsonb, payload));
         command.Parameters.Add(P("available", NpgsqlDbType.TimestampTz, occurredAt));
         command.Parameters.Add(P("created", NpgsqlDbType.TimestampTz, occurredAt));
+        command.Parameters.Add(OutboxTraceContextColumn.Parameter());
         RequireOne(await command.ExecuteNonQueryAsync(cancellationToken), "The order outbox event was not inserted.");
     }
 

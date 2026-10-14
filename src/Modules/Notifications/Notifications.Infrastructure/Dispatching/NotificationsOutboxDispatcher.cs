@@ -97,6 +97,9 @@ internal sealed class NotificationsOutboxDispatcher(
             },
             async (message, token) =>
             {
+                // OBS-003 PR 7: each message is processed in the trace that wrote it (its trace_parent), so its log
+                // lines carry the trace id of the originating request; the cycle keeps its own root trace.
+                using var activity = TraceCorrelation.StartOutboxMessage(OutboxLanes.Notifications, message.TraceParent);
                 try
                 {
                     await handler(message, token);

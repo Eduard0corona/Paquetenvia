@@ -2,6 +2,7 @@ using System.Globalization;
 using Microsoft.Extensions.DependencyInjection;
 using Npgsql;
 using NpgsqlTypes;
+using Paqueteria.Infrastructure.Database.Outbox;
 using Paqueteria.Infrastructure.Database.Pooling;
 
 namespace Dispatch.Infrastructure.Lifecycle;
@@ -18,7 +19,8 @@ public sealed record ClaimedDispatchOutboxMessage(
     int Attempts,
     Guid LeaseToken,
     DateTimeOffset LeaseExpiresAt,
-    DateTimeOffset? AvailableAt = null);
+    DateTimeOffset? AvailableAt = null,
+    string? TraceParent = null);
 
 /// <summary>
 /// Connection source for the Worker credential; every scope runs as paqueteria_worker. SCL-007: the Worker's one
@@ -105,7 +107,9 @@ public sealed class PostgreSqlDispatchOutboxStore(DispatchWorkerConnectionFactor
                     reader.GetGuid(reader.GetOrdinal("lease_token")),
                     reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("lease_expires_at")),
                     // OBS-002: already part of the claim function's result row; used only for the lane's claim age.
-                    reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("available_at"))));
+                    reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("available_at")),
+                    // OBS-003 PR 7: the producing trace context, parent of this message's processing activity.
+                    OutboxTraceContextColumn.Read(reader)));
             }
         }
 

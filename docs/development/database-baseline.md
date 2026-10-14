@@ -13,8 +13,8 @@ role model. Their mandatory hashes and order are declared in
 `database/migrations/v0.6-baseline.json`:
 
 ```text
-AI-06 f069b455894eb825f252f59c1a50373cd6a0d13d50d6b4493c53024f0d4b7ba7
-AI-18 2a95220f8934f0431da096bb66028b60e2ab00fcdaa8b2c44d39bb43ec8f5700
+AI-06 3a491699ee7462ffd6071bcf2a1092d66654916ed2502bf474b9e4fac78b6754
+AI-18 ef05f7ce5e11a5b1fc8fb71d3ae0bb9d3f10074d7eb8e438c3a72c9493435580
 ```
 
 ## Migrator and commands

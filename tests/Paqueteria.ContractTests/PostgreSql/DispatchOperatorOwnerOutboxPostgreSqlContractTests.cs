@@ -335,8 +335,14 @@ public sealed partial class DispatchPostgreSqlContractTests
             await ExecuteAsync(connection, transaction, "ROLLBACK TO SAVEPOINT direct_insert");
             await ExecuteAsync(connection, transaction, "RESET ROLE");
 
-            // Up reinstalls both functions with the exact boundary, and refuses a widened executor.
+            // Up reinstalls both functions with the exact boundary, and refuses a widened executor. The published step
+            // verifies exactly the AI-18 grants, so the OBS-003-OUTBOX-TRACE-CONTEXT executor grant is taken out first
+            // and that later step is applied again after it (its column stays; it adopts it).
+            await ExecuteAsync(connection, transaction,
+                "REVOKE INSERT (trace_parent) ON platform.outbox_events FROM paqueteria_operator_outbox_executor");
             await ExecuteAsync(connection, transaction, AddOperatorOwnerOutboxExecutor.UpSql);
+            await ExecuteAsync(connection, transaction, "RESET ROLE");
+            await ExecuteAsync(connection, transaction, AddOutboxTraceContext.UpSql);
             await ExecuteAsync(connection, transaction, "RESET ROLE");
             await DatabaseBaselineAssertions.AssertOperatorOutboxExecutorInstalledAsync(connection, transaction);
             await ExecuteAsync(connection, transaction, "SAVEPOINT widened");
