@@ -245,7 +245,9 @@ Lo aplicado está en `docs/development/scl-007-pool-per-role.md` (`SCL-007-POOL-
 
 Lo aplicado está en `docs/development/scl-007-adaptive-outbox-wait.md` (`SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13`):
 los despachadores de tiempo real de la API esperan 250 ms, 500 ms y luego 1 s (negocio) o 500 ms y luego 1 s
-(ubicación) mientras no hay trabajo; los pollers del Worker no cambian.
+(ubicación) mientras no hay trabajo. Como seguimiento, las colas de notificaciones y del ciclo de vida de asignaciones
+del Worker esperan igual, 250 ms, 500 ms y luego 1 s (`SCL-007-WORKER-ADAPTIVE-WAIT-2026-10-14`, respuesta del owner
+"1 segundo en ambas (Recommended)"); la validación de fotos y las tareas programadas no cambian.
 
 - Mientras los lotes regresan llenos, el despachador vuelve a reclamar de inmediato. Mientras regresan vacíos, espera
   cada vez más, hasta una espera máxima. Al encontrar trabajo, vuelve a empezar.

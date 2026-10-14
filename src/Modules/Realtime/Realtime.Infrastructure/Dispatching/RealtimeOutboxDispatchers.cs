@@ -1,6 +1,7 @@
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
+using Paqueteria.Application.Scaling;
 using Paqueteria.Infrastructure.Observability;
 using Realtime.Application.Configuration;
 using Realtime.Application.Dispatching;
@@ -37,7 +38,7 @@ internal sealed class BusinessOutboxDispatcher(
             "postgresql");
         var lane = options.Value.Business;
         // SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13: this lane's own wait between claims.
-        var idle = new OutboxIdleWait(lane);
+        var idle = new OutboxIdleWait(lane.PollIntervalMilliseconds, lane.MaximumIdleWaitMilliseconds);
         var nextRequeue = DateTimeOffset.MinValue;
         try
         {
@@ -156,7 +157,7 @@ internal sealed class LocationOutboxDispatcher(
             "postgresql");
         var lane = options.Value.Location;
         // SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13: this lane's own wait between claims.
-        var idle = new OutboxIdleWait(lane);
+        var idle = new OutboxIdleWait(lane.PollIntervalMilliseconds, lane.MaximumIdleWaitMilliseconds);
         var nextRequeue = DateTimeOffset.MinValue;
         try
         {
