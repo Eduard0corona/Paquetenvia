@@ -13,7 +13,7 @@ using Paqueteria.IntegrationTests.Observability;
 using Realtime.Application.Configuration;
 using Xunit.Abstractions;
 
-namespace Paqueteria.EndToEndTests;
+namespace Paqueteria.IntegrationTests.PlatformEndToEnd;
 
 /// <summary>
 /// OPS-005, owner answer Q-PR10 "Recorrido principal (Recommended)" (decision OPS-005-JOURNEYS-2026-10-13): quote,

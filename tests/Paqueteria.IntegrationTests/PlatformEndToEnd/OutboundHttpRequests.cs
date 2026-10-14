@@ -1,7 +1,7 @@
 using System.Collections.Concurrent;
 using System.Diagnostics;
 
-namespace Paqueteria.EndToEndTests;
+namespace Paqueteria.IntegrationTests.PlatformEndToEnd;
 
 /// <summary>
 /// OBS-003 "nada sale del proceso": every real HTTP request any <see cref="HttpClient"/> of this test process sends

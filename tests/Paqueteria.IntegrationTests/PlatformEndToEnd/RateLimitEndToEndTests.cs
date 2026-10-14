@@ -6,7 +6,7 @@ using Paqueteria.Infrastructure.Observability;
 using Paqueteria.IntegrationTests.Observability;
 using Xunit.Abstractions;
 
-namespace Paqueteria.EndToEndTests;
+namespace Paqueteria.IntegrationTests.PlatformEndToEnd;
 
 /// <summary>
 /// AI-08 OPS-005, SEC-004 and the error leg of OBS-003, through the real "Nueva orden" screen against the assembled

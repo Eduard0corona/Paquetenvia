@@ -1,6 +1,6 @@
 using Microsoft.Playwright;
 
-namespace Paqueteria.EndToEndTests;
+namespace Paqueteria.IntegrationTests.PlatformEndToEnd;
 
 /// <summary>
 /// "Nueva orden" (<c>/ops/orders/new</c>, UI-PHASE3-ORDER-WIZARD-2026-10-10) driven as a dispatcher fills it: the
@@ -38,10 +38,10 @@ internal static class OrderWizardScreen
     }
 
     /// <summary>
-    /// Step 2 "Qué se envía": one synthetic package with its measurements. The measurements are optional on the
-    /// screen, but an order whose package has none cannot be assigned to an own driver today: the order stores the
-    /// missing measurements as JSON nulls and the driver eligibility reads a null as an invalid measurement
-    /// (PACKAGE_REQUIREMENT_INVALID). The journey captures them, as a dispatcher can; that defect is reported apart.
+    /// Step 2 "Qué se envía": one synthetic package with its measurements, typed as a dispatcher can. The measurements
+    /// are optional on the screen; an order whose package has none is assignable too since #265 (a JSON null in
+    /// <c>dimensions_mm</c> reads as no measurement in the Dispatch, Routing and Orders readers). The journey keeps
+    /// typing them because it is a valid dispatcher path.
     /// </summary>
     internal static async Task FillWhatAsync(IPage page, int shipment, int weightGrams = 1000)
     {

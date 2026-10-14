@@ -2,7 +2,7 @@ using System.Collections.Concurrent;
 using Npgsql;
 using NpgsqlTypes;
 
-namespace Paqueteria.EndToEndTests;
+namespace Paqueteria.IntegrationTests.PlatformEndToEnd;
 
 /// <summary>
 /// SCL-007 during the synthetic workflow: samples <c>pg_stat_activity</c> every 100 ms from the test's own

@@ -6,7 +6,7 @@ using Paqueteria.IntegrationTests.Observability;
 using Paqueteria.IntegrationTests.Realtime;
 using Paqueteria.IntegrationTests.Security;
 
-namespace Paqueteria.EndToEndTests;
+namespace Paqueteria.IntegrationTests.PlatformEndToEnd;
 
 [CollectionDefinition(Name, DisableParallelization = true)]
 public sealed class PlatformEndToEndCollection : ICollectionFixture<PlatformEndToEndFixture>

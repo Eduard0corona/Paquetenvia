@@ -9,7 +9,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Paqueteria.IntegrationTests.Observability;
 
-namespace Paqueteria.EndToEndTests;
+namespace Paqueteria.IntegrationTests.PlatformEndToEnd;
 
 /// <summary>
 /// The instruments two OPS-005 checks rely on, proven against the real runtime so those checks cannot pass by seeing

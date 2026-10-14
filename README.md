@@ -137,8 +137,9 @@ dotnet test .\tests\Paqueteria.IntegrationTests\Paqueteria.IntegrationTests.cspr
 dotnet test .\tests\Paqueteria.ArchitectureTests\Paqueteria.ArchitectureTests.csproj
 ```
 
-La suite de punta a punta (`tests/Paqueteria.EndToEndTests`, categoría `PlatformEndToEnd`) necesita Docker, las
-dependencias web y Chromium; la [guía OPS-005](docs/development/ops-005-end-to-end-suite.md) explica cómo correrla.
+La suite de punta a punta vive en `tests/Paqueteria.IntegrationTests/PlatformEndToEnd` (categoría `PlatformEndToEnd`)
+y necesita Docker, las dependencias web y Chromium; la [guía OPS-005](docs/development/ops-005-end-to-end-suite.md)
+explica cómo correrla. `tests/Paqueteria.EndToEndTests` sigue reservado y vacío.
 
 ## Frontend
 

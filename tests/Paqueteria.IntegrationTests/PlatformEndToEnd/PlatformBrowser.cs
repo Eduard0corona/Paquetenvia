@@ -3,7 +3,7 @@ using System.Text.Json;
 using Identity.Infrastructure.Mock;
 using Microsoft.Playwright;
 
-namespace Paqueteria.EndToEndTests;
+namespace Paqueteria.IntegrationTests.PlatformEndToEnd;
 
 /// <summary>
 /// Chromium (the pre-installed Playwright browser) with one context per person of the journey, each with its own

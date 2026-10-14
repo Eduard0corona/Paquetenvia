@@ -10,7 +10,7 @@ using Microsoft.Extensions.DependencyInjection;
 using Paqueteria.IntegrationTests.Realtime;
 using Realtime.Application.Events;
 
-namespace Paqueteria.EndToEndTests;
+namespace Paqueteria.IntegrationTests.PlatformEndToEnd;
 
 /// <summary>
 /// A SignalR client of the operations hub (AI-12), connected as the synthetic dispatcher over WebSockets to the API's

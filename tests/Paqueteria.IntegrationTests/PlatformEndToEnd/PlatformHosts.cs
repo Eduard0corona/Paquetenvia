@@ -13,7 +13,7 @@ using Paqueteria.IntegrationTests.Observability;
 using Paqueteria.IntegrationTests.Realtime;
 using WorkerProgram = WorkerHost::WorkerProgram;
 
-namespace Paqueteria.EndToEndTests;
+namespace Paqueteria.IntegrationTests.PlatformEndToEnd;
 
 /// <summary>
 /// The assembled API and Worker of one test: the real <c>Program</c> and <c>WorkerProgram</c> compositions in the

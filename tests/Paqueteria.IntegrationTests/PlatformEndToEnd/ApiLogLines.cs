@@ -1,6 +1,6 @@
 using System.Text.Json;
 
-namespace Paqueteria.EndToEndTests;
+namespace Paqueteria.IntegrationTests.PlatformEndToEnd;
 
 /// <summary>Reads the API's JSON console lines (<c>JsonConsoleCapture</c>) as Log Analytics would.</summary>
 internal static class ApiLogLines

@@ -1,8 +1,9 @@
 # OPS-005: platform end-to-end suite
 
 Phase 4 PR 10 (`docs/development/phase4-platform-plan.md`, "PR 10: pruebas de punta a punta de la plataforma"), backlog
-item **OPS-005** in `AI-08_BACKLOG.yaml`. Decision rows: `OPS-005-JOURNEYS-2026-10-13` (the journey) and
-`OPS-005-E2E-LOCKFILE-REL000-2026-10-14` (how REL-000 accepts the suite's lockfile).
+item **OPS-005** in `AI-08_BACKLOG.yaml`. Decision rows: `OPS-005-JOURNEYS-2026-10-13` (the journey),
+`OPS-005-SUITE-IN-INTEGRATIONTESTS-2026-10-14` (where the suite lives) and `OPS-005-E2E-LOCKFILE-REL000-2026-10-14`
+(a REL-000 rule for a separate project's lockfile, superseded before merge and never applied).
 
 The owner's question and answer, literal (2026-10-13):
 
@@ -16,8 +17,9 @@ The options not chosen and the context shown to the owner are in the decision ro
 
 ## What is assembled
 
-`tests/Paqueteria.EndToEndTests` reuses the harness of `tests/Paqueteria.IntegrationTests` through a project reference
-(`InternalsVisibleTo`), so nothing of it is copied:
+The suite lives in `tests/Paqueteria.IntegrationTests/PlatformEndToEnd` (namespace
+`Paqueteria.IntegrationTests.PlatformEndToEnd`, category `PlatformEndToEnd`) and uses that project's harness directly,
+so nothing of it is copied:
 
 | Piece | What runs | Harness |
 | --- | --- | --- |
@@ -60,8 +62,9 @@ active driver's service area and valid identity document. The wizard's addresses
 
 'Entregada' in the option text was the wording of the session that asked the question and meant the delivered state
 on public tracking (confirmed by that session on 2026-10-14). The shipped public tracking label of `DELIVERED` is
-"Entregado" (AI-07, `publicStatusLabels`; "Entregada" is the driver app's label). The suite asserts the shipped label
-and no label changes.
+"Entregado" (`apps/web/src/tracking/contracts/public-tracking-labels.ts`, `DELIVERED: "Entregado"`; "Entregada" is the
+driver app's label, `apps/web/src/driver/contracts/labels.ts`). The suite asserts the shipped label and no label
+changes.
 
 At the end it checks the database: the order is `DELIVERED` with the tariff total in centavos, its status changes are
 exactly CONFIRMED, READY_FOR_PICKUP, ASSIGNED, AT_PICKUP, PICKED_UP, IN_TRANSIT, DELIVERING, DELIVERED, it has a
@@ -70,14 +73,15 @@ assignment with its cost in centavos.
 
 Every step has a screen; no step uses the API directly.
 
-### Defect found (not fixed here)
+### Defect found (fixed apart by #265)
 
-An order whose packages have no measurements (optional in the wizard) cannot be assigned to any own driver: the
-picker shows "No disponible: Los paquetes de la orden no tienen peso o medidas válidos". The order stores the missing
-measurements as JSON nulls (`QuoteSnapshotToOrderCoordinator`), and the eligibility read treats a present null as an
-invalid measurement (`PostgreSqlAssignmentToOrderCoordinator.TryReadDimensions`), while DSP-001 checks measurements
-only "cuando existan". The journey types measurements (300 × 200 × 150 mm), as a dispatcher can. The fix belongs to
-its own task.
+The suite found that an order whose packages had no measurements (optional in the wizard) could not be assigned to
+any own driver: the picker showed "No disponible: Los paquetes de la orden no tienen peso o medidas válidos". The order
+stores the missing measurements as JSON nulls (`QuoteSnapshotToOrderCoordinator`), and the eligibility read treated a
+present null as an invalid measurement, while DSP-001 checks measurements only "cuando existan". #265 fixed it in its
+own pull request (a JSON null in `dimensions_mm` now reads as no measurement in the Dispatch, Routing and Orders
+readers; `docs/development/fix-package-dimensions-null.md`), and this branch has merged it. The journey still types
+measurements (300 × 200 × 150 mm), a valid dispatcher path.
 
 ## The platform checks (AI-08 OPS-005)
 
@@ -91,57 +95,71 @@ its own task.
 
 Two instrument tests (`PlatformInstrumentTests`, uncategorized) prove against the real runtime that the outbound
 recorder sees a real request of the process and that the API log reader gets the method, path and multipart content
-type of a real Kestrel request. They run in the `dotnet` job, so the project always yields results there.
+type of a real Kestrel request. They need no container, browser or database, so they run as plain IntegrationTests
+tests in the `dotnet` job.
 
-Local results (two consecutive runs on this branch after merging `development`, this machine): suite 66 s and 63 s
-including the containers and the web start; journey 25 s and 18 s, 429 test 6 s and 7 s; delivery after 3 s idle
-701 ms and 675 ms; connection peaks app 4/10, realtime 4/4, worker 2/10, total 10/24; 3 log lines and 2 audit rows
-per trace; Retry-After 45 shown as 45; 26 and 23 outgoing requests, all on loopback.
+Local results (two consecutive runs on this branch after the move and after merging `development` eb7ec9e, this
+machine, `dotnet test` of the IntegrationTests project with `--filter "Category=PlatformEndToEnd"`): 2/2 passed both
+times; 81 s and 63 s for the whole command, including the containers and the web build and start (the first run built
+the web from scratch); journey 25.8 s and 24.6 s, 429 test 5.8 s and 5.1 s; delivery after 3 s idle 759 ms and 581 ms;
+connection peaks app 3/10, realtime 4/4, worker 2/10, total 9/24 (253 and 244 samples); 3 log lines and 2 audit rows
+per trace; Retry-After 45 shown as 45; 26 outgoing requests in each run, all on loopback.
 
 ## CI
 
 The suite runs inside the existing `driver-stops-pwa` job of Foundation CI and PR Validation; no job is added, so
 Foundation keeps 13 jobs.
 
-- Why this job: it already restores and builds the IntegrationTests harness, installs the frozen web dependencies and
+- Why this job: it already restores and builds the IntegrationTests project, installs the frozen web dependencies and
   Chromium, starts the same storage container for the real offline pipeline, and holds the driver PWA the journey
   drives. `operations-dashboard` and `public-tracking` have no storage container; `delivery-simulation` has no web
   dependencies or browser.
-- Steps added: "Restore locked platform end-to-end dependencies", "Build platform end-to-end suite" and "Execute
-  platform end-to-end suite (OPS-005)" (`--filter "Category=PlatformEndToEnd"`, TRX `platform-end-to-end.trx`). The
-  job's `collect-results` step adds that TRX as `tests/Paqueteria.EndToEndTests/Paqueteria.EndToEndTests.csproj|
-  PlatformEndToEnd`, so REL-000 execution evidence of `driver-stops-pwa` carries the suite's results.
-- The `dotnet` jobs (Foundation, PR Validation and the development push smoke) exclude `Category!=PlatformEndToEnd`.
-- `tools/ci/change-domains.json`: `tests/Paqueteria.EndToEndTests/**` is its own domain (`TESTS_END_TO_END`) routed to
-  `dotnet` and `driver-stops-pwa`, instead of every backend job.
-- Tests: `tools/ci/test_platform_end_to_end_wiring.py` (the host job's steps, their order, the evidence spec run
-  through rel000 `collect_execution_results`, the `dotnet` exclusions, the category constant) and
-  `test_end_to_end_suite_runs_in_its_host_job` in `tools/ci/test_classify_changes.py`.
-- Minutes added: see the PR (measured on the CI run).
+- One step added, after the job's two driver categories: "Execute platform end-to-end suite (OPS-005)"
+  (`--filter "Category=PlatformEndToEnd"` on the IntegrationTests build the job already has, TRX
+  `platform-end-to-end.trx`). No restore or build step is added. The job's `collect-results` step adds that TRX as
+  `tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj|PlatformEndToEnd`, so the REL-000 execution
+  evidence of `driver-stops-pwa` carries the suite's results.
+- The `dotnet` jobs (Foundation, PR Validation and the development push smoke) exclude the category
+  (`Category!=PlatformEndToEnd`), as they exclude every other IntegrationTests category that needs containers or a
+  browser; the two instrument tests are uncategorized and run there.
+- The change classifier is unchanged: the suite's files are `tests/Paqueteria.IntegrationTests/**` (domain `BACKEND`),
+  which already runs `dotnet`, `driver-stops-pwa` and the other backend jobs.
+- Tests: `tools/ci/test_platform_end_to_end_wiring.py` (the host job's run step and its order after Chromium, no restore
+  or build step of the suite's own and no workflow naming `tests/Paqueteria.EndToEndTests`, the evidence spec run
+  through rel000 `collect_execution_results`, the `dotnet` exclusions, the classifier routing of every suite file, the
+  category constant).
+- Minutes added: measured on the PR Validation run of this pull request (the host job against the same job of the
+  base), recorded here once that run completes.
 
 A pull request that changes only operations or tracking web screens does not run `driver-stops-pwa` in PR Validation
 (their domains route to `operations-dashboard` and `public-tracking`); the suite runs there on the next change that
 routes to it and always on the promotion to `main`.
 
-## The suite's lockfile and REL-000
+## Where the suite lives (owner decision)
 
-The project's csproj references only packages that `tests/Paqueteria.IntegrationTests` already references, at the
-central versions of `Directory.Packages.props`. Its `packages.lock.json` (FND-001 committed it with no package node)
-now holds 116 package nodes, each identical as a whole node (type, requested range, resolved version, content hash and
-dependencies) to its node in the IntegrationTests lockfile of the same commit. No package or version is new.
+The suite was first written as its own project, `tests/Paqueteria.EndToEndTests`, which FND-001 had reserved with an
+empty `packages.lock.json`. Its packages were exactly the IntegrationTests ones (116 nodes, identical), but filling
+that lockfile is a dependency change:
 
-REL-000's permanent package graph treated the empty file as an existing lockfile and rejected every added node
-(`DEPENDENCY_ADMISSION_UNREGISTERED_PACKAGE`). The owner decided it in two rounds on 2026-10-14
-(`OPS-005-E2E-LOCKFILE-REL000-2026-10-14`, literal questions, options and context in the decision row): first
-"Archivo vacío = nuevo (Recommended)", then, because that option failed REL-000's permanent test (`test_k`) unless the
-SEC-2026-12 revert were widened, "Solo este proyecto (Recommended)", which replaces the first and is the one applied.
+- REL-000 rejected it; the owner decided a narrow REL-000 rule in two rounds (`OPS-005-E2E-LOCKFILE-REL000-2026-10-14`,
+  "Archivo vacío = nuevo (Recommended)", then "Solo este proyecto (Recommended)");
+- PR Validation's PR Gate then failed with `PR_GATE_DEPENDENCY_CHANGE_NOT_ALLOWED`: the classifier counts an existing
+  lockfile that gains nodes as `DEPS`, and dependencies never enter `development`
+  ([branching-and-ci](branching-and-ci.md), "Dependency route through main").
 
-`tools/rel-000/rel000.py` accepts `tests/Paqueteria.EndToEndTests/packages.lock.json` only when its base graph has no
-package node, only when every package node is identical to the IntegrationTests node of the same tree, and only when
-that IntegrationTests lockfile is itself accepted by the same pass or unchanged from the base. Any other path, a
-non-empty base, an extra or differing node and a rejected IntegrationTests lockfile still fail closed
-(`UNAUTHORIZED_DEPENDENCY_FILE_CHANGED`). Tests: `test_v` to `test_z` of `BaselinePackageGraphLockfileTests` in
-`tools/rel-000/test_rel000.py`; details in `docs/development/rel-000-internal-release.md`.
+The owner answered a third question with "Suite en integración (Recommended)"
+(`OPS-005-SUITE-IN-INTEGRATIONTESTS-2026-10-14`, literal question, options and context in the decision row), which
+supersedes the REL-000 rule before merge:
+
+- the 13 source files moved with `git mv` to `tests/Paqueteria.IntegrationTests/PlatformEndToEnd`, with their own
+  category, in the same CI job; the suite's `GlobalUsings.cs` and the IntegrationTests `InternalsVisibleTo` are gone;
+- `tests/Paqueteria.EndToEndTests` is byte-identical to `development` (csproj, README and the empty lockfile): it stays
+  reserved and empty, and in the solution as AI-03 and AI-13 lay it out;
+- no package file changes: the IntegrationTests csproj and lockfile are byte-identical to `development`;
+- no control changes: `tools/rel-000` (`rel000.py`, `test_rel000.py`), `docs/development/rel-000-internal-release.md`,
+  `tools/ci/change-domains.json`, `tools/ci/test_classify_changes.py`, `classify_changes.py` and `pr_gate.py` are
+  byte-identical to `development`; the REL-000 rule was never applied;
+- AI-08 OPS-005 `expected_outputs` names `tests/Paqueteria.IntegrationTests` and `Category=PlatformEndToEnd`.
 
 ## Running it locally
 
@@ -150,18 +168,17 @@ pnpm, and Chromium for Playwright.
 
 ```bash
 pnpm --dir apps/web install --frozen-lockfile
-dotnet build tests/Paqueteria.EndToEndTests/Paqueteria.EndToEndTests.csproj --configuration Release
-pwsh tests/Paqueteria.EndToEndTests/bin/Release/net10.0/playwright.ps1 install chromium   # or PLAYWRIGHT_BROWSERS_PATH
-MSBUILDDISABLENODEREUSE=1 dotnet test tests/Paqueteria.EndToEndTests/Paqueteria.EndToEndTests.csproj \
+dotnet build tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj --configuration Release
+pwsh tests/Paqueteria.IntegrationTests/bin/Release/net10.0/playwright.ps1 install chromium   # or PLAYWRIGHT_BROWSERS_PATH
+MSBUILDDISABLENODEREUSE=1 dotnet test tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj \
   --configuration Release --no-build --filter "Category=PlatformEndToEnd" --logger "console;verbosity=normal"
 ```
 
 The test output prints each measurement. `next start` rewrites nothing tracked: the Next.js fixture restores
 `apps/web/next-env.d.ts`.
 
-## Harness changes in IntegrationTests
+## Harness options added in IntegrationTests
 
-- `Properties/AssemblyInfo.cs`: `InternalsVisibleTo("Paqueteria.EndToEndTests")`.
 - `RealtimeKestrelWebApplicationFactory`: optional `corsExposedHeaders` for its test CORS policy. The pilot serves the
   web and the API on one origin, where a script reads every response header; the harness serves them on two, so the
   suite exposes `Retry-After`. Existing callers are unchanged.
@@ -173,6 +190,6 @@ The test output prints each measurement. `next start` rewrites nothing tracked: 
 
 ## Rollback
 
-Revert the pull request. The suite adds no product code, SQL, migration, role, grant, secret, Bicep or package; the
-harness options it adds default to the previous behaviour. The REL-000 rule and the lockfile it accepts go back
-together: without the rule the lockfile must return to its empty graph.
+Revert the pull request. The suite adds no product code, SQL, migration, role, grant, secret, Bicep, package, package
+file or control change; the harness options it adds default to the previous behaviour, and
+`tests/Paqueteria.EndToEndTests` is already as `development` has it.

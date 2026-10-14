@@ -262,7 +262,9 @@ los despachadores de tiempo real de la API esperan 250 ms, 500 ms y luego 1 s (n
 
 ### PR 10: pruebas de punta a punta de la plataforma (OPS-005)
 
-- Suite en `tests/Paqueteria.EndToEndTests`: API, Worker y Web armados contra PostgreSQL/PostGIS real.
+- Suite en `tests/Paqueteria.IntegrationTests/PlatformEndToEnd` (categoría `PlatformEndToEnd`; el owner decidió el
+  lugar el 2026-10-14, `OPS-005-SUITE-IN-INTEGRATIONTESTS-2026-10-14`): API, Worker y Web armados contra
+  PostgreSQL/PostGIS real. `tests/Paqueteria.EndToEndTests` sigue reservado y vacío.
 - Comprueba:
   - un trace id de punta a punta;
   - el 429 con `problem+json` y `Retry-After`, y el texto aprobado en la web;
@@ -284,9 +286,13 @@ Lo aplicado está en `docs/development/ops-005-end-to-end-suite.md`:
 - Las cinco comprobaciones de plataforma se miden en la misma corrida; el 429 tiene su propia prueba.
 - La suite corre dentro del job `driver-stops-pwa`, que ya prepara PostgreSQL, el almacenamiento S3, las dependencias
   web y Chromium. Los jobs `dotnet` la excluyen por categoría (`PlatformEndToEnd`).
-- El archivo de paquetes de la suite repite, nodo por nodo, el de IntegrationTests. El owner decidió el 2026-10-14
-  cómo lo acepta REL-000 (`OPS-005-E2E-LOCKFILE-REL000-2026-10-14`, "Solo este proyecto (Recommended)"): solo ese
-  archivo, solo con la base vacía y solo con nodos idénticos a los de IntegrationTests del mismo commit.
+- La suite se escribió primero como proyecto propio (`tests/Paqueteria.EndToEndTests`). Llenar su archivo de paquetes
+  era un cambio de dependencias: REL-000 lo rechazaba (el owner aprobó una regla,
+  `OPS-005-E2E-LOCKFILE-REL000-2026-10-14`, "Solo este proyecto (Recommended)") y después el PR Gate también, porque
+  ninguna dependencia entra por `development`. El owner decidió entonces "Suite en integración (Recommended)"
+  (`OPS-005-SUITE-IN-INTEGRATIONTESTS-2026-10-14`): la suite se movió a IntegrationTests con su propia categoría, en el
+  mismo job; no cambia ningún archivo de paquetes ni ningún control, y la regla de REL-000 se retiró antes del merge
+  sin aplicarse.
 
 ## Decisiones pendientes del owner
 
@@ -297,7 +303,7 @@ Lo aplicado está en `docs/development/ops-005-end-to-end-suite.md`:
 | Alerta de métrica sobre conexiones de PostgreSQL | PR 8 (la alerta, no el pool) | AI-08 SCL-007 |
 | Espera máxima del outbox por lane | PR 9 | AI-08 SCL-007 |
 | Recorridos de negocio de la suite de punta a punta | decidida 2026-10-13 (`OPS-005-JOURNEYS-2026-10-13`, "Recorrido principal (Recommended)") | AI-08 OPS-005 |
-| Archivo de paquetes de la suite en REL-000 | decidida 2026-10-14 (`OPS-005-E2E-LOCKFILE-REL000-2026-10-14`, "Solo este proyecto (Recommended)") | `decision-log.md`, `docs/development/rel-000-internal-release.md` |
+| Dónde vive la suite de punta a punta | decidida 2026-10-14 (`OPS-005-SUITE-IN-INTEGRATIONTESTS-2026-10-14`, "Suite en integración (Recommended)"; reemplaza a `OPS-005-E2E-LOCKFILE-REL000-2026-10-14` antes del merge) | AI-08 OPS-005, `decision-log.md` |
 
 ## Invariantes que ningún PR de la fase 4 cambia
 

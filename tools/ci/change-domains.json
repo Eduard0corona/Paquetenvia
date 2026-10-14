@@ -305,6 +305,7 @@
         "templates/**",
         ".dockerignore",
         "tests/Paqueteria.IntegrationTests/**",
+        "tests/Paqueteria.EndToEndTests/**",
         "tests/fixtures/ops-002/**"
       ],
       "job_sets": [
@@ -341,16 +342,6 @@
       "jobs": [
         "dotnet",
         "realtime-e2e"
-      ]
-    },
-    {
-      "name": "TESTS_END_TO_END",
-      "patterns": [
-        "tests/Paqueteria.EndToEndTests/**"
-      ],
-      "jobs": [
-        "dotnet",
-        "driver-stops-pwa"
       ]
     }
   ]

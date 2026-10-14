@@ -1,31 +1,5 @@
 <Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
     <IsPackable>false</IsPackable>
-    <IsTestProject>true</IsTestProject>
   </PropertyGroup>
-  <!--
-    OPS-005: only packages that Directory.Packages.props already pins and Paqueteria.IntegrationTests already references,
-    so the resolved graph stays a subset of the IntegrationTests lock file that REL-000 audits.
-  -->
-  <ItemGroup>
-    <PackageReference Include="Microsoft.AspNetCore.Mvc.Testing" />
-    <PackageReference Include="Microsoft.AspNetCore.SignalR.Client" />
-    <PackageReference Include="Microsoft.NET.Test.Sdk" />
-    <PackageReference Include="Microsoft.Playwright" />
-    <PackageReference Include="Npgsql" />
-    <PackageReference Include="Testcontainers.PostgreSql" />
-    <PackageReference Include="xunit" />
-    <PackageReference Include="xunit.runner.visualstudio" PrivateAssets="all" />
-  </ItemGroup>
-  <!--
-    The harness is the IntegrationTests one (PostgreSQL and storage fixtures, the Kestrel API host, the Next.js server,
-    the log capture), reused through this reference rather than copied. The API and the Worker are referenced directly
-    so WebApplicationFactory finds their content roots and dependency manifests; the Worker keeps the WorkerHost alias,
-    as in IntegrationTests, because both hosts are minimal-hosting programs.
-  -->
-  <ItemGroup>
-    <ProjectReference Include="..\Paqueteria.IntegrationTests\Paqueteria.IntegrationTests.csproj" />
-    <ProjectReference Include="..\..\src\Paqueteria.Api\Paqueteria.Api.csproj" />
-    <ProjectReference Include="..\..\src\Paqueteria.Worker\Paqueteria.Worker.csproj" Aliases="WorkerHost" />
-  </ItemGroup>
 </Project>
