@@ -52,8 +52,9 @@ public sealed class Scl007RuntimeDataSourceTests
         }));
 
         Assert.Contains(
-            "DatabasePools: ApplicationMaximumPoolSize + RealtimeMaximumPoolSize + WorkerMaximumPoolSize must not " +
-            "exceed the SCL-007 budget of 24 connections.",
+            "DatabasePools: ApplicationMaximumPoolSize, RealtimeMaximumPoolSize and WorkerMaximumPoolSize must be " +
+            "identical in the API and the Worker, and ApplicationMaximumPoolSize + RealtimeMaximumPoolSize + " +
+            "WorkerMaximumPoolSize must not exceed the SCL-007 budget of 24 connections.",
             failure.Failures);
     }
 

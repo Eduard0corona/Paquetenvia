@@ -626,10 +626,14 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
   connections. SCL-007 gives each process one pool per database role: the API's `paqueteria_app` pool (10) and its
   realtime dispatcher pool (`paqueteria_realtime`, 4), and the Worker's `paqueteria_worker` pool (10), 24 in all
   (`docs/development/scl-007-pool-per-role.md`). The sizes come from `DatabasePools` (defaults in each image's
-  `appsettings.json`) and replace the `Maximum Pool Size=5` of the runtime secrets; a size above 24 in total refuses
-  the start. The other 11 are for the migrate, verify and logins jobs (`Maximum Pool Size=4`), the restore drill and
-  administration. `too many connections` means lowering `DatabasePools__*` or moving to B2s (+≈41 USD/month, over
-  budget).
+  `appsettings.json`) and replace the `Maximum Pool Size=5` of the runtime secrets. Each process refuses to start when
+  the three values of its own configuration sum to more than 24, but it cannot see the other process's values, so the
+  24 holds only when both apps carry the same three. Change the sizes only by setting all three variables,
+  `DatabasePools__ApplicationMaximumPoolSize`, `DatabasePools__RealtimeMaximumPoolSize` and
+  `DatabasePools__WorkerMaximumPoolSize`, with identical values on both `ca-pv-pilot-api` and `ca-pv-pilot-worker`;
+  never on one app alone. Today the Bicep sets none. The other 11 are for the migrate, verify and logins jobs
+  (`Maximum Pool Size=4`), the restore drill and administration. `too many connections` means lowering all three
+  `DatabasePools__*` on both apps, identically, or moving to B2s (+≈41 USD/month, over budget).
 - **Realtime dispatcher not ready:** `/health/ready` reports `realtime_outbox_dispatcher` unhealthy when
   `pg-realtime-runtime-connection` is missing or its login is not `pv_pilot_realtime` (member of
   `paqueteria_realtime` only), when the Notifications lane step `20261012000100_AddRealtimeDispatcherRole` has not

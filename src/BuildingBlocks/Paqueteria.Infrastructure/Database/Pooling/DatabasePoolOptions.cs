@@ -11,8 +11,15 @@ namespace Paqueteria.Infrastructure.Database.Pooling;
 /// which Azure reserves 15 for replication and monitoring, so 35 are user connections. The runtime pools of the one
 /// API replica and the one Worker replica (GATE-013) may take at most 70 % of them (AZR-001-INV-014),
 /// <see cref="RuntimeConnectionBudget"/> = floor(35 × 0.70) = 24. The other 11 stay for the migrator jobs, the
-/// restore drill, administration and diagnostics. Every process validates the sum of the three sizes, so a value
-/// raised in one process alone also fails that process's start.
+/// restore drill, administration and diagnostics.
+/// <para>
+/// Each process validates the sum of the three sizes of its own configuration, and neither process can see the
+/// other's. The API opens only the Application and Realtime pools and the Worker only the Worker pool, so the check
+/// bounds the total of both processes only when the API and the Worker carry the same three values. A value changed in
+/// one process alone is not detected: a Worker with 1, 1 and 22 and an API with 10, 4 and 10 both start and may hold
+/// 22 + 14 = 36 connections. Both <c>appsettings.json</c> files therefore carry these defaults (an architecture test
+/// keeps them identical), and an override sets all three values, identically, in both processes.
+/// </para>
 /// </remarks>
 public sealed class DatabasePoolOptions
 {
@@ -78,9 +85,10 @@ public sealed class DatabasePoolOptionsValidator : IValidateOptions<DatabasePool
         if (options.TotalMaximumPoolSize > DatabasePoolOptions.RuntimeConnectionBudget)
         {
             errors.Add(
-                $"{DatabasePoolOptions.SectionName}: ApplicationMaximumPoolSize + RealtimeMaximumPoolSize + " +
-                $"WorkerMaximumPoolSize must not exceed the SCL-007 budget of " +
-                $"{DatabasePoolOptions.RuntimeConnectionBudget} connections.");
+                $"{DatabasePoolOptions.SectionName}: ApplicationMaximumPoolSize, RealtimeMaximumPoolSize and " +
+                $"WorkerMaximumPoolSize must be identical in the API and the Worker, and " +
+                $"ApplicationMaximumPoolSize + RealtimeMaximumPoolSize + WorkerMaximumPoolSize must not exceed the " +
+                $"SCL-007 budget of {DatabasePoolOptions.RuntimeConnectionBudget} connections.");
         }
 
         return errors;
