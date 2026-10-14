@@ -23,7 +23,17 @@ public sealed class AssignmentLifecycleOptions
     public string EffectiveWorkerId => InstanceIdentity.QualifyWorkerId(WorkerId);
     public int BatchSize { get; set; } = 10;
     public int MaximumConcurrency { get; set; } = 4;
+
+    /// <summary>The shortest wait after an empty poll, and the wait after a failed loop iteration.</summary>
     public int PollIntervalMilliseconds { get; set; } = 250;
+
+    /// <summary>
+    /// SCL-007-WORKER-ADAPTIVE-WAIT-2026-10-14: the longest wait between two polls while they come back empty. The wait
+    /// starts at <see cref="PollIntervalMilliseconds"/> and doubles after each empty poll up to this value
+    /// (<see cref="OutboxIdleWait"/>). The owner chose 1 s on both Worker lanes.
+    /// </summary>
+    public int MaximumIdleWaitMilliseconds { get; set; } = 1_000;
+
     public int LeaseSeconds { get; set; } = 120;
     public int MaximumAttempts { get; set; } = 5;
     public int RetryBaseSeconds { get; set; } = 2;
@@ -37,6 +47,7 @@ public sealed class AssignmentLifecycleOptions
         value.BatchSize is >= 1 and <= 200 &&
         value.MaximumConcurrency is >= 1 and <= 32 &&
         value.PollIntervalMilliseconds is >= 10 and <= 60_000 &&
+        OutboxIdleWait.IsValidMaximum(value.PollIntervalMilliseconds, value.MaximumIdleWaitMilliseconds) &&
         value.LeaseSeconds is >= 10 and <= 600 &&
         value.MaximumAttempts is >= 1 and <= 20 &&
         value.RetryBaseSeconds is >= 1 and <= 60 &&
