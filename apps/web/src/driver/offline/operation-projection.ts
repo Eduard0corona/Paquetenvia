@@ -189,13 +189,30 @@ export function driverOperationConfirmedByStop(
  * projected again, never shown as a conflict, and leaves the queue on the next
  * pass. The stop then shows what REST says, for example DELIVERING again after
  * dispatch chose "Reintentar hoy".
+ *
+ * Any other transition the driver has not been asked to resolve is settled
+ * the same way once REST shows it applied (its target status at a later
+ * version): the scheduler removes it without sending it again (DRV-002, "Si
+ * REST ya confirma el estado y la versión esperados, elimina la operación sin
+ * repetir la mutación"). The screen takes the confirmation read before the
+ * scheduler removes the action and publishes the queue, so without this the
+ * stop showed, in between, the action it had just confirmed as a conflict: the
+ * next step disappeared for a moment and a photo the driver was previewing for
+ * it was lost (docs/development/driver-photo-selection-refresh.md). An action
+ * held for the driver (NEEDS_ATTENTION or BLOCKED) stays held, and REST beyond
+ * the action's target is still a conflict, as before.
  */
 function settledByStop(
   operation: DriverOfflineOperation,
   stop: DriverStop,
 ): boolean {
+  if (operation.kind === "FAILED_DELIVERY") {
+    return driverOperationConfirmedByStop(operation, stop);
+  }
   return (
-    operation.kind === "FAILED_DELIVERY" &&
+    driverOperationDefinitions[operation.kind].transition &&
+    operation.status !== "NEEDS_ATTENTION" &&
+    operation.status !== "BLOCKED" &&
     driverOperationConfirmedByStop(operation, stop)
   );
 }
