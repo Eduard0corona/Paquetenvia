@@ -9,6 +9,7 @@ using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using Orders.Application.Tracking;
+using Paqueteria.Application.Scaling;
 using Paqueteria.Infrastructure.Observability;
 using Paqueteria.UnitTests.Operations;
 using Realtime.Application.Configuration;
@@ -120,11 +121,7 @@ public sealed class Scl007AdaptiveOutboxWaitTests
         int maximumIdleWaitMilliseconds,
         int[] expected)
     {
-        var wait = new OutboxIdleWait(new OutboxLaneOptions
-        {
-            PollIntervalMilliseconds = pollIntervalMilliseconds,
-            MaximumIdleWaitMilliseconds = maximumIdleWaitMilliseconds,
-        });
+        var wait = new OutboxIdleWait(pollIntervalMilliseconds, maximumIdleWaitMilliseconds);
 
         var observed = expected.Select(_ => (int)wait.After(0).TotalMilliseconds).ToArray();
 
@@ -136,18 +133,11 @@ public sealed class Scl007AdaptiveOutboxWaitTests
     [Fact]
     public void The_wait_refuses_a_lane_the_validator_would_refuse()
     {
-        Assert.Throws<ArgumentNullException>(() => new OutboxIdleWait(null!));
-        Assert.Throws<ArgumentOutOfRangeException>(() => new OutboxIdleWait(new OutboxLaneOptions
-        {
-            PollIntervalMilliseconds = 500,
-            MaximumIdleWaitMilliseconds = 250,
-        }));
-        Assert.Throws<ArgumentOutOfRangeException>(() => new OutboxIdleWait(new OutboxLaneOptions
-        {
-            PollIntervalMilliseconds = 0,
-            MaximumIdleWaitMilliseconds = 1_000,
-        }));
-        Assert.Throws<ArgumentOutOfRangeException>(() => new OutboxIdleWait(new OutboxDispatcherOptions().Business).After(-1));
+        var business = new OutboxDispatcherOptions().Business;
+        Assert.Throws<ArgumentOutOfRangeException>(() => new OutboxIdleWait(500, 250));
+        Assert.Throws<ArgumentOutOfRangeException>(() => new OutboxIdleWait(0, 1_000));
+        Assert.Throws<ArgumentOutOfRangeException>(() =>
+            new OutboxIdleWait(business.PollIntervalMilliseconds, business.MaximumIdleWaitMilliseconds).After(-1));
     }
 
     [Theory]

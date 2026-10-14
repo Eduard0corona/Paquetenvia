@@ -66,7 +66,7 @@ public sealed class OutboxLaneOptions
     /// <summary>
     /// SCL-007-ADAPTIVE-OUTBOX-WAIT-2026-10-13: the longest wait between two claims while they come back empty. The
     /// wait starts at <see cref="PollIntervalMilliseconds"/> and doubles after each empty claim up to this value
-    /// (<see cref="Realtime.Application.Dispatching.OutboxIdleWait"/>). The owner chose 1 s on both lanes.
+    /// (<see cref="OutboxIdleWait"/>). The owner chose 1 s on both lanes.
     /// </summary>
     public int MaximumIdleWaitMilliseconds { get; set; }
 
