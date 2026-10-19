@@ -555,7 +555,7 @@ Las órdenes nuevas guardan la versión nueva; las anteriores conservan la que a
 
 ## 7. Primer despliegue y verificación
 
-Fuente: README §6.1 pasos 4–10; `deploy-azure-pilot.yml`.
+Fuente: README §6.1 pasos 4–11; `deploy-azure-pilot.yml`.
 
 ### 7.1 Certificar el SHA en `main`
 
@@ -607,7 +607,64 @@ Del *Summary* del run copia la IP estática y el `asuid` (paso 4).
   Si el DNS ya propagó antes del Run 2, puedes hacer el Run 2 directamente con `bind`. El repo describe
   la secuencia none → bind.
 
-### 7.5 Verificación
+### 7.5 Tu organización de plataforma y tu cuenta de administrador (una sola vez, antes de entrar)
+
+Fuente: README §6.1 paso 10; decisión `TEN-003-PLATFORM-BOOTSTRAP-2026-10-19` en `decision-log.md`.
+
+Sin este paso nadie puede crear una orden: el registro abierto solo crea negocios y aliados, y solo un
+PLATFORM_ADMIN de la organización de plataforma da los roles de despacho y finanzas, aprueba aliados y registra la
+marca de datos maestros (README §6.8). Hazlo **después del Run 3 y antes de tu primer inicio de sesión** en
+`https://paquetenvia.com`. El comando corre una sola vez y deja registro en auditoría.
+
+1. **Tu `sub` de AuthCenter.** Entra a `https://authcenter.info/admin-v2/users`, busca tu usuario y ábrelo
+   (*Administrar* o *Consultar*). La dirección termina en `/admin-v2/users/<sub>`: ese UUID en minúsculas es tu id
+   de usuario de AuthCenter, el mismo que AuthCenter pone en el claim `sub`. Copia solo ese UUID, tal cual: el
+   comando rechaza un correo, la dirección completa o mayúsculas. No es secreto, pero no lo pegues en issues ni
+   chats.
+2. **Corre el comando** en Cloud Shell (bash). Usa el job de migración con su misma imagen, identidad y conexión;
+   solo cambian los argumentos de esta ejecución, así que el siguiente despliegue sigue corriendo `apply`. Cambia
+   la razón social y, si quieres, el nombre visible (máximo 200 y 80 caracteres, sin espacios al inicio ni al
+   final):
+
+   ```bash
+   RG=rg-pv-pilot
+   JOB=job-pv-pilot-migrate
+   read -r -p 'AuthCenter sub: ' SUB
+   LEGAL_NAME='<razón social de la organización de plataforma>'
+   DISPLAY_NAME='Paquetenvia'
+   az containerapp job show -g "$RG" -n "$JOB" --query properties.template -o json > pv-bootstrap.json
+   python3 - "$SUB" "$LEGAL_NAME" "$DISPLAY_NAME" <<'EOF'
+   import json, sys
+   template = json.load(open("pv-bootstrap.json"))
+   container = template["containers"][0]
+   container["args"] = ["platform-bootstrap", "--connection-env", "PAQUETERIA_MIGRATION_CONNECTION",
+                        "--identity-subject", sys.argv[1], "--legal-name", sys.argv[2], "--display-name", sys.argv[3]]
+   json.dump({"containers": [container]}, open("pv-bootstrap.json", "w"))
+   EOF
+   execution="$(az containerapp job start -g "$RG" -n "$JOB" --yaml pv-bootstrap.json --query name -o tsv)"
+   rm -f pv-bootstrap.json
+   az containerapp job execution show -g "$RG" -n "$JOB" --job-execution-name "$execution" --query properties.status -o tsv
+   ```
+
+3. **Lee el resultado.** Repite la última línea hasta que ya no diga `Running` y busca en Log Analytics:
+   `ContainerAppConsoleLogs_CL | where ContainerJobName_s == "job-pv-pilot-migrate" | where Log_s has "TEN003_PLATFORM_BOOTSTRAP" | order by TimeGenerated desc`.
+   - `TEN003_PLATFORM_BOOTSTRAP_OK organization_type=PLATFORM status=ACTIVE role=PLATFORM_ADMIN (audited)`: listo.
+     Se crearon la organización de plataforma, tu usuario y tu rol de administrador, con una fila de auditoría.
+   - `TEN003_PLATFORM_BOOTSTRAP_ALREADY_DONE` (código 11): ya existe una organización de plataforma o un
+     administrador. No se escribió nada y no hay nada más que hacer.
+   - `TEN003_PLATFORM_BOOTSTRAP_SUBJECT_ALREADY_SIGNED_IN` (código 11): esa cuenta ya entró a Paquetenvia. No se
+     escribió nada. Detente y avísame; no corras SQL a mano.
+   - Código 2: el `sub` no es un UUID en minúsculas o un nombre no cumple las reglas. El valor no se muestra.
+   - Código 5 que nombra una migración o una verificación: la base no está migrada; repite el despliegue.
+4. **Después de entrar** (paso 7.6): `https://paquetenvia.com/api/v1/me/organization-contexts` muestra el
+   `organization_id` de la organización de plataforma, que pide `master-data-gate` (README §6.8). Las operaciones
+   de administrador de plataforma te piden la verificación MFA de AuthCenter.
+
+> Los argumentos de esta ejecución (tu `sub` y los dos nombres) quedan en el historial del job, visibles para quien
+> pueda leer el grupo de recursos. Ninguno es secreto. La salida del comando no muestra tu `sub`, los nombres ni
+> ningún id.
+
+### 7.6 Verificación
 
 ```bash
 # Certificado administrado emitido
@@ -620,8 +677,8 @@ az resource list -g rg-pv-pilot -o table
 az consumption budget list --resource-group rg-pv-pilot -o table      # budget-pv-pilot, 100 USD
 ```
 
-Pruebas manuales en el navegador sobre `https://paquetenvia.com` (README §6.1 pasos 9 y 10):
-- Login por AuthCenter (requiere las URIs del paso 5.1 registradas).
+Pruebas manuales en el navegador sobre `https://paquetenvia.com` (README §6.1 pasos 9 y 11):
+- Login por AuthCenter con la cuenta del paso 7.5 (requiere las URIs del paso 5.1 registradas).
 - `/ops/orders/new` permite confirmar una orden (versiones de términos y aviso del paso 6.1 cargadas).
 - DevTools → Network → WS: `/hubs/...` responde `101 Switching Protocols`.
 - Subir una foto de prueba y comprobar que el blob tiene el index tag del escaneo de Defender.
@@ -706,7 +763,7 @@ Después mándame los dos nombres (no son secretos) para el cambio que conecte e
    por API más cuota?
 6. **Transferencia de direcciones a Google** depende de GATE-007.
 7. ~~Orden de AuthCenter~~: corregido; README §6.1 ahora registra las URIs de `paquetenvia-web-prod`
-   (paso 9) antes de la prueba de login (paso 10).
+   (paso 9) antes de la prueba de login (paso 11).
 8. ~~README §6.1 paso 6~~: corregido; ahora nombra los tres secretos del owner
    (`authcenter-paquetenvia-client-secret`, `google-maps-api-key`, `public-tracking-link-key`).
 9. **Prevent self-review** en el environment, con un único revisor.

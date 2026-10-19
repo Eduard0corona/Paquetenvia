@@ -378,7 +378,7 @@ No web screen calls `createLocation` today.
   - The fallback needs `Http__ForwardedHeaders__ForwardLimit=2`. The middleware stops at the first address outside
     `KnownNetworks`, so a client cannot pass a forged address with it.
   - `docs/operations/env-001-pilot/README.md` has the note next to the fallback row, and a post-deploy check (§6.1 step
-    10) that the API sees a client address outside the subnet.
+    11) that the API sees a client address outside the subnet.
 - **Metric names differ for a shared-window rejection.** When the shared CSV window rejects a commit:
   - event 4604 and the `rate_limit.rejected` counter count it under `Orders.CsvImport`, the window's owner (the
     lease's `RejectedBy` metadata);
