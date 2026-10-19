@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Net;
 using System.Net.Sockets;
 using System.Text;
+using Paqueteria.IntegrationTests.Realtime;
 
 namespace Paqueteria.IntegrationTests.Driver;
 
@@ -53,16 +54,28 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
     private static readonly SemaphoreSlim BuildGate = new(1, 1);
 
     /// <summary>
-    /// Builds <c>.next</c> for the requested <c>NEXT_PUBLIC_API_BASE_URL</c>.
-    /// That value is inlined into the client bundle, so the artifact records
-    /// the origin it was built for and is rebuilt whenever a different origin
-    /// is requested, even by another test process sharing the checkout.
+    /// What the marker of a BFF build records in place of an API origin. It can
+    /// never equal an origin, so a BFF build and a Mock build always replace
+    /// each other.
     /// </summary>
-    private static async Task EnsureProductionBuildAsync(string web, string? apiBaseUrl)
+    private const string BffBuildConfiguration = "NEXT_PUBLIC_AUTH_MODE=bff";
+
+    /// <summary>
+    /// Builds <c>.next</c> for the requested <c>NEXT_PUBLIC_API_BASE_URL</c>, or,
+    /// for <paramref name="bff"/>, for the AuthCenter BFF mode
+    /// (<c>NEXT_PUBLIC_AUTH_MODE=bff</c>, no <c>NEXT_PUBLIC_API_BASE_URL</c>: the
+    /// API is reached through the page's own origin). Those values are inlined
+    /// into the client bundle, so the artifact records what it was built for
+    /// and is rebuilt whenever something else is requested, even by another
+    /// test process sharing the checkout.
+    /// </summary>
+    private static async Task EnsureProductionBuildAsync(string web, string? apiBaseUrl, bool bff)
     {
-        var configuration = apiBaseUrl?.TrimEnd('/')
-            ?? throw new InvalidOperationException(
-                "The production Next.js runtime requires an explicit API base URL.");
+        var configuration = bff
+            ? BffBuildConfiguration
+            : apiBaseUrl?.TrimEnd('/')
+              ?? throw new InvalidOperationException(
+                  "The production Next.js runtime requires an explicit API base URL.");
         var marker = Path.Combine(web, ".next", "paquetenvia-test-api-origin");
         await BuildGate.WaitAsync();
         try
@@ -95,7 +108,7 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
                     CreateNoWindow = true,
                 },
             };
-            build.StartInfo.Environment["NEXT_PUBLIC_API_BASE_URL"] = configuration;
+            ApplyAuthenticationMode(build.StartInfo, bff ? null : configuration, bff);
             build.OutputDataReceived += (_, args) =>
             {
                 if (args.Data is not null)
@@ -148,7 +161,7 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
     internal static Task<DriverStopsNextServer> StartAsync(
         string? apiBaseUrl = null,
         int? requestedPort = null) =>
-        StartCoreAsync(NextRuntime.Development, apiBaseUrl, requestedPort, connectSources: null, runtimeEnvironment: null);
+        StartCoreAsync(NextRuntime.Development, apiBaseUrl, requestedPort, connectSources: null, runtimeEnvironment: null, bff: false);
 
     /// <summary>
     /// Builds the deployable artifact and serves it with <c>next start</c>.
@@ -171,14 +184,28 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
         int? requestedPort = null,
         string? connectSources = null,
         IReadOnlyDictionary<string, string>? runtimeEnvironment = null) =>
-        StartCoreAsync(NextRuntime.Production, apiBaseUrl, requestedPort, connectSources, runtimeEnvironment);
+        StartCoreAsync(NextRuntime.Production, apiBaseUrl, requestedPort, connectSources, runtimeEnvironment, bff: false);
+
+    /// <summary>
+    /// The deployable artifact in the pilot's sign-in mode, AuthCenter BFF
+    /// (<c>NEXT_PUBLIC_AUTH_MODE=bff</c>): the driver PWA installs its session from
+    /// <c>GET /auth/session</c> and reaches the API through the page's own origin,
+    /// exactly as the pilot image is built (deploy/azure/pilot/Dockerfile.web).
+    /// Nothing is proxied: a suite fulfils <c>/auth/*</c> and <c>/api/*</c> in the
+    /// browser. The production driver code accepts only an HTTPS same origin, so a
+    /// suite serves it through <see cref="LoopbackTlsTunnel"/>
+    /// (<see cref="DriverStopsBffNextServerFixture"/>).
+    /// </summary>
+    internal static Task<DriverStopsNextServer> StartProductionBffAsync(int? requestedPort = null) =>
+        StartCoreAsync(NextRuntime.Production, apiBaseUrl: null, requestedPort, connectSources: null, runtimeEnvironment: null, bff: true);
 
     private static async Task<DriverStopsNextServer> StartCoreAsync(
         NextRuntime runtime,
         string? apiBaseUrl,
         int? requestedPort,
         string? connectSources,
-        IReadOnlyDictionary<string, string>? runtimeEnvironment)
+        IReadOnlyDictionary<string, string>? runtimeEnvironment,
+        bool bff)
     {
         await ServerGate.WaitAsync();
         FileStream? crossProcessLease = null;
@@ -196,6 +223,7 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
                 requestedPort,
                 connectSources,
                 runtimeEnvironment,
+                bff,
                 crossProcessLease,
                 nextEnvDeclaration);
         }
@@ -220,6 +248,7 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
         int? requestedPort,
         string? connectSources,
         IReadOnlyDictionary<string, string>? runtimeEnvironment,
+        bool bff,
         FileStream crossProcessLease,
         NextEnvDeclarationSnapshot nextEnvDeclaration)
     {
@@ -227,7 +256,7 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
         var web = Path.Combine(root, "apps", "web");
         if (runtime is NextRuntime.Production)
         {
-            await EnsureProductionBuildAsync(web, apiBaseUrl);
+            await EnsureProductionBuildAsync(web, apiBaseUrl, bff);
         }
         var port = requestedPort ?? ReservePort();
         var output = new StringBuilder();
@@ -250,11 +279,10 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
             },
             EnableRaisingEvents = true,
         };
-        if (!string.IsNullOrWhiteSpace(apiBaseUrl))
-        {
-            process.StartInfo.Environment["NEXT_PUBLIC_API_BASE_URL"] =
-                apiBaseUrl.TrimEnd('/');
-        }
+        ApplyAuthenticationMode(
+            process.StartInfo,
+            string.IsNullOrWhiteSpace(apiBaseUrl) ? null : apiBaseUrl.TrimEnd('/'),
+            bff);
         if (!string.IsNullOrWhiteSpace(connectSources))
         {
             process.StartInfo.Environment["PAQUETERIA_CSP_CONNECT_SOURCES"] = connectSources;
@@ -388,6 +416,24 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// A Mock build or server gets the API origin and never the BFF mode; a BFF one gets the BFF mode and never an API
+    /// origin (next.config.ts refuses both together), whatever the test process inherited.
+    /// </summary>
+    private static void ApplyAuthenticationMode(ProcessStartInfo startInfo, string? apiBaseUrl, bool bff)
+    {
+        startInfo.Environment.Remove("NEXT_PUBLIC_AUTH_MODE");
+        startInfo.Environment.Remove("NEXT_PUBLIC_API_BASE_URL");
+        if (bff)
+        {
+            startInfo.Environment["NEXT_PUBLIC_AUTH_MODE"] = "bff";
+        }
+        else if (apiBaseUrl is not null)
+        {
+            startInfo.Environment["NEXT_PUBLIC_API_BASE_URL"] = apiBaseUrl;
+        }
+    }
+
     internal static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
@@ -512,4 +558,52 @@ public sealed class DriverStopsPwaCollection :
     ICollectionFixture<DriverStopsNextServerFixture>
 {
     public const string Name = "DriverStopsPwa";
+}
+
+/// <summary>
+/// The driver PWA in the pilot's AuthCenter BFF mode (<see cref="DriverStopsNextServer.StartProductionBffAsync"/>),
+/// served over loopback TLS: the production driver code accepts only an HTTPS same-origin API. The certificate is the
+/// process-local loopback one, so only a browser context that ignores its TLS error reaches it.
+/// </summary>
+public sealed class DriverStopsBffNextServerFixture : IAsyncLifetime
+{
+    private DriverStopsNextServer? _server;
+    private LoopbackTlsTunnel? _tunnel;
+
+    internal Uri BaseAddress =>
+        _tunnel?.Origin
+        ?? throw new InvalidOperationException("Next.js is not running.");
+
+    public async Task InitializeAsync()
+    {
+        _server = await DriverStopsNextServer.StartProductionBffAsync();
+        _tunnel = LoopbackTlsTunnel.Start(
+            _server.BaseAddress,
+            RealtimeKestrelWebApplicationFactory.LoopbackCertificate);
+    }
+
+    public async Task DisposeAsync()
+    {
+        try
+        {
+            if (_tunnel is not null)
+            {
+                await _tunnel.DisposeAsync();
+            }
+        }
+        finally
+        {
+            if (_server is not null)
+            {
+                await _server.DisposeAsync();
+            }
+        }
+    }
+}
+
+[CollectionDefinition(Name, DisableParallelization = true)]
+public sealed class DriverStopsBffPwaCollection :
+    ICollectionFixture<DriverStopsBffNextServerFixture>
+{
+    public const string Name = "DriverStopsBffPwa";
 }
