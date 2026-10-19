@@ -55,6 +55,8 @@ export function createDriverVoiceApi(
   fetcher: typeof fetch = fetch,
 ): DriverVoiceApi {
   async function send(path: string, init: RequestInit, signal?: AbortSignal): Promise<unknown> {
+    // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19: never with a session the server has not confirmed.
+    if (session.remembered === true) throw new DriverVoiceApiError("network");
     let authorization: RequestAuthorization;
     try {
       authorization = await resolveRequestAuthorization(session, init.method ?? "GET");

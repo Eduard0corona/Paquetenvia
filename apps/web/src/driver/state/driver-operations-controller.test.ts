@@ -28,6 +28,7 @@ import type { DriverSession } from "../session/driver-session";
 import {
   DriverOperationsController,
   driverOperationExpiredMessage,
+  driverSessionUnconfirmedSyncMessage,
 } from "./driver-operations-controller";
 import { DriverStopsController } from "./driver-stops-controller";
 
@@ -40,6 +41,52 @@ const session: DriverSession = {
   cacheNamespace: "opaque-controller-test",
   getAccessToken: () => "memory-only",
 };
+
+describe("a remembered session (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19, owner answer E3)", () => {
+  it("opens the queue and takes new actions, but starts no sync, so nothing is sent", async () => {
+    const queued = operation("CHECK_IN", 3);
+    const queue = new MemoryQueue([queued]);
+    const schedulerFactory = vi.fn();
+    const transitionOrder = vi.fn();
+    const controller = new DriverOperationsController({
+      session: { ...session, remembered: true },
+      queue,
+      api: {
+        transitionOrder,
+        createProofUploadSession: vi.fn(),
+        finalizeProof: vi.fn(),
+        recordCodCollection: vi.fn(),
+        openFailedDeliveryIncident: vi.fn(),
+      } as DriverSyncApi,
+      refreshStops: async () => stopList([]),
+      onAccessRevoked: vi.fn(),
+      schedulerFactory,
+      sync: false,
+      now: () => new Date("2026-07-26T12:01:00.000Z"),
+      randomUuid: () => replacementId,
+    });
+
+    await controller.start();
+    expect(controller.current.operations.map((candidate) => candidate.id)).toEqual([queued.id]);
+    expect(schedulerFactory).not.toHaveBeenCalled();
+
+    await expect(
+      controller.enqueue({
+        orderId: "55555555-5555-4555-8555-555555555555",
+        kind: "CHECK_IN",
+        projectedStatus: "ASSIGNED",
+        projectedVersion: 2,
+      }),
+    ).resolves.toBe(true);
+    expect(queue.operations).toHaveLength(2);
+    expect(controller.current.message).toBe("Acción guardada. Se sincronizará cuando haya conexión.");
+
+    await controller.syncNow();
+    expect(controller.current.message).toBe(driverSessionUnconfirmedSyncMessage);
+    expect(transitionOrder).not.toHaveBeenCalled();
+    await controller.dispose();
+  });
+});
 
 describe("driver operations conflict resolution", () => {
   it("creates an explicit upload-session attempt without changing capture identity", async () => {

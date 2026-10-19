@@ -37,6 +37,7 @@ import {
   disabledDriverSyncTelemetry,
   driverProofSizeBucket,
   DriverSyncScheduler,
+  type DriverAccessRevocation,
   type DriverSyncTelemetry,
   type DriverSyncSchedulerOptions,
 } from "../offline/driver-sync-scheduler";
@@ -68,7 +69,14 @@ export interface DriverOperationsControllerOptions {
   readonly api: DriverSyncApi;
   /** The confirmation read; see DriverSyncSchedulerOptions.refreshStops. */
   readonly refreshStops: (signal?: AbortSignal) => Promise<DriverStopList>;
-  readonly onAccessRevoked: (category: "unauthorized" | "forbidden") => void;
+  readonly onAccessRevoked: (category: DriverAccessRevocation) => void;
+  /**
+   * DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (owner answer E3): false for a
+   * remembered session the server has not confirmed. The queue opens and
+   * takes new actions, but no scheduler starts, so nothing is sent; the
+   * confirmed session that replaces it has its own controller. Defaults to true.
+   */
+  readonly sync?: boolean;
   /**
    * ORG-MY-ROLES-2026-10-12: who reports, from the person's own roles in the
    * session's organization as DriverRolesController knows them now
@@ -138,6 +146,13 @@ export function driverOperationExpiredMessage(
   }
   return parts.join(" ");
 }
+
+/**
+ * DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (E3): "Sincronizar ahora" while the
+ * server has not confirmed the session the phone remembered.
+ */
+export const driverSessionUnconfirmedSyncMessage =
+  "Tus acciones se enviarán cuando haya conexión y el servidor confirme tu sesión.";
 
 /** Shown when another tab of an older version keeps the phone's database open. */
 export const driverDatabaseBlockedMessage =
@@ -223,6 +238,7 @@ export class DriverOperationsController {
       const operations = await this.queue.listOperations(partition);
       if (this.disposed) return;
       this.setState({ ...initialState, operations, loading: false });
+      if (this.options.sync === false) return;
       const createScheduler =
         this.options.schedulerFactory ??
         ((schedulerOptions) => new DriverSyncScheduler(schedulerOptions));
@@ -557,6 +573,10 @@ export class DriverOperationsController {
   }
 
   public async syncNow(): Promise<void> {
+    if (this.options.sync === false) {
+      this.setMessage(driverSessionUnconfirmedSyncMessage);
+      return;
+    }
     this.expired = [];
     this.setMessage("Sincronizando acciones pendientes.");
     await this.scheduler?.requestSync(true);

@@ -72,8 +72,15 @@ export function DriverAccount() {
     setBusy(false);
     setFailed(true);
     // The local session objects were dropped; restore them from the still-valid cookie.
-    if (isBffAuthenticationEnabled(process.env.NEXT_PUBLIC_AUTH_MODE)) void bootstrapBffSession(window);
+    if (isBffAuthenticationEnabled(process.env.NEXT_PUBLIC_AUTH_MODE)) {
+      void bootstrapBffSession(window, fetch, null, { rememberDriver: true });
+    }
   }
+
+  // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (E3): a remembered session has no
+  // server session to end yet and asks the API for nothing, so "Cerrar sesión"
+  // waits for the confirmed one and "Cuenta" is not offered.
+  const remembered = session.remembered === true;
 
   return (
     <div className={styles.account}>
@@ -81,20 +88,25 @@ export function DriverAccount() {
       <button
         type="button"
         className={styles.accountLogout}
-        disabled={busy || !online}
+        disabled={busy || !online || remembered}
         onClick={() => void logout(session)}
       >
         {busy ? "Cerrando sesión…" : "Cerrar sesión"}
       </button>
       {!online && <span className={styles.accountHint}>Conéctate a internet para cerrar sesión.</span>}
+      {online && remembered && (
+        <span className={styles.accountHint}>Podrás cerrar sesión cuando se confirme tu sesión.</span>
+      )}
       {failed && <span role="alert" className={styles.accountHint}>No fue posible cerrar la sesión. Intenta de nuevo.</span>}
-      <details
-        className={styles.accountDetails}
-        onToggle={(event) => setAccountOpen(event.currentTarget.open)}
-      >
-        <summary>Cuenta</summary>
-        {accountOpen ? <DriverPhoneSettings session={session} /> : null}
-      </details>
+      {remembered ? null : (
+        <details
+          className={styles.accountDetails}
+          onToggle={(event) => setAccountOpen(event.currentTarget.open)}
+        >
+          <summary>Cuenta</summary>
+          {accountOpen ? <DriverPhoneSettings session={session} /> : null}
+        </details>
+      )}
     </div>
   );
 }
