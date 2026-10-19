@@ -9,12 +9,12 @@ files (`deploy/azure/*.bicep`, `deploy-core.ps1`, `deploy-azure-dev.yml`) or gua
 |---|---|
 | Templates | `deploy/azure/pilot/{security,platform,jobs,apps,observability}.bicep` |
 | Pilot-only images | `deploy/azure/pilot/Dockerfile.db-ops` (migrator only), `deploy/azure/pilot/Dockerfile.web` (AUTH-001 BFF build) |
-| API and Worker images | `deploy/azure/Dockerfile.api`, `deploy/azure/Dockerfile.worker` (shared, unchanged) |
+| API and Worker images | `deploy/azure/Dockerfile.api`, `deploy/azure/Dockerfile.worker` (shared; run as the non-root `app` user, `USER $APP_UID`) |
 | Business settings reviewed by the owner | `deploy/azure/pilot/apps.settings.json` |
 | OBS-002 alert e-mail (owner) | `deploy/azure/pilot/observability.parameters.json` |
 | Accepted terms and privacy versions for the web (owner, UI-001) | `deploy/azure/pilot/web.parameters.json` |
 | Deployment workflow | `.github/workflows/deploy-azure-pilot.yml` (`workflow_dispatch`, GitHub Environment `azure-pilot`) |
-| Static guards | `tools/azr-001/env001_pilot_guards.py` (24 guards) and `test_env001_pilot_guards.py` |
+| Static guards | `tools/azr-001/env001_pilot_guards.py` (25 guards) and `test_env001_pilot_guards.py` |
 | Restore drill | `deploy/azure/pilot/restore-drill.sh` |
 | One-time bootstrap (owner) | [`bootstrap.md`](bootstrap.md) |
 
@@ -741,7 +741,7 @@ Details, format and error codes: `docs/development/mdm-001-master-data-loader.md
 
 ## 8. Static guards (`tools/azr-001/env001_pilot_guards.py`)
 
-The 24 guards (P00–P23) run on the compiled ARM output and the workflow:
+The 25 guards (P00–P24) run on the compiled ARM output, the workflow and the pilot Dockerfiles:
 
 - **Resources:** only authorized resource types and exactly six workloads. Redis, Azure SignalR,
   Front Door and PostgreSQL firewall rules are rejected.
@@ -805,6 +805,12 @@ The 24 guards (P00–P23) run on the compiled ARM output and the workflow:
   maps `ConnectionStrings:PaqueteriaWorker` or a Worker secret (the shared OBS-003 pseudonym key is not a Worker
   credential and is exempt); no other workload maps the realtime secret; and the workflow generates exactly the
   `api`, `worker` and `realtime` runtime logins.
+- **Non-root images (P24, AZR-001-AC-064):** AZR-001 v0.8 says "Non-root cuando soporte runtime. Root requiere
+  waiver", and no waiver exists. The workflow builds exactly the four images `deploy/azure/Dockerfile.api`,
+  `deploy/azure/Dockerfile.worker`, `deploy/azure/pilot/Dockerfile.db-ops` and `deploy/azure/pilot/Dockerfile.web`,
+  and the last `USER` of each final stage is non-root: `$APP_UID` (uid 1654, the `app` user) on an official
+  `mcr.microsoft.com/dotnet/` base whose `APP_UID` no `ARG` or `ENV` redefines, or a literal user other than
+  `root`/`0` (`node` for the web). A missing `USER`, a later `USER root` or an unresolvable variable fails.
 
 The unit tests compile the real templates whenever the pinned Bicep CLI is present (the azr-static CI
 job installs it). They mutate the ARM output to prove that each guard fails closed.
@@ -817,12 +823,15 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
 **Verified without Azure:**
 
 - `bicep build` and `bicep lint` pass with the pinned v0.47.16, with no warnings.
-- 24/24 pilot guards (P00–P23) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
+- 25/25 pilot guards (P00–P24) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
   tooling tests. The gitleaks scan was not re-run for OBS-002.
 - The SCL-007 PostgreSQL connection alerts build and lint with no diagnostic, and P21 pins them.
 - The OBS-002 alert and workbook queries parse and type-check offline (Kusto language service).
 - The migrator changes pass contract tests on real PostgreSQL 18/PostGIS 3.6.
 - The BFF web build and `next start` with the CSP connect source work.
+- The API and Worker images run as the non-root `app` user (uid 1654). With the final stage of each Dockerfile
+  copied verbatim over a local `dotnet publish`, both listen on `0.0.0.0:8080` and answer `/health/live` with 200, with
+  no permission error (Development configuration, so the PostgreSQL key ring and Key Vault were not exercised).
 
 **Unverified until the first real deployment:**
 
