@@ -55,7 +55,9 @@ El despacho y Finanzas no ven los mismos repartidores ni los mismos campos, y ca
   forzado), sin `FOR UPDATE`, sin migración, tabla, índice, rol, grant ni flujo cross-module nuevo. AI-06 y AI-18 no
   cambian.
 - No se lee ni devuelve nombre, correo, teléfono (tampoco las columnas de VOICE-001), documentos ni coordenadas; las
-  consultas no tocan `identity.users`, membresías ni documentos. Los logs solo registran tenant, actor y conteo.
+  consultas no tocan `identity.users`, membresías ni documentos. Los logs solo registran el conteo; la organización y el
+  actor van como el seudónimo HMAC y el tipo de rol que agrega `TraceCorrelatedLoggerFactory`, nunca como id
+  (OBS-003-TENANT-PSEUDONYM-2026-10-12; `LogTemplateIdentifierArchitectureTests`).
 
 ## Web
 

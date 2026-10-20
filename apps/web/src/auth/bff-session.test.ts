@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   buildLoginHref,
+  buildSignInPromptHref,
   fetchBffSession,
   isLocalReturnUrl,
   buildStepUpHref,
@@ -58,6 +59,28 @@ describe("BFF login href", () => {
     for (const unsafe of ["https://evil.test", "//evil.test", "/\\evil", "javascript:alert(1)", "/a\nb", ""]) {
       expect(isLocalReturnUrl(unsafe)).toBe(false);
       expect(buildLoginHref(unsafe)).toBe("/auth/login?return_url=%2Flogin");
+    }
+  });
+});
+
+describe("sign-in prompt href", () => {
+  it("opens /login with a local return url only", () => {
+    expect(buildSignInPromptHref("/driver/stops")).toBe("/login?return_url=%2Fdriver%2Fstops");
+    expect(
+      buildSignInPromptHref("/driver/stops/22222222-2222-2222-2222-222222222222"),
+    ).toBe("/login?return_url=%2Fdriver%2Fstops%2F22222222-2222-2222-2222-222222222222");
+    for (const unsafe of [
+      "https://evil.test",
+      "//evil.test",
+      "/\\evil",
+      "javascript:alert(1)",
+      "/a\nb",
+      "",
+      "/login",
+      null,
+      undefined,
+    ]) {
+      expect(buildSignInPromptHref(unsafe)).toBe("/login");
     }
   });
 });

@@ -9,12 +9,12 @@ files (`deploy/azure/*.bicep`, `deploy-core.ps1`, `deploy-azure-dev.yml`) or gua
 |---|---|
 | Templates | `deploy/azure/pilot/{security,platform,jobs,apps,observability}.bicep` |
 | Pilot-only images | `deploy/azure/pilot/Dockerfile.db-ops` (migrator only), `deploy/azure/pilot/Dockerfile.web` (AUTH-001 BFF build) |
-| API and Worker images | `deploy/azure/Dockerfile.api`, `deploy/azure/Dockerfile.worker` (shared, unchanged) |
+| API and Worker images | `deploy/azure/Dockerfile.api`, `deploy/azure/Dockerfile.worker` (shared; run as the non-root `app` user, `USER $APP_UID`) |
 | Business settings reviewed by the owner | `deploy/azure/pilot/apps.settings.json` |
 | OBS-002 alert e-mail (owner) | `deploy/azure/pilot/observability.parameters.json` |
 | Accepted terms and privacy versions for the web (owner, UI-001) | `deploy/azure/pilot/web.parameters.json` |
 | Deployment workflow | `.github/workflows/deploy-azure-pilot.yml` (`workflow_dispatch`, GitHub Environment `azure-pilot`) |
-| Static guards | `tools/azr-001/env001_pilot_guards.py` (24 guards) and `test_env001_pilot_guards.py` |
+| Static guards | `tools/azr-001/env001_pilot_guards.py` (25 guards) and `test_env001_pilot_guards.py` |
 | Restore drill | `deploy/azure/pilot/restore-drill.sh` |
 | One-time bootstrap (owner) | [`bootstrap.md`](bootstrap.md) |
 
@@ -32,6 +32,7 @@ lists what could only be checked statically.
 | AZURE-DEPLOY-VIA-WORKFLOW | Single `workflow_dispatch` workflow using OIDC, with the 13/13 Foundation provenance gate (AZR-001 §27 `deploy-gate` reused unchanged) |
 | PILOT-SAME-ORIGIN-ROUTING | Container Apps rule-based routing (§3) |
 | ADP-001-POD-BLOB-DEFENDER | Storage account (Entra-only, no anonymous or shared-key access), private container `proofs`, Defender for Storage on-upload malware scanning, RBAC from the ADP-001 table |
+| ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20 | Blob and container soft delete 30 days on the proof storage, versioning off: a deleted or overwritten photo can be recovered for 30 days (§6.4, guard P12) |
 | ADP-001-PII-KEYVAULT-ENVELOPE | Key Vault RSA-3072 `pii-kek` (wrap/unwrap only). The API alone has *Key Vault Crypto Service Encryption User* on it. |
 | SCL-001 / ENV-001 Data Protection KEK | Key Vault RSA-3072 `dataprotection-kek`. API and Worker have *Crypto Service Encryption User*, and the workloads get `DataProtection__KeyEncryption__*`. |
 | GATE-013 | API and Worker run with `minReplicas = maxReplicas = 1`, SignalR `InProcess`, no Redis and no Azure SignalR Service (guard P08) |
@@ -80,7 +81,7 @@ Otherwise the deploy job stops before logging in to Azure.
 | Private DNS | `pv-pilot.private.postgres.database.azure.com` |
 | Log Analytics | `law-pv-pilot-<suffix>`: 30 days, 0.3 GB/day cap |
 | Registry | `pvpilot<suffix>`: Basic, admin disabled, pulls by managed identity only |
-| Storage | `stpvpilot<suffix13>` / container `proofs` |
+| Storage | `stpvpilot<suffix13>` / container `proofs`: Standard LRS, versioning off, blob and container soft delete 30 days (§6.4) |
 | PostgreSQL | `pg-pv-pilot-<suffix>`: 18, Burstable B1ms, 32 GB with auto-grow, 14-day PITR backups, `require_secure_transport=ON`, `azure.extensions=POSTGIS,PGCRYPTO`, `password_encryption=SCRAM-SHA-256` |
 | Container Apps environment | `cae-pv-pilot-<suffix>` |
 | Apps / jobs | `ca-pv-pilot-{api,worker,web}`, `job-pv-pilot-{migrate,logins,verify}` |
@@ -282,8 +283,9 @@ App settings wired by `apps.bicep`:
 `apps.settings.json` holds the business and policy values the owner must choose. It is appended to the
 API and Worker settings. It cannot override any platform-managed prefix, and it cannot carry a
 mock/synthetic value or a secret-looking name (guard P17). The workflow refuses to deploy while any
-value is still `OWNER_DECISION_REQUIRED`; today no value in the file awaits the owner (it only carries
-`Finance__OperationalTimeZone=America/Mazatlan`).
+value is still `OWNER_DECISION_REQUIRED` or while the driver eligibility rules are missing (below). Today the
+file only carries `Finance__OperationalTimeZone=America/Mazatlan`, so the owner still has to supply the driver
+eligibility rules before the first deploy.
 
 There is no assignment or driver eligibility policy version setting (POLICY-VERSIONS-PER-ORG-2026-10-02,
 owner 2026-10-02: "Por empresa, piloto-2026-10-v1"). Each organization carries its own versions in
@@ -300,8 +302,28 @@ organization versions its own pricing policy in `pricing.tariff_rules.policy_ver
 tariffs (MDM-001), and every quote freezes the version of the rule it selected. The API refuses to
 start if `Pricing__PricingPolicyVersion` is still set.
 
-Driver eligibility maps (`Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TYPE>__0`,
-`Drivers__Eligibility__VehicleCapacity__<TYPE>__MaximumPackageCount`, …) go in the same file.
+**Driver eligibility rules (owner decision pending, blocks the deploy).** The API runs with
+`Drivers__Provider=PostgreSql` and `Routing__Provider=PostgreSql`, so it refuses to start until the same file gives
+every vehicle type (`MOTORCYCLE`, `CAR`, `VAN`, `BICYCLE`, `WALKER`) its rules:
+
+- `Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TYPE>__<n>`, numbered from `0`: the documents a driver
+  with that vehicle type needs, at least one, each one of `IDENTITY`, `DRIVER_LICENSE`, `VEHICLE_CARD`, `INSURANCE`,
+  `BACKGROUND_CHECK` or `OTHER`;
+- `Drivers__Eligibility__VehicleCapacity__<TYPE>__MaximumPackageCount`, `__MaximumTotalWeightGrams`,
+  `__MaximumSinglePackageWeightGrams` (not above the total), `__MaximumLengthMillimeters`, `__MaximumWidthMillimeters`
+  and `__MaximumHeightMillimeters`: whole numbers above zero, in plain digits;
+- optionally `Drivers__Eligibility__VehicleCapacity__<TYPE>__RequireDimensions` (`true` refuses a package without
+  dimensions; `false` when absent) and `Drivers__Eligibility__NonExpiringDocumentTypes__<n>` (document types that need
+  no expiry date; every other required document needs one that has not passed).
+
+The file has none today and there is no default: they are business rules the owner chooses.
+`env001_pilot_guards.py settings-check` (provenance job and Stage 4) stops with
+`STOP_FOR_OWNER_DECISION: driver eligibility rules for vehicle type <TYPE> are missing: ...`, naming each missing
+setting, so **the pilot deploy stops before touching Azure** until all five vehicle types are complete. It applies the
+API's rules to every entry present and accepts only the exact names above. Guard P17 (`check`) refuses an invalid entry
+but not a missing one. Without this stop, a first deploy would fail only at the smoke test (`/auth/session is not
+served by the API`), and a later one would leave the earlier revision serving. `PilotApiStartupConfigurationTests`
+pins the two start failures (`OwnerPendingStartFailures`) until the owner supplies the rules.
 
 **Dispatch number for the driver app (DRV-DISPATCH-CONTACT-2026-10-12, owner 2026-10-12: "Sí, configurable
 (Recommended)").** The driver app shows "Llamar a despacho" (a `tel:` link) next to its texts that ask the driver to
@@ -376,6 +398,7 @@ hours a month. Sized for 50–100 real deliveries.
 | Log Analytics | 5 GB/month free, then 2.53 per GB; cap 0.3 GB/day ⇒ ≤ 9.1 GB | 0 – 10.40 |
 | Key Vault | RSA-3072 operations 0.165 per 10 k; secrets 0.033 per 10 k (the API realtime login adds two secrets read once per start: no measurable change) | ~0.30 |
 | Blob storage | a few GB Hot LRS | ~0.20 |
+| Soft-deleted photos (30 days, ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20) | billed as stored data, Hot LRS 0.02288 per GB (Retail Prices API, 2026-10-20); the Worker deletes each quarantine copy after promotion, so about one month of uploads (~0.2 GB, the malware scanning row) stays soft-deleted, ≈ 0.005; with 7 days it was ≈ 0.001 | < 0.01 |
 | Private DNS zone | 0.50 per zone | 0.50 |
 | VNet, route, managed certificate, budget | free | 0.00 |
 | **Subtotal before OBS-002** | | **≈ 98 typical, ≈ 108 if the log cap is hit every day** |
@@ -418,13 +441,17 @@ Two further caveats:
 2. The owner records the GATE-007 and GATE-012 decisions (or explicit scopes) in `decision-log.md`,
    then sets `PILOT_GATE_007_DECISION` / `PILOT_GATE_012_DECISION` to those row ids.
    `PILOT_GATE_012_DECISION=GATE-012-PILOT-SCOPE` is already approved (owner, 2026-09-28).
-3. The owner replaces every `OWNER_DECISION_REQUIRED` (PR → `development` → `main`):
-   - `deploy/azure/pilot/apps.settings.json` (none remains since POLICY-VERSIONS-PER-ORG-2026-10-02);
+3. The owner replaces every `OWNER_DECISION_REQUIRED` and supplies the missing owner values (PR → `development` →
+   `main`):
+   - `deploy/azure/pilot/apps.settings.json`: no placeholder remains since POLICY-VERSIONS-PER-ORG-2026-10-02, but
+     the driver eligibility rules (documents and capacity per vehicle type, §4 "Driver eligibility rules") are
+     missing;
    - the alert e-mail in `deploy/azure/pilot/observability.parameters.json`;
    - `webTermsVersion` and `webPrivacyVersion` in `deploy/azure/pilot/web.parameters.json`, the accepted
      terms and privacy notice versions that come with the approved notice (§4).
 
-   Each file blocks the workflow while a placeholder remains.
+   Each file blocks the workflow while a placeholder remains or, in `apps.settings.json`, a driver eligibility rule
+   is missing.
 4. Promote to `main` and wait for the Foundation CI push run on `main` (13/13 green). Note its run id
    and head SHA.
 5. Actions → *Deploy Azure PILOT* → Run workflow on `main`: `tested_git_sha=<head SHA>`,
@@ -473,13 +500,15 @@ grants the role and `apps.bicep` gives the API identity *Key Vault Secrets User*
 the owner can confirm in Log Analytics that `ca-pv-pilot-api` logs `realtime_outbox_dispatcher_started` with
 `provider=postgresql` and no `realtime_outbox_message_failed`.
 
-**Still blocks the API start, separate owner decision (found by `PilotApiStartupConfigurationTests`):** with
+**Driver eligibility rules (step 3, found by `PilotApiStartupConfigurationTests`):** with
 `Drivers__Provider=PostgreSql` and `Routing__Provider=PostgreSql` the API refuses to start until
-`apps.settings.json` carries the driver eligibility maps for every vehicle type (MOTORCYCLE, CAR, VAN, BICYCLE,
+`apps.settings.json` carries the driver eligibility rules for every vehicle type (MOTORCYCLE, CAR, VAN, BICYCLE,
 WALKER): `Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TYPE>__<n>` and
 `Drivers__Eligibility__VehicleCapacity__<TYPE>__{MaximumPackageCount,MaximumTotalWeightGrams,MaximumSinglePackageWeightGrams,MaximumLengthMillimeters,MaximumWidthMillimeters,MaximumHeightMillimeters}`
-(optionally `Drivers__Eligibility__NonExpiringDocumentTypes__<n>`). The file has none today; the values are
-business rules the owner must choose.
+(optionally `Drivers__Eligibility__NonExpiringDocumentTypes__<n>` and
+`Drivers__Eligibility__VehicleCapacity__<TYPE>__RequireDimensions`; §4 "Driver eligibility rules"). The file has
+none today; the values are business rules the owner must choose. `settings-check` stops the deploy before touching
+Azure while any is missing.
 
 ### 6.2 Redeploy
 
@@ -530,6 +559,66 @@ The recovery target is any point in the last 14 days (PITR, locally redundant, n
   4. Re-run the workflow for the current SHA. This restores the replica counts and re-applies the
      runtime logins.
 
+#### Proof photos (Blob Storage)
+
+The point-in-time restore above brings back PostgreSQL only. Delivery photos live in the storage account and
+have their own protection (ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20, owner: "Borrado suave más largo
+(Recommended)"):
+
+- **What can be recovered, for 30 days:**
+  - a deleted photo;
+  - the previous state of an overwritten photo, kept as a soft-deleted snapshot, since versioning is off
+    ([soft delete for blobs](https://learn.microsoft.com/en-us/azure/storage/blobs/soft-delete-blob-overview));
+  - the whole `proofs` container with every photo in it, if the container is deleted
+    ([container soft delete](https://learn.microsoft.com/en-us/azure/storage/blobs/soft-delete-container-overview)).
+- **What cannot:**
+  - anything after its 30 days;
+  - deleting the storage account or the resource group (§6.5): every photo is lost;
+  - changes to a blob's metadata or properties.
+- **When the 30 days start:** Azure fixes the expiry when an object is deleted or overwritten. Photos deleted
+  before the deployment that raised the period from 7 to 30 days keep their 7 days.
+- **Which names matter:** the app never deletes or overwrites a promoted photo. The Worker copies each validated
+  upload once to `proofs/<owner organization id>/<order id>/<upload session id>` in the container `proofs`, only if
+  that name is still free, and then deletes the upload copy under `quarantine/`. Soft-deleted `quarantine/` blobs are
+  therefore normal; restore only names under `proofs/`. The database row keeps pointing at the same name, so a
+  restored photo needs no other change.
+- **Who can restore:** shared keys are disabled, so use your Microsoft Entra sign-in. You need *Storage Blob Data
+  Contributor* on the account or the container `proofs`, the least-privileged built-in role for Undelete Blob and
+  Restore Container. The templates never assign it to a person: grant it temporarily and remove it afterwards, as
+  with the Key Vault role in §6.6.
+
+**Steps in the Azure portal:**
+
+1. Open the storage account `stpvpilot<suffix13>` → *Containers* → `proofs` and turn on *Show deleted blobs*.
+   Deleted blobs show the status *Deleted* and how many days remain.
+2. **Deleted photo:** open the blob and select *Undelete*.
+3. **Overwritten photo:** open the blob and select *Undelete*. This restores its soft-deleted snapshots even
+   when the blob itself is not deleted. Then open *Snapshots*, choose the snapshot from before the overwrite and
+   select *Promote snapshot*.
+4. **Deleted container:** in *Storage browser* → *Blob containers*, turn on *Show deleted containers*, select
+   `proofs` and *Restore*. Do this before re-running the pilot workflow: the workflow recreates `proofs`, and a
+   container with the same name blocks the restore until it is deleted again.
+
+**The same from Cloud Shell** (`--auth-mode login`):
+
+```bash
+# Deleted photos of one order:
+az storage blob list --account-name <account> -c proofs --prefix 'proofs/<owner>/<order>/' --include d \
+  --auth-mode login --query "[?deleted].name" -o tsv
+az storage blob undelete --account-name <account> -c proofs -n '<blob name>' --auth-mode login
+
+# Deleted container:
+az storage container list --account-name <account> --include-deleted --auth-mode login \
+  --query "[?deleted].{name:name, version:version}" -o table
+az storage container restore --account-name <account> -n proofs --deleted-version <version> --auth-mode login
+```
+
+To promote a snapshot of an overwritten photo, use the portal (step 3).
+
+**Cost:** soft-deleted data is billed as stored data. In the pilot that is mostly the upload copies the Worker
+deletes, about one month of uploads (~0.2 GB): under 0.01 USD per month (§5). Even if every photo of the pilot
+(a few GB) were deleted at once, keeping them for 30 days would cost well under 0.10 USD.
+
 ### 6.5 Destroy
 
 ```bash
@@ -538,6 +627,8 @@ az group delete --name <rg> --yes
 
 This removes everything in the group. The budget and role assignments are scoped to it.
 
+- **Proof photos:** the storage account goes with the group, and soft delete does not protect against that, so
+  every delivery photo is lost (§6.4).
 - **Key Vault:** it has purge protection, so it stays soft-deleted for 90 days and cannot be purged.
   Redeploying into a resource group with the same name and subscription derives the same vault name,
   so recover it first: `az keyvault recover --name <kv>`.
@@ -746,7 +837,7 @@ Details, format and error codes: `docs/development/mdm-001-master-data-loader.md
 
 ## 8. Static guards (`tools/azr-001/env001_pilot_guards.py`)
 
-The 24 guards (P00–P23) run on the compiled ARM output and the workflow:
+The 25 guards (P00–P24) run on the compiled ARM output, the workflow and the pilot Dockerfiles:
 
 - **Resources:** only authorized resource types and exactly six workloads. Redis, Azure SignalR,
   Front Door and PostgreSQL firewall rules are rejected.
@@ -767,14 +858,16 @@ The 24 guards (P00–P23) run on the compiled ARM output and the workflow:
 - **Data services:**
   - PostgreSQL is private, version 18, with ≥ 7-day backups, secure transport and the extension
     allowlist, in a VNet-injected Consumption environment.
-  - Storage flags and Defender scanning are set.
+  - Storage flags and Defender scanning are set. Blob versioning is off, and blob and container soft delete are on
+    for exactly 30 days with no permanent delete (P12, ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20).
   - Key Vault denies public traffic (only the Container Apps subnet, no bypass, no standing IP rule) and has RBAC, purge protection and wrap-only RSA keys of at least 3072 bits.
 - **RBAC:** role assignments stay within the allowlist.
 - **Cost:** the 100 USD budget exists and the log cap is set.
 - **ADP-001 and web:**
   - The ADP-001 configuration contract is wired.
   - Business settings cannot override platform settings (P17; `TelemetryExport__` and `TelemetryPseudonym__` are
-    platform-managed).
+    platform-managed). Driver eligibility entries follow the API's start rules (P17), and `settings-check` also
+    requires them for every vehicle type (§4).
   - The web image is a BFF build.
 - **Observability (P21, OBS-002):**
   - exactly the five alert rules, every 5–15 minutes, costing at most 5 USD per month;
@@ -817,6 +910,12 @@ The 24 guards (P00–P23) run on the compiled ARM output and the workflow:
   maps `ConnectionStrings:PaqueteriaWorker` or a Worker secret (the shared OBS-003 pseudonym key is not a Worker
   credential and is exempt); no other workload maps the realtime secret; and the workflow generates exactly the
   `api`, `worker` and `realtime` runtime logins.
+- **Non-root images (P24, AZR-001-AC-064):** AZR-001 v0.8 says "Non-root cuando soporte runtime. Root requiere
+  waiver", and no waiver exists. The workflow builds exactly the four images `deploy/azure/Dockerfile.api`,
+  `deploy/azure/Dockerfile.worker`, `deploy/azure/pilot/Dockerfile.db-ops` and `deploy/azure/pilot/Dockerfile.web`,
+  and the last `USER` of each final stage is non-root: `$APP_UID` (uid 1654, the `app` user) on an official
+  `mcr.microsoft.com/dotnet/` base whose `APP_UID` no `ARG` or `ENV` redefines, or a literal user other than
+  `root`/`0` (`node` for the web). A missing `USER`, a later `USER root` or an unresolvable variable fails.
 
 The unit tests compile the real templates whenever the pinned Bicep CLI is present (the azr-static CI
 job installs it). They mutate the ARM output to prove that each guard fails closed.
@@ -829,12 +928,15 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
 **Verified without Azure:**
 
 - `bicep build` and `bicep lint` pass with the pinned v0.47.16, with no warnings.
-- 24/24 pilot guards (P00–P23) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
+- 25/25 pilot guards (P00–P24) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
   tooling tests. The gitleaks scan was not re-run for OBS-002.
 - The SCL-007 PostgreSQL connection and resource alerts build and lint with no diagnostic, and P21 pins them.
 - The OBS-002 alert and workbook queries parse and type-check offline (Kusto language service).
 - The migrator changes pass contract tests on real PostgreSQL 18/PostGIS 3.6.
 - The BFF web build and `next start` with the CSP connect source work.
+- The API and Worker images run as the non-root `app` user (uid 1654). With the final stage of each Dockerfile
+  copied verbatim over a local `dotnet publish`, both listen on `0.0.0.0:8080` and answer `/health/live` with 200, with
+  no permission error (Development configuration, so the PostgreSQL key ring and Key Vault were not exercised).
 
 **Unverified until the first real deployment:**
 
@@ -862,6 +964,8 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
     and the PostgreSQL pages do not restate them;
   - the disk is still 32 GiB, the base of the storage percentages; after an autogrow the same 70 % is of the larger
     disk.
+- Proof photo soft delete (ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20): ARM acceptance of the 30-day blob and
+  container retention and the restore steps of §6.4 were not run against real Azure.
 - OBS-003:
   - ARM acceptance of the workspace-based component;
   - that the exporter reaches the Mexico Central ingestion endpoint from inside the VNet, and the real volume
