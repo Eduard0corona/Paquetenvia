@@ -106,6 +106,13 @@ entities:
     - address
     - contact_name
     - phone
+    - email
+    rules:
+    - NTF-RECIPIENT-NOTICES-2026-10-20 - email is optional and exists only on the destination location of a quote; the
+      destination phone and e-mail are also sealed under the recipient-notice key (notice copies) so that the Worker can
+      send recipient notices without the PII key (E4-P2); every copy is personal data in GATE-007 retention and ARCO
+    - a location row never changes after its quote, so the destination location is the recipient snapshot of its order;
+      erasing it erases every copy
   TariffRule:
     required:
     - id
@@ -461,6 +468,12 @@ privacy_invariants:
 - VOICE-001-MASKED-CALLS-2026-10-11 - driver and recipient phone numbers reach the voice provider only in memory for one
   bridged call; they are never returned by the call endpoints, logged, audited, published or stored in clear, and the
   driver's own number is stored only with consent (ADP-001 envelope) and is included in GATE-007 retention/ARCO
+- NTF-RECIPIENT-NOTICES-2026-10-20 - the recipient phone and e-mail of a notice are decrypted only in the Worker's
+  memory for one send, from the notice-key copies (the Worker never holds the PII key), and only after the consent,
+  validity and opt-out checks; they are never stored in clear, logged, audited or placed in an outbox payload, a
+  Notification row, a status event or a realtime event; a notice carries only the public id (número de guía) and the
+  tracking link, inside the public_tracking_contract map below; opt-outs are kept only as keyed hashes; the text of an
+  inbound WhatsApp reply is never stored; recipient notices are included in GATE-007 retention/ARCO
 - proof and audit records are append-only; privacy actions use access restriction, pseudonymization or cryptographic erasure
   under approved policy
 outbox_invariants:
@@ -471,6 +484,11 @@ outbox_invariants:
 - stale PROCESSING is requeued; max-attempt poison messages become DEAD
 - a stale PROCESSING WHATSAPP notifications.send-requested is never requeued; it becomes DEAD and its Notification FAILED
   with AMBIGUOUS_TIMEOUT plus a notifications.status-changed event (NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03)
+- orders.recipient-notice-requested (NOTIFICATIONS lane) is written by ORD-002 in the same transaction as the order
+  event, only for DRAFT -> CONFIRMED, PICKED_UP -> IN_TRANSIT, IN_TRANSIT -> FAILED_ATTEMPT, DELIVERING -> FAILED_ATTEMPT
+  and DELIVERING -> DELIVERED, with a payload without personal data; the NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02 and
+  NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03 rules apply to recipient notices (NTF-RECIPIENT-NOTICES-2026-10-20, AI-24
+  recipient_notices)
 - purge is owned by paqueteria_maintenance and can delete only old PROCESSED/DEAD rows
 - runtime producers provide all inserted values and emit no INSERT RETURNING
 - when the operator organization of an order (operator_org_id distinct from owner_org_id) assigns it (DSP-002), the

@@ -535,3 +535,51 @@ Característica: Dinero de 64 bits v0.6
     Y todos los campos API de centavos usan format int64
     Y ninguna regla monetaria usa float o double
 
+# NTF-RECIPIENT-NOTICES-2026-10-20 (project owner, E4 y E4-P1 a E4-P13): decidido, sin implementar (AI-08 NTF-002 a
+# NTF-008, AI-24 recipient_notices). Los escenarios corren con proveedores sintéticos; ningún interruptor real se enciende.
+Característica: Avisos al destinatario v0.6
+  Escenario: Solo cinco transiciones piden aviso
+    Dado el mapa de las 29 transiciones de AI-04
+    Cuando ORD-002 aplica cada transición
+    Entonces escribe orders.recipient-notice-requested solo en DRAFT→CONFIRMED, PICKED_UP→IN_TRANSIT, IN_TRANSIT→FAILED_ATTEMPT, DELIVERING→FAILED_ATTEMPT y DELIVERING→DELIVERED
+    Y la fila va en la misma transacción que el evento de la orden, con todos sus valores y sin RETURNING
+    Y su payload no lleva teléfono, correo, guía, token ni enlace
+    Y AT_PICKUP→FAILED_ATTEMPT no escribe ninguna
+
+  Escenario: Canales según el permiso y el correo
+    Dado una orden confirmada con correo del destinatario y sin la casilla de WhatsApp
+    Cuando el Worker expande la solicitud
+    Entonces crea solo la notificación EMAIL
+    Dado una orden confirmada con la casilla de WhatsApp marcada y con correo
+    Cuando el Worker expande la solicitud
+    Entonces crea una notificación WHATSAPP y una EMAIL, y un fallo en una no cambia la otra
+
+  Escenario: Sin duplicados
+    Dado una solicitud entregada dos veces al Worker
+    Cuando el Worker la expande
+    Entonces existe una sola notificación por evento de la orden, canal y plantilla
+
+  Escenario: Horario sin mensajes
+    Dado un aviso pedido a las 21:30 hora de America/Mazatlan
+    Cuando el Worker lo expande
+    Entonces su envío queda disponible a las 08:00 siguientes
+    Y si a esa hora ya no aplica termina CANCELLED con NOTICE_SUPERSEDED sin llamar al proveedor
+
+  Escenario: Baja global respetada
+    Dado un teléfono dado de baja con BAJA por WhatsApp tras un aviso de otra organización
+    Cuando el Worker va a enviar un aviso por WhatsApp a ese teléfono
+    Entonces el aviso termina CANCELLED con RECIPIENT_OPTED_OUT sin llamar al proveedor
+    Y la baja solo guarda un hash con llave del teléfono
+
+  Escenario: Avisos apagados
+    Dado Notifications:RecipientNotices:Enabled en false
+    Cuando el Worker recibe una solicitud de aviso
+    Entonces la liquida PROCESSED con RECIPIENT_NOTICES_DISABLED sin crear notificaciones ni descifrar nada
+
+  Escenario: Enlace verificado y sin datos personales
+    Dado un aviso listo para enviarse
+    Cuando el Worker deriva el enlace de seguimiento en memoria
+    Entonces el SHA-256 del token coincide con token_hash antes de usarlo
+    Y el mensaje solo lleva el número de guía y el enlace
+    Y ni logs, outbox, notificaciones, eventos de estado, auditoría ni eventos de tiempo real contienen el teléfono, el correo, el token o el enlace
+

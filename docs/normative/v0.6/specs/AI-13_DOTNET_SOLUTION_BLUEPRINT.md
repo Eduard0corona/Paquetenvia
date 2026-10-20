@@ -161,6 +161,22 @@ En una sola transacción del Worker el consumer cierra la asignación, escribe
 `AssignmentChanged` admite los estados `COMPLETED` y `CANCELLED`
 (`AI12-ASSIGNMENT-TERMINAL-STATES`, 2026-09-27; ver AI-12).
 
+### 7.2 Adenda 2026-10-20: avisos al destinatario
+
+**Decidido** (`NTF-RECIPIENT-NOTICES-2026-10-20`, project owner, 2026-10-19 y
+2026-10-20; sin implementar, AI-08 NTF-002 a NTF-008; ADR
+`docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md`): `NotificationDispatcher` también
+entrega los avisos al destinatario por WhatsApp y correo. Orders escribe el topic
+`orders.recipient-notice-requested` (payload `recipient-notice-requested-v1`, sin
+PII) en la misma transacción de ORD-002, como un INSERT adicional en el outbox,
+solo en las cinco transiciones de AI-24 `recipient_notices.notices`, igual que
+`D8-OUTBOX-LANE-DISPATCH`; `security.resolve_outbox_consumer` lo enruta al lane
+`NOTIFICATIONS`. La expansión, el envío, los acuses y las bajas escriben solo
+filas de Notifications más el outbox y la auditoría compartidos, y leen Orders y
+Locations bajo RLS: no hay sexto flujo atómico ni coordinador nuevo. Toda llamada
+al proveedor ocurre sin transacción abierta (leer, confirmar, llamar y liquidar
+con `lease_token`), como en NTF-001 y VOICE-001.
+
 ## 8. Frontend
 
 ```text
