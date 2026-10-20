@@ -28,10 +28,12 @@ tracking_token:
     canonical_input: paquetenvia-trk-v1|{key_version}|{order_id}|{generation}
     canonical_rules: exact ASCII, no whitespace; key_version and generation invariant decimal integers; order_id UUID D lowercase
     key: Key Vault secret public-tracking-link-key, Base64 of 32 to 128 random bytes, read by the API at start
-      (PublicTracking:LinkKeys:{key_version}, current version PublicTracking:CurrentLinkKeyVersion); never stored in
-      the database, logged or committed
+      and, once AI-08 NTF-005 ships, by the Worker at start to derive the link a recipient notice carries
+      (NTF-RECIPIENT-NOTICES-2026-10-20, recipient_notices.tracking_link) (PublicTracking:LinkKeys:{key_version},
+      current version PublicTracking:CurrentLinkKeyVersion); never stored in the database, logged or committed
     fail_closed: the API refuses to start with PublicTracking:Provider=PostgreSql and no valid key, except
-      Development and Testing, which derive a synthetic key at runtime from a public label
+      Development and Testing, which derive a synthetic key at runtime from a public label; the Worker refuses to
+      start with recipient notices enabled and a real messaging provider but no valid key (NTF-005)
     stored: token_hash only, plus generation (starting at 1) and key_version; plaintext never persisted or logged
     generation: a retired generation is never derived again; the next link of the order is max(generation)+1.
       TRK-002-NO-REVOCATION - nobody revokes a link, so generation stays at its initial value 1 and grows only when
@@ -335,3 +337,292 @@ voice_bridge:
     erasure, offboarding) is a follow-up outside VOICE-001
   rollback: Voice:Provider=Disabled stops every call and every new phone; drivers can still remove their number; the
     Drivers lane rollback refuses while call requests or phones exist
+recipient_notices:
+  decisions:
+  - NTF-RECIPIENT-NOTICES-2026-10-20
+  - GATE-004-CHANNELS
+  - NTF-EMAIL-ACS-PILOT-2026-10-11
+  - NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02
+  - NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03
+  - TRK-002-AUTO-LINK
+  - GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10
+  status: DECIDED by the project owner on 2026-10-19 and 2026-10-20 (E4 and E4-P1 to E4-P13); nothing is implemented,
+    configured or enabled yet. AI-08 NTF-002 to NTF-008 deliver it, each item with its own code and tests; only a later
+    change that records the GATE-004 and GATE-007 resolution rows turns it on. GATE-004 and GATE-007 stay open
+  adr: docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md
+  audience: the delivery recipient of the order only, reached at the contact of its destination location; never the
+    sender or its business (E4-P13, out of this work until BUS-001), a driver or a dispatcher
+  notices:
+  - kind: TRACKING_LINK
+    template_key: recipient.tracking-link
+    trigger: DRAFT -> CONFIRMED (E4-P4, "Al quedar confirmada"); an order that never leaves DRAFT never gets it
+    valid_at_send: the public status of the order is not DELIVERED, RETURNED or CANCELLED (every later notice carries
+      the link too)
+  - kind: IN_TRANSIT
+    template_key: recipient.in-transit
+    trigger: PICKED_UP -> IN_TRANSIT, the driver action "Iniciar traslado" (E4-P3, "Al iniciar traslado"); a
+      rescheduled order that goes out again with its new assignment gets it again
+    valid_at_send: the order is still IN_TRANSIT
+  - kind: DELIVERY_FAILED
+    template_key: recipient.delivery-failed
+    trigger: IN_TRANSIT -> FAILED_ATTEMPT and DELIVERING -> FAILED_ATTEMPT; never AT_PICKUP -> FAILED_ATTEMPT, a failed
+      pickup at the sender
+    valid_at_send: the order is neither DELIVERING nor in the public status DELIVERED
+    content: no failure reason, incident type, next action or note ever reaches the message (E4-P5, "Sin motivo, con
+      enlace"); the tracking page keeps showing only the AI-04 public map
+  - kind: DELIVERED
+    template_key: recipient.delivered
+    trigger: DELIVERING -> DELIVERED
+    valid_at_send: the public status of the order is DELIVERED
+  template_version: 1 for every key; any text change is a new version and needs a new Meta approval
+  not_notified: every other AI-04 transition, RESCHEDULED, RETURNING, RETURNED and CANCELLED included (E4, "Los 4 del
+    plan"); no new order state or order event exists for notices
+  producer:
+    pattern: D8-OUTBOX-LANE-DISPATCH (AI-13 section 7.2); no sixth cross-module flow and no new coordinator
+    where: the ORD-002 transition transaction of the owner organization (PostgreSqlOrderTransitionService), after the
+      order event and in the same transaction as it and its audit row; DELIVERED keeps running inside
+      proof_custody_to_order_transition
+    policy: RecipientNoticeRequestPolicy decides from source, target and attempt stage; a test pins all 29 AI-04
+      transitions so that exactly the five triggers above write a row
+    row: one platform.outbox_events row, topic orders.recipient-notice-requested, aggregate_type Order, aggregate_id the
+      order, aggregate_version the new order version, priority 50, tenant_context the owner organization; every value
+      supplied by the application (generated id, ValueGeneratedNever, trace_parent from OutboxTraceContextColumn) and
+      no RETURNING
+    payload: recipient-notice-requested-v1 with schema_version, order_event_id, order_id, notice and occurred_at; no
+      personal data, public id, token or link
+    unconditional: written whenever the transition matches, whatever the switches, so tests stay deterministic; while
+      recipient notices are off the Worker settles it at once (switches.enabled)
+    routing: security.resolve_outbox_consumer maps orders.recipient-notice-requested to NOTIFICATIONS; the NTF-003 lane
+      step and the NTF-005 consumer ship before the NTF-004 producer, so no request row is ever unrouted or unknown
+  expansion:
+    function: security.expand_recipient_notice_request (Notifications lane, NTF-003), owned by
+      paqueteria_outbox_executor and executable only by paqueteria_worker, called under the source row lease_token
+    effect: in one transaction, one Notification per eligible channel (recipient_kind ORDER_DESTINATION, order_id,
+      order_event_id, template key and version, variables_snapshot with order_public_id only), its PENDING status
+      event, its notifications.status-changed row and one notifications.send-requested row whose available_at is the
+      start of the quiet-hours window (quiet_hours); ON CONFLICT DO NOTHING on owner_org_id, order_event_id, channel
+      and template_key; the source then ends PROCESSED with SOURCE_EXPANDED, or NO_ELIGIBLE_CHANNEL when no channel
+      applies
+    reads: the public id and status of the order, its WhatsApp consent and whether its destination holds notice copies,
+      under FORCE RLS in a tenant transaction of the envelope owner organization; no contact value is read or
+      decrypted at expansion
+  channels:
+    decisions: E4 (WhatsApp; e-mail only when the recipient has one), E4-P1 (WhatsApp only with the consent box) and
+      E4-P11 ("Por los dos siempre")
+    whatsapp: created when the order recorded the WhatsApp consent (consent) and Messaging:WhatsApp:Provider is not
+      Disabled
+    email: created when the destination has an e-mail and Messaging:Email:Provider is not Disabled; no consent box is
+      needed (E4-P1, "sí correo si hay")
+    both: when both apply, both are always sent; the channels are independent - a failure, an opt-out or a cancellation
+      in one never changes the other, and nothing waits for a delivery receipt; the WhatsApp row is created first
+    disabled_channel: a Disabled provider is left out at expansion, so it never piles up FAILED rows
+  consent:
+    decision: E4-P1, "Casilla en la orden (Recommended)"
+    text: El destinatario aceptó recibir avisos de su envío por WhatsApp
+    version: NTF-RECIPIENT-WHATSAPP-CONSENT-V1
+    capture: an optional box, unticked by default, on "Nueva orden" (AI-07 create_order.recipient_notices) sent with
+      createOrder, and one box for the whole file on the CSV-001 commit (AI-07 csv_order_import.recipient_notices); the
+      AI-05 x-pilot-contract-deltas entry NTF-RECIPIENT-NOTICES has the request shapes
+    record: orders.recipient_notice_consents (Orders lane, NTF-004; declared in AI-06), append-only, RLS by owner_org_id
+      - order, channel WHATSAPP, consent version, attested_by (the creating actor) and attested_at (server time),
+      written in the createOrder transaction (quote_snapshot_to_order) or the CSV-001 row create; no row when the box
+      is not ticked; it never changes after creation
+    effect: without that record no WhatsApp notice is created for the order; e-mail is unaffected
+  quiet_hours:
+    decision: E4-P10, "8:00 a 21:00 (Recommended)"
+    time_zone: America/Mazatlan
+    window: messages leave only from 08:00 (inclusive) to 21:00 (exclusive) local time
+    outside_window: a notice requested outside the window, and a retry that falls outside it, waits until the next
+      08:00 (available_at computed in SQL with AT TIME ZONE, so the container needs no time-zone data) and is sent then
+      only if it is still valid (valid_at_send); otherwise it ends CANCELLED with NOTICE_SUPERSEDED and no provider
+      call
+    settings: Notifications:RecipientNotices:QuietHours:Start (08:00) and End (21:00), validated at start; the time
+      zone is fixed by the decision
+  staleness:
+    bound: Notifications:RecipientNotices:MaximumNoticeDelayHours, default 12 (1 to 24), counted from occurred_at
+      without the quiet-hours wait
+    expansion: a request row older than the bound ends PROCESSED with NOTICE_STALE and creates nothing
+    send: a send request past the bound ends CANCELLED with NOTICE_STALE; after an outage the Worker never sends a burst
+      of old notices
+  caps:
+    per_order: Notifications:RecipientNotices:MaximumPerOrderAndChannel, default 8
+    per_day: Notifications:RecipientNotices:DailyLimitPerChannel, default 500 per calendar day in America/Mazatlan
+    reached: CANCELLED with NOTICE_LIMIT_REACHED and one operational log line with allowlisted dimensions only
+  validity:
+    check: at send time, before any decryption or provider call, from the current order status read under RLS and the
+      valid_at_send of the notice; PublicOrderStatusPolicy maps the status and throws on an unmapped one (AI-01 rule 12)
+    superseded: CANCELLED with NOTICE_SUPERSEDED, no attempt counted, the send request PROCESSED
+  idempotency: one request row per order event (ORD-002 idempotency writes no second event for a replayed transition);
+    one Notification per order event, channel and template key; a redelivered request finds DO NOTHING or LEASE_LOST;
+    e-mail retries reuse one ACS Operation-Id per Notification; WhatsApp has no provider idempotency, so an ambiguous
+    send and a stale WhatsApp lease end FAILED with AMBIGUOUS_TIMEOUT and are never retried
+    (NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02, NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03)
+  retries: the NTF-001 policy - exponential backoff from RetryBaseSeconds 2 to RetryMaximumSeconds 60, Retry-After
+    honoured up to one hour, MaximumAttempts 5, then FAILED with MAX_ATTEMPTS_EXHAUSTED; transient means unreachable,
+    429, 5xx, circuit open or bulkhead; authentication, rejection, template and recipient errors are permanent
+  outcome_function: security.apply_notification_outcome v2 (NTF-003), under lease_token, accepts the closed
+    MessagingResultCodes set and p_provider_reference (wamid or ACS operation id), keeps the WhatsApp ambiguous rule and
+    adds the outcome CANCELLED (no attempt counted, outbox PROCESSED); the published 8-argument signature is dropped in
+    the same step and the Worker moves with it
+  contact:
+    decision: E4-P2, "Llave propia para avisos (Recommended)"
+    stored: at quote time the API seals the destination phone and the optional e-mail twice - under the PII key
+      (phone_ciphertext as today and email_ciphertext, purpose locations.email) and under the recipient-notice key
+      (notice_phone_ciphertext and notice_email_ciphertext, purposes locations.notice_phone and locations.notice_email,
+      with notice_key_version); AI-06 locations.locations declares the columns (NTF-002); the origin location never
+      carries an e-mail or a notice copy
+    notice_key: Key Vault RSA key recipient-notice-kek, distinct from the PII key and the Data Protection key; ADP-001
+      envelope format v1 bound to owner organization, location row and purpose; notice_key_version is akv:{key
+      name}/{version}; rotation keeps earlier versions readable
+    roles: the API may only wrap with the notice key and never unwraps it; the Worker may only unwrap with it and read
+      its versions, and never reaches the PII key, so addresses, names and incident text stay closed to it (the ADP-001
+      rule "The Worker needs no access to the PII key" still holds)
+    read_at_send: in a short tenant transaction of the owner organization under FORCE RLS (paqueteria_worker already
+      reads locations.locations and orders.orders), a reader the Locations module publishes returns the notice copies,
+      their key version and their binding; after the commit they are decrypted in memory only, normalized
+      (MexicanPhonePolicy to E.164 +52, the e-mail policy) and wrapped in MessagingRecipient, whose ToString is
+      [redacted]; they go out of scope right after the provider call
+    never: in logs, outbox payloads, Notification rows, status events, audit, realtime events, metrics or traces
+    synthetic: CI and DEV_SYNTHETIC never decrypt; the placeholders +520000000002 (as VOICE-001) and
+      destinatario@example.invalid are used
+  tracking_link:
+    read: a reader the Orders module publishes returns the active derived link of the order (generation, key_version and
+      token_hash, revoked_at IS NULL) under FORCE RLS
+    derive: the Worker derives the token with TrackingLinkTokenDerivation and the key ring PublicTracking:LinkKeys,
+      checks that SHA-256 of the token equals the stored token_hash, and builds {PublicTracking:PublicBaseUrl}/track/
+      followed by the token in memory only; the token is the WhatsApp URL button suffix and part of the e-mail link
+    never: stored, logged, placed in an outbox payload, a Notification row or an event; TRK-002 issuance is unchanged
+    unavailable: no live link (tracking disabled, a key version the Worker does not hold or a hash mismatch) ends FAILED
+      with TRACKING_LINK_UNAVAILABLE, permanent
+  templates:
+    decision: E4-P6, "De "tú", sin nombres (Recommended)"; the owner reviews these drafts in the change that records
+      them, before they go to Meta review
+    rules: neutral and without brand while GATE-001 is open (GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10); informal "tú";
+      the name of no one, neither the sending business nor the recipient; Meta category UTILITY with no promotion;
+      only the número de guía and the tracking link as content; the repository keeps these texts as the contract and
+      the adapters still have no default text
+    whatsapp:
+      category: UTILITY
+      language: es_MX
+      body_parameter: '{{1}} is the número de guía (Order.public_id); no other parameter'
+      url_button: 'Ver seguimiento, URL https://paquetenvia.com/track/{{1}} whose dynamic suffix is the derived token
+        (the base is PublicTracking:PublicBaseUrl); a URL button also avoids link previews'
+      quick_reply_button: No recibir avisos
+      footer: Responde BAJA para no recibir más avisos
+      bodies:
+        recipient.tracking-link: 'Hola. Hay un envío para ti con número de guía {{1}}. Puedes ver cómo va en cualquier
+          momento con el botón Ver seguimiento. Si no esperabas este envío, ignora este mensaje.'
+        recipient.in-transit: 'Tu envío con número de guía {{1}} ya va en camino a la dirección de entrega. Síguelo con
+          el botón Ver seguimiento.'
+        recipient.delivery-failed: 'Hoy intentamos entregar tu envío con número de guía {{1}} y no fue posible. Con el
+          botón Ver seguimiento verás el siguiente paso.'
+        recipient.delivered: 'Tu envío con número de guía {{1}} fue entregado. Puedes ver el detalle con el botón Ver
+          seguimiento.'
+      privacy_line: a line with the link to the privacy notice is added only if the GATE-007 legal review asks for it
+        (first contact, docs/legal); it changes the texts and needs a new Meta approval
+      configuration: Messaging:WhatsApp:Templates:<key>:Name, LanguageCode and ParameterCount name the approved
+        template
+    email:
+      decision: E4-P12, "avisos@paquetenvia.com (Recommended)"
+      sender: avisos@paquetenvia.com, the ACS MailFrom address of the verified domain paquetenvia.com, with the display
+        name Seguimiento de envío; no Reply-To and no mailbox that receives replies
+      format: plain text only, engagement tracking off
+      subjects:
+        recipient.tracking-link: 'Seguimiento de envío: guía {{1}}'
+        recipient.in-transit: 'Tu envío {{1}} va en camino'
+        recipient.delivery-failed: 'No pudimos entregar tu envío {{1}}'
+        recipient.delivered: 'Tu envío {{1}} fue entregado'
+      body: 'the WhatsApp body of the same notice, then the full tracking link ({{2}}) on a line of its own, the link to
+        the privacy notice (its wording and address come with the GATE-007 approval), the line "Para dejar de recibir
+        estos correos: {{3}}" with the unsubscribe link of that notification, and the line "Este correo se envía
+        automáticamente; no lo respondas."'
+      headers: List-Unsubscribe with the one-click URL of that notification and List-Unsubscribe-Post
+        List-Unsubscribe=One-Click (RFC 8058)
+      configuration: Messaging:Email:Templates:<key>:Subject, PlainText and ParameterCount, and
+        Messaging:Email:AzureCommunicationServices:SenderAddress
+  opt_out:
+    decision: E4-P8, "Las tres vías (Recommended)"
+    scope: global - an opt-out stops every recipient notice of that channel to that phone or e-mail from every
+      organization, because the WhatsApp number is only one
+    whatsapp_reply: an inbound WhatsApp text that is exactly BAJA, ALTO, STOP or CANCELAR (trimmed, case and accents
+      ignored), or a tap on the quick reply No recibir avisos (receiveMetaWhatsAppWebhook); source RECIPIENT_REPLY,
+      channel WHATSAPP; no confirmation message is sent (none was decided); the message body is never stored or logged
+    email_link: the link in every e-mail and its List-Unsubscribe one-click (unsubscribeRecipientNotices); source
+      EMAIL_LINK, channel EMAIL
+    dispatcher: the button "Detener avisos" on the order (stopOrderRecipientNotices), for a recipient who asks by
+      phone; source DISPATCHER, both channels of the contact of that order; audited RECIPIENT_NOTICES_STOPPED without
+      any value
+    store: the opt-out store declared in AI-06 (NTF-003 table, NTF-006 writer functions) keeps keyed hashes only
+    hash: HMAC-SHA256 under the Key Vault secret paquetenvia-contact-lookup-key-1 (read by the API and the Worker,
+      versioned like EmailLookup:Keys) over paquetenvia-contact-v1|{channel}|{value}, where value is the E.164 +52
+      phone (a WhatsApp 521 mobile prefix is reduced to 52 first) or the trimmed lower-case e-mail address
+    check: before every send the Worker hashes the decrypted contact under every configured key version and asks
+      security.is_recipient_opted_out; an opted-out contact ends CANCELLED with RECIPIENT_OPTED_OUT and no provider call
+    permanence: a later consent box or order never undoes an opt-out; re-subscription is not offered (not decided)
+  auto_reply:
+    decision: E4-P9, "Respuesta automática (Recommended)"
+    text: Este número solo envía avisos. Para dudas sobre tu envío contacta a quien te lo envió.
+    when: an inbound WhatsApp message of any type that is not an opt-out keyword or the quick reply No recibir avisos
+    how: a free-form text message inside the 24-hour customer service window that the inbound message opens (charged as
+      a service message, as the chosen option said); never a template and never outside that window
+    limit: at most one automatic reply per contact (keyed hash) in 24 hours, so two automated senders cannot loop
+    path: the webhook never calls the provider; it seals the sender number under the recipient-notice key and records
+      the request with its keyed hash through a SECURITY DEFINER function; the Worker sends it, decrypting in memory,
+      and erases the sealed number right after the attempt whatever its outcome; a request older than 23 hours is
+      dropped unsent; NTF-006 fixes the store and its functions
+    never: the inbound body, the sender profile name or the number in logs, audit, events or any row other than the
+      sealed number until the attempt
+  receipts:
+    whatsapp: receiveMetaWhatsAppWebhook statuses - delivered sets DELIVERED and delivered_at; failed sets FAILED with
+      the code of the existing classifier (131026 is MESSAGING_RECIPIENT_UNDELIVERABLE); sent and read are ignored (data
+      minimization); recipient_id, contacts, conversation and pricing data are never stored or logged
+    email: receiveAcsEmailEvents, Microsoft.Communication.EmailDeliveryReportReceived - Delivered sets DELIVERED;
+      Failed, Bounced, Suppressed and FilteredSpam set FAILED with a closed MessagingResultCodes code
+    function: security.record_messaging_receipt, SECURITY DEFINER owned by paqueteria_notification_receipt_executor
+      (AI-18, NTF-006) and executable only by paqueteria_app; it crosses tenants because a webhook carries none;
+      transitions only move forward (SENT to DELIVERED or FAILED); a repeated receipt changes nothing; a provider
+      reference that matches nothing, a receipt that arrives before its send was settled included, is ignored; each
+      change writes one status event and one notifications.status-changed row
+    meaning: until receipts exist, SENT means provider acceptance only
+  dispatcher_view:
+    list: listOrderRecipientNotices - notice, channel, status, attempts, last code and times; never the recipient, the
+      link or a template parameter
+    stop: stopOrderRecipientNotices records the opt-outs of the contact of that order (opt_out.dispatcher)
+    realtime: NotificationStatusChanged v2 (AI-12 decided amendment) carries order_id and notice, and the order detail
+      reloads its panel (AI-07 /ops/orders/:id recipient_notices)
+    roles: DISPATCHER members, and PLATFORM_ADMIN members with a satisfied MFA challenge, of the owner organization only
+      (the tracking_link_operations rule); an operator organization gets the uniform 404
+  webhooks:
+    whatsapp: GET and POST /api/v1/messaging/whatsapp/webhook - the verification answers hub.challenge only for
+      hub.mode subscribe and a hub.verify_token equal, in constant time, to its Key Vault secret; every POST needs a
+      valid X-Hub-Signature-256 (HMAC-SHA256 of the raw body under the Meta app secret from Key Vault) compared in
+      constant time before the body is parsed; the body size is bounded
+    email: POST /api/v1/messaging/email/events - the Event Grid subscription validation handshake, then authenticated
+      deliveries only (Microsoft Entra protected delivery or a Key Vault secret header, chosen and recorded by NTF-006)
+    unsubscribe: POST /api/v1/recipient-notices/unsubscribe/{token} - the token binds the owner organization and the
+      notification id under HMAC-SHA256 (contact lookup key, prefix paquetenvia-unsubscribe-v1), checked in constant
+      time and never stored or logged; a GET never opts out, so link scanners cannot
+    common: anonymous (no session, cookie or CSRF), rate limited under SEC-004 (their budgets are an owner decision
+      asked in NTF-006, like the SEC-004 numbers), inert (uniform 404) while their switch is off, problem+json errors
+      that never echo a value
+  switches:
+    enabled: Notifications:RecipientNotices:Enabled (Worker), false by default; while false each request row ends
+      PROCESSED with RECIPIENT_NOTICES_DISABLED at once - no Notification, no decryption and no backlog when it is
+      turned on (orders confirmed before that get no link message)
+    providers: Messaging:WhatsApp:Provider and Messaging:Email:Provider stay Disabled
+    gate_decisions: a real provider for recipient notices is refused at start unless
+      Notifications:RecipientNotices:Gate004DecisionId and Gate007DecisionId name the decision-log rows that resolve
+      GATE-004 and GATE-007 (the Voice:Twilio:Gate007DecisionId pattern); real providers are refused in Development,
+      Testing and DEV_SYNTHETIC, and the synthetic ones are accepted only there
+    webhooks: Messaging:WhatsApp:Webhook:Enabled and Messaging:Email:Events:Enabled, false by default (uniform 404)
+    pilot: Notifications__RecipientNotices__ and Messaging__ become platform-managed in tools/azr-001/env001_pilot_guards.py
+      (as Voice__, NTF-008); only the gate-closing change sets them
+  pilot_wiring: NTF-008 - the Worker reads public-tracking-link-key, paquetenvia-contact-lookup-key-1 and the WhatsApp
+    token and phone number id and may only unwrap with recipient-notice-kek; the API reads
+    paquetenvia-contact-lookup-key-1, the Meta app secret and the webhook verify token and may only wrap with
+    recipient-notice-kek; secret names, the ACS role of the Worker and the Event Grid subscription are fixed there
+  logging: owner organization pseudonym, lane, channel, notice, outcome and code only (OBS-002 allowlist); never a
+    phone, an e-mail, a name, a link, a token, a template parameter or a provider message
+  rollback: Enabled false or a provider Disabled, no migration; rows already created then end FAILED with
+    MESSAGING_CHANNEL_DISABLED and the dispatchers see them; a webhook switched off answers 404; every lane Down
+    refuses while rows that need the new shape exist

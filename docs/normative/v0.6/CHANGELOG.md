@@ -1,5 +1,34 @@
 # Changelog
 
+## Avisos al destinatario: contratos (NTF-RECIPIENT-NOTICES-2026-10-20) — 2026-10-20
+
+- Respuestas literales del project owner (2026-10-19 y 2026-10-20), registradas en `decision-log.md` con su
+  contexto, las preguntas y las opciones no elegidas: E4 "Los 4 del plan (Recommended)" ("Enlace de seguimiento al crear la orden, "Va en camino", "No se pudo entregar" y "Entregado", por WhatsApp. Por correo solo si hay correo del destinatario: hoy no se captura, se agrega como campo opcional en la nueva orden."); E4-P1 "Casilla en la orden (Recommended)" ("En la nueva orden: "El destinatario aceptó recibir avisos de su envío por WhatsApp". Si no se marca, no se manda WhatsApp (sí correo si hay). Queda registro de quién la marcó y cuándo."); E4-P2 "Llave propia para avisos (Recommended)" ("Al cotizar se guarda además una copia cifrada del teléfono y del correo con una llave que solo sirve para avisos. El Worker solo abre esa llave, nunca direcciones, nombres ni descripciones. Una llave más en Key Vault (centavos al mes)."); E4-P3 "Al iniciar traslado (Recommended)" ("Avisa con tiempo. En rutas con varias paradas puede llegar horas antes; el texto no promete hora."); E4-P4 "Al quedar confirmada (Recommended)" ("Nunca se manda el enlace de una orden que no llegó a confirmarse."); E4-P5 "Sin motivo, con enlace (Recommended)" (""Intentamos entregar y no fue posible; en el seguimiento verás el siguiente paso". No expone motivos delicados."); E4-P6 "De "tú", sin nombres (Recommended)" ("Como el ejemplo: sin nombre de la empresa que envía ni de nadie. Los 4 textos completos quedan en el PR para que los revises antes de mandarlos a Meta."); E4-P7 "La razón social (Recommended)" ("Es el responsable legal del aviso de privacidad y no es la marca comercial."); E4-P8 "Las tres vías (Recommended)" ("Responder "BAJA" o tocar "No recibir avisos" en WhatsApp, un enlace en cada correo, y un botón "Detener avisos" en la orden para cuando lo pida por teléfono. Aplica a todas las empresas que le envíen, porque el número de WhatsApp es uno solo."); E4-P9 "Respuesta automática (Recommended)" (""Este número solo envía avisos. Para dudas sobre tu envío contacta a quien te lo envió." Se cobra como mensaje de servicio."); E4-P10 "8:00 a 21:00 (Recommended)" ("Lo que pase fuera de ese horario se manda a las 8:00, salvo que ya no aplique (por ejemplo, "Va en camino" si ya se entregó)."); E4-P11 "Por los dos siempre (Recommended)" ("Más simple y no depende de los avisos de entrega de Meta; el correo cuesta casi nada."); E4-P12 "avisos@paquetenvia.com (Recommended)" ("Nombre visible "Seguimiento de envío", sin buzón de respuestas. Coherente con la marca neutra; el dominio ya es el del enlace."); E4-P13 "Fuera de este trabajo (Recommended)" ("El despachador ya ve los estados en la plataforma; se decide después, con el portal de negocios (BUS-001).").
+- Solo contratos (PR-0): nada se construye, configura ni enciende; GATE-004 y GATE-007 siguen abiertas. ADR
+  `docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md` y nota `docs/development/ntf-recipient-notices.md` (arquitectura,
+  secuencia PR-1 a PR-8, acciones del owner y reversión).
+- AI-24 gana la sección `recipient_notices`: cuatro avisos al destinatario en cinco transiciones de ORD-002 (enlace al
+  confirmar, "Va en camino" al iniciar traslado, "No se pudo entregar" sin motivo y nunca por una recolección fallida,
+  "Entregado"), revisados otra vez al enviarse; WhatsApp solo con la casilla de permiso y correo solo si hay correo,
+  los dos cuando aplican; de 8:00 a 21:00 hora de Mazatlán; llave propia de avisos que el Worker solo desenvuelve;
+  textos neutros para revisión del owner antes de Meta; bajas globales por tres vías guardadas como hashes con llave;
+  respuesta automática; acuses firmados; interruptores apagados. `tracking_token.derivation.key` también la lee el
+  Worker.
+- AI-05: entrada `DECIDED` `NTF-RECIPIENT-NOTICES` de `x-pilot-contract-deltas` (correo opcional solo en el destino,
+  permiso de WhatsApp en `createOrder` y en la carga CSV, webhooks de Meta y de Event Grid, baja por correo, lista y
+  "Detener avisos" del despachador y su capacidad). La superficie HTTP no cambia hasta que cada ítem publique su parte
+  con código y pruebas; los conteos de rutas, esquemas y referencias no cambian.
+- AI-12: `decided_amendment` de `NotificationStatusChanged` (payload v2 con `order_id` y `notice`, canales WhatsApp y
+  correo, estados `DELIVERED` y `CANCELLED`). AI-06 y AI-18: contrato declarado en comentarios (columnas de Locations,
+  cambios del carril Notifications, almacén de bajas, respuestas automáticas, tabla de permisos, funciones y el rol
+  `paqueteria_notification_receipt_executor`); su DDL entra con cada paso de carril, así que solo se vuelven a fijar
+  sus hashes. AI-04: correo como dato sensible e invariantes de privacidad y outbox, sin estados nuevos. AI-07: campo
+  de correo, casillas de permiso, panel "Avisos al destinatario" y página `/avisos/baja/:token`. AI-08: ítems NTF-002
+  a NTF-008, criterio en TRK-002 y REL-001 depende de NTF-005. AI-09, AI-03 §15/§16 y AI-13 §7.2.
+- Sin cambios de comportamiento, migraciones, roles, permisos, Bicep ni paquetes: solo se vuelven a fijar los hashes de
+  AI-05, AI-06 y AI-18 (constantes de la línea base, manifiesto del migrador, flujos de CI, documentación y pruebas) y el
+  conteo de ítems de AI-08 en las pruebas.
+
 ## Repartidor: lecturas viejas de la parada (DRV-STALE-STOP-READ-2026-10-14) — 2026-10-14
 
 - Respuestas literales del project owner (2026-10-14), registradas en `decision-log.md` con su contexto y las opciones
