@@ -37,7 +37,8 @@ export const DriverSyncLeasesStoreName = "sync_leases";
  * ORG-MY-ROLES-2026-10-12: the last successful answer of getMyOrganizationRoles
  * of each partition (role codes only), so "No se pudo entregar" keeps working
  * offline; see IndexedDbDriverOrganizationRolesCache. It leaves the phone with
- * its partition (401 or 403) and on logout, like the stop snapshots.
+ * its partition (403 or no usable credential; a 401 keeps it,
+ * DRV-SESSION-EXPIRY-OFFLINE-2026-10-19) and on logout, like the stop snapshots.
  */
 export const DriverOrganizationRolesStoreName = "organization_roles";
 /**
@@ -45,7 +46,8 @@ export const DriverOrganizationRolesStoreName = "organization_roles";
  * getMyDispatchContact of each partition (the organization's dispatch number,
  * or that it has none), so "Llamar a despacho" keeps working offline; see
  * IndexedDbDriverDispatchContactCache. It leaves the phone with its partition
- * (401 or 403) and on logout, like the stop snapshots.
+ * (403 or no usable credential; a 401 keeps it,
+ * DRV-SESSION-EXPIRY-OFFLINE-2026-10-19) and on logout, like the stop snapshots.
  */
 export const DriverDispatchContactStoreName = "dispatch_contacts";
 
@@ -154,7 +156,8 @@ export class IndexedDbDriverStopsCache implements DriverStopsCache {
   }
 
   /**
-   * 401 or 403: the partition's snapshot, its saved organization roles
+   * 403 or a session without a usable credential (never a 401,
+   * DRV-SESSION-EXPIRY-OFFLINE-2026-10-19): the partition's snapshot, its saved organization roles
    * (ORG-MY-ROLES-2026-10-12) and its saved dispatch contact
    * (DRV-DISPATCH-CONTACT-2026-10-12) leave together.
    */

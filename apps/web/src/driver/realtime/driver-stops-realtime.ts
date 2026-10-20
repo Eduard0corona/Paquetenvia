@@ -28,8 +28,15 @@ export interface DriverStopsRealtimeConnection {
   stop(): Promise<void>;
 }
 
+/** DRV-SESSION-EXPIRY-OFFLINE-2026-10-19: a remembered session opens no hub connection. */
+const noRealtimeConnection: DriverStopsRealtimeConnection = Object.freeze({
+  start: () => Promise.reject(new Error("A remembered session opens no realtime connection.")),
+  stop: () => Promise.resolve(),
+});
+
 export const defaultDriverStopsRealtimeFactory: DriverStopsRealtimeFactory = {
   create(baseUrl, session, callbacks) {
+    if (session.remembered === true) return noRealtimeConnection;
     const relevantHandlers = {
       AssignmentChanged: callbacks.refreshFromSignal,
       OrderStatusChanged: callbacks.refreshFromSignal,

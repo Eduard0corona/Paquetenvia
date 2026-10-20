@@ -162,10 +162,10 @@ public sealed class DriverStopsBffPwaPlaywrightTests(DriverStopsBffNextServerFix
             $"/auth/login?return_url=%2Fdriver%2Fstops%2F{PickupOrderId}",
             await authCenter.GetAttributeAsync("href"));
 
-        // A session the API no longer accepts: "Sesión no válida" offers it too.
+        // A session the API no longer accepts (401): DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 asks to sign in again.
         signedIn = true;
         await page.GotoAsync(new Uri(server.BaseAddress, "/driver/stops").AbsoluteUri);
-        await ExpectTextAsync(page, "Sesión no válida");
+        await ExpectTextAsync(page, "Tu sesión venció, entra de nuevo");
         var again = page.GetByRole(AriaRole.Link, new() { Name = "Iniciar sesión" });
         await again.WaitForAsync();
         Assert.Equal("/login?return_url=%2Fdriver%2Fstops", await again.GetAttributeAsync("href"));

@@ -68,7 +68,13 @@ export interface DriverSyncSchedulerOptions {
   readonly onQueueChanged: (
     operations: readonly DriverOfflineOperation[],
   ) => void;
-  readonly onAccessRevoked: (category: "unauthorized" | "forbidden") => void;
+  /**
+   * `forbidden` (403) and `unauthorized` (no usable credential) come after the
+   * partition was wiped. `session-ended` (401) wipes nothing
+   * (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19): the queue stops until the same
+   * driver signs in again.
+   */
+  readonly onAccessRevoked: (category: DriverAccessRevocation) => void;
   /**
    * Called once for every operation removed because it is older than the
    * OPS-003 maximum age. The operation is already gone from the queue and
@@ -92,6 +98,8 @@ export interface DriverSyncSchedulerOptions {
   >;
 }
 
+export type DriverAccessRevocation = "session-ended" | "unauthorized" | "forbidden";
+
 export class DriverSyncScheduler {
   private readonly telemetry: DriverSyncTelemetry;
   private readonly now: () => Date;
@@ -106,6 +114,12 @@ export class DriverSyncScheduler {
   private started = false;
   private leaseLost = false;
   private disposed = false;
+  /**
+   * DRV-SESSION-EXPIRY-OFFLINE-2026-10-19: the server answered 401. Nothing
+   * more is sent with this session; the next one (the same driver signing in
+   * again) has its own scheduler.
+   */
+  private sessionEnded = false;
   /** Pauses in force (see pause); no pass runs while it is above zero. */
   private pauseCount = 0;
   /**
@@ -149,6 +163,7 @@ export class DriverSyncScheduler {
   public async requestSync(manual = true): Promise<void> {
     if (
       this.disposed ||
+      this.sessionEnded ||
       this.pauseCount > 0 ||
       !this.isOnline() ||
       !this.isVisible()
@@ -717,7 +732,24 @@ export class DriverSyncScheduler {
       this.abortController?.abort();
       return;
     }
+    if (error.category === "session-ended") {
+      // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (owner answer E2 "Conservar y
+      // pedir entrar (Recommended)"): the session ended (401). Nothing is
+      // wiped: the snapshot, every queued action with its photo and its
+      // progress stay exactly as last persisted, and the action in flight is
+      // resumed with the same keys once the same driver in the same
+      // organization signs in again (the same partition). Nothing more is
+      // sent with this session. The 72-hour rule (OPS-003-OFFLINE-72H) keeps
+      // counting from each action's own time.
+      this.sessionEnded = true;
+      this.clearTimer();
+      this.options.onAccessRevoked("session-ended");
+      this.abortController?.abort();
+      return;
+    }
     if (error.category === "unauthorized" || error.category === "forbidden") {
+      // 403, or a session without a usable credential: unchanged, the
+      // partition leaves the phone.
       await this.options.queue.clearPartition(this.options.partition);
       this.options.onAccessRevoked(error.category);
       this.abortController?.abort();

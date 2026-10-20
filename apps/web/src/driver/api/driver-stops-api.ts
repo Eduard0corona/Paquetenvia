@@ -26,7 +26,15 @@ export interface DriverStopsApi {
   ): Promise<DriverStopList>;
 }
 
+/**
+ * - `session-ended`: 401, the session ended (expired, ended by AuthCenter or
+ *   replaced); DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 keeps the partition and
+ *   asks the same driver to sign in again;
+ * - `unauthorized`: the session has no usable credential, so nothing was sent;
+ * - `forbidden`: 403, the person is no longer a driver of the organization.
+ */
 export type DriverStopsApiFailure =
+  | "session-ended"
   | "unauthorized"
   | "forbidden"
   | "recoverable"
@@ -73,6 +81,13 @@ export function createDriverStopsApi(
         if (signal?.aborted) {
           throw new DriverStopsApiError("cancelled");
         }
+        // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19: a remembered session is not
+        // confirmed by the server, so it never reaches the network (the
+        // cookie may belong to someone else); the caller falls back to what
+        // the partition saved.
+        if (options.session.remembered === true) {
+          throw new DriverStopsApiError("recoverable");
+        }
         let authorization: RequestAuthorization;
         try {
           authorization = await resolveRequestAuthorization(options.session, "GET");
@@ -96,7 +111,7 @@ export function createDriverStopsApi(
         );
 
         if (response.status === 401) {
-          throw new DriverStopsApiError("unauthorized");
+          throw new DriverStopsApiError("session-ended");
         }
         if (response.status === 403) {
           throw new DriverStopsApiError("forbidden");
