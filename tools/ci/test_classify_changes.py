@@ -7,6 +7,7 @@ import copy
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -259,18 +260,22 @@ class ImpactModelTests(unittest.TestCase):
 
     def test_backend_shared(self):
         plan = classify(["src/BuildingBlocks/Outbox/Publisher.cs"])
-        self.assertEqual({"secret-scan", *BACKEND}, jobs(plan))
+        # src/** is also an image build input, so azr-static builds the deploy images (ENV-001 F-05).
+        self.assertEqual({"secret-scan", "azr-static", *BACKEND}, jobs(plan))
         self.assertNotIn("web", jobs(plan))
         self.assertNotIn("rel000", jobs(plan))
         self.assertEqual("SELECTIVE", plan["classification"])
 
     def test_migration_is_backend(self):
         plan = classify(["src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20260921_X.cs"])
-        self.assertEqual({"secret-scan", *BACKEND}, jobs(plan))
+        self.assertEqual({"secret-scan", "azr-static", *BACKEND}, jobs(plan))
 
     def test_backend_infrastructure_paths(self):
-        plan = classify(["deploy/docker-compose.yml", "tools/dev-platform.ps1", "database/migrations/v0.6-baseline.json"])
+        plan = classify(["deploy/docker-compose.yml", "tools/dev-platform.ps1"])
         self.assertEqual({"secret-scan", *BACKEND}, jobs(plan))
+        # The db-ops images copy the baseline manifest, so it is also an image build input.
+        plan = classify(["deploy/docker-compose.yml", "tools/dev-platform.ps1", "database/migrations/v0.6-baseline.json"])
+        self.assertEqual({"secret-scan", "azr-static", *BACKEND}, jobs(plan))
 
     def test_dotnet_only_test_projects(self):
         plan = classify(
@@ -303,6 +308,150 @@ class ImpactModelTests(unittest.TestCase):
     def test_web_plus_backend_union(self):
         plan = classify(["apps/web/src/driver/a.tsx", "src/Paqueteria.Api/Program.cs"])
         self.assertEqual({"secret-scan", "web", "azr-static", *BACKEND}, jobs(plan))
+
+
+# ENV-001 F-05: azr-static builds every deploy image (deploy/azure/**/Dockerfile*), so every file those builds read
+# must select it. `COPY . .` puts the whole repository in the .NET build stage, but `dotnet restore` and `dotnet publish`
+# of one project read only its project closure and the root build files; the db-ops images then copy named repository
+# files, and the web images copy apps/web.
+DEPLOY_DOCKERFILES = sorted(
+    path.relative_to(REPOSITORY_ROOT).as_posix() for path in (REPOSITORY_ROOT / "deploy/azure").rglob("Dockerfile*")
+)
+DOTNET_ENTRY_PROJECTS = {
+    "src/Paqueteria.Api/Paqueteria.Api.csproj",
+    "src/Paqueteria.Worker/Paqueteria.Worker.csproj",
+    "tools/Paqueteria.DatabaseMigrator/Paqueteria.DatabaseMigrator.csproj",
+    "tools/Paqueteria.DevSeed/Paqueteria.DevSeed.csproj",
+}
+IMAGE_BUILD_INPUTS = [
+    classifier.compile_pattern(pattern)
+    for pattern in (
+        "deploy/azure/**",
+        ".dockerignore",
+        "Paqueteria.sln",
+        "Directory.Build.props",
+        "Directory.Packages.props",
+        "global.json",
+        "src/**",
+        "database/**",
+        "tools/Paqueteria.DatabaseMigrator/**",
+        "tools/Paqueteria.DevSeed/**",
+        "docs/normative/v0.6/database/**",
+        "apps/web/**",
+    )
+]
+MSBUILD_ITEM = re.compile(r'<(ProjectReference|Compile)\s+Include="([^"]+)"')
+
+
+def is_image_build_input(path: str) -> bool:
+    return any(pattern.match(path) for pattern in IMAGE_BUILD_INPUTS)
+
+
+def dockerfile_instructions(path: str) -> list[str]:
+    """One string per Dockerfile instruction, backslash continuations joined and comments dropped."""
+    lines, pending = [], ""
+    for raw in (REPOSITORY_ROOT / path).read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.endswith("\\"):
+            pending += line[:-1] + " "
+            continue
+        lines.append(pending + line)
+        pending = ""
+    return lines
+
+
+class ImageBuildInputTests(unittest.TestCase):
+    """ENV-001 F-05: a change to anything a deploy image is built from runs azr-static, which builds the images."""
+
+    def test_the_inputs_cover_every_deploy_dockerfile(self):
+        self.assertEqual(6, len(DEPLOY_DOCKERFILES), DEPLOY_DOCKERFILES)
+        built = set()
+        for dockerfile in DEPLOY_DOCKERFILES:
+            for instruction in dockerfile_instructions(dockerfile):
+                built.update(re.findall(r"dotnet (?:restore|publish) (\S+\.csproj)", instruction))
+        self.assertEqual(DOTNET_ENTRY_PROJECTS, built)
+
+    def test_every_copied_repository_path_is_an_input(self):
+        for dockerfile in DEPLOY_DOCKERFILES:
+            sources = [instruction.split()[1:-1] for instruction in dockerfile_instructions(dockerfile)
+                       if instruction.split()[0].upper() == "COPY"]
+            self.assertTrue(sources, dockerfile)
+            for source in sources:
+                with self.subTest(dockerfile=dockerfile, source=source):
+                    if source[0] == "--from=build":
+                        path = source[1]
+                        if path.startswith("/src/"):  # a repository file the .NET build stage holds
+                            self.assertTrue(is_image_build_input(path.removeprefix("/src/")), path)
+                        else:  # a build output of that stage
+                            self.assertRegex(path, r"^/(out|app)(/|$)")
+                    else:
+                        self.assertEqual(1, len(source), source)
+                        self.assertIn(source[0], (".", "apps/web"))
+
+    def test_the_dotnet_project_closure_is_an_input(self):
+        seen: set[str] = set()
+        pending = sorted(DOTNET_ENTRY_PROJECTS)
+        while pending:
+            project = pending.pop()
+            if project in seen:
+                continue
+            seen.add(project)
+            self.assertTrue(is_image_build_input(project), project)
+            text = (REPOSITORY_ROOT / project).read_text(encoding="utf-8")
+            self.assertNotIn("<Import ", text, project)
+            for kind, include in MSBUILD_ITEM.findall(text):
+                self.assertNotIn("$(", include, f"{project}: {include}")
+                resolved = os.path.normpath(os.path.join(os.path.dirname(project), include.replace("\\", "/")))
+                self.assertTrue((REPOSITORY_ROOT / resolved).is_file(), f"{project}: {include}")
+                self.assertTrue(is_image_build_input(Path(resolved).as_posix()), f"{project}: {include}")
+                if kind == "ProjectReference":
+                    pending.append(Path(resolved).as_posix())
+        self.assertGreater(len(seen), len(DOTNET_ENTRY_PROJECTS))
+
+    def test_every_tracked_image_input_selects_azr_static(self):
+        tracked = git(REPOSITORY_ROOT, "ls-files").splitlines()
+        inputs = [path for path in tracked if is_image_build_input(path)]
+        self.assertGreater(len(inputs), 1000)
+        missing = [path for path in inputs if "azr-static" not in classify([path])["required_jobs"]]
+        self.assertEqual([], missing)
+
+    def test_new_image_inputs_select_azr_static(self):
+        for path in (
+            "src/Modules/Newmodule/Newmodule.Infrastructure/Migrations/20261101000100_X.cs",
+            "src/BuildingBlocks/Paqueteria.Infrastructure/New.cs",
+            "src/Paqueteria.Api/packages.lock.json",
+            "tools/Paqueteria.DatabaseMigrator/NewCommand.cs",
+            "tools/Paqueteria.DevSeed/Seed.cs",
+            "database/migrations/v0.6-baseline.json",
+            "Paqueteria.sln",
+            "Directory.Build.props",
+            ".dockerignore",
+            "deploy/azure/Dockerfile.api",
+            "deploy/azure/pilot/Dockerfile.web",
+            "apps/web/src/app/new-area/page.tsx",
+        ):
+            with self.subTest(path=path):
+                self.assertIn("azr-static", classify([path])["required_jobs"])
+        plan = classify(["tools/Paqueteria.DatabaseMigrator/Program.cs"])
+        self.assertEqual("SELECTIVE", plan["classification"])
+        self.assertEqual(["BACKEND", "IMAGE_BUILD_INPUT"], plan["domains"])
+        self.assertEqual({"secret-scan", "azr-static", *BACKEND}, jobs(plan))
+
+    def test_backend_paths_that_no_image_reads_do_not_build_images(self):
+        domains = {domain["name"]: domain for domain in CONFIG["domains"]}
+        self.assertEqual(["azr-static"], domains["IMAGE_BUILD_INPUT"]["jobs"])
+        for path in (
+            "tests/Paqueteria.IntegrationTests/Driver/StopsTests.cs",
+            "deploy/docker-compose.yml",
+            "tools/Paqueteria.SyntheticVerification/Program.cs",
+            "tools/dev-platform.ps1",
+            "templates/Paqueteria.Module/x.cs",
+        ):
+            with self.subTest(path=path):
+                self.assertFalse(is_image_build_input(path), path)
+                self.assertNotIn("azr-static", classify([path])["required_jobs"])
 
 
 class FullTriggerTests(unittest.TestCase):
@@ -461,8 +610,8 @@ class Rel000InputNarrowingTests(unittest.TestCase):
             ]
         )
         self.assert_selective_openapi(plan)
-        self.assertEqual({"secret-scan", "normative-contracts", "web", *BACKEND}, jobs(plan))
-        self.assertEqual({"azr-static", "rel000"}, set(ALL_JOBS) - jobs(plan))
+        self.assertEqual({"secret-scan", "normative-contracts", "web", "azr-static", *BACKEND}, jobs(plan))
+        self.assertEqual({"rel000"}, set(ALL_JOBS) - jobs(plan))
 
     def test_openapi_domain_covers_exactly_the_excluded_triplet(self):
         domains = {domain["name"]: domain for domain in CONFIG["domains"]}

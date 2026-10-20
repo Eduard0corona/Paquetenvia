@@ -52,6 +52,7 @@ SEMANTIC_STEP_OWNER = {
     "Build and lint Bicep templates (AZR-001 §28.1, offline)": "azr-static",
     "Test AZR-001 static guard tooling": "azr-static",
     "Run AZR-001 §28 static guards": "azr-static",
+    "Build and smoke-test the deploy images (no push)": "azr-static",
     "Secret scan (AZR-001 §29, Gitleaks 8.30.1 pinned by digest)": "secret-scan",
 }
 FOUNDATION_NORMATIVE_PROJECTION = '"normative":"${{ needs.normative.result }}"'
