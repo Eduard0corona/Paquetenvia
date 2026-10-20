@@ -51,8 +51,12 @@ public sealed class ProofPolicyTests
     public void Order_state_matrix_is_exact(ProofType proofType, string status, bool allowed) =>
         Assert.Equal(allowed, ProofContract.IsAllowedOrderState(proofType, status));
 
+    // DRV-PROOF-PHOTO-REDUCE-2026-10-20: the driver app stores every photo as the JPEG it reduced on the phone, so
+    // JPEG is accepted for each photo proof type, the failed-attempt photo (a DELIVERY_PHOTO) included.
     [Theory]
     [InlineData(ProofType.PickupPhoto, "image/jpeg", true)]
+    [InlineData(ProofType.DeliveryPhoto, "image/jpeg", true)]
+    [InlineData(ProofType.ReturnPhoto, "image/jpeg", true)]
     [InlineData(ProofType.PickupPhoto, "image/png", true)]
     [InlineData(ProofType.PickupPhoto, "text/plain", false)]
     [InlineData(ProofType.Signature, "image/png", true)]
@@ -66,6 +70,10 @@ public sealed class ProofPolicyTests
     public void Magic_bytes_validate_jpeg_png_and_utf8_text()
     {
         Assert.True(ProofContentPolicy.MatchesMagicBytes("image/jpeg", [0xff, 0xd8, 0xff, 0x00]));
+        // The start of every reduced proof photo: SOI and the JFIF APP0 header (DRV-PROOF-PHOTO-REDUCE-2026-10-20).
+        Assert.True(ProofContentPolicy.MatchesMagicBytes(
+            "image/jpeg",
+            [0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46, 0x49, 0x46, 0x00]));
         Assert.True(ProofContentPolicy.MatchesMagicBytes(
             "image/png",
             [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]));

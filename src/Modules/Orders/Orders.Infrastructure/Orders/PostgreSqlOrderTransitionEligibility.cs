@@ -74,7 +74,7 @@ internal static class OrderTransitionEligibility
     };
 
     /// <summary>An invalid requirement the policy always rejects as a capacity failure.</summary>
-    internal static readonly DriverCapacityRequirement InvalidRequirement = new(0, 0, 0, null, null, null);
+    internal static readonly DriverCapacityRequirement InvalidRequirement = new(0, 0, 0, []);
 
     internal static (bool EligibleDriver, bool CapacityAvailable) Evaluate(
         string assignmentType,
@@ -131,9 +131,7 @@ internal static class OrderTransitionEligibility
         {
             long totalWeight = 0;
             long maximumWeight = 0;
-            int? maximumLength = null;
-            int? maximumWidth = null;
-            int? maximumHeight = null;
+            var sides = new List<PackageSides>(packages.Count);
             foreach (var (weight, dimensionsJson) in packages)
             {
                 if (weight <= 0 ||
@@ -144,27 +142,22 @@ internal static class OrderTransitionEligibility
 
                 totalWeight = checked(totalWeight + weight);
                 maximumWeight = Math.Max(maximumWeight, weight);
-                maximumLength = Max(maximumLength, length);
-                maximumWidth = Max(maximumWidth, width);
-                maximumHeight = Max(maximumHeight, height);
+                // Each package keeps its own sides, unsorted: DriverEligibilityPolicy sorts them
+                // (DRV-ELIGIBILITY-SORTED-DIMENSIONS-2026-10-20).
+                sides.Add(new PackageSides(length, width, height));
             }
 
             return new DriverCapacityRequirement(
                 packages.Count,
                 totalWeight,
                 maximumWeight,
-                maximumLength,
-                maximumWidth,
-                maximumHeight);
+                sides);
         }
         catch (OverflowException)
         {
             return InvalidRequirement;
         }
     }
-
-    private static int? Max(int? current, int? value) =>
-        value is null ? current : current is null ? value : Math.Max(current.Value, value.Value);
 
     internal static bool TryReadDimensions(string json, out int? length, out int? width, out int? height)
     {

@@ -198,9 +198,17 @@ public sealed partial class DispatchPostgreSqlContractTests
     /// </summary>
     private async Task<Guid> CreateReadyOrderWithoutMeasurementsAsync(DispatchScenario scenario)
     {
+        var orderId = await CreateReadyOrderFromQuotePackagesAsync(scenario, NoMeasurementsQuotePackages);
+        Assert.True(await PackageItemsHaveNoMeasurementsAsync(orderId));
+        return orderId;
+    }
+
+    /// <summary>The same flow for the quote packages given, as Pricing stores them.</summary>
+    private async Task<Guid> CreateReadyOrderFromQuotePackagesAsync(DispatchScenario scenario, string quotePackages)
+    {
         await scenario.ExecuteAdminAsync(
             "UPDATE pricing.quotes SET package_snapshot=@packages::jsonb WHERE id=@quote;",
-            P("packages", NoMeasurementsQuotePackages),
+            P("packages", quotePackages),
             P("quote", scenario.QuoteId));
 
         var created = await CreateOrderService(OccurredAt.AddHours(-2)).CreateAsync(
@@ -219,7 +227,6 @@ public sealed partial class DispatchPostgreSqlContractTests
                 RestrictedGoodsAcknowledged: true),
             default);
         Assert.Equal("DRAFT", created.Status);
-        Assert.True(await PackageItemsHaveNoMeasurementsAsync(created.Id));
 
         var transitions = CreateOrderTransitionService(OccurredAt.AddHours(-1));
         var confirmed = await transitions.TransitionAsync(
@@ -312,7 +319,19 @@ public sealed partial class DispatchPostgreSqlContractTests
             new FixedClock(now));
     }
 
-    private PostgreSqlRouteService CreateRouteService(bool requireDimensions)
+    private PostgreSqlRouteService CreateRouteService(bool requireDimensions) =>
+        CreateRouteService(new RoutingVehicleCapacityOptions
+        {
+            MaximumPackageCount = 4,
+            MaximumTotalWeightGrams = 4_000,
+            MaximumSinglePackageWeightGrams = 2_000,
+            MaximumLengthMillimeters = 500,
+            MaximumWidthMillimeters = 400,
+            MaximumHeightMillimeters = 300,
+            RequireDimensions = requireDimensions,
+        });
+
+    private PostgreSqlRouteService CreateRouteService(RoutingVehicleCapacityOptions motorcycle)
     {
         var state = new TenantDatabaseExecutionState();
         var dbOptions = new DbContextOptionsBuilder<RoutingDbContext>()
@@ -328,19 +347,7 @@ public sealed partial class DispatchPostgreSqlContractTests
             Options.Create(new RoutingDriverEligibilityOptions
             {
                 RequiredDocumentTypesByVehicleType = new(StringComparer.Ordinal) { ["MOTORCYCLE"] = ["IDENTITY"] },
-                VehicleCapacity = new(StringComparer.Ordinal)
-                {
-                    ["MOTORCYCLE"] = new()
-                    {
-                        MaximumPackageCount = 4,
-                        MaximumTotalWeightGrams = 4_000,
-                        MaximumSinglePackageWeightGrams = 2_000,
-                        MaximumLengthMillimeters = 500,
-                        MaximumWidthMillimeters = 400,
-                        MaximumHeightMillimeters = 300,
-                        RequireDimensions = requireDimensions,
-                    },
-                },
+                VehicleCapacity = new(StringComparer.Ordinal) { ["MOTORCYCLE"] = motorcycle },
             }),
             new PostgreSqlAppendOnlyAuditWriter(state),
             new AuditPayloadRedactor(),
@@ -358,12 +365,13 @@ public sealed partial class DispatchPostgreSqlContractTests
         TransitionMetadataMaximumBytes = 4_096,
     };
 
-    private static OrderTransitionDriverEligibilityOptions OrderTransitionEligibilityOptions() => new()
+    private static OrderTransitionDriverEligibilityOptions OrderTransitionEligibilityOptions(
+        OrderTransitionVehicleCapacityOptions? motorcycle = null) => new()
     {
         RequiredDocumentTypesByVehicleType = new(StringComparer.Ordinal) { ["MOTORCYCLE"] = ["IDENTITY"] },
         VehicleCapacity = new(StringComparer.Ordinal)
         {
-            ["MOTORCYCLE"] = new()
+            ["MOTORCYCLE"] = motorcycle ?? new()
             {
                 MaximumPackageCount = 4,
                 MaximumTotalWeightGrams = 4_000,

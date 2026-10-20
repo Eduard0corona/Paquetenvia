@@ -263,7 +263,7 @@ public sealed class DriversEligibilityPostgreSqlContractTests(PostgreSqlContract
         scenario.DriverId,
         scenario.CityId,
         scenario.ServiceAreaId,
-        new DriverCapacityRequirement(1, 500, 500, 100, 100, 100),
+        new DriverCapacityRequirement(1, 500, 500, [new PackageSides(100, 100, 100)]),
         EvaluatedAt);
 
     private async Task<DriverScenario> SeedAsync()

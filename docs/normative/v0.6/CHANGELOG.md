@@ -36,6 +36,104 @@
   AI-18, API, columnas, restricciones, políticas, roles, permisos ni paquetes; la única consulta que cambia es la lista
   de órdenes de I1. Nota: `docs/development/dp-indexes-orders-dispatch.md`.
 
+## Medidas del paquete ordenadas antes de compararlas con el vehículo (DRV-ELIGIBILITY-SORTED-DIMENSIONS-2026-10-20) — 2026-10-20
+
+- Respuesta literal del project owner (2026-10-20, pregunta H4 de la ronda H), registrada en `decision-log.md` con su
+  contexto y la opción no elegida: "El sistema compara largo con largo, ancho con ancho y alto con alto, sin girar el paquete; el formulario deja capturarlos en cualquier orden. Un paquete de 30×45 capturado al revés no pasaría para moto aunque quepa girado. ¿Cómo lo manejamos?" Respuesta: "Que el sistema las ordene" ("Tarea pequeña: antes de comparar, el sistema ordena las tres medidas de mayor a menor (paquete y límite). Evita rechazos por capturar al revés. Toca la regla que usan despacho, órdenes y rutas."). No elegida: "Convención de captura"
+  ("Sin código: «Largo» siempre es el lado más largo y «Alto» el más corto, y despacho lo aprende. Un error de captura rechaza un pedido que sí cabe."). La opción elegida no era la recomendada (la recomendada era la convención de captura).
+- `DriverEligibilityPolicy`, la regla que usan despacho (selector de repartidor, asignación y ofertas externas),
+  órdenes (`capacity_available` de ORD-002) y rutas (agregar parada), ordena de mayor a menor las tres medidas de
+  cada paquete y los tres límites del tipo de vehículo antes de comparar. Un paquete cabe si cada medida ordenada es
+  menor o igual que el límite en el mismo lugar, y la orden cabe si cabe cada paquete: un paquete de 300 × 450 × 200 mm
+  capturado así cabe en el límite de 450 × 400 × 300 mm de bici y a pie.
+- `DriverCapacityRequirement` lleva ahora las medidas de cada paquete en vez del máximo de largo, ancho y alto entre
+  paquetes, que juntaba lados de paquetes distintos. Los tres agregadores de los módulos solo reúnen las medidas; el
+  ordenamiento existe una sola vez, en la política. Ningún SQL agregaba medidas.
+- Una medida que falta no se revisa (las presentes, ordenadas, se comparan con los límites mayores). Una medida que
+  no cabe da el código de su lugar: la mayor `PACKAGE_LENGTH_EXCEEDED`, la de en medio `PACKAGE_WIDTH_EXCEEDED`, la
+  menor `PACKAGE_HEIGHT_EXCEEDED`. Con `RequireDimensions=true`, una medida en blanco falla con el código de su campo,
+  ahora en cada paquete de la orden. Mismos códigos, sin cambios de API, esquema, roles, migraciones, configuración,
+  paquetes ni textos de la interfaz; AI-04 no cambia.
+- AI-08 DSP-001: un criterio DECIDED y su prueba. Notas: `docs/development/dsp-001-own-driver-eligibility.md`,
+  `docs/operations/env-001-pilot/README.md` §4 y la guía del owner.
+
+## Repartidor: fotos de evidencia reducidas y sin metadatos (DRV-PROOF-PHOTO-REDUCE-2026-10-20) — 2026-10-20
+
+- Respuesta literal del project owner (2026-10-20, pregunta G2), registrada en `decision-log.md` con su contexto y las
+  opciones no elegidas: "Fotos de entrega: hoy se suben tal como las toma el teléfono (2 a 5 MB, con metadatos que pueden incluir GPS). Sin señal caben solo de 5 a 12 fotos en la cola. ¿Las procesamos en el teléfono antes de guardarlas?" Respuesta: "Reducir y quitar metadatos (Recommended)" ("JPEG de máximo 1600 px por lado y calidad 80 % (unos 300-500 KB), sin metadatos. La evidencia guardada es esa foto reducida (su huella se calcula después). Caben unas 50 fotos sin señal. Se ve menos detalle al hacer zoom.").
+- La app del repartidor reduce cada foto de evidencia en el teléfono antes de calcular su huella y guardarla en la
+  cola: la de recolección, la de entrega y la "Foto del lugar" de "No se pudo entregar". Decodifica la foto con su
+  orientación visual (`createImageBitmap` con `imageOrientation: "from-image"`, o un `<img>` donde falta esa opción) y
+  la vuelve a codificar en un canvas como JPEG de calidad 0.8 con el lado mayor de 1600 px como máximo, sin agrandarla
+  y sin cambiar su proporción. Un PNG también se guarda como JPEG; lo transparente queda blanco.
+- Sin metadatos: la foto guardada solo conserva el encabezado JFIF y los datos de la imagen. Se quitan EXIF (con GPS,
+  modelo del teléfono y hora), XMP, perfiles ICC, comentarios y todo lo que vaya después del fin de la imagen, también
+  lo que escribe el propio codificador del navegador (Chromium agrega un perfil ICC).
+- La evidencia guardada es esa foto reducida: la vista previa la muestra, y esos mismos bytes son los que se hashean
+  (SHA-256), se guardan en IndexedDB, se declaran (`image/jpeg`), se suben y valida el servidor (bytes mágicos y
+  SHA-256), sin cambios en el servidor. El archivo que eligió el repartidor no se guarda, no se muestra ni se envía.
+- Si el teléfono no puede procesar la foto (formato, archivo dañado o memoria), el paso dice «No se pudo procesar la
+  foto en el teléfono. Tómala de nuevo.», no guarda nada y nunca usa el archivo original en su lugar. Mientras la
+  reduce dice «Preparando la foto…».
+- Límites sin cambio: 10 MiB por foto, 25 MiB de fotos y 100 operaciones por partición. Tamaño típico: unos
+  300-500 KB por foto de una cámara de 12 MP (estimación del owner), unas 50 fotos sin señal. Medido en Chromium con
+  imágenes sintéticas: una de 4000x3000 y 3.78 MB queda en 1600x1200 y 258 KB; 12 MP de ruido puro (peor caso), de
+  10.5 MB a 661 KB.
+- Una foto que una versión anterior de la app ya había guardado en la cola se envía como se guardó.
+- AI-07 `driver_stop.proof_photo` (nuevo) y `failed_delivery.photo`; AI-08 DRV-002: criterio DECIDED y prueba
+  requerida. Pruebas: vitest con una foto sintética con EXIF y GPS inventados (coordenadas imposibles) y Playwright en
+  Chromium real (lo guardado, hasheado, declarado y subido es un solo JPEG de 800x1600, derecho y sin metadatos; una
+  foto que no se puede decodificar no deja nada). Notas: `docs/development/drv-002-offline-events-pod.md`; borradores
+  legales actualizados. Sin cambios de API, SQL, migraciones, roles, esquema de IndexedDB, Service Worker ni paquetes.
+
+## Rutas y asignaciones como flujo atómico 6, con catálogo de escrituras entre módulos (RTE-001-ROUTING-ASSIGNMENT-FLOW6-2026-10-20) — 2026-10-20
+
+- Respuesta literal del project owner (2026-10-20, pregunta G1), registrada en `decision-log.md` con su contexto y la
+  opción no elegida: "Rutas: al agregar o quitar una parada, el módulo de Rutas escribe directo en las asignaciones de Despacho, en la misma transacción. Lo exige RTE-001, pero no está entre los 5 flujos permitidos (AI-13 §4) y no hay prueba que detecte escrituras nuevas entre módulos. ¿Qué hacemos?" Respuesta: "Registrarlo como flujo 6 (Recommended)" ("Fila de decisión y ADR que lo agregan a la lista, más la prueba que cataloga cada escritura entre módulos y falla con cualquiera nueva. Sin cambio de comportamiento.").
+- AI-13 §4 agrega el flujo 6, route stop ↔ assignment.route_id (RTE-001): lo coordina Routes y, en una sola
+  transacción, `addRouteStop` fija y `removeRouteStop` limpia `dispatch.assignments.route_id` junto con la parada, la
+  versión de la ruta, la auditoría, el outbox `routes.route-changed` y la idempotencia. Los otros cinco flujos no
+  cambian. ADR: `docs/adr/ADR-RTE-001-ROUTE-ASSIGNMENT-FLOW6.md`.
+- La cuenta sube a seis en AI-13 §15, AI-03 §25.9 y `CLAUDE.md`; AI-04 `transaction_coordinator_allowlist` agrega
+  `route_stop_to_assignment_route_id`; AI-01 §4.18 y AI-11 prohíben ahora un séptimo flujo sin ADR y pruebas. AI-08
+  RTE-001: un criterio DECIDED y la prueba exigida.
+- Nueva prueba de arquitectura `CrossSchemaWriteCatalogTests`: cataloga cada escritura SQL de runtime en el esquema de
+  otro módulo (hoy ocho: flujos 1, 2, 5 y 6, y ADR-031 para el provisioning) y falla ante una nueva, una retirada o una
+  sin flujo, con un mensaje que pide el ADR. Nota: `docs/development/rte-001-routing-assignment-flow6.md`.
+- Sin cambios de código de `src/`, SQL, migraciones, roles, permisos, RLS, outbox ni paquetes; el comportamiento no
+  cambia.
+
+## Avisos al destinatario: contratos (NTF-RECIPIENT-NOTICES-2026-10-20) — 2026-10-20
+
+- Respuestas literales del project owner (2026-10-19 y 2026-10-20), registradas en `decision-log.md` con su
+  contexto, las preguntas y las opciones no elegidas: E4 "Los 4 del plan (Recommended)" ("Enlace de seguimiento al crear la orden, "Va en camino", "No se pudo entregar" y "Entregado", por WhatsApp. Por correo solo si hay correo del destinatario: hoy no se captura, se agrega como campo opcional en la nueva orden."); E4-P1 "Casilla en la orden (Recommended)" ("En la nueva orden: "El destinatario aceptó recibir avisos de su envío por WhatsApp". Si no se marca, no se manda WhatsApp (sí correo si hay). Queda registro de quién la marcó y cuándo."); E4-P2 "Llave propia para avisos (Recommended)" ("Al cotizar se guarda además una copia cifrada del teléfono y del correo con una llave que solo sirve para avisos. El Worker solo abre esa llave, nunca direcciones, nombres ni descripciones. Una llave más en Key Vault (centavos al mes)."); E4-P3 "Al iniciar traslado (Recommended)" ("Avisa con tiempo. En rutas con varias paradas puede llegar horas antes; el texto no promete hora."); E4-P4 "Al quedar confirmada (Recommended)" ("Nunca se manda el enlace de una orden que no llegó a confirmarse."); E4-P5 "Sin motivo, con enlace (Recommended)" (""Intentamos entregar y no fue posible; en el seguimiento verás el siguiente paso". No expone motivos delicados."); E4-P6 "De "tú", sin nombres (Recommended)" ("Como el ejemplo: sin nombre de la empresa que envía ni de nadie. Los 4 textos completos quedan en el PR para que los revises antes de mandarlos a Meta."); E4-P7 "La razón social (Recommended)" ("Es el responsable legal del aviso de privacidad y no es la marca comercial."); E4-P8 "Las tres vías (Recommended)" ("Responder "BAJA" o tocar "No recibir avisos" en WhatsApp, un enlace en cada correo, y un botón "Detener avisos" en la orden para cuando lo pida por teléfono. Aplica a todas las empresas que le envíen, porque el número de WhatsApp es uno solo."); E4-P9 "Respuesta automática (Recommended)" (""Este número solo envía avisos. Para dudas sobre tu envío contacta a quien te lo envió." Se cobra como mensaje de servicio."); E4-P10 "8:00 a 21:00 (Recommended)" ("Lo que pase fuera de ese horario se manda a las 8:00, salvo que ya no aplique (por ejemplo, "Va en camino" si ya se entregó)."); E4-P11 "Por los dos siempre (Recommended)" ("Más simple y no depende de los avisos de entrega de Meta; el correo cuesta casi nada."); E4-P12 "avisos@paquetenvia.com (Recommended)" ("Nombre visible "Seguimiento de envío", sin buzón de respuestas. Coherente con la marca neutra; el dominio ya es el del enlace."); E4-P13 "Fuera de este trabajo (Recommended)" ("El despachador ya ve los estados en la plataforma; se decide después, con el portal de negocios (BUS-001).").
+- Ronda F (2026-10-20, sobre los borradores de este cambio; también en la fila con su contexto, preguntas y opciones no elegidas): E4-P14 "Corregir los dos (Recommended)" ("WhatsApp: «Intentamos entregar tu envío con número de guía {{1}} y no fue posible. Con el botón Ver seguimiento verás el siguiente paso.» (como tu respuesta E4-P5). Correo: «con el botón Ver seguimiento» pasa a «en el enlace de abajo» en los 4 avisos."); E4-P15 "Sí, una línea (Recommended)" ("«Listo. Ya no recibirás avisos en este número.» Una sola vez, por la misma vía que la respuesta automática (mensaje de servicio). En el correo la página de baja ya lo confirma en pantalla."); E4-P16 "No en el piloto (Recommended)" ("La baja es definitiva durante el piloto. Si alguien la pidió por error, no hay forma de reactivarla; se revisa al terminar el piloto. Sin trabajo extra."). En AI-24: "No se pudo entregar" ya no empieza con "Hoy"; los cuatro cuerpos de correo quedan escritos con "en el enlace de abajo"; una baja por WhatsApp recibe una sola confirmación ("Listo. Ya no recibirás avisos en este número.") por la vía de la respuesta automática y fuera de su límite de 24 h; la baja es definitiva durante el piloto (riesgo residual: una baja por error no se deshace). Lo reflejan AI-05, AI-03, AI-06 (comentario del almacén de respuestas automáticas) y AI-08 NTF-006.
+- E4-P17 (2026-10-20, tras el hallazgo MAJOR de la revisión automática sobre las dos copias del correo; también en la fila): "Dos copias, como el teléfono (Recommended)" ("La API conserva el correo con la llave de datos personales, igual que el teléfono, y el Worker solo abre la copia de avisos. Ninguna se muestra, registra ni publica, y al borrar la ubicación se borran las dos. Queda como hoy en el PR."). El contrato no cambia: el correo se guarda con la llave PII, como el teléfono, y con una copia bajo `recipient-notice-kek` para el Worker. AI-24 usa ahora el mismo nombre de parámetro que AI-05 en la baja por correo (`{unsubscribeToken}`).
+- Solo contratos (PR-0): nada se construye, configura ni enciende; GATE-004 y GATE-007 siguen abiertas. ADR
+  `docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md` y nota `docs/development/ntf-recipient-notices.md` (arquitectura,
+  secuencia PR-1 a PR-8, acciones del owner y reversión).
+- AI-24 gana la sección `recipient_notices`: cuatro avisos al destinatario en cinco transiciones de ORD-002 (enlace al
+  confirmar, "Va en camino" al iniciar traslado, "No se pudo entregar" sin motivo y nunca por una recolección fallida,
+  "Entregado"), revisados otra vez al enviarse; WhatsApp solo con la casilla de permiso y correo solo si hay correo,
+  los dos cuando aplican; de 8:00 a 21:00 hora de Mazatlán; llave propia de avisos que el Worker solo desenvuelve;
+  textos neutros para revisión del owner antes de Meta; bajas globales por tres vías guardadas como hashes con llave;
+  respuesta automática; acuses firmados; interruptores apagados. `tracking_token.derivation.key` también la lee el
+  Worker.
+- AI-05: entrada `DECIDED` `NTF-RECIPIENT-NOTICES` de `x-pilot-contract-deltas` (correo opcional solo en el destino,
+  permiso de WhatsApp en `createOrder` y en la carga CSV, webhooks de Meta y de Event Grid, baja por correo, lista y
+  "Detener avisos" del despachador y su capacidad). La superficie HTTP no cambia hasta que cada ítem publique su parte
+  con código y pruebas; los conteos de rutas, esquemas y referencias no cambian.
+- AI-12: `decided_amendment` de `NotificationStatusChanged` (payload v2 con `order_id` y `notice`, canales WhatsApp y
+  correo, estados `DELIVERED` y `CANCELLED`). AI-06 y AI-18: contrato declarado en comentarios (columnas de Locations,
+  cambios del carril Notifications, almacén de bajas, respuestas automáticas, tabla de permisos, funciones y el rol
+  `paqueteria_notification_receipt_executor`); su DDL entra con cada paso de carril, así que solo se vuelven a fijar
+  sus hashes. AI-04: correo como dato sensible e invariantes de privacidad y outbox, sin estados nuevos. AI-07: campo
+  de correo, casillas de permiso, panel "Avisos al destinatario" y página `/avisos/baja/:token`. AI-08: ítems NTF-002
+  a NTF-008, criterio en TRK-002 y REL-001 depende de NTF-005. AI-09, AI-03 §15/§16 y AI-13 §7.2.
+- Sin cambios de comportamiento, migraciones, roles, permisos, Bicep ni paquetes: solo se vuelven a fijar los hashes de
+  AI-05, AI-06 y AI-18 (constantes de la línea base, manifiesto del migrador, flujos de CI, documentación y pruebas) y el
+  conteo de ítems de AI-08 en las pruebas.
+
 ## Alertas de CPU, memoria, disco y créditos de CPU de PostgreSQL en el piloto (SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20) — 2026-10-20
 
 - Respuestas literales del project owner (2026-10-20, preguntas D2, D2-a, D2-b, D2-c y D2-d), registradas en

@@ -180,6 +180,19 @@ events:
     - occurred_at
     rules:
     - operations audience only; never sent to DriverHub unless contract audience is explicitly expanded
+    decided_amendment:
+      status: DECIDED_2026-10-20_IMPLEMENTATION_PENDING
+      decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner, E4 "Los 4 del plan (Recommended)"; AI-24
+        recipient_notices)
+      implementation: AI-08 NTF-003 publishes it with the Realtime parser change and its tests; until then the payload
+        above and NotificationStatusChanged.v1 stand unchanged
+      text: payload notification-status-changed-v2 adds the optional order_id (the order of a recipient notice) and
+        notice (TRACKING_LINK, IN_TRANSIT, DELIVERY_FAILED or DELIVERED), both absent for IN_APP; channel is IN_APP,
+        WHATSAPP or EMAIL and status is PENDING, SENT, DELIVERED, FAILED or CANCELLED; the Realtime parser accepts v1 and
+        v2 and stops sending a WHATSAPP or EMAIL row DEAD (today it accepts only IN_APP, which would also drop the
+        dispatcher alert promised by NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02 and NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03);
+        still the operations audience of the owner organization only, never DriverHub or TrackingHub; never the
+        recipient, a template parameter, a link, a token, a result code or any other personal data
   PublicEtaChanged:
     audience:
     - tracking

@@ -34,7 +34,7 @@ public sealed class PostgreSqlAssignableDriversQuery(
         Meter.CreateHistogram<long>("dispatch.assignable_drivers.count");
 
     /// <summary>The requirement that makes the policy report PACKAGE_REQUIREMENT_INVALID, as assignDriver refuses.</summary>
-    private static readonly DriverCapacityRequirement InvalidRequirement = new(0, 0, 0, null, null, null);
+    private static readonly DriverCapacityRequirement InvalidRequirement = new(0, 0, 0, []);
 
     public async Task<AssignableDriverPage> ListAsync(
         ListAssignableDriversQuery query,

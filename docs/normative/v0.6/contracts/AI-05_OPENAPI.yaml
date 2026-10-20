@@ -8271,3 +8271,101 @@ x-pilot-contract-deltas:
       user, its own budget) records its 429 in ADR-OBS-001. TooManyRequests now declares the Retry-After header that
       every 429 already sends. The numbers are configuration (RateLimits) and a later owner decision re-sets them; no
       path, operation, schema or other status code changes
+  - id: NTF-RECIPIENT-NOTICES
+    status: DECIDED
+    decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner, 2026-10-19 and 2026-10-20 - E4 and the answers E4-P1 to
+      E4-P13 recorded in decision-log.md; docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md; AI-24 recipient_notices)
+    literal: '"Avisos al destinatario: con tu decisión "Empezaremos con todo habilitado" toca construirlos (WhatsApp y correo, apagados hasta cerrar GATE-004). ¿Qué avisos manda el piloto?" - Los 4 del plan (Recommended)'
+    option: 'Enlace de seguimiento al crear la orden, "Va en camino", "No se pudo entregar" y "Entregado", por WhatsApp. Por correo solo si hay correo del destinatario: hoy no se captura, se agrega como campo opcional en la nueva orden.'
+    implementation: pending - nothing below is served or accepted yet; each part is published in this file together with
+      its code and tests by the AI-08 item it names, and until then the HTTP surface above is unchanged; GATE-004 and
+      GATE-007 stay open and every switch stays off
+    delta: recipient notices (TRACKING_LINK, IN_TRANSIT, DELIVERY_FAILED and DELIVERED) to the delivery recipient by
+      WhatsApp and by e-mail; the parts below add an optional recipient e-mail, the WhatsApp consent, the dispatcher
+      list and stop operations, the provider webhooks and the e-mail unsubscribe; every error keeps
+      application/problem+json, the uniform 404 and the AI05-DECLARE-EMITTED-ERRORS 503, and no answer, problem or log
+      ever carries a phone, an e-mail, a link, a token or a template parameter
+    parts:
+    - item: NTF-002
+      operation: createQuote
+      change: CreateQuoteRequest.destination becomes DestinationAddressInput, AddressInput plus the optional email
+        (string, ASCII only, at most 254 characters, exactly one @, a domain with at least one dot and no spaces;
+        trimmed, the domain lower-cased); origin keeps AddressInput, so an origin never carries an e-mail; any other
+        value is 422 ValidationError before any effect, without echoing it; the e-mail enters the quote input hash and
+        the Idempotency-Key fingerprint only when present, so existing hashes stay stable (LOW-PRICE-MANUAL-AUTH-2026-10-02
+        precedent); it is stored only sealed (AI-24 recipient_notices.contact) and never returned by any operation,
+        logged, audited or placed in request_snapshot_redacted, an outbox payload or an event
+    - item: NTF-004
+      operation: createOrder
+      change: CreateOrderRequest gains the optional recipient_notices object (additionalProperties false) with
+        whatsapp_consent_attested (boolean) and whatsapp_consent_version (const NTF-RECIPIENT-WHATSAPP-CONSENT-V1,
+        required when whatsapp_consent_attested is true and absent otherwise); absent or false records nothing; any other
+        shape is the uniform 409 INVALID_REQUEST before any order is created; it is part of the Idempotency-Key request
+        hash; when true, orders.recipient_notice_consents gets one row (order, WHATSAPP, version, the actor, the server
+        time) in the createOrder transaction and the ORDER_CREATED audit entry records the boolean only
+    - item: NTF-004
+      operation: commitOrderCsv
+      change: CsvImportCommitRequest gains the optional form fields recipient_whatsapp_consent_attested (true or false)
+        and recipient_whatsapp_consent_version (NTF-RECIPIENT-WHATSAPP-CONSENT-V1, required with true); the attestation
+        covers every row of the batch, is recorded for each created order as on createOrder and is part of the batch
+        fingerprint; previewOrderCsv is unchanged
+    - item: NTF-006
+      operation: verifyMetaWhatsAppWebhook
+      method_path: GET /messaging/whatsapp/webhook
+      change: tag Messaging, security none; query hub.mode, hub.verify_token and hub.challenge; 200 text/plain with
+        hub.challenge only for hub.mode subscribe and a verify token equal, in constant time, to the configured secret;
+        otherwise the uniform 403; 404 while Messaging:WhatsApp:Webhook:Enabled is false; 429 under SEC-004 (the budgets
+        of these four anonymous operations are an owner decision asked in NTF-006)
+    - item: NTF-006
+      operation: receiveMetaWhatsAppWebhook
+      method_path: POST /messaging/whatsapp/webhook
+      change: tag Messaging, security none, application/json from Meta with the required X-Hub-Signature-256 header
+        (sha256= and the HMAC-SHA256 of the raw body under the Meta app secret), checked in constant time before
+        parsing; statuses become delivery receipts (AI-24 recipient_notices.receipts); an inbound opt-out keyword or the
+        quick reply No recibir avisos becomes a WHATSAPP opt-out of the sender hash (recipient_notices.opt_out) and, when
+        it records that opt-out, the one confirmation (recipient_notices.opt_out.confirmation, E4-P15); any other
+        inbound message gets the one automatic reply (recipient_notices.auto_reply, E4-P9); 200 once recorded, fields it
+        does not use ignored; the uniform 403 for a missing or invalid signature; 400 for a validly signed body that is
+        not a JSON object; 404 while disabled; 429 under SEC-004; 503 when the store or a key is unavailable, so Meta
+        retries; no inbound text, profile name, phone or recipient_id is ever logged, stored in clear or audited
+    - item: NTF-006
+      operation: receiveAcsEmailEvents
+      method_path: POST /messaging/email/events
+      change: tag Messaging, security none, Event Grid event schema (application/json); answers the subscription
+        validation handshake with its validationResponse; otherwise only authenticated deliveries (Microsoft Entra
+        protected delivery or a Key Vault secret header, chosen and recorded by NTF-006), else 401 or the uniform 403;
+        Microsoft.Communication.EmailDeliveryReportReceived events become receipts and other event types are ignored;
+        200 once recorded; 404 while Messaging:Email:Events:Enabled is false; 429 under SEC-004; 503 when the store is
+        unavailable, so Event Grid retries
+    - item: NTF-006
+      operation: unsubscribeRecipientNotices
+      method_path: POST /recipient-notices/unsubscribe/{unsubscribeToken}
+      change: tag Messaging, security none, no session, cookie or CSRF; the body is empty, the RFC 8058 form
+        List-Unsubscribe=One-Click or an empty JSON object from the public page; the token binds the owner organization
+        and the notification id under HMAC-SHA256 and is checked in constant time; a valid token records the EMAIL
+        opt-out of that notification contact (source EMAIL_LINK) and answers 204, also when it was already recorded; an
+        invalid or malformed token, or one whose notification no longer exists, is the uniform 404; 429 under SEC-004;
+        503 when the store or a key is unavailable; Cache-Control no-store
+    - item: NTF-007
+      operation: listOrderRecipientNotices
+      method_path: GET /orders/{orderId}/recipient-notices
+      change: tag Orders; OrganizationContext and OrderId; 200 RecipientNoticeList with items (notification_id, notice,
+        channel WHATSAPP or EMAIL, status PENDING, SENT, DELIVERED, FAILED or CANCELLED, attempts, last_code from the
+        closed MessagingResultCodes and notice code set, scheduled_for, sent_at, delivered_at, updated_at; ordered by
+        creation), whatsapp_consent_attested and email_on_file (booleans); never the phone, the e-mail, the link or a
+        template parameter; Cache-Control no-store; 401, 403 (MFA_REQUIRED when only the second factor is missing), the
+        uniform 404 (missing order, another organization or an order the selected organization only operates) and 503
+    - item: NTF-007
+      operation: stopOrderRecipientNotices
+      method_path: POST /orders/{orderId}/recipient-notices/stop
+      change: tag Orders; OrganizationContext, OrderId and the required Idempotency-Key, no body; records the WHATSAPP
+        opt-out of the destination phone and, when there is one, the EMAIL opt-out of the destination e-mail (source
+        DISPATCHER; global, E4-P8), decrypting them in memory only, and audits RECIPIENT_NOTICES_STOPPED without any
+        value; 200 with order_id, the channels recorded and recorded_at; a replay returns the stored answer; 409
+        INVALID_REQUEST or IDEMPOTENCY_CONFLICT; 401, 403 (MFA_REQUIRED), the uniform 404 as listOrderRecipientNotices and
+        503 when the PII key or the contact lookup key is unavailable
+    - item: NTF-007
+      operation: x-capability-matrix
+      change: a new section recipient_notice_operations with listOrderRecipientNotices and stopOrderRecipientNotices for
+        DISPATCHER members without MFA and PLATFORM_ADMIN members with a satisfied MFA challenge, owner organization
+        only (the tracking_link_operations rule), decided before any order is read

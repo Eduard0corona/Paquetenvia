@@ -34,7 +34,7 @@ Normative files read:
 - Evidencia legal coincide con vector canónico.
 - Montos `long/bigint/int64`.
 - No PII en snapshots, logs, outbox o eventos públicos.
-- No sexto flujo transaccional cross-module.
+- No séptimo flujo transaccional cross-module.
 
 ## Salida
 

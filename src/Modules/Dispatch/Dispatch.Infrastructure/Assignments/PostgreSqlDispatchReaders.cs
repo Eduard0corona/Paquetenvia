@@ -187,7 +187,7 @@ public sealed class PostgreSqlAssignmentVisibilityDataReader(
                 driverId,
                 cityId,
                 serviceAreaId,
-                new DriverCapacityRequirement(0, 0, 0, null, null, null),
+                new DriverCapacityRequirement(0, 0, 0, []),
                 DateTimeOffset.UnixEpoch),
             cancellationToken);
 

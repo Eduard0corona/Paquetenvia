@@ -71,7 +71,11 @@ public sealed class DriverEligibilityPolicyTests
         var command = Command() with
         {
             ServiceAreaId = Guid.NewGuid(),
-            Capacity = new DriverCapacityRequirement(3, 2_001, 1_500, 400, 300, 200),
+            Capacity = new DriverCapacityRequirement(
+                3,
+                2_001,
+                1_500,
+                [Sides(400, 300, 200), Sides(1, 1, 1), Sides(1, 1, 1)]),
         };
 
         var result = Evaluate(command, snapshot);
@@ -171,12 +175,16 @@ public sealed class DriverEligibilityPolicyTests
 
     public static TheoryData<DriverCapacityRequirement, string> CapacityCases => new()
     {
-        { new(3, 1_000, 700, 100, 100, 100), DriverEligibilityRejectionCodes.PackageCountExceeded },
-        { new(1, 2_001, 700, 100, 100, 100), DriverEligibilityRejectionCodes.TotalWeightExceeded },
-        { new(1, 1_001, 1_001, 100, 100, 100), DriverEligibilityRejectionCodes.SinglePackageWeightExceeded },
-        { new(1, 500, 500, 301, 100, 100), DriverEligibilityRejectionCodes.PackageLengthExceeded },
-        { new(1, 500, 500, 100, 201, 100), DriverEligibilityRejectionCodes.PackageWidthExceeded },
-        { new(1, 500, 500, 100, 100, 151), DriverEligibilityRejectionCodes.PackageHeightExceeded },
+        {
+            new(3, 1_000, 700, [Sides(100, 100, 100), Sides(100, 100, 100), Sides(100, 100, 100)]),
+            DriverEligibilityRejectionCodes.PackageCountExceeded
+        },
+        { new(1, 2_001, 700, [Sides(100, 100, 100)]), DriverEligibilityRejectionCodes.TotalWeightExceeded },
+        { new(1, 1_001, 1_001, [Sides(100, 100, 100)]), DriverEligibilityRejectionCodes.SinglePackageWeightExceeded },
+        // The limits are 300 x 200 x 150: each sorted side is compared with the limit in the same place.
+        { new(1, 500, 500, [Sides(301, 100, 100)]), DriverEligibilityRejectionCodes.PackageLengthExceeded },
+        { new(1, 500, 500, [Sides(300, 201, 100)]), DriverEligibilityRejectionCodes.PackageWidthExceeded },
+        { new(1, 500, 500, [Sides(300, 200, 151)]), DriverEligibilityRejectionCodes.PackageHeightExceeded },
     };
 
     [Fact]
@@ -184,7 +192,7 @@ public sealed class DriverEligibilityPolicyTests
     {
         var result = Evaluate(Command() with
         {
-            Capacity = new DriverCapacityRequirement(1, 500, 500, null, null, null),
+            Capacity = new DriverCapacityRequirement(1, 500, 500, [Sides(null, null, null)]),
         });
 
         Assert.Equal(
@@ -206,11 +214,18 @@ public sealed class DriverEligibilityPolicyTests
 
     public static TheoryData<DriverCapacityRequirement> InvalidCapacityCases => new()
     {
-        new(0, 500, 500, 100, 100, 100),
-        new(1, 0, 1, 100, 100, 100),
-        new(1, 500, 501, 100, 100, 100),
-        new(1, 500, 500, 0, 100, 100),
-        new(1, 500, 500, 100, -1, 100),
+        new(0, 500, 500, []),
+        new(1, 0, 1, [Sides(100, 100, 100)]),
+        new(1, 500, 501, [Sides(100, 100, 100)]),
+        new(1, 500, 500, [Sides(0, 100, 100)]),
+        new(1, 500, 500, [Sides(100, -1, 100)]),
+        new(1, 500, 500, [Sides(100, 100, int.MinValue)]),
+        // The sides travel per package: a list that does not match the package count is not a requirement.
+        new(1, 500, 500, []),
+        new(2, 500, 250, [Sides(100, 100, 100)]),
+        new(1, 500, 500, [Sides(100, 100, 100), Sides(100, 100, 100)]),
+        new(1, 500, 500, [null!]),
+        new(1, 500, 500, null!),
     };
 
     [Fact]
@@ -300,8 +315,10 @@ public sealed class DriverEligibilityPolicyTests
         DriverId,
         CityId,
         null,
-        new DriverCapacityRequirement(1, 500, 500, 100, 100, 100),
+        new DriverCapacityRequirement(1, 500, 500, [Sides(100, 100, 100)]),
         Now);
+
+    private static PackageSides Sides(int? length, int? width, int? height) => new(length, width, height);
 
     private static DriverEligibilitySnapshot Snapshot() => new(
         DriverId,

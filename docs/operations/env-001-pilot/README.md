@@ -317,7 +317,10 @@ every vehicle type (`MOTORCYCLE`, `CAR`, `VAN`, `BICYCLE`, `WALKER`) its rules:
   `BACKGROUND_CHECK` or `OTHER`;
 - `Drivers__Eligibility__VehicleCapacity__<TYPE>__MaximumPackageCount`, `__MaximumTotalWeightGrams`,
   `__MaximumSinglePackageWeightGrams` (not above the total), `__MaximumLengthMillimeters`, `__MaximumWidthMillimeters`
-  and `__MaximumHeightMillimeters`: whole numbers above zero, in plain digits;
+  and `__MaximumHeightMillimeters`: whole numbers above zero, in plain digits. The order of the three size limits does
+  not matter, nor the order in which dispatch types a package's length, width and height: the API sorts the limits
+  and each package's sides from largest to smallest before comparing them
+  (DRV-ELIGIBILITY-SORTED-DIMENSIONS-2026-10-20);
 - optionally `Drivers__Eligibility__VehicleCapacity__<TYPE>__RequireDimensions` (`true` refuses a package without
   dimensions; `false` when absent) and `Drivers__Eligibility__NonExpiringDocumentTypes__<n>` (document types that need
   no expiry date; every other required document needs one that has not passed).

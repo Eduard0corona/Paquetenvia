@@ -66,7 +66,7 @@ public sealed class OrderTransitionEligibilityTests
             DriverId,
             CityId,
             null,
-            new DriverCapacityRequirement(1, 500, 500, 100, 80, 60),
+            new DriverCapacityRequirement(1, 500, 500, [new PackageSides(100, 80, 60)]),
             Now,
             snapshot,
             policy);
