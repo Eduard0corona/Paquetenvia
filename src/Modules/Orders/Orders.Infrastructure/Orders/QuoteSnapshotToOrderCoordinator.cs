@@ -636,7 +636,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
     /// <c>security.app_allowed_org</c> parses it, and kept only where that function admits it. The owner part reads
     /// <c>orders_owner_created_idx</c>; the operator part reads <c>orders_operator_created_idx</c> and keeps only the
     /// orders whose owner <c>security.app_allowed_org</c> does not admit, so no order is in both parts. Each part is
-    /// ordered and limited like the list, then the parts are merged by <c>created_at DESC, id DESC</c> and limited
+    /// ordered and limited as the list is, then the parts are merged by <c>created_at DESC, id DESC</c> and limited
     /// again: the same rows, order, page size and cursor. RLS still filters every row of both parts. The status, date
     /// and cursor terms are the list's own text; <c>created_at&lt;=@cursor_created_at</c> is implied by the cursor term
     /// and only lets the index start at the cursor.
