@@ -548,7 +548,8 @@
 
 .primaryLink,
 .secondaryLink,
-.retryButton {
+.retryButton,
+.signInAction {
   display: inline-flex;
   min-width: 44px;
   min-height: 44px;
@@ -581,14 +582,37 @@
   font: inherit;
 }
 
+/* DRV-PWA-INAPP-NAVIGATION: "Iniciar sesión" on the session panels. */
+.signInAction {
+  margin-top: 1rem;
+  border: 0;
+  padding: 0.7rem 1rem;
+  background: var(--accent);
+  color: var(--accent-ink);
+  cursor: pointer;
+  font: inherit;
+  font-weight: 800;
+}
+
+.signInAction:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.signInHint {
+  margin-top: 0.4rem;
+}
+
 .primaryLink:hover,
-.retryButton:hover {
+.retryButton:hover,
+.signInAction:hover:not(:disabled) {
   background: var(--accent-strong);
 }
 
 .primaryLink:focus-visible,
 .secondaryLink:focus-visible,
 .retryButton:focus-visible,
+.signInAction:focus-visible,
 .detail h2:focus-visible {
   outline: 3px solid var(--focus);
   outline-offset: 3px;

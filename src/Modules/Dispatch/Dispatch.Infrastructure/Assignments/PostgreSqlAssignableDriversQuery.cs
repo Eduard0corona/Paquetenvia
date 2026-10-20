@@ -111,10 +111,10 @@ public sealed class PostgreSqlAssignableDriversQuery(
             cancellationToken);
 
         ListedCount.Record(page.Items.Count);
+        // OBS-003-TENANT-PSEUDONYM-2026-10-12: the organization and the actor reach this line only as the pseudonym and
+        // the role kind the logger factory adds, never as their ids.
         logger.LogInformation(
-            "Dispatch assignable drivers listed; tenant {TenantId}; actor {ActorId}; count {Count}; eligible {Eligible}",
-            query.OrganizationId,
-            query.ActorId,
+            "Dispatch assignable drivers listed; count {Count}; eligible {Eligible}",
             page.Items.Count,
             page.Items.Count(item => item.Eligible));
         return page;

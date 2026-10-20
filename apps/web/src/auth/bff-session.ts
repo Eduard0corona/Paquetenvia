@@ -45,6 +45,18 @@ export function buildLoginHref(returnUrl?: string | null): string {
 }
 
 /**
+ * "Iniciar sesión" from a screen without a usable session (the driver PWA's session panels,
+ * DRV-PWA-INAPP-NAVIGATION): the `/login` page, which validates `return_url` again and passes it
+ * to `/auth/login`. Only a local path other than `/login` is carried; anything else opens
+ * `/login` alone.
+ */
+export function buildSignInPromptHref(returnUrl?: string | null): string {
+  return isLocalReturnUrl(returnUrl) && returnUrl !== "/login"
+    ? `/login?return_url=${encodeURIComponent(returnUrl)}`
+    : "/login";
+}
+
+/**
  * "Verificar identidad" (AUTH-001-MFA-STEP-UP): a new AuthCenter sign-in that requires a
  * second factor and replaces the current session. Same local-only return_url rule as login.
  */

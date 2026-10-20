@@ -86,10 +86,10 @@ public sealed class PostgreSqlOrganizationDriversQuery(
         }
 
         ListedCount.Record(page.Items.Count);
+        // OBS-003-TENANT-PSEUDONYM-2026-10-12: the organization and the actor reach this line only as the pseudonym and
+        // the role kind the logger factory adds, never as their ids.
         logger.LogInformation(
-            "Dispatch organization drivers listed; tenant {TenantId}; actor {ActorId}; count {Count}",
-            query.OrganizationId,
-            query.ActorId,
+            "Dispatch organization drivers listed; count {Count}",
             page.Items.Count);
         return page;
     }

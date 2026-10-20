@@ -1,8 +1,11 @@
 "use client";
 
-/* eslint-disable @next/next/no-html-link-for-pages -- document navigation lets the Service Worker resolve offline shells */
-
 import { useEffect, useMemo, useRef, useState } from "react";
+import { buildSignInPromptHref } from "../../auth/bff-session";
+import {
+  isSessionBootstrapSettled,
+  sessionBootstrapSettledEvent,
+} from "../../auth/bootstrap-state";
 import { resolveDriverApiBaseUrl } from "../api/api-base-url";
 import {
   createDriverStopsApi,
@@ -51,6 +54,9 @@ import {
 import { driverRejectionMessage } from "../offline/rejection-codes";
 import { defaultDriverStopsRealtimeFactory } from "../realtime/driver-stops-realtime";
 import {
+  driverStopsRouteChangedEvent,
+  isInAppNavigationClick,
+  navigateWithinDriverStops,
   parseDriverStopsPathname,
   type DriverStopsRoute,
 } from "../routing/driver-stops-route";
@@ -131,6 +137,8 @@ const loadingRolesState: DriverOrganizationRolesState = Object.freeze({
 const noDispatchContact: DriverDispatchContactState = Object.freeze({
   phoneE164: null,
 });
+/** The "Mis paradas" title, focused after an in-app move back to the list. */
+const driverStopsTitleId = "driver-stops-title";
 const stopUnavailableForReport: DriverFailedDeliveryEnqueueResult =
   Object.freeze({
     stored: false,
@@ -167,6 +175,7 @@ export function DriverStopsExperience() {
   const dispatchContactControllerRef =
     useRef<DriverDispatchContactController | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const listFocusPendingRef = useRef(false);
   const identity = sessionIdentity(session);
   // VOICE-001: online-only calls; never part of the offline queue.
   const voiceApi = useMemo<DriverVoiceApi | null>(
@@ -208,11 +217,24 @@ export function DriverStopsExperience() {
   }, []);
 
   useEffect(() => {
-    const refreshRoute = () =>
+    const readRoute = () =>
       setRoute(parseDriverStopsPathname(window.location.pathname));
-    refreshRoute();
+    // DRV-PWA-INAPP-NAVIGATION: an in-app move or the browser's back and
+    // forward. As a page load did, the move reads the stops again (offline the
+    // read falls back to the saved snapshot and says so) and the list takes
+    // the focus once.
+    const refreshRoute = () => {
+      listFocusPendingRef.current = true;
+      readRoute();
+      void controllerRef.current?.retry();
+    };
+    readRoute();
     window.addEventListener("popstate", refreshRoute);
-    return () => window.removeEventListener("popstate", refreshRoute);
+    window.addEventListener(driverStopsRouteChangedEvent, refreshRoute);
+    return () => {
+      window.removeEventListener("popstate", refreshRoute);
+      window.removeEventListener(driverStopsRouteChangedEvent, refreshRoute);
+    };
   }, []);
 
   useEffect(() => {
@@ -339,6 +361,12 @@ export function DriverStopsExperience() {
     }
   }, [route, state.phase]);
 
+  useEffect(() => {
+    if (route?.kind !== "list" || !listFocusPendingRef.current) return;
+    listFocusPendingRef.current = false;
+    document.getElementById(driverStopsTitleId)?.focus({ preventScroll: true });
+  }, [route]);
+
   const projection = useMemo(
     () => projectDriverOperations(state.stops, operationsState.operations),
     [state.stops, operationsState.operations],
@@ -358,6 +386,7 @@ export function DriverStopsExperience() {
         <StatusPanel title="Sesión no disponible">
           Inicia una sesión válida y selecciona una organización para consultar
           tus paradas.
+          <SignInAction route={route} />
         </StatusPanel>
       </DriverShell>
     );
@@ -391,6 +420,7 @@ export function DriverStopsExperience() {
           {state.phase === "unauthorized"
             ? "Tu sesión ya no permite consultar paradas. Vuelve a autenticarte."
             : "No tienes acceso a las paradas de repartidor en esta organización."}
+          {state.phase === "unauthorized" ? <SignInAction route={route} /> : null}
         </StatusPanel>
       </DriverShell>
     );
@@ -630,7 +660,9 @@ function DriverShell({
           <p className={styles.eyebrow}>Paquetenvia Repartidor</p>
           <DriverAccount />
         </div>
-        <h1>Mis paradas</h1>
+        <h1 id={driverStopsTitleId} tabIndex={-1}>
+          Mis paradas
+        </h1>
         <p className={styles.intro}>
           Consulta y registra las acciones de tus recolecciones y entregas.
         </p>
@@ -775,12 +807,12 @@ function StopList({
                 </dd>
               </div>
             </dl>
-            <a
+            <DriverStopsLink
               className={styles.primaryLink}
               href={`/driver/stops/${stop.order_id}`}
             >
               Ver detalle
-            </a>
+            </DriverStopsLink>
           </li>
         ))}
       </ul>
@@ -851,9 +883,9 @@ function StopDetail({
         <p>
           La parada no existe o ya no está visible en tu organización actual.
         </p>
-        <a className={styles.secondaryLink} href="/driver/stops">
+        <DriverStopsLink className={styles.secondaryLink} href="/driver/stops">
           Volver a mis paradas
-        </a>
+        </DriverStopsLink>
       </section>
     );
   }
@@ -942,9 +974,9 @@ function StopDetail({
           onRetrySame={onRetrySame}
           onRebuild={onRebuild}
         />
-        <a className={styles.secondaryLink} href="/driver/stops">
+        <DriverStopsLink className={styles.secondaryLink} href="/driver/stops">
           Volver a mis paradas
-        </a>
+        </DriverStopsLink>
       </article>
     </>
   );
@@ -1297,6 +1329,93 @@ function StatusPanel({
       <div>{children}</div>
     </section>
   );
+}
+
+/**
+ * DRV-PWA-INAPP-NAVIGATION: "Ver detalle" and "Volver a mis paradas". A real
+ * anchor (a modified click still opens a new tab, and the Service Worker
+ * shell still answers a page load); a plain click moves inside the app
+ * without loading a page, so the session, the controllers and the open
+ * partition stay as they are, also offline.
+ */
+function DriverStopsLink({
+  href,
+  className,
+  children,
+}: Readonly<{ href: string; className: string; children: React.ReactNode }>) {
+  return (
+    <a
+      className={className}
+      href={href}
+      onClick={(event) => {
+        if (isInAppNavigationClick(event) && navigateWithinDriverStops(href)) {
+          event.preventDefault();
+        }
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
+/**
+ * DRV-PWA-INAPP-NAVIGATION: the installed app has no address bar, so a
+ * screen without a usable session offers "Iniciar sesión": /login with this
+ * stops path as its validated return_url (buildSignInPromptHref). It appears
+ * once the page's session check is over, never while it is still running.
+ * Signing in needs the network, so offline the button is disabled and says
+ * why, like "Cerrar sesión".
+ */
+function SignInAction({ route }: Readonly<{ route: DriverStopsRoute | null }>) {
+  const online = useBrowserOnline();
+  const settled = useSessionBootstrapSettled();
+  if (!settled) return null;
+  const returnPath =
+    route?.kind === "detail" ? `/driver/stops/${route.orderId}` : "/driver/stops";
+  if (!online) {
+    return (
+      <>
+        <button className={styles.signInAction} type="button" disabled>
+          Iniciar sesión
+        </button>
+        <span className={styles.signInHint}>
+          Conéctate a internet para iniciar sesión.
+        </span>
+      </>
+    );
+  }
+  return (
+    <a className={styles.signInAction} href={buildSignInPromptHref(returnPath)}>
+      Iniciar sesión
+    </a>
+  );
+}
+
+function useBrowserOnline(): boolean {
+  const [online, setOnline] = useState(true);
+  useEffect(() => {
+    const refresh = () => setOnline(navigator.onLine);
+    refresh();
+    window.addEventListener("online", refresh);
+    window.addEventListener("offline", refresh);
+    return () => {
+      window.removeEventListener("online", refresh);
+      window.removeEventListener("offline", refresh);
+    };
+  }, []);
+  return online;
+}
+
+function useSessionBootstrapSettled(): boolean {
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    const refresh = () => setSettled(isSessionBootstrapSettled());
+    refresh();
+    window.addEventListener(sessionBootstrapSettledEvent, refresh);
+    return () =>
+      window.removeEventListener(sessionBootstrapSettledEvent, refresh);
+  }, []);
+  return settled;
 }
 
 function RetryButton({ onClick }: Readonly<{ onClick: () => void }>) {

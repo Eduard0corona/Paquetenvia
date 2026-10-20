@@ -93,20 +93,18 @@ public sealed class PostgreSqlDriverStopsQuery(
         }
 
         StopsCount.Record(stops.Length);
+        // OBS-003-TENANT-PSEUDONYM-2026-10-12: the organization and the actor reach these lines only as the pseudonym
+        // and the role kind the logger factory adds, never as their ids.
         if (unavailable > 0)
         {
             DetailsUnavailableCount.Add(unavailable);
             logger.LogWarning(
-                "Dispatch driver stop details unavailable; tenant {TenantId}; actor {ActorId}; stops {Count}",
-                organizationId,
-                actorId,
+                "Dispatch driver stop details unavailable; stops {Count}",
                 unavailable);
         }
 
         logger.LogInformation(
-            "Dispatch driver stops result; tenant {TenantId}; actor {ActorId}; count {Count}; details {Details}",
-            organizationId,
-            actorId,
+            "Dispatch driver stops result; count {Count}; details {Details}",
             stops.Length,
             includeDetails);
         return new DriverStopListResult(stops, completedToday);

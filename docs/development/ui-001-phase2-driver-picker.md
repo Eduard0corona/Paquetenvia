@@ -36,7 +36,9 @@ la fase 2"). El despachador asigna un repartidor propio (OWN) eligiéndolo de un
   evaluar en su transacción.
 - Privacidad: AI-06 no guarda nombre de repartidor. Se muestra la referencia `DRV-` del tablero (OBS-001), calculada
   en `Paqueteria.Application.Privacy.DriverReference` (compartida con Reporting). No se lee ni devuelve correo,
-  teléfono, documentos ni ubicación; los logs solo registran tenant, actor y conteos.
+  teléfono, documentos ni ubicación; los logs solo registran conteos, y la organización y el actor van como el
+  seudónimo HMAC y el tipo de rol que agrega `TraceCorrelatedLoggerFactory`, nunca como id
+  (OBS-003-TENANT-PSEUDONYM-2026-10-12; `LogTemplateIdentifierArchitectureTests`).
 - Solo lectura en una transacción explícita (`set_config` después de `BEGIN`, `SET LOCAL ROLE paqueteria_app`, RLS
   forzado); sin `FOR UPDATE`, sin migración, índice, rol ni flujo nuevo (`assignments_driver_idx` ya existe).
 

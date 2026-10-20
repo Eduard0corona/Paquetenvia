@@ -42,7 +42,7 @@ FOUNDATION_JOB_IDS = [
 NORMATIVE_DECOMPOSITION = ["secret-scan", "normative-contracts", "azr-static"]
 PR_VALIDATION_JOB_IDS = ["classify", *NORMATIVE_DECOMPOSITION, *FOUNDATION_JOB_IDS[1:], "pr-gate"]
 STRUCTURAL_JOB_IDS = {"classify", "pr-gate"}
-GITHUB_HOSTED_LINUX_RUNNER = "ubuntu-latest"
+GITHUB_HOSTED_LINUX_RUNNER = "ubuntu-24.04"
 JOB_LINE = re.compile(r"^  ([a-z0-9_-]+):$")
 
 
@@ -348,6 +348,27 @@ class DependencyCacheInvariantTests(unittest.TestCase):
                         self.assertEqual(GITHUB_HOSTED_ONLY_CACHE[action], inputs.get("cache"), context)
                         gated_actions.add(action)
             self.assertEqual(set(GITHUB_HOSTED_ONLY_CACHE), gated_actions, path.name)
+
+
+WORKFLOWS_DIRECTORY = REPOSITORY_ROOT / ".github/workflows"
+
+
+class RunnerImagePinTests(unittest.TestCase):
+    """Every job of every workflow pins the runner image instead of following ubuntu-latest.
+
+    ubuntu-latest moves to Ubuntu 26 from 2026-10-19. The image changes only through a
+    deliberate PR that updates GITHUB_HOSTED_LINUX_RUNNER (docs/development/branching-and-ci.md).
+    """
+
+    def test_every_workflow_job_runs_on_the_pinned_image(self):
+        workflows = sorted([*WORKFLOWS_DIRECTORY.glob("*.yml"), *WORKFLOWS_DIRECTORY.glob("*.yaml")])
+        self.assertIn(CI_WORKFLOW, workflows)
+        self.assertIn(PR_VALIDATION_WORKFLOW, workflows)
+        for path in workflows:
+            jobs = load_workflow(path)["jobs"]
+            self.assertTrue(jobs, path.name)
+            for job_id, job in jobs.items():
+                self.assertEqual(GITHUB_HOSTED_LINUX_RUNNER, job.get("runs-on"), f"{path.name}:{job_id}")
 
 
 if __name__ == "__main__":
