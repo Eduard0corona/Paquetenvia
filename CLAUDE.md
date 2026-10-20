@@ -28,9 +28,10 @@ y tracking público seguro. Este archivo resume; la autoridad son los contratos 
 5. Sin PII en logs, snapshots, outbox ni eventos públicos; sin secretos ni datos de tarjeta.
    Tracking público solo expone el mapa AI-04 + `public_event_code`; falla cerrado (404 uniforme).
 6. `order_acceptances`, `order_events`, `proofs` y `audit_logs` son append-only.
-7. Solo los 5 flujos atómicos cross-module de AI-13 §4 (quote→order, assignment→order,
-   POD/custody→order, COD reconciliation→close, external offer→assignment).
-   Un sexto flujo requiere ADR y pruebas.
+7. Solo los 6 flujos atómicos cross-module de AI-13 §4 (quote→order, assignment→order,
+   POD/custody→order, COD reconciliation→close, external offer→assignment,
+   route stop↔assignment.route_id). Un séptimo flujo requiere ADR y pruebas;
+   `CrossSchemaWriteCatalogTests` cataloga cada escritura en el esquema de otro módulo.
 8. `pgcrypto` como `extensions.*`; PostGIS en `public`, sin `CREATE` en runtime.
 9. Migraciones por módulo con up/down probados en PostgreSQL real; nada de NestJS, BullMQ,
    microservicios ni Kubernetes sin ADR.

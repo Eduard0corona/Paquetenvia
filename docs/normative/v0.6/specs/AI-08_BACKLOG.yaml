@@ -499,9 +499,11 @@ items:
   - evento conserva client timestamp
   - reintento no duplica
   - conflicto requiere resolución visible
+  - 'DECIDED DRV-PROOF-PHOTO-REDUCE-2026-10-20 (project owner, "Reducir y quitar metadatos (Recommended)"): the phone reduces every proof photo before it is hashed and queued - a JPEG of at most 1600 px per side (never enlarged, aspect ratio kept), quality 0.8, with no metadata (no EXIF, GPS, XMP, ICC profile or comment); that reduced JPEG is the stored evidence, its SHA-256 is computed on those bytes and those exact bytes are queued, uploaded and kept; a photo the phone cannot reduce is refused with nothing kept, never replaced by the picked file; the 10 MiB, 25 MiB and 100-operation limits are unchanged (AI-07 driver_stop.proof_photo)'
   required_tests:
   - offline Playwright
   - duplicate upload
+  - 'proof photo reduction in a real browser - a synthetic EXIF GPS camera JPEG is previewed, stored, hashed, declared and uploaded as one upright image/jpeg of at most 1600 px per side with no metadata segment, and a photo the browser cannot decode keeps nothing'
   approval_gate: null
 - id: TRK-001
   epic: Tracking
@@ -704,6 +706,10 @@ items:
   - RouteChanged is emitted post-commit through outbox and clients recover through REST
   - route cost is calculated server-side from ACCEPTED/ACTIVE assignment cost_cents using bigint cents
   - already-valid 4500/5200-cent orders may be linked without changing Pricing snapshots, consolidated_route or financial_override
+  - 'DECIDED RTE-001-ROUTING-ASSIGNMENT-FLOW6-2026-10-20: route stop <-> assignment.route_id is AI-13 §4 flow 6
+    (route_stop_to_assignment_route_id, docs/adr/ADR-RTE-001-ROUTE-ASSIGNMENT-FLOW6.md); in the one Routes transaction
+    addRouteStop sets and removeRouteStop clears dispatch.assignments.route_id, its only write into another module; no
+    behaviour change'
   required_tests:
   - route constraints
   - Playwright reorder
@@ -716,6 +722,7 @@ items:
   - RouteChanged audience and transactional outbox
   - Playwright drag and keyboard reorder
   - valid 4500/5200-cent order route fixture
+  - cross-module write catalog (CrossSchemaWriteCatalogTests) fails on a new, removed or unflowed cross-module write
   approval_gate: null
 - id: INC-001
   epic: Incidents

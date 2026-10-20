@@ -40,7 +40,7 @@ Backend: .NET 10, ASP.NET Core, EF Core/Npgsql, PostgreSQL/PostGIS, Worker Servi
 15. Todo dinero usa centavos `long/bigint/int64`; se prohíbe punto flotante.
 16. La API no recibe bytes POD multipart; usa carga firmada.
 17. GPS usa lote 1–20 y lane independiente con `UNIQUE(driver_position_id)` sin FK.
-18. No añadir un sexto flujo cross-module sin ADR y actualización de pruebas.
+18. No añadir un séptimo flujo cross-module sin ADR y actualización de pruebas.
 
 ## 5. Artefactos por tarea
 

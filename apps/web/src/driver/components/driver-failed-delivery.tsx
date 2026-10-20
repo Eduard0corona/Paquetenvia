@@ -33,6 +33,7 @@ import {
 import {
   DriverProofPreview,
   driverProofPreviewProblemMessage,
+  driverProofPreviewStatus,
 } from "../proofs/proof-preview";
 import { DriverDispatchCall } from "./driver-dispatch-call";
 import styles from "./driver-stops.module.css";
@@ -540,7 +541,8 @@ function ReasonOption({
 /**
  * "Foto del lugar (obligatoria)": exactly one photo, shown in "Vista previa de
  * la foto" from an in-memory object URL before it is used, as the delivery
- * photo is. "Usar esta foto" hands the Blob to the form (nothing is stored
+ * photo is, and reduced on the phone first like it (DRV-PROOF-PHOTO-REDUCE-2026-10-20).
+ * "Usar esta foto" hands the reduced Blob to the form (nothing is stored
  * until "Enviar reporte"); "Repetir" drops it. The object URL is revoked on
  * "Repetir", on "Usar esta foto" and when the step unmounts.
  */
@@ -609,7 +611,7 @@ function FailedDeliveryPhoto({
           disabled={disabled}
           aria-describedby={problem ? `${hintId} ${problemId}` : hintId}
           aria-invalid={state.phase === "capture" && problem ? true : undefined}
-          onChange={(event) => preview.select(event.currentTarget.files)}
+          onChange={(event) => void preview.select(event.currentTarget.files)}
         />
       </div>
       {state.phase === "preview" ? (
@@ -677,8 +679,9 @@ function FailedDeliveryPhoto({
         </p>
       ) : null}
       <p className={styles.liveMessage} aria-live="polite">
-        {state.phase === "preview" && state.problem === null
-          ? "Revisa la foto: elige «Usar esta foto» o «Repetir»."
+        {state.phase === "preparing" ||
+        (state.phase === "preview" && state.problem === null)
+          ? driverProofPreviewStatus(state)
           : state.phase === "queued"
             ? failedDeliveryCopy.photoChosen
             : ""}

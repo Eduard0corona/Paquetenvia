@@ -28,6 +28,52 @@
 - GATE-010 sigue abierto (zonas, horarios, artículos prohibidos, SLA) y GATE-009 también. Fuentes de los valores en la
   fila del decision-log. Sin cambios de esquema, roles, permisos, migraciones, paquetes, `apps.bicep` ni topología de CI.
 
+## Repartidor: fotos de evidencia reducidas y sin metadatos (DRV-PROOF-PHOTO-REDUCE-2026-10-20) — 2026-10-20
+
+- Respuesta literal del project owner (2026-10-20, pregunta G2), registrada en `decision-log.md` con su contexto y las
+  opciones no elegidas: "Fotos de entrega: hoy se suben tal como las toma el teléfono (2 a 5 MB, con metadatos que pueden incluir GPS). Sin señal caben solo de 5 a 12 fotos en la cola. ¿Las procesamos en el teléfono antes de guardarlas?" Respuesta: "Reducir y quitar metadatos (Recommended)" ("JPEG de máximo 1600 px por lado y calidad 80 % (unos 300-500 KB), sin metadatos. La evidencia guardada es esa foto reducida (su huella se calcula después). Caben unas 50 fotos sin señal. Se ve menos detalle al hacer zoom.").
+- La app del repartidor reduce cada foto de evidencia en el teléfono antes de calcular su huella y guardarla en la
+  cola: la de recolección, la de entrega y la "Foto del lugar" de "No se pudo entregar". Decodifica la foto con su
+  orientación visual (`createImageBitmap` con `imageOrientation: "from-image"`, o un `<img>` donde falta esa opción) y
+  la vuelve a codificar en un canvas como JPEG de calidad 0.8 con el lado mayor de 1600 px como máximo, sin agrandarla
+  y sin cambiar su proporción. Un PNG también se guarda como JPEG; lo transparente queda blanco.
+- Sin metadatos: la foto guardada solo conserva el encabezado JFIF y los datos de la imagen. Se quitan EXIF (con GPS,
+  modelo del teléfono y hora), XMP, perfiles ICC, comentarios y todo lo que vaya después del fin de la imagen, también
+  lo que escribe el propio codificador del navegador (Chromium agrega un perfil ICC).
+- La evidencia guardada es esa foto reducida: la vista previa la muestra, y esos mismos bytes son los que se hashean
+  (SHA-256), se guardan en IndexedDB, se declaran (`image/jpeg`), se suben y valida el servidor (bytes mágicos y
+  SHA-256), sin cambios en el servidor. El archivo que eligió el repartidor no se guarda, no se muestra ni se envía.
+- Si el teléfono no puede procesar la foto (formato, archivo dañado o memoria), el paso dice «No se pudo procesar la
+  foto en el teléfono. Tómala de nuevo.», no guarda nada y nunca usa el archivo original en su lugar. Mientras la
+  reduce dice «Preparando la foto…».
+- Límites sin cambio: 10 MiB por foto, 25 MiB de fotos y 100 operaciones por partición. Tamaño típico: unos
+  300-500 KB por foto de una cámara de 12 MP (estimación del owner), unas 50 fotos sin señal. Medido en Chromium con
+  imágenes sintéticas: una de 4000x3000 y 3.78 MB queda en 1600x1200 y 258 KB; 12 MP de ruido puro (peor caso), de
+  10.5 MB a 661 KB.
+- Una foto que una versión anterior de la app ya había guardado en la cola se envía como se guardó.
+- AI-07 `driver_stop.proof_photo` (nuevo) y `failed_delivery.photo`; AI-08 DRV-002: criterio DECIDED y prueba
+  requerida. Pruebas: vitest con una foto sintética con EXIF y GPS inventados (coordenadas imposibles) y Playwright en
+  Chromium real (lo guardado, hasheado, declarado y subido es un solo JPEG de 800x1600, derecho y sin metadatos; una
+  foto que no se puede decodificar no deja nada). Notas: `docs/development/drv-002-offline-events-pod.md`; borradores
+  legales actualizados. Sin cambios de API, SQL, migraciones, roles, esquema de IndexedDB, Service Worker ni paquetes.
+
+## Rutas y asignaciones como flujo atómico 6, con catálogo de escrituras entre módulos (RTE-001-ROUTING-ASSIGNMENT-FLOW6-2026-10-20) — 2026-10-20
+
+- Respuesta literal del project owner (2026-10-20, pregunta G1), registrada en `decision-log.md` con su contexto y la
+  opción no elegida: "Rutas: al agregar o quitar una parada, el módulo de Rutas escribe directo en las asignaciones de Despacho, en la misma transacción. Lo exige RTE-001, pero no está entre los 5 flujos permitidos (AI-13 §4) y no hay prueba que detecte escrituras nuevas entre módulos. ¿Qué hacemos?" Respuesta: "Registrarlo como flujo 6 (Recommended)" ("Fila de decisión y ADR que lo agregan a la lista, más la prueba que cataloga cada escritura entre módulos y falla con cualquiera nueva. Sin cambio de comportamiento.").
+- AI-13 §4 agrega el flujo 6, route stop ↔ assignment.route_id (RTE-001): lo coordina Routes y, en una sola
+  transacción, `addRouteStop` fija y `removeRouteStop` limpia `dispatch.assignments.route_id` junto con la parada, la
+  versión de la ruta, la auditoría, el outbox `routes.route-changed` y la idempotencia. Los otros cinco flujos no
+  cambian. ADR: `docs/adr/ADR-RTE-001-ROUTE-ASSIGNMENT-FLOW6.md`.
+- La cuenta sube a seis en AI-13 §15, AI-03 §25.9 y `CLAUDE.md`; AI-04 `transaction_coordinator_allowlist` agrega
+  `route_stop_to_assignment_route_id`; AI-01 §4.18 y AI-11 prohíben ahora un séptimo flujo sin ADR y pruebas. AI-08
+  RTE-001: un criterio DECIDED y la prueba exigida.
+- Nueva prueba de arquitectura `CrossSchemaWriteCatalogTests`: cataloga cada escritura SQL de runtime en el esquema de
+  otro módulo (hoy ocho: flujos 1, 2, 5 y 6, y ADR-031 para el provisioning) y falla ante una nueva, una retirada o una
+  sin flujo, con un mensaje que pide el ADR. Nota: `docs/development/rte-001-routing-assignment-flow6.md`.
+- Sin cambios de código de `src/`, SQL, migraciones, roles, permisos, RLS, outbox ni paquetes; el comportamiento no
+  cambia.
+
 ## Avisos al destinatario: contratos (NTF-RECIPIENT-NOTICES-2026-10-20) — 2026-10-20
 
 - Respuestas literales del project owner (2026-10-19 y 2026-10-20), registradas en `decision-log.md` con su
