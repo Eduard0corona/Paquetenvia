@@ -1,5 +1,23 @@
 # Changelog
 
+## Fotos de entrega: 30 días de borrado suave (ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20) — 2026-10-20
+
+- Respuesta literal del project owner (2026-10-20, pregunta D3), registrada en `decision-log.md` con su contexto y las
+  opciones no elegidas: "Fotos de entrega (evidencia legal): hoy el almacenamiento guarda lo borrado solo 7 días, sin versiones, y restaurar la base de datos no recupera fotos. ¿Cómo las protegemos?" Respuesta: "Borrado suave más largo (Recommended)" ("Subir a 30 días la recuperación de fotos borradas o sobrescritas. Cambio de una línea en el despliegue y costo casi nulo; no protege si se borra la cuenta de almacenamiento completa.").
+- `deploy/azure/pilot/platform.bicep`: el borrado suave de blobs del almacenamiento de fotos pasa de 7 a 30 días y el
+  versionado sigue apagado (requisito de ADP-001). Sin versionado, sobrescribir un blob deja una instantánea con borrado
+  suave del estado anterior, así que los 30 días cubren fotos borradas o sobrescritas (learn.microsoft.com, *Soft delete
+  for blobs*). El borrado suave del contenedor también pasa de 7 a 30 días: el de blobs no protege si se borra el
+  contenedor `proofs`, y la opción solo dejaba fuera el borrado de la cuenta completa.
+- Guarda P12: un solo servicio de blobs, versionado apagado y las dos políticas activas por exactamente 30 días, sin
+  borrado permanente; las pruebas prueban que cada desviación falla cerrada.
+- Costo: lo borrado se cobra como dato guardado (Hot LRS 0.02288 USD por GB al mes en mexicocentral, 2026-10-20). Con
+  ~0.2 GB de fotos al mes y la copia de cuarentena que borra el Worker, unos 0.005 USD al mes.
+- AI-08 ADP-001: criterio y prueba de la guarda. Guía de restauración en `docs/operations/env-001-pilot/README.md` §6.4;
+  `docs/development/adp-001-production-adapters.md` y el borrador de reglas de retención actualizados. Sin cambios de
+  código, SQL, roles, permisos, flujo de despliegue ni paquetes. No protege si se borra la cuenta de almacenamiento o el
+  grupo de recursos.
+
 ## Repartidor: lecturas viejas de la parada (DRV-STALE-STOP-READ-2026-10-14) — 2026-10-14
 
 - Respuestas literales del project owner (2026-10-14), registradas en `decision-log.md` con su contexto y las opciones

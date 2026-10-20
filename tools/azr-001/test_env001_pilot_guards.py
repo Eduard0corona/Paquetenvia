@@ -596,6 +596,46 @@ class TemplateGuardTests(unittest.TestCase):
             self.resource(t, "platform", "Microsoft.Security/defenderForStorageSettings")["properties"]["malwareScanning"]["onUpload"]["isEnabled"] = False
         self.assert_fails(12, self.context(no_scan), "malware scanning")
 
+    def test_proof_soft_delete_is_30_days_with_versioning_off(self):
+        """ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20: blob and container soft delete exactly 30 days, versioning off
+        (an overwrite is kept as a soft-deleted snapshot), no permanent delete."""
+        def service(t):
+            return self.resource(t, "platform", "Microsoft.Storage/storageAccounts/blobServices")["properties"]
+
+        compiled = service(self.compiled)
+        self.assertIs(False, compiled["isVersioningEnabled"])
+        for policy in guards.PROOF_SOFT_DELETE_POLICIES:
+            self.assertEqual({"enabled": True, "days": 30}, compiled[policy])
+        self.assertEqual(30, guards.PROOF_SOFT_DELETE_DAYS)
+
+        fragment = "must be enabled for exactly 30 days"
+        mutations = {
+            "blob back to 7 days": (lambda t: service(t)["deleteRetentionPolicy"].update(days=7), fragment),
+            "blob longer than decided": (lambda t: service(t)["deleteRetentionPolicy"].update(days=31), fragment),
+            "blob days as text": (lambda t: service(t)["deleteRetentionPolicy"].update(days="30"), fragment),
+            "blob days as a parameter": (lambda t: service(t)["deleteRetentionPolicy"].update(days="[parameters('days')]"), fragment),
+            "blob soft delete off": (lambda t: service(t)["deleteRetentionPolicy"].update(enabled=False), fragment),
+            "blob policy removed": (lambda t: service(t).pop("deleteRetentionPolicy"), "deleteRetentionPolicy must be enabled"),
+            "container back to 7 days": (lambda t: service(t)["containerDeleteRetentionPolicy"].update(days=7), fragment),
+            "container soft delete off": (lambda t: service(t)["containerDeleteRetentionPolicy"].update(enabled=False), fragment),
+            "container policy removed": (lambda t: service(t).pop("containerDeleteRetentionPolicy"),
+                                         "containerDeleteRetentionPolicy must be enabled"),
+            "permanent delete": (lambda t: service(t)["deleteRetentionPolicy"].update(allowPermanentDelete=True), "must not allow permanent delete"),
+            "versioning on": (lambda t: service(t).update(isVersioningEnabled=True), "blob versioning must be off"),
+            "versioning unset": (lambda t: service(t).pop("isVersioningEnabled"), "blob versioning must be off"),
+        }
+        for name, (mutate, expected) in mutations.items():
+            with self.subTest(name=name):
+                self.assert_fails(12, self.context(mutate), expected)
+
+        def no_blob_service(t):
+            t["platform"]["resources"].remove(self.resource(t, "platform", "Microsoft.Storage/storageAccounts/blobServices"))
+        self.assert_fails(12, self.context(no_blob_service), "expected one blob service, found 0")
+
+        def second_blob_service(t):
+            t["platform"]["resources"].append(copy.deepcopy(self.resource(t, "platform", "Microsoft.Storage/storageAccounts/blobServices")))
+        self.assert_fails(12, self.context(second_blob_service), "expected one blob service, found 2")
+
     def test_forbidden_resources_and_roles_fail(self):
         def redis(t):
             t["platform"]["resources"].append({"type": "Microsoft.Cache/redis", "apiVersion": "2024-03-01", "name": "r"})
