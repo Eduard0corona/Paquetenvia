@@ -1,5 +1,30 @@
 # Changelog
 
+## Repartidor: sesión vencida y recarga sin señal (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19) — 2026-10-19
+
+- Respuestas literales del project owner (2026-10-19), registradas en `decision-log.md` con su contexto y las opciones
+  no elegidas: E2 "Conservar y pedir entrar (Recommended)" ("La app guarda lo pendiente, avisa \"Tu sesión venció, entra de nuevo\" con un botón para iniciar sesión, y al volver a entrar el mismo repartidor en la misma empresa se envía todo. A otra persona nunca se le muestra esa cola.") y E3 "Sí, y envía al validar (Recommended)" ("El teléfono recuerda qué repartidor y empresa abrieron la sesión (sin contraseña ni token), muestra las paradas guardadas y guarda las acciones; se envían cuando vuelve la señal y el servidor confirma la sesión.").
+- Un 401 (la sesión BFF terminó: venció a las 8 horas, AuthCenter la cerró u otro inicio de sesión la reemplazó) ya no
+  borra nada de la partición: la instantánea, los roles y el teléfono de despacho guardados y cada acción en cola, con
+  su foto y su avance, se quedan; la cola deja de enviar con esa sesión y la pantalla dice «Tu sesión venció, entra de
+  nuevo» con «Iniciar sesión». Al volver a entrar el mismo repartidor en la misma empresa (mismo `sessionNamespace`,
+  misma organización, misma partición) la cola se envía sola con las mismas llaves; otra persona, u otra empresa,
+  abre su propia partición y nunca ve, envía ni borra la anterior.
+- Un 403 y una sesión sin credencial usable siguen borrando la partición, como antes: el código muestra que el
+  vencimiento de la sesión nunca llega como 403 ni como token CSRF faltante. La regla de 72 horas
+  (OPS-003-OFFLINE-72H) sigue contando desde la hora de cada acción mientras espera el nuevo inicio de sesión.
+- El teléfono recuerda en localStorage (`paquetenvia:driver-session-marker`) qué repartidor y empresa abrieron la
+  última sesión confirmada: sólo el `sessionNamespace` y el id de la organización, lo que forma la llave de la
+  partición; nunca token, cookie, CSRF, contraseña, nombre, correo ni teléfono. Sin señal (o sin respuesta del
+  servidor) las páginas del repartidor abren esa partición en modo local («Sesión sin confirmar»): muestran las paradas
+  y la cola guardadas y guardan acciones nuevas sin pedir nada a la API. Al volver la señal (`online`), al mostrarse la
+  app, con «Sincronizar ahora» o «Reintentar» y cada 30 s se vuelve a consultar `GET /auth/session`; sólo la misma
+  persona en la misma organización envía la cola.
+- AI-07: `/driver/stops` y `/driver/stops/:id` citan la decisión; `driver_stop` cambia `offline_cache`,
+  `details.retention`, `failed_delivery.role_unknown` y `dispatch_contact` (un 401 conserva, un 403 borra) y agrega
+  `session_expiry` y `offline_reload`. Sin cambios de API, SQL, migraciones, roles, esquema de IndexedDB, Service
+  Worker ni paquetes. Nota: `docs/development/drv-002-offline-events-pod.md`.
+
 ## Fotos de entrega: 30 días de borrado suave (ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20) — 2026-10-20
 
 - Respuesta literal del project owner (2026-10-20, pregunta D3), registrada en `decision-log.md` con su contexto y las

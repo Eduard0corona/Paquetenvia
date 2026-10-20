@@ -6,6 +6,7 @@ import {
   type NavigationTarget,
 } from "./bff-session";
 import { clearInstalledSessions, type SessionHost } from "./bff-session-installation";
+import { clearDriverSessionMarker } from "../driver/session/driver-session-marker";
 import { isCookieSession, type SessionCredentials } from "./request-credentials";
 
 /**
@@ -28,6 +29,9 @@ export async function endBffSession(
     clearInstalledSessions(host);
   }
   if (!result.ok) return false;
+  // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (E3): once the server ended the session the phone
+  // no longer remembers its driver, so a page load without network opens nobody's stops.
+  clearDriverSessionMarker(host);
   navigateAfterLogout(result, location);
   return true;
 }
@@ -54,6 +58,7 @@ export async function signOutInstalledSession(
     return endBffSession(csrfToken, host, location, fetcher);
   }
   clearInstalledSessions(host);
+  clearDriverSessionMarker(host);
   location.assign("/login");
   return true;
 }

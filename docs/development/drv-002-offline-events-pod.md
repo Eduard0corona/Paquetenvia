@@ -86,7 +86,8 @@ Actualización `DRV-DISPATCH-CONTACT-2026-10-12`: la base sube a la versión `5`
 versión 4 ya había llegado a main, así que el store nuevo necesita su propia versión. La subida desde la 4 no toca
 operaciones (siguen en esquema 3), fotos, leases, instantáneas ni roles guardados; una app de la versión 4 no puede
 abrir la base. El shell del Service Worker sube a `paquetenvia-driver-shell-v8`. El store sale del teléfono con la
-partición ante 401/403 y al cerrar sesión, como las instantáneas. Ver `ui-001-phase3-driver-dispatch-contact.md`.
+partición ante 403 (un 401 lo conserva desde `DRV-SESSION-EXPIRY-OFFLINE-2026-10-19`) y al cerrar sesión, como las
+instantáneas. Ver `ui-001-phase3-driver-dispatch-contact.md`.
 
 La base conserva el nombre `paquetenvia-driver-stops-v1` y sube su versión de
 base de datos a `2`. El snapshot DRV-001 conserva `schemaVersion: 1`. La
@@ -246,8 +247,9 @@ sola transición funcional.
 | Resultado | Tratamiento |
 | --- | --- |
 | red, timeout o 5xx | `RETRY_WAIT` con backoff |
-| 401 | limpia snapshot, operaciones, blobs y lease de la partición activa |
-| 403 | mismo cierre fail-closed que 401 |
+| 401 (`session-ended`) | desde `DRV-SESSION-EXPIRY-OFFLINE-2026-10-19` no borra nada: la cola deja de enviar con esa sesión y la pantalla pide volver a entrar (ver abajo) |
+| 403 | limpia snapshot, operaciones, blobs y lease de la partición activa |
+| sin credencial usable (`unauthorized`: sin token CSRF, nada se envió) | mismo cierre fail-closed que 403 |
 | 404 | elimina operación/blob, refresca REST y no consulta otra partición |
 | 409 de transición | `NEEDS_ATTENTION`; bloquea las posteriores de esa orden |
 | 409 POD “not ready” | `WAITING_VALIDATION` y reintento |
@@ -255,8 +257,96 @@ sola transición funcional.
 | 409 `OFFLINE_OPERATION_EXPIRED` (o captura con más de 72 h) | elimina operación y blob, nunca reintenta y avisa al conductor (OPS-003) |
 
 La limpieza nunca toca otra organización ni otro IndexedDB. Offline no permite
-detectar una revocación nueva; al siguiente 401/403 conocido se elimina el
-material local activo.
+detectar una revocación nueva; al siguiente 403 conocido se elimina el material
+local activo.
+
+## Sesión vencida y recarga sin señal (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19)
+
+Respuestas del owner (2026-10-19, literales en `decision-log.md`): E2 «Conservar y pedir entrar (Recommended)» y E3
+«Sí, y envía al validar (Recommended)». Se apoya en el PR 1 (`fix/driver-pwa-inapp-navigation`), que hizo que «Ver
+detalle» y «Volver a mis paradas» no recarguen la página y agregó «Iniciar sesión» a los paneles de sesión.
+
+### 401: conservar y pedir entrar (E2)
+
+- Los clientes del repartidor distinguen el 401 (`session-ended`: la sesión BFF terminó, por sus 480 minutos fijos
+  sin renovación, porque AuthCenter la cerró o porque otro inicio de sesión la reemplazó) de la falta de credencial
+  (`unauthorized`: sin token CSRF, nada se envió) y del 403 (`forbidden`): `driver-stops-api`,
+  `organization-roles-api`, `dispatch-contact-api` y `driver-sync-api`.
+- `DriverSyncScheduler` ante `session-ended` no llama `clearPartition`: la instantánea, cada operación
+  (DELIVERY_PROOF, COD_COLLECTION, FAILED_DELIVERY y las demás), cada blob y su avance se quedan; la operación en curso
+  queda como se persistió por última vez, con sus llaves; el pase se aborta, se libera el lease y ese scheduler ya no
+  envía nada (ni `online`, ni visibilidad, ni temporizadores). `DriverStopsController.revokeAccess("session-ended")`
+  detiene lecturas y realtime sin borrar la instantánea; los controladores de roles y de teléfono de despacho conservan
+  lo guardado y no vuelven a preguntar.
+- La pantalla muestra «Tu sesión venció, entra de nuevo» con «Iniciar sesión» (`/login?return_url=<ruta de
+  paradas>`). También lo muestra cuando la consulta de sesión de la página no encuentra sesión (401) y el teléfono
+  recuerda a un repartidor.
+- La llave de partición es SHA-256 de `sessionNamespace` (que la API deriva de SHA-256 del `sub` de AuthCenter) y de la
+  organización, así que el mismo repartidor en la misma empresa reabre la misma partición al volver a entrar y su cola
+  se envía sola con las mismas llaves de idempotencia. Otra persona, o la misma en otra empresa, abre su propia
+  partición; la anterior queda intacta e invisible.
+- Sin cambio: 403 (membresía o perfil de repartidor revocados) y la falta de credencial siguen borrando la partición.
+  El código muestra que un vencimiento nunca llega así: la API responde 401 a una sesión vencida, cerrada o
+  reemplazada (sin ticket, o `AuthCenterCookieEvents.ValidatePrincipal` rechaza el principal; `TenantContextMiddleware`
+  deja pasar las peticiones anónimas y la autorización responde 401), 403 sólo a una persona autenticada sin acceso, y
+  el token CSRF vive en la memoria de la página toda su vida.
+- La regla de 72 horas (OPS-003-OFFLINE-72H) sigue contando desde `clientOccurredAt` mientras la acción espera el nuevo
+  inicio de sesión: una acción más vieja se descarta, con su aviso, en el primer pase después de entrar.
+
+### Recarga sin señal (E3)
+
+- Marca (`src/driver/session/driver-session-marker.ts`): `localStorage["paquetenvia:driver-session-marker"]` con
+  `{ v: 1, sessionNamespace, organizationId }`, exactamente lo que forma la llave de partición. Nunca token, cookie,
+  token CSRF, contraseña, nombre, correo ni teléfono; nunca se registra en logs. Se valida estrictamente al leerla
+  (miembros exactos, patrón del namespace, UUID canónico) y un valor distinto se borra.
+- Por qué localStorage y no IndexedDB: un store nuevo obligaría a la versión 6 de la base del repartidor, cuya subida
+  espera a que se cierre cualquier otra pestaña y que una build anterior ya no puede abrir (un rollback dejaría la cola
+  ilegible); localStorage no tiene esquema, una build anterior ignora la llave y se lee al iniciar la página.
+  Seguridad: AI-08 AUTH-001 prohíbe tokens en almacenamiento del navegador y la marca no lleva ninguno; AI-13 deja toda
+  regla crítica en el servidor y la marca no autoriza nada, sólo elige qué partición local abrir mientras el servidor
+  no responde. Ambos almacenamientos son del mismo origen; ninguno protege más contra un script del origen (la defensa
+  sigue siendo la CSP con nonce).
+- Ciclo: la escribe cada sesión de repartidor confirmada (`installBffSession`); la reemplaza otra persona u otra
+  empresa; la borran un rol que no es de repartidor, no tener organización, «Cerrar sesión» cuando el servidor cerró
+  la sesión (`endBffSession`), un 403, la falta de credencial y una identidad que el servidor no autoriza; un 401 y un
+  servidor inalcanzable la conservan.
+- En `/driver/...`, si `GET /auth/session` no responde (sin señal, 5xx o respuesta ilegible), o no se pueden listar las
+  organizaciones de la misma persona, `bootstrapBffSession(..., { rememberDriver: true })` instala una sesión
+  `remembered` sin token CSRF. La pantalla abre la partición («Sesión sin confirmar»): paradas y cola desde IndexedDB y
+  acciones nuevas a la cola. Con esa sesión ningún cliente sale a la red (stops, roles, despacho, sync, ofertas,
+  llamadas; el hub no se abre), el scheduler no arranca (`sync: false`), no hay ofertas externas, ni «Cuenta», y «Cerrar
+  sesión» espera.
+- `watchDriverSessionConfirmation` vuelve a consultar la sesión en `online`, al mostrarse la app, con «Sincronizar
+  ahora» o «Reintentar» y cada 30 s mientras espera con señal. Sólo `GET /auth/session` del mismo `sessionNamespace` con
+  un contexto de la misma organización la reemplaza por la sesión confirmada, cuyo scheduler envía la cola. Otra persona
+  u organización instala su propia sesión y partición y reemplaza la marca; un 401 pide volver a entrar.
+
+### Pruebas
+
+Vitest: clientes (401 → `session-ended`, sin CSRF → `unauthorized` sin enviar nada, sesión recordada sin `fetch`),
+scheduler (401 conserva instantánea, operaciones, fotos y lease liberado y no envía más; un 401 de la lectura de
+confirmación también; el mismo repartidor reanuda con las mismas llaves; 403 y sin credencial siguen borrando),
+controladores de paradas, roles, despacho y operaciones, la marca (sólo namespace y organización, ningún secreto,
+valores inválidos descartados, almacenamiento bloqueado), el bootstrap (recarga sin señal, misma persona, otra
+persona, otra empresa, rol de operaciones, 401, no autorizado, sin organizaciones, logout) y el vigilante de
+confirmación.
+
+Playwright en modo BFF (`DriverSessionExpiryBffPwaPlaywrightTests`, colección BFF de
+`docs/development/drv-001-driver-stops-pwa.md`, categoría `DriverOfflineOperationsPwa`): la sesión vence con una
+acción en cola, la pantalla pide entrar, «Iniciar sesión» pasa por `/login` y `/auth/login` (que el navegador
+responde como AuthCenter) y vuelve a la parada; el mismo repartidor envía la acción con la misma llave y su token
+CSRF, y otra persona no ve ni envía nada y la cola queda intacta. Una recarga sin señal muestra las paradas guardadas
+(«Sesión sin confirmar»), guarda una acción sin ninguna petición a la API ni al hub, y al volver la señal sólo el
+mismo repartidor la envía; con otra persona nada se envía y la marca cambia. Un 403 sigue borrando la partición y
+olvida al repartidor.
+
+### Rollback
+
+Revertir el PR. Las páginas vuelven a borrar la partición ante un 401 y a mostrar «Sesión no disponible» al recargar
+sin señal; la llave `paquetenvia:driver-session-marker` queda ignorada (se puede borrar sin riesgo: no guarda datos de
+la cola). No hay cambio de base IndexedDB, Service Worker, API, SQL ni paquetes, así que la cola sigue legible para
+la build anterior. Para revertir sólo la parte normativa, revertir también la fila del decision-log, la entrada del
+CHANGELOG y AI-07 y regenerar la integridad.
 
 La telemetría está deshabilitada por defecto. Su puerto sólo admite kind,
 fase, categorías de resultado, buckets de cantidad `0`, `1`, `2-5`, `6-20`,
@@ -344,7 +434,8 @@ La categoría `DriverOfflineOperationsPwa` ejecuta Chromium real y cubre:
 - sincronización FIFO;
 - aislamiento entre organizaciones y sesión nueva;
 - conflicto visible, descarte y reconstrucción explícita;
-- limpieza fail-closed para 401, 403 y 404;
+- limpieza fail-closed para 403 y 404; un 401 conserva instantánea, operación y foto, y el mismo repartidor las
+  envía al volver a entrar (`DRV-SESSION-EXPIRY-OFFLINE-2026-10-19`);
 - respuesta perdida después de PUT, Proof 201 y Transition 200, con las mismas
   keys y sin duplicados;
 - un pipeline real con PostgreSQL/PostGIS, API Kestrel, Next, Ceph RGW aislado

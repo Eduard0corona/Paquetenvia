@@ -18,6 +18,8 @@ export interface ExternalOffersApi {
 
 export function createExternalOffersApi(baseUrl: string, session: DriverSession, fetcher: typeof fetch = fetch): ExternalOffersApi {
   async function request(path: string, init: RequestInit, signal?: AbortSignal): Promise<Response> {
+    // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19: never with a session the server has not confirmed.
+    if (session.remembered === true) throw new ExternalOffersApiError("recoverable");
     let authorization: RequestAuthorization;
     try {
       authorization = await resolveRequestAuthorization(session, init.method ?? "GET");

@@ -99,7 +99,8 @@ describe("createDriverStopsApi", () => {
   });
 
   it.each([
-    [401, "unauthorized"],
+    // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19: the session ended; a missing credential stays "unauthorized".
+    [401, "session-ended"],
     [403, "forbidden"],
     [500, "recoverable"],
     [503, "recoverable"],

@@ -18,7 +18,7 @@ import { FakeIndexedDb, fakeIdbKeyRange } from "./fake-indexed-db.fixtures";
 /**
  * ORG-MY-ROLES-2026-10-12: the phone keeps the last answer of
  * getMyOrganizationRoles per partition (role codes only), so the report keeps
- * working offline, and drops it with the partition (401 or 403) and on logout.
+ * working offline, and drops it with the partition (403, never 401) and on logout.
  */
 const partition = { key: "R".repeat(43) };
 const other = { key: "S".repeat(43) };
@@ -74,7 +74,7 @@ describe("saved organization roles", () => {
     expect(() => validateDriverOrganizationRoles(record, partition.key)).toThrow(DriverStopsCacheError);
   });
 
-  it("leave the phone with their partition on 401 or 403, and every partition's on logout", async () => {
+  it("leave the phone with their partition on 403 (never on 401), and every partition's on logout", async () => {
     const roles = new IndexedDbDriverOrganizationRolesCache();
     const stops = new IndexedDbDriverStopsCache();
     await roles.replaceRoles(partition, ["DRIVER"]);

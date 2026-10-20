@@ -7,7 +7,21 @@ import { asUuid } from "../../realtime/envelope";
 export type DriverSession = SessionCredentials & {
   readonly organizationId: string;
   readonly cacheNamespace: string;
+  /**
+   * DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (owner answer E3): a session the
+   * phone remembered (driver-session-marker) because `GET /auth/session` could
+   * not be answered on this page load. It opens the saved partition only: the
+   * stops screen reads and queues locally and makes no request, so nothing is
+   * sent until the server confirms the same driver and organization and a
+   * confirmed session (without this flag) replaces it.
+   */
+  readonly remembered?: true;
 };
+
+/** Whether the server confirmed this session (every Mock session counts as confirmed). */
+export function isConfirmedDriverSession(session: DriverSession | null): boolean {
+  return session !== null && session.remembered !== true;
+}
 
 declare global {
   interface Window {
@@ -16,6 +30,14 @@ declare global {
 }
 
 export const driverSessionChangedEvent = "paquetenvia:driver-session-changed";
+
+/**
+ * DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (E3): the stops screen asks the BFF
+ * bootstrap to check the session again now ("Sincronizar ahora" or
+ * "Reintentar" while the session is only remembered).
+ */
+export const driverSessionCheckRequestedEvent =
+  "paquetenvia:driver-session-check-requested";
 
 /**
  * Dispatched by "Cerrar sesión" before it signs out, so the stops screen stops

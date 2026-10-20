@@ -53,7 +53,7 @@ describe("getMyOrganizationRoles client", () => {
   });
 
   it.each<[string, () => Promise<Response>, string]>([
-    ["401", json(401, { title: "Unauthorized" }, "application/problem+json"), "unauthorized"],
+    ["401", json(401, { title: "Unauthorized" }, "application/problem+json"), "session-ended"],
     ["403", json(403, { title: "Forbidden." }, "application/problem+json"), "forbidden"],
     ["404 of an API older than this app", json(404, { title: "Not Found" }, "application/problem+json"), "not-found"],
     ["503", json(503, { title: "Service unavailable." }, "application/problem+json"), "recoverable"],

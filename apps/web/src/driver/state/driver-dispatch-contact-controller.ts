@@ -43,9 +43,12 @@ const noNumber: DriverDispatchContactState = Object.freeze({ phoneE164: null });
  * organization when the driver session starts (a new sign-in or organization
  * is a new session and a new partition). The answer saved for the partition
  * is used at once, so "Llamar a despacho" also works offline, and a successful
- * answer (a number or null) replaces it. 401 or 403 removes it (the person is
- * no longer a driver there; the stops screen clears the rest of the partition
- * on its own revocation) and nothing is asked again. Any other failure -
+ * answer (a number or null) replaces it. 403 or a session without a usable
+ * credential removes it (the person is no longer a driver there; the stops
+ * screen clears the rest of the partition on its own revocation) and nothing
+ * is asked again. A 401 (the session ended,
+ * DRV-SESSION-EXPIRY-OFFLINE-2026-10-19) keeps it for the same driver's next
+ * sign-in and nothing is asked again. Any other failure -
  * offline, a timeout, a 5xx, an older API without the operation (404) or an
  * answer that breaks the contract - keeps what is saved, or no number when
  * nothing is, and the request is made again when the connection returns
@@ -171,6 +174,12 @@ export class DriverDispatchContactController {
         .catch(() => undefined);
     } catch (error) {
       if (this.disposed) return;
+      if (
+        error instanceof DriverDispatchContactApiError &&
+        error.category === "session-ended"
+      ) {
+        return;
+      }
       if (
         error instanceof DriverDispatchContactApiError &&
         (error.category === "unauthorized" || error.category === "forbidden")

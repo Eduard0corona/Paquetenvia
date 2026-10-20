@@ -382,6 +382,72 @@ describe("driver sync API", () => {
     ).rejects.toMatchObject({ category: "invalid-contract" });
   });
 
+  describe("session loss (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19)", () => {
+    const cookieSession = (getCsrfToken: () => string): DriverSession => ({
+      organizationId: session.organizationId,
+      cacheNamespace: session.cacheNamespace,
+      credentialMode: "cookie",
+      getCsrfToken,
+    });
+
+    it("tells a 401 (the session ended) apart from a 403", async () => {
+      for (const [status, category] of [
+        [401, "session-ended"],
+        [403, "forbidden"],
+      ] as const) {
+        const fetch = vi.fn<typeof globalThis.fetch>().mockResolvedValue(new Response(null, { status }));
+        const api = createDriverSyncApi({
+          baseUrl: "https://api.synthetic.test",
+          session: cookieSession(() => "C".repeat(43)),
+          fetch,
+        });
+        await expect(api.transitionOrder(operation)).rejects.toMatchObject({ category });
+        expect(fetch).toHaveBeenCalledOnce();
+      }
+    });
+
+    it("sends nothing without a usable CSRF token and keeps that apart from a 401", async () => {
+      const fetch = vi.fn<typeof globalThis.fetch>();
+      const api = createDriverSyncApi({
+        baseUrl: "https://api.synthetic.test",
+        session: cookieSession(() => {
+          throw new Error("no token");
+        }),
+        fetch,
+      });
+      await expect(api.transitionOrder(operation)).rejects.toMatchObject({ category: "unauthorized" });
+      expect(fetch).not.toHaveBeenCalled();
+    });
+
+    it("sends nothing with a remembered session, whatever the request", async () => {
+      const fetch = vi.fn<typeof globalThis.fetch>();
+      const api = createDriverSyncApi({
+        baseUrl: "https://api.synthetic.test",
+        session: { ...cookieSession(() => "C".repeat(43)), remembered: true },
+        fetch,
+      });
+      await expect(api.transitionOrder(operation)).rejects.toMatchObject({ category: "cancelled" });
+      await expect(
+        api.createProofUploadSession(operation, { contentType: "image/png", sizeBytes: 8, sha256: hash }),
+      ).rejects.toMatchObject({ category: "cancelled" });
+      await expect(
+        api.finalizeProof(operation, "33333333-3333-4333-8333-333333333333", hash),
+      ).rejects.toMatchObject({ category: "cancelled" });
+      const collection = createDriverOfflineOperation({
+        partitionKey: "C".repeat(43),
+        orderId: operation.orderId,
+        kind: "COD_COLLECTION",
+        expectedVersion: 9,
+        cod: { amountCents: 125_000, reference: "ORD_SYNTHETIC 2026-07-26T05:00:00-07:00" },
+        now: () => new Date("2026-07-26T12:00:00.000Z"),
+        randomUuid: () => "44444444-4444-4444-8444-444444444444",
+      });
+      await expect(api.recordCodCollection(collection)).rejects.toMatchObject({ category: "cancelled" });
+      // Every request goes through the same guarded path (requestJson), the incident included.
+      expect(fetch).not.toHaveBeenCalled();
+    });
+  });
+
   it("classifies an expired signed upload grant without creating a new session", async () => {
     await expect(
       uploadDriverProof(
