@@ -234,7 +234,8 @@ for the calculation, "Máximo en 5 min, cada minuto (Recommended)". The pilot no
   frequency ([Azure Monitor pricing](https://azure.microsoft.com/en-us/pricing/details/monitor/)).
 - **Guards:** guard P21 (`tools/azr-001/env001_pilot_guards.py`) pins the rules: target server, metric, aggregation,
   window, frequency, thresholds, severities and action group, with no e-mail address. Every other metric alert is
-  refused.
+  refused, except the four PostgreSQL resource alerts (CPU, memory, storage and CPU credits) of
+  `SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20`, which P21 pins the same way (README §10.3).
 
 **When it fires** (runbook in `docs/operations/env-001-pilot/README.md` §10.2):
 
