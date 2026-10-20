@@ -1027,6 +1027,11 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         RequireOne(await command.ExecuteNonQueryAsync(cancellationToken), "Idempotency completion failed.");
     }
 
+    /// <summary>
+    /// DSP-002 result line: the technical order and assignment ids, policy versions, result and duration. The
+    /// organization and the actor reach it only as the pseudonym and the role kind the logger factory adds, never as
+    /// their ids (OBS-003-TENANT-PSEUDONYM-2026-10-12).
+    /// </summary>
     private void LogResult(
         CreateOwnDriverAssignmentCommand command,
         Guid assignmentId,
@@ -1035,10 +1040,8 @@ public sealed class PostgreSqlAssignmentToOrderCoordinator(
         string? eligibilityPolicyVersion,
         TimeSpan duration) =>
         logger.LogInformation(
-            "Dispatch assignment result {Result}; tenant {TenantId}; actor {ActorId}; order {OrderId}; assignment {AssignmentId}; assignment policy {AssignmentPolicyVersion}; eligibility policy {EligibilityPolicyVersion}; duration_ms {DurationMs}",
+            "Dispatch assignment result {Result}; order {OrderId}; assignment {AssignmentId}; assignment policy {AssignmentPolicyVersion}; eligibility policy {EligibilityPolicyVersion}; duration_ms {DurationMs}",
             result,
-            command.OrganizationId,
-            command.ActorId,
             command.OrderId,
             assignmentId,
             assignmentPolicyVersion,
