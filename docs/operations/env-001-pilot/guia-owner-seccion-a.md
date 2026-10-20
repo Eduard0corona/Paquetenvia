@@ -625,7 +625,7 @@ al mes (README §5).
 
 ## 7. Primer despliegue y verificación
 
-Fuente: README §6.1 pasos 4–10; `deploy-azure-pilot.yml`.
+Fuente: README §6.1 pasos 4–11; `deploy-azure-pilot.yml`.
 
 ### 7.1 Certificar el SHA en `main`
 
@@ -677,7 +677,108 @@ Del *Summary* del run copia la IP estática y el `asuid` (paso 4).
   Si el DNS ya propagó antes del Run 2, puedes hacer el Run 2 directamente con `bind`. El repo describe
   la secuencia none → bind.
 
-### 7.5 Verificación
+### 7.5 Tu organización de plataforma y tu cuenta de administrador (una sola vez, antes de entrar)
+
+Fuente: README §6.1 paso 10; decisión `TEN-003-PLATFORM-BOOTSTRAP-2026-10-19` en `decision-log.md`.
+
+Sin este paso nadie puede crear una orden: el registro abierto solo crea negocios y aliados, y solo un
+PLATFORM_ADMIN de la organización de plataforma da los roles de despacho y finanzas, aprueba aliados y registra la
+marca de datos maestros (README §6.8). Hazlo **después del Run 3 y antes de tu primer inicio de sesión** en
+`https://paquetenvia.com`. El comando corre una sola vez y deja registro en auditoría.
+
+1. **Tu `sub` de AuthCenter.** Entra a `https://authcenter.info/admin-v2/users`, busca tu usuario y ábrelo
+   (*Administrar* o *Consultar*). La dirección termina en `/admin-v2/users/<sub>`: ese UUID en minúsculas es tu id
+   de usuario de AuthCenter, el mismo que AuthCenter pone en el claim `sub`. Copia solo ese UUID, tal cual: el
+   comando rechaza un correo, la dirección completa o mayúsculas. No es secreto, pero no lo pegues en issues ni
+   chats.
+2. **Corre el comando** en Cloud Shell (bash). Usa el job de migración con su misma imagen, identidad y conexión;
+   solo cambian los argumentos de esta ejecución, así que el siguiente despliegue sigue corriendo `apply`. Cambia
+   la razón social y, si quieres, el nombre visible (máximo 200 y 80 caracteres, sin espacios al inicio ni al
+   final):
+
+   ```bash
+   RG=rg-pv-pilot
+   JOB=job-pv-pilot-migrate
+   read -r -p 'AuthCenter sub: ' SUB
+   LEGAL_NAME='<razón social de la organización de plataforma>'
+   DISPLAY_NAME='Paquetenvia'
+   az containerapp job show -g "$RG" -n "$JOB" --query properties.template -o json > pv-bootstrap.json
+   python3 - "$SUB" "$LEGAL_NAME" "$DISPLAY_NAME" <<'EOF'
+   import json, sys
+   template = json.load(open("pv-bootstrap.json"))
+   container = template["containers"][0]
+   container["args"] = ["platform-bootstrap", "--connection-env", "PAQUETERIA_MIGRATION_CONNECTION",
+                        "--identity-subject", sys.argv[1], "--legal-name", sys.argv[2], "--display-name", sys.argv[3]]
+   json.dump({"containers": [container]}, open("pv-bootstrap.json", "w"))
+   EOF
+   execution="$(az containerapp job start -g "$RG" -n "$JOB" --yaml pv-bootstrap.json --query name -o tsv)"
+   rm -f pv-bootstrap.json
+   az containerapp job execution show -g "$RG" -n "$JOB" --job-execution-name "$execution" --query properties.status -o tsv
+   ```
+
+3. **Lee el resultado.** Repite la última línea hasta que ya no diga `Running` y busca en Log Analytics:
+   `ContainerAppConsoleLogs_CL | where ContainerJobName_s == "job-pv-pilot-migrate" | where Log_s has "TEN003_PLATFORM_BOOTSTRAP" | order by TimeGenerated desc`.
+   - `TEN003_PLATFORM_BOOTSTRAP_OK organization_type=PLATFORM status=ACTIVE role=PLATFORM_ADMIN (audited)`: listo.
+     Se crearon la organización de plataforma, tu usuario y tu rol de administrador, con una fila de auditoría.
+   - `TEN003_PLATFORM_BOOTSTRAP_ALREADY_DONE` (código 11): ya existe una organización de plataforma o un
+     administrador. No se escribió nada y no hay nada más que hacer.
+   - `TEN003_PLATFORM_BOOTSTRAP_SUBJECT_ALREADY_SIGNED_IN` (código 11): esa cuenta ya entró a Paquetenvia. No se
+     escribió nada. No corras SQL a mano: sigue el recuadro *Si ya iniciaste sesión antes de correr el comando*, abajo.
+   - Código 2: el `sub` no es un UUID en minúsculas o un nombre no cumple las reglas. El valor no se muestra.
+   - Código 5 que nombra una migración o una verificación: la base no está migrada; repite el despliegue.
+4. **Después de entrar** (paso 7.6): `https://paquetenvia.com/api/v1/me/organization-contexts` muestra el
+   `organization_id` de la organización de plataforma, que pide `master-data-gate` (README §6.8). Las operaciones
+   de administrador de plataforma te piden la verificación MFA de AuthCenter.
+
+> **Si ya iniciaste sesión antes de correr el comando** (decisión E1b, "Restaurar y repetir")
+>
+> El comando nunca toma un usuario que ya existe, y eso no cambia. La salida es regresar la base a un momento antes de
+> ese inicio de sesión y correr el comando otra vez. Solo sirve mientras nadie haya usado el piloto: se pierde todo lo
+> escrito después de ese momento, que a estas alturas, si solo entraste tú, es solo tu usuario y tu sesión.
+>
+> 1. **Cómo lo sabes.** En el paso 3 aparece `TEN003_PLATFORM_BOOTSTRAP_SUBJECT_ALREADY_SIGNED_IN` y la ejecución
+>    termina con código 11. No se escribió nada.
+> 2. **No vuelvas a entrar** a `https://paquetenvia.com` hasta el final de esta lista.
+> 3. **Busca la hora de tu primer inicio de sesión.** En el historial de tu navegador, busca tu primera visita a
+>    `https://paquetenvia.com`: abrir el sitio no inicia sesión, así que entraste en ese momento o después. Elige un
+>    momento antes de esa visita y después de que terminó tu último run de *Deploy Azure PILOT* anterior a ella (la
+>    hora de fin sale en GitHub Actions), para que la base restaurada ya tenga todas sus migraciones. Si dudas, usa
+>    uno o dos minutos después de que terminó ese run. Tiene que estar dentro de los últimos 14 días (README §6.4).
+>    Escríbelo en UTC con `Z` al final, por ejemplo `2026-10-05T13:10:00Z` (GitHub y tu navegador te muestran tu hora
+>    local).
+> 4. **Restaura la base** como dice README §6.4, *Real restore*, en Cloud Shell (bash) y desde una copia del repo:
+>    1. Detén la API y el Worker:
+>
+>       ```bash
+>       RG=rg-pv-pilot
+>       az containerapp update -n ca-pv-pilot-api -g "$RG" --min-replicas 0 --max-replicas 0
+>       az containerapp update -n ca-pv-pilot-worker -g "$RG" --min-replicas 0 --max-replicas 0
+>       ```
+>
+>    2. Restaura a ese momento y conserva el servidor restaurado (`--keep`):
+>
+>       ```bash
+>       ./deploy/azure/pilot/restore-drill.sh --resource-group "$RG" --restore-time <momento en UTC> --keep
+>       ```
+>
+>       Restaura en un **servidor nuevo** (`pg-pv-pilot-<sufijo>-drill-<fecha>`; su host sale en la línea
+>       `restore_completed=...`), lo verifica y termina con una línea `EVIDENCE ... verify_status=Succeeded`. Las apps
+>       todavía apuntan al servidor anterior.
+>    3. Pasa las apps al servidor restaurado con una de las dos opciones de README §6.4 paso 3: **cambiar nombres** (la
+>       preferida: borras el servidor anterior y restauras otra vez con el nombre original `pg-pv-pilot-<sufijo>`, así
+>       ningún secreto de conexión cambia) o **apuntar los secretos al host nuevo** (actualizas los cuatro secretos de
+>       conexión, `pg-migrate-connection`, `pg-api-runtime-connection`, `pg-worker-runtime-connection` y
+>       `pg-realtime-runtime-connection`, y reinicias las revisiones de la API y el Worker).
+>    4. Corre otra vez **Deploy Azure PILOT** con el mismo `<HEAD_SHA>` y `<FOUNDATION_RUN_ID>` y
+>       `custom_domain_phase=bind` (paso 7.4). Ese run regresa las réplicas y vuelve a aplicar los logins.
+> 5. **Corre otra vez el comando** (pasos 2 y 3 de esta sección). Ahora debe decir `TEN003_PLATFORM_BOOTSTRAP_OK`.
+> 6. **Solo entonces inicia sesión** (paso 7.6).
+
+> Los argumentos de esta ejecución (tu `sub` y los dos nombres) quedan en el historial del job, visibles para quien
+> pueda leer el grupo de recursos. Ninguno es secreto. La salida del comando no muestra tu `sub`, los nombres ni
+> ningún id.
+
+### 7.6 Verificación
 
 ```bash
 # Certificado administrado emitido
@@ -690,8 +791,8 @@ az resource list -g rg-pv-pilot -o table
 az consumption budget list --resource-group rg-pv-pilot -o table      # budget-pv-pilot, 100 USD
 ```
 
-Pruebas manuales en el navegador sobre `https://paquetenvia.com` (README §6.1 pasos 9 y 10):
-- Login por AuthCenter (requiere las URIs del paso 5.1 registradas).
+Pruebas manuales en el navegador sobre `https://paquetenvia.com` (README §6.1 pasos 9 y 11):
+- Login por AuthCenter con la cuenta del paso 7.5 (requiere las URIs del paso 5.1 registradas).
 - `/ops/orders/new` permite confirmar una orden (versiones de términos y aviso del paso 6.1 cargadas).
 - DevTools → Network → WS: `/hubs/...` responde `101 Switching Protocols`.
 - Subir una foto de prueba y comprobar que el blob tiene el index tag del escaneo de Defender.
@@ -789,7 +890,7 @@ Después mándame los dos nombres (no son secretos) para el cambio que conecte e
    por API más cuota?
 6. **Transferencia de direcciones a Google** depende de GATE-007.
 7. ~~Orden de AuthCenter~~: corregido; README §6.1 ahora registra las URIs de `paquetenvia-web-prod`
-   (paso 9) antes de la prueba de login (paso 10).
+   (paso 9) antes de la prueba de login (paso 11).
 8. ~~README §6.1 paso 6~~: corregido; ahora nombra los cuatro secretos del owner
    (`authcenter-paquetenvia-client-secret`, `google-maps-api-key`, `public-tracking-link-key`,
    `paquetenvia-telemetry-pseudonym-key-1`).

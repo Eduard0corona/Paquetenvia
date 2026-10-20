@@ -129,6 +129,12 @@ Otherwise the deploy job stops before logging in to Azure.
   `realtime_outbox_dispatcher` is unhealthy if its login could assume `paqueteria_worker` or `paqueteria_app`.
 - `job-pv-pilot-verify` runs the read-only `assert` after every deployment. The restore drill also
   uses it.
+- TEN-003-PLATFORM-BOOTSTRAP-2026-10-19: the owner runs the migrator command `platform-bootstrap` once, in an
+  execution of `job-pv-pilot-migrate` with its own arguments (§6.1 step 10), on the migration connection. It reads
+  every tenant as the deployment login (BYPASSRLS, E-002) only to refuse a second run, then writes as
+  `paqueteria_migrator` (NOBYPASSRLS) under FORCE RLS with the new UUIDs pre-authorized only in its transaction.
+  The deployment login holds no SET on `paqueteria_app`, so the API's tenant transaction cannot run there. No role,
+  grant or function is added (`docs/development/ten-003-platform-bootstrap.md`).
 
 ## 3. Same-origin routing (PILOT-SAME-ORIGIN-ROUTING)
 
@@ -154,7 +160,7 @@ public.
 
 - **WebSockets (`/hubs`):** API and Web ingresses use `transport: auto`, which supports the HTTP/1.1
   upgrade. SignalR still falls back to SSE or long-polling if an upgrade fails. The WebSocket check
-  after the first deploy is manual (§6.1 step 9).
+  after the first deploy is manual (§6.1 step 11).
 - **Back-channel logout:** the environment ingress does not inspect `Origin`, and the API accepts
   `POST /auth/backchannel-logout` without it (auth-001 §14.2). The workflow smoke test sends such a
   POST through the route and requires the API's `{"error":"invalid_request"}`.
@@ -165,7 +171,7 @@ public.
   hop: Web reaches the API through the API's internal ingress, which adds Web's address. With
   `ForwardLimit=1` every sign-in would then share one bucket, so the fallback needs
   `Http__ForwardedHeaders__ForwardLimit=2`. The middleware stops at the first address outside
-  `KnownNetworks`, so a client still cannot pass a forged address. §6.1 step 10 checks the result.
+  `KnownNetworks`, so a client still cannot pass a forged address. §6.1 step 11 checks the result.
 
 ## 4. Configuration, identities and secrets
 
@@ -475,9 +481,63 @@ Two further caveats:
    `az containerapp env certificate list -g <rg> -n <env> --managed-certificates-only -o table`
    (status `Succeeded`), then `curl -I https://paquetenvia.com/`.
 9. Register the production AuthCenter client URIs (auth-001 §10.1, all on `https://paquetenvia.com`).
-   The login test in the next step needs them.
-10. Check by hand, in a browser on `https://paquetenvia.com`:
-    - Log in through AuthCenter.
+   The login test in step 11 needs them.
+10. **Once, before your first sign-in: create the PLATFORM organization and make your AuthCenter account its
+    PLATFORM_ADMIN** (TEN-003-PLATFORM-BOOTSTRAP-2026-10-19, owner decision E1). Self-service onboarding creates
+    only BUSINESS and ALLY organizations, and only a PLATFORM_ADMIN of a PLATFORM organization can grant DISPATCHER
+    and FINANCE, approve allies and record the master-data gate (§6.8), so without this step nobody can create an
+    order. Spanish walkthrough: [`guia-owner-seccion-a.md`](guia-owner-seccion-a.md) §7.5.
+    - Your AuthCenter `sub`: in `https://authcenter.info/admin-v2/users` open your own user (*Administrar* or
+      *Consultar*). The address ends in `/admin-v2/users/<sub>`: that lowercase UUID is your AuthCenter user id,
+      which AuthCenter puts in the `sub` claim. Copy it exactly; the command refuses anything else (an e-mail, the
+      whole address, upper case).
+    - From Cloud Shell, run the migrator's `platform-bootstrap` once in an execution of the migrate job (same image,
+      identity and migration connection; only this execution's arguments change, so the next deployment still runs
+      `apply`):
+
+      ```bash
+      RG=rg-pv-pilot
+      JOB=job-pv-pilot-migrate
+      read -r -p 'AuthCenter sub: ' SUB
+      LEGAL_NAME='<legal name of the platform organization>'
+      DISPLAY_NAME='Paquetenvia'
+      az containerapp job show -g "$RG" -n "$JOB" --query properties.template -o json > pv-bootstrap.json
+      python3 - "$SUB" "$LEGAL_NAME" "$DISPLAY_NAME" <<'EOF'
+      import json, sys
+      template = json.load(open("pv-bootstrap.json"))
+      container = template["containers"][0]
+      container["args"] = ["platform-bootstrap", "--connection-env", "PAQUETERIA_MIGRATION_CONNECTION",
+                           "--identity-subject", sys.argv[1], "--legal-name", sys.argv[2], "--display-name", sys.argv[3]]
+      json.dump({"containers": [container]}, open("pv-bootstrap.json", "w"))
+      EOF
+      execution="$(az containerapp job start -g "$RG" -n "$JOB" --yaml pv-bootstrap.json --query name -o tsv)"
+      rm -f pv-bootstrap.json
+      az containerapp job execution show -g "$RG" -n "$JOB" --job-execution-name "$execution" --query properties.status -o tsv
+      ```
+
+      Repeat the last line until it no longer says `Running`, then read the result in Log Analytics:
+      `ContainerAppConsoleLogs_CL | where ContainerJobName_s == "job-pv-pilot-migrate" | where Log_s has "TEN003_PLATFORM_BOOTSTRAP" | order by TimeGenerated desc`.
+    - `TEN003_PLATFORM_BOOTSTRAP_OK organization_type=PLATFORM status=ACTIVE role=PLATFORM_ADMIN (audited)`: done.
+      In one transaction the command created the ACTIVE PLATFORM organization, the user of your `sub` and its
+      ACTIVE default PLATFORM_ADMIN membership, and one `INITIAL_ORGANIZATION_PROVISIONED` audit row in that
+      organization (request id `ten-003-platform-bootstrap`). Its output names no subject, name or id.
+    - Exit 11, `TEN003_PLATFORM_BOOTSTRAP_ALREADY_DONE`: a PLATFORM organization or a PLATFORM_ADMIN already exists.
+      Nothing was written and nothing is left to do; the command runs only once.
+    - Exit 11, `TEN003_PLATFORM_BOOTSTRAP_SUBJECT_ALREADY_SIGNED_IN`: that account already signed in to Paquetenvia.
+      Nothing was written. The command never takes over an existing user, and you must not write SQL by hand.
+      Restore the database to a point before that sign-in (§6.4) and run the command again, as the box *Si ya
+      iniciaste sesión antes de correr el comando* in the guide §7.5 explains step by step (decision E1b).
+    - Exit 2: the `sub` is not a lowercase UUID, or a name is empty, has leading or trailing spaces or control
+      characters, or is longer than 200 (legal) or 80 (display) characters. The value is never echoed.
+    - Exit 5 naming a migration or an assertion: the database is not fully migrated; run the deployment again
+      first. Exit 12 (`TEN003_PLATFORM_BOOTSTRAP_DATABASE_ERROR SQLSTATE=...`): nothing was written; see §6.7.
+    - The execution keeps its arguments (your `sub` and the two names) in the job's execution history, readable by
+      whoever can read the resource group. None of them is a secret.
+    - After you sign in (step 11), `https://paquetenvia.com/api/v1/me/organization-contexts` lists the PLATFORM
+      organization with its `organization_id`, which `master-data-gate --platform-organization-id` (§6.8) needs.
+      PLATFORM_ADMIN operations ask for the AuthCenter MFA step-up (auth-001 §14.3).
+11. Check by hand, in a browser on `https://paquetenvia.com`:
+    - Log in through AuthCenter with the account of step 10.
     - In DevTools → Network → WS, `/hubs/...` shows `101 Switching Protocols`.
     - Upload a proof photo, then check that the blob has the Defender scan-result index tag.
     - `/ops/orders/new` allows confirming an order (the terms and privacy versions are set).
@@ -490,13 +550,13 @@ Two further caveats:
       twenty redirects, then `429`. Within the same minute, from the second network, one such request
       must still redirect. A `429` there means every client shares one bucket: check `ForwardLimit` and
       `KnownNetworks`. Repeat after any routing change, and after switching to the Next.js fallback.
-11. Run the restore drill (§6.4) and keep its `EVIDENCE` line. The ENV-001 criterion "restore drill
+12. Run the restore drill (§6.4) and keep its `EVIDENCE` line. The ENV-001 criterion "restore drill
     evidence is current before pilot start" requires it.
 
 **Owner actions for RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12:** none by hand. The workflow generates
 `pg-realtime-runtime-connection` and `pg-realtime-login-verifier` (also on a vault populated by an earlier run:
 they are created the first time they are missing), the logins job creates `pv_pilot_realtime`, the migrate job
-grants the role and `apps.bicep` gives the API identity *Key Vault Secrets User* on that one secret. After step 10,
+grants the role and `apps.bicep` gives the API identity *Key Vault Secrets User* on that one secret. After step 11,
 the owner can confirm in Log Analytics that `ca-pv-pilot-api` logs `realtime_outbox_dispatcher_started` with
 `provider=postgresql` and no `realtime_outbox_message_failed`.
 
@@ -964,6 +1024,10 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
     and the PostgreSQL pages do not restate them;
   - the disk is still 32 GiB, the base of the storage percentages; after an autogrow the same 70 % is of the larger
     disk.
+- TEN-003-PLATFORM-BOOTSTRAP-2026-10-19: `az containerapp job start --yaml` with the migrate job's own template and
+  new arguments (§6.1 step 10). The command itself passes contract tests on real PostgreSQL as a NOSUPERUSER
+  BYPASSRLS deployment login without `paqueteria_app`; the `az` override was checked only against the Azure CLI
+  source.
 - Proof photo soft delete (ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20): ARM acceptance of the 30-day blob and
   container retention and the restore steps of §6.4 were not run against real Azure.
 - OBS-003:

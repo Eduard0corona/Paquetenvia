@@ -13,10 +13,17 @@ using Paqueteria.Infrastructure.Tenancy;
 
 namespace Organizations.Infrastructure.Provisioning;
 
+/// <summary>
+/// TEN-003: user, organization, initial membership and audit row in one transaction, with application-generated
+/// UUIDs pre-authorized only in that transaction's RLS context. The API wires it to
+/// <see cref="TenantTransactionContext{TDbContext}"/> (<c>paqueteria_app</c>) behind
+/// <see cref="DenyInitialOrganizationProvisioningAuthorizer"/>; TEN-003-PLATFORM-BOOTSTRAP-2026-10-19 runs it once
+/// from the DatabaseMigrator <c>platform-bootstrap</c> command with that command's own transaction runner.
+/// </summary>
 public sealed class PostgreSqlInitialOrganizationProvisioner(
     IInitialOrganizationProvisioningAuthorizer authorizer,
     IProvisioningFailureInjector failureInjector,
-    TenantTransactionContext<OrganizationsDbContext> transactionContext,
+    ITenantTransactionRunner<OrganizationsDbContext> transactionContext,
     IAppendOnlyAuditWriter auditWriter,
     IClock clock)
     : IInitialOrganizationProvisioner
