@@ -69,7 +69,10 @@ changes.
 At the end it checks the database: the order is `DELIVERED` with the tariff total in centavos, its status changes are
 exactly CONFIRMED, READY_FOR_PICKUP, ASSIGNED, AT_PICKUP, PICKED_UP, IN_TRANSIT, DELIVERING, DELIVERED, it has a
 PICKUP_PHOTO and a DELIVERY_PHOTO proof whose objects are in the bucket, two consumed upload sessions and the
-assignment with its cost in centavos.
+assignment with its cost in centavos. Since DRV-PROOF-PHOTO-REDUCE-2026-10-20 the photos are a 1x1 PNG and the
+synthetic EXIF GPS JPEG of the driver suites (`apps/web/src/driver/proofs/proof-photo-exif-gps.fixture.jpg`), which
+the phone can decode; both proofs are `image/jpeg` and the objects read back from the bucket are the reduced JPEGs
+without metadata (1x1 and 800x1600).
 
 Every step has a screen; no step uses the API directly.
 

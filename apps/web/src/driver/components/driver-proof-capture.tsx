@@ -11,7 +11,8 @@ import styles from "./driver-stops.module.css";
 /**
  * Proof photo step of a driver stop (UI-001 phase 3): take the photo, check it in
  * "Vista previa de la foto", then "Repetir" or "Usar esta foto". Only "Usar esta foto"
- * calls `onUse`, which queues the action with that same photo exactly as before.
+ * calls `onUse`, which queues the action with the photo the preview shows: the photo
+ * reduced on the phone, never the picked file (DRV-PROOF-PHOTO-REDUCE-2026-10-20).
  */
 export function DriverProofCapture({
   orderId,
@@ -80,7 +81,7 @@ export function DriverProofCapture({
           capture="environment"
           aria-describedby={problem ? problemId : undefined}
           aria-invalid={state.phase === "capture" && problem ? true : undefined}
-          onChange={(event) => preview.select(event.currentTarget.files)}
+          onChange={(event) => void preview.select(event.currentTarget.files)}
         />
       </div>
       {state.phase === "preview" ? (

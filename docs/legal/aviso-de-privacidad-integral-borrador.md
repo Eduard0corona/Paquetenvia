@@ -72,15 +72,15 @@ No pedimos datos personales sensibles. La sección 3.6 explica en qué casos pod
 | Dirección y referencias para llegar | Igual | Cifrado |
 | Ubicación del domicilio en el mapa (latitud y longitud) | Igual: el personal marca el punto | **Sin cifrar.** Se usa para saber si el domicilio está dentro de la zona de servicio |
 | Datos del envío: número de guía, estado, fechas y horas de cada cambio, ventana de entrega, monto a cobrar contra entrega y si se cobró | Los genera la plataforma | Acceso restringido a la organización de la orden |
-| Fotografías de recolección y de entrega, y la foto del lugar cuando no se pudo entregar | Las toma el repartidor | Almacenamiento privado; cada foto pasa un análisis de malware antes de aceptarse |
+| Fotografías de recolección y de entrega, y la foto del lugar cuando no se pudo entregar | Las toma el repartidor | El teléfono reduce la foto y le quita los metadatos (ubicación GPS, modelo del teléfono, hora) antes de guardarla. Almacenamiento privado; cada foto pasa un análisis de malware antes de aceptarse |
 | Motivo de un intento fallido (por ejemplo "No había nadie") y la descripción que escribe el personal de despacho | Repartidor y despacho | La descripción se guarda cifrada |
 
 Hoy **no** recabamos del destinatario: correo electrónico, firma, identificación oficial, nombre de quien recibe
 (el sistema lo rechaza), dirección IP ni datos de su dispositivo.
 
-**[PENDIENTE: una fotografía de entrega puede mostrar a la persona que recibe, su domicilio o placas de vehículos. El
-sistema no quita los metadatos de la imagen (EXIF). Según el teléfono, la foto puede llevar la ubicación GPS y la hora
-de la toma. Decidir si se informa así o si se pide un cambio técnico que los elimine.]**
+**[PENDIENTE: una fotografía de entrega puede mostrar a la persona que recibe, su domicilio o placas de vehículos.]**
+Los metadatos de la imagen (EXIF), que según el teléfono pueden llevar la ubicación GPS y la hora de la toma, se quitan
+en el teléfono antes de guardar la foto (decisión del owner DRV-PROOF-PHOTO-REDUCE-2026-10-20).
 
 **[PENDIENTE: avisos al destinatario por WhatsApp y correo (GATE-004). Los conectores existen pero están apagados y
 nada los usa. Hoy no se recaba el correo del destinatario: el formulario de cotización no tiene ese campo. Si se
@@ -103,7 +103,10 @@ contenido de los mensajes (número de guía y enlace de seguimiento).]**
 > - El rol VIEWER ve las coordenadas redondeadas a unos 1.1 km (D5-VIEWER-LOCATION-PRECISION-2026-09-27).
 > - `FinalizeProofRequest.recipient_name` se rechaza con `PII_PROTECTION_UNAVAILABLE`. La app del repartidor no manda
 >   `lat`/`lng` al finalizar la foto; la API sí los acepta y los guardaría en claro en `custody.proofs.captured_point`.
-> - La app sube la foto tal como la entrega el navegador, sin recodificarla (`apps/web/src/driver/proofs/proof-file.ts`).
+> - La app reduce la foto en el teléfono antes de calcular su huella y guardarla: un JPEG de máximo 1600 px por lado,
+>   calidad 80 %, sin EXIF, GPS, XMP, perfil ICC ni comentarios. La evidencia guardada es esa foto reducida; el archivo
+>   original no se guarda ni se envía (`apps/web/src/driver/proofs/proof-photo-reduce.ts`,
+>   DRV-PROOF-PHOTO-REDUCE-2026-10-20).
 > - La aceptación guarda el `actor_id` del usuario que la registró; IP y user-agent están prohibidos mientras GATE-007
 >   siga abierto (AI-04 `OrderAcceptance`).
 
