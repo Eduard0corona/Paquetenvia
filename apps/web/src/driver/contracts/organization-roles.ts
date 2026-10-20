@@ -71,7 +71,8 @@ export function parseOrganizationRoleCodes(value: unknown): readonly string[] {
  *   the stop says nothing about the role: it is not an error.
  * - `unknown`: no answer of getMyOrganizationRoles is known for the session
  *   and none is on its way (the request failed with nothing saved, an older
- *   API without the operation, 401 or 403, or a malformed value). The report
+ *   API without the operation, 403, a 401 with nothing saved, or a malformed
+ *   value). The report
  *   is not offered (fails closed) and the stop says why; nothing else of the
  *   app changes.
  */

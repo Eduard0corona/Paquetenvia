@@ -126,7 +126,8 @@ describe("openIncident for a driver report", () => {
     [409, "INVALID_REQUEST", "conflict"],
     [409, "EVIDENCE_NOT_AVAILABLE", "conflict"],
     [409, "OFFLINE_OPERATION_EXPIRED", "conflict"],
-    [401, null, "unauthorized"],
+    // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19: a 401 is the session ending, not a missing credential.
+    [401, null, "session-ended"],
     [403, null, "forbidden"],
     [404, null, "not-found"],
     [503, null, "recoverable"],

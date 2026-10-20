@@ -492,8 +492,47 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         }
     }
 
+    /// <summary>
+    /// DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (owner answer E2): a 401 is the session ending, not a revocation. The
+    /// screen asks to sign in again and the saved stops stay for the same driver, so a read without connection still
+    /// falls back to them.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverStopsPwa")]
+    public async Task Session_end_asks_to_sign_in_again_and_keeps_the_cache()
+    {
+        var currentStatus = 200;
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        var page = await browser.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-session-ended-0001");
+        await page.RouteAsync(
+            StopsRoute,
+            route => route.FulfillAsync(
+                currentStatus == 200
+                    ? JsonResponse(StopsBody(route.Request, Stops))
+                    : new RouteFulfillOptions { Status = currentStatus }));
+        await page.GotoAsync(new Uri(server.BaseAddress, "/driver/stops").AbsoluteUri);
+        await ExpectTextAsync(page, "ORD_abcdefghijklmnopqrstuv");
+        await WaitForSnapshotCountAsync(page, 1);
+
+        currentStatus = 401;
+        await page.ReloadAsync();
+        await ExpectTextAsync(page, "Tu sesión venció, entra de nuevo");
+        await page.GetByRole(AriaRole.Link, new() { Name = "Iniciar sesión" }).WaitForAsync();
+        Assert.DoesNotContain(
+            "ORD_abcdefghijklmnopqrstuv",
+            await page.Locator("body").InnerTextAsync());
+
+        await page.UnrouteAllAsync();
+        await page.RouteAsync(StopsRoute, route => route.AbortAsync());
+        await page.ReloadAsync();
+        await ExpectTextAsync(page, "ORD_abcdefghijklmnopqrstuv");
+        await ExpectTextAsync(page, "Mostrando última información disponible");
+    }
+
     [Theory]
-    [InlineData(401, "Sesión no válida")]
     [InlineData(403, "No tienes acceso a las paradas de repartidor")]
     [Trait("Category", "DriverStopsPwa")]
     public async Task Known_revocation_clears_cache_without_offline_fallback(

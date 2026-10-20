@@ -10,7 +10,7 @@ namespace Paqueteria.IntegrationTests.Driver;
 public sealed class DriverOfflineOperationsPwaPlaywrightTests(
     DriverStopsNextServerFixture server)
 {
-    private const string OrderId = "22222222-2222-4222-8222-222222222222";
+    internal const string OrderId = "22222222-2222-4222-8222-222222222222";
     private const string OrganizationId = "11111111-1111-4111-8111-111111111111";
 
     /// <summary>
@@ -1838,8 +1838,54 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         Assert.Equal(0, await ReadStoreCountAsync(page, "operations"));
     }
 
+    /// <summary>
+    /// DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (owner answer E2 "Conservar y pedir entrar (Recommended)"): a 401 while
+    /// a photo waits keeps the snapshot, the operation and its photo and sends nothing; the same driver opening the app
+    /// again with a session the server accepts sends it.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Session_end_keeps_snapshot_operation_and_blob_and_the_same_driver_sends_them()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-drv002-session-ended");
+        var backend = new SyntheticOfflineBackend();
+        backend.SetOrderState("AT_PICKUP", 4);
+        await backend.RouteAsync(page);
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(page, "Confirmar recolección");
+        await context.SetOfflineAsync(true);
+        await EnqueueProofAsync(page, "Confirmar recolección", "session-ended.png");
+        await WaitForOperationCountAsync(page, 1);
+        await WaitForProofCountAsync(page, 1);
+
+        backend.StopsFailureStatus = 401;
+        await context.SetOfflineAsync(false);
+        await page.WaitForFunctionAsync("() => navigator.onLine === true");
+
+        await ExpectTextAsync(page, "Tu sesión venció, entra de nuevo");
+        await page.WaitForTimeoutAsync(500);
+        Assert.Equal(1, await ReadStoreCountAsync(page, "operations"));
+        Assert.Equal(1, await ReadStoreCountAsync(page, "proof_blobs"));
+        Assert.Equal(1, await ReadStoreCountAsync(page, "snapshots"));
+        Assert.Empty(backend.SessionAttempts);
+        Assert.Empty(backend.TransitionTargets);
+
+        backend.StopsFailureStatus = null;
+        await page.ReloadAsync();
+        await WaitForOperationCountAsync(page, 0);
+        await WaitForProofCountAsync(page, 0);
+        Assert.Single(backend.SessionAttempts);
+        Assert.Equal(new[] { "PICKED_UP" }, backend.TransitionTargets);
+    }
+
     [Theory]
-    [InlineData(401, "Sesión no válida")]
     [InlineData(403, "Acceso no disponible")]
     [Trait("Category", "DriverOfflineOperationsPwa")]
     public async Task Revocation_clears_snapshot_operation_and_blob_without_mutation(
@@ -2055,7 +2101,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         await dialog.GetByRole(AriaRole.Button, new() { Name = "Sí, recibí $1,250.00" }).ClickAsync();
     }
 
-    private static async Task EnqueueButtonAsync(IPage page, string name)
+    internal static async Task EnqueueButtonAsync(IPage page, string name)
     {
         await page.GetByRole(AriaRole.Button, new() { Name = name }).ClickAsync();
         await page.WaitForFunctionAsync(
@@ -2200,7 +2246,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             "the driver shell cache does not hold static assets");
     }
 
-    private static Task WaitForOperationCountAsync(IPage page, int count) =>
+    internal static Task WaitForOperationCountAsync(IPage page, int count) =>
         WaitForStoreCountAsync(page, "operations", count);
 
     private static Task WaitForProofCountAsync(IPage page, int count) =>
@@ -2444,7 +2490,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             })
             """);
 
-    private static Task<int> ReadStoreCountAsync(IPage page, string storeName) =>
+    internal static Task<int> ReadStoreCountAsync(IPage page, string storeName) =>
         page.EvaluateAsync<int>(
             """
             storeName => new Promise((resolve, reject) => {
@@ -2501,7 +2547,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         }
     }
 
-    private sealed class SyntheticOfflineBackend
+    internal sealed class SyntheticOfflineBackend
     {
         private readonly object gate = new();
         private readonly TaskCompletionSource heldReadArrived = new(TaskCreationOptions.RunContinuationsAsynchronously);

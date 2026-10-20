@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
+import { isBffAuthenticationEnabled } from "../../auth/auth-mode";
 import { buildSignInPromptHref } from "../../auth/bff-session";
 import {
   isSessionBootstrapSettled,
@@ -63,10 +64,15 @@ import {
 import {
   driverLogoutStartedEvent,
   driverSessionChangedEvent,
+  driverSessionCheckRequestedEvent,
   readBrowserDriverSession,
   sessionIdentity,
   type DriverSession,
 } from "../session/driver-session";
+import {
+  forgetDriverSessionMarker,
+  readDriverSessionMarker,
+} from "../session/driver-session-marker";
 import {
   DriverDispatchContactController,
   type DriverDispatchContactState,
@@ -126,6 +132,14 @@ const unavailableExternalOffersState: ExternalOffersState = Object.freeze({
   pendingOfferId: null,
   message: null,
 });
+// DRV-SESSION-EXPIRY-OFFLINE-2026-10-19: external offers are online only, so
+// a remembered session shows none and asks for none.
+const noExternalOffersState: ExternalOffersState = Object.freeze({
+  offers: [],
+  loading: false,
+  pendingOfferId: null,
+  message: null,
+});
 // ORG-MY-ROLES-2026-10-12: until the roles controller answers, the roles are
 // loading: the report is not offered and nothing is said about the role.
 const loadingRolesState: DriverOrganizationRolesState = Object.freeze({
@@ -147,6 +161,10 @@ const stopUnavailableForReport: DriverFailedDeliveryEnqueueResult =
 
 export function DriverStopsExperience() {
   const [session, setSession] = useState<DriverSession | null>(null);
+  // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (E2): the page's session check found
+  // no session while the phone still remembers its driver, so that session
+  // ended (401) and the same driver is asked to sign in again.
+  const [signInAgain, setSignInAgain] = useState(false);
   const [state, setState] = useState<DriverStopsViewState>(unavailableState);
   const [operationsState, setOperationsState] = useState<DriverOperationsState>(
     unavailableOperationsState,
@@ -177,10 +195,13 @@ export function DriverStopsExperience() {
   const headingRef = useRef<HTMLHeadingElement>(null);
   const listFocusPendingRef = useRef(false);
   const identity = sessionIdentity(session);
+  // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (E3): a session the phone remembered
+  // while the server could not be asked; read and queue locally only.
+  const remembered = session?.remembered === true;
   // VOICE-001: online-only calls; never part of the offline queue.
   const voiceApi = useMemo<DriverVoiceApi | null>(
     () =>
-      session
+      session && session.remembered !== true
         ? createDriverVoiceApi(
             resolveDriverApiBaseUrl(
               window.location.origin,
@@ -194,11 +215,23 @@ export function DriverStopsExperience() {
   );
 
   useEffect(() => {
-    const refreshSession = () => setSession(readBrowserDriverSession());
+    const refreshSession = () => {
+      const current = readBrowserDriverSession();
+      setSession(current);
+      setSignInAgain(
+        current === null &&
+          isBffAuthenticationEnabled(process.env.NEXT_PUBLIC_AUTH_MODE) &&
+          isSessionBootstrapSettled() &&
+          readDriverSessionMarker(window) !== null,
+      );
+    };
     refreshSession();
     window.addEventListener(driverSessionChangedEvent, refreshSession);
-    return () =>
+    window.addEventListener(sessionBootstrapSettledEvent, refreshSession);
+    return () => {
       window.removeEventListener(driverSessionChangedEvent, refreshSession);
+      window.removeEventListener(sessionBootstrapSettledEvent, refreshSession);
+    };
   }, []);
 
   useEffect(() => {
@@ -290,6 +323,7 @@ export function DriverStopsExperience() {
         } catch (error) {
           if (error instanceof DriverStopsApiError) {
             const category =
+              error.category === "session-ended" ||
               error.category === "unauthorized" ||
               error.category === "forbidden" ||
               error.category === "cancelled"
@@ -304,6 +338,10 @@ export function DriverStopsExperience() {
       },
       onAccessRevoked: (category) => void controller.revokeAccess(category),
       reportRole: () => driverReportRoleOf(rolesController.current),
+      // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (E3): nothing is sent until the
+      // server confirms this driver and organization; the confirmed session
+      // gets its own controller.
+      sync: session.remembered !== true,
     });
     controllerRef.current = controller;
     operationsControllerRef.current = operationsController;
@@ -312,6 +350,16 @@ export function DriverStopsExperience() {
     dispatchContactControllerRef.current = dispatchContactController;
     const unsubscribe = controller.subscribe((next) => {
       if (active) setState(next);
+      // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (E3): a 403 or a session without
+      // a usable credential wiped this session's partition, so the phone stops
+      // remembering it; a 401 ("session-ended") keeps it (E2).
+      if (next.phase === "forbidden" || next.phase === "unauthorized") {
+        forgetDriverSessionMarker(
+          window,
+          session.cacheNamespace,
+          session.organizationId,
+        );
+      }
     });
     const unsubscribeRoles = rolesController.subscribe((next) => {
       if (active) setRolesState(next);
@@ -331,7 +379,7 @@ export function DriverStopsExperience() {
     );
     void controller.start();
     void operationsController.start();
-    void externalOffersController.start();
+    if (session.remembered !== true) void externalOffersController.start();
     void rolesController.start();
     void dispatchContactController.start();
 
@@ -378,7 +426,32 @@ export function DriverStopsExperience() {
     );
   }, [projection.stops, route]);
 
-  const retry = () => void controllerRef.current?.retry();
+  // E3: while the session is only remembered, "Reintentar" and "Sincronizar
+  // ahora" also ask the server to confirm it now.
+  const requestSessionCheck = () => {
+    if (remembered) window.dispatchEvent(new Event(driverSessionCheckRequestedEvent));
+  };
+  const retry = () => {
+    requestSessionCheck();
+    void controllerRef.current?.retry();
+  };
+
+  if (
+    route &&
+    ((!session && signInAgain) || (session && state.phase === "session-ended"))
+  ) {
+    // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (owner answer E2 "Conservar y
+    // pedir entrar (Recommended)"): nothing was wiped.
+    return (
+      <DriverShell>
+        <StatusPanel title="Tu sesión venció, entra de nuevo">
+          Lo que tengas pendiente sigue guardado en este teléfono y se enviará
+          cuando vuelvas a entrar con tu cuenta.
+          <SignInAction route={route} />
+        </StatusPanel>
+      </DriverShell>
+    );
+  }
 
   if (!route || !session || state.phase === "session-unavailable") {
     return (
@@ -457,12 +530,24 @@ export function DriverStopsExperience() {
         state={state}
         offline={dataIsOffline || state.realtime === "offline"}
       />
+      {remembered ? (
+        <aside className={styles.offlineBanner} role="status">
+          <strong>Sesión sin confirmar</strong>
+          <span>
+            Lo que registres queda guardado en este teléfono y se enviará
+            cuando haya conexión y se confirme tu sesión.
+          </span>
+        </aside>
+      ) : null}
       <QueueSummary
         operations={projection.operations}
         mutating={operationsState.mutating}
         message={operationsState.message}
         dispatchPhone={dispatchContactState.phoneE164}
-        onSync={() => void operationsControllerRef.current?.syncNow()}
+        onSync={() => {
+          requestSessionCheck();
+          void operationsControllerRef.current?.syncNow();
+        }}
       />
       {route.kind === "detail" ? (
         <StopDetail
@@ -538,7 +623,7 @@ export function DriverStopsExperience() {
       ) : route.kind === "list" ? (
         <>
           <ExternalOffersPanel
-            state={externalOffersState}
+            state={remembered ? noExternalOffersState : externalOffersState}
             onAccept={(offerId) =>
               void externalOffersControllerRef.current?.accept(offerId)
             }
