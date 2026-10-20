@@ -23,11 +23,13 @@ public sealed class ManualRoutePolicyTests
     {
         Assert.True(RoutingCapacityAggregator.TryAggregate(
             [(1_000, 300, 200, 100), (2_000, 400, 250, 150)], out var capacity));
-        Assert.Equal(new DriverCapacityRequirement(2, 3_000, 2_000, 400, 250, 150), capacity);
+        Assert.Equal(
+            new DriverCapacityRequirement(2, 3_000, 2_000, [new(300, 200, 100), new(400, 250, 150)]),
+            capacity);
         Assert.False(RoutingCapacityAggregator.TryAggregate([], out _));
         Assert.True(RoutingCapacityAggregator.TryAggregate([(1_000, 300, null, 100)], out var partial));
         Assert.NotNull(partial);
-        Assert.Null(partial.MaximumWidthMillimeters);
+        Assert.Equal(new PackageSides[] { new(300, null, 100) }, partial.Packages);
     }
 
     [Fact]

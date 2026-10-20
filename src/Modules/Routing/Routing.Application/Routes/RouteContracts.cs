@@ -292,20 +292,18 @@ public static class RoutingCapacityAggregator
         {
             long total = 0;
             long maximumWeight = 0;
-            int? length = null;
-            int? width = null;
-            int? height = null;
+            var sides = new List<PackageSides>(packages.Count);
             foreach (var package in packages)
             {
                 if (package.WeightGrams <= 0 || package.Length is <= 0 ||
                     package.Width is <= 0 || package.Height is <= 0) return false;
                 total = checked(total + package.WeightGrams);
                 maximumWeight = Math.Max(maximumWeight, package.WeightGrams);
-                length = Max(length, package.Length);
-                width = Max(width, package.Width);
-                height = Max(height, package.Height);
+                // Each package keeps its own sides, unsorted: DriverEligibilityPolicy sorts them
+                // (DRV-ELIGIBILITY-SORTED-DIMENSIONS-2026-10-20).
+                sides.Add(new(package.Length, package.Width, package.Height));
             }
-            result = new(packages.Count, total, maximumWeight, length, width, height);
+            result = new(packages.Count, total, maximumWeight, sides);
             return true;
         }
         catch (OverflowException)
@@ -313,9 +311,6 @@ public static class RoutingCapacityAggregator
             return false;
         }
     }
-
-    private static int? Max(int? left, int? right) =>
-        right is null ? left : left is null ? right : Math.Max(left.Value, right.Value);
 }
 
 public enum RoutingTransactionStage

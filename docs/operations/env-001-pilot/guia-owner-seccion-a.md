@@ -108,7 +108,9 @@ y el nombre de cada valor que falta. El formato, para cada tipo de vehículo (`M
 - **Capacidad:** `Drivers__Eligibility__VehicleCapacity__<TIPO>__MaximumPackageCount`,
   `__MaximumTotalWeightGrams`, `__MaximumSinglePackageWeightGrams` (no mayor que el total),
   `__MaximumLengthMillimeters`, `__MaximumWidthMillimeters` y `__MaximumHeightMillimeters`: enteros mayores
-  que cero, solo dígitos.
+  que cero, solo dígitos. El orden de largo, ancho y alto no importa: antes de comparar, el sistema ordena de
+  mayor a menor los tres límites y las tres medidas de cada paquete, así que despacho puede capturarlas en
+  cualquier orden.
 - **Opcionales:** `Drivers__Eligibility__VehicleCapacity__<TIPO>__RequireDimensions` (`true` rechaza paquetes
   sin medidas; `false` si no lo pones) y `Drivers__Eligibility__NonExpiringDocumentTypes__<n>` (documentos que
   no vencen; los demás necesitan una fecha de vencimiento vigente).

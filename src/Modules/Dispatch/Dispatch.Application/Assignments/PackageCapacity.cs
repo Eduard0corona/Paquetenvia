@@ -24,9 +24,7 @@ public static class PackageCapacityAggregator
         {
             long totalWeight = 0;
             long maximumWeight = 0;
-            int? maximumLength = null;
-            int? maximumWidth = null;
-            int? maximumHeight = null;
+            var sides = new List<PackageSides>(packages.Count);
 
             foreach (var package in packages)
             {
@@ -40,18 +38,19 @@ public static class PackageCapacityAggregator
 
                 totalWeight = checked(totalWeight + package.WeightGrams);
                 maximumWeight = Math.Max(maximumWeight, package.WeightGrams);
-                maximumLength = Max(maximumLength, package.LengthMillimeters);
-                maximumWidth = Max(maximumWidth, package.WidthMillimeters);
-                maximumHeight = Max(maximumHeight, package.HeightMillimeters);
+                // Each package keeps its own sides, unsorted: DriverEligibilityPolicy sorts them
+                // (DRV-ELIGIBILITY-SORTED-DIMENSIONS-2026-10-20).
+                sides.Add(new PackageSides(
+                    package.LengthMillimeters,
+                    package.WidthMillimeters,
+                    package.HeightMillimeters));
             }
 
             requirement = new DriverCapacityRequirement(
                 packages.Count,
                 totalWeight,
                 maximumWeight,
-                maximumLength,
-                maximumWidth,
-                maximumHeight);
+                sides);
             return true;
         }
         catch (OverflowException)
@@ -59,7 +58,4 @@ public static class PackageCapacityAggregator
             return false;
         }
     }
-
-    private static int? Max(int? current, int? value) =>
-        value is null ? current : current is null ? value : Math.Max(current.Value, value.Value);
 }

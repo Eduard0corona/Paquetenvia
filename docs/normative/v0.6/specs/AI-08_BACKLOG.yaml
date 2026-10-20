@@ -326,8 +326,10 @@ items:
   - documento vencido bloquea
   - capacidad y estado se verifican
   - razón de rechazo estructurada
+  - 'DECIDED DRV-ELIGIBILITY-SORTED-DIMENSIONS-2026-10-20 (project owner, "Que el sistema las ordene"): before comparing, DriverEligibilityPolicy sorts the three sides of each package and the three limits of the vehicle type from largest to smallest; a package fits when each sorted side is at most the limit in the same place, the order fits when every package fits, a side not measured is not checked (the measured sides take the largest limits) unless RequireDimensions, which fails a blank side with the code of its field in every package; a side that does not fit reports the code of its sorted place (largest LENGTH, middle WIDTH, smallest HEIGHT); Dispatch, Orders and Routing pass the sides of each package'
   required_tests:
   - eligibility table tests
+  - sorted dimensions table tests - every order of the sides and of the limits gives the same verdict and code, ties, partial sides, RequireDimensions true and false, multi-package orders, and an order typed sideways through the picker, assignDriver, capacity_available and addRouteStop on PostgreSQL
   approval_gate: null
 - id: DSP-002
   epic: Dispatch

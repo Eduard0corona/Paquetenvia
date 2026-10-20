@@ -42,6 +42,14 @@ public sealed record DriverEligibilityPolicyConfiguration(
 
 public static class DriverEligibilityPolicy
 {
+    /// <summary>The code of each place of the sorted sides: largest, middle and smallest.</summary>
+    private static readonly string[] SideCodes =
+    [
+        DriverEligibilityRejectionCodes.PackageLengthExceeded,
+        DriverEligibilityRejectionCodes.PackageWidthExceeded,
+        DriverEligibilityRejectionCodes.PackageHeightExceeded,
+    ];
+
     public static DriverEligibilityResult Evaluate(
         EvaluateOwnDriverEligibilityCommand command,
         DriverEligibilitySnapshot? snapshot,
@@ -196,12 +204,7 @@ public static class DriverEligibilityPolicy
             DriverEligibilityRejectionCodes.TotalWeightExceeded);
         AddWhen(codes, requirement.MaximumSinglePackageWeightGrams > limits.MaximumSinglePackageWeightGrams,
             DriverEligibilityRejectionCodes.SinglePackageWeightExceeded);
-        EvaluateDimension(codes, requirement.MaximumLengthMillimeters, limits.MaximumLengthMillimeters,
-            limits.RequireDimensions, DriverEligibilityRejectionCodes.PackageLengthExceeded);
-        EvaluateDimension(codes, requirement.MaximumWidthMillimeters, limits.MaximumWidthMillimeters,
-            limits.RequireDimensions, DriverEligibilityRejectionCodes.PackageWidthExceeded);
-        EvaluateDimension(codes, requirement.MaximumHeightMillimeters, limits.MaximumHeightMillimeters,
-            limits.RequireDimensions, DriverEligibilityRejectionCodes.PackageHeightExceeded);
+        EvaluateSides(requirement.Packages, limits, codes);
     }
 
     private static bool IsValid(DriverCapacityRequirement value) =>
@@ -210,17 +213,72 @@ public static class DriverEligibilityPolicy
         value.TotalWeightGrams > 0 &&
         value.MaximumSinglePackageWeightGrams > 0 &&
         value.MaximumSinglePackageWeightGrams <= value.TotalWeightGrams &&
-        value.MaximumLengthMillimeters is null or > 0 &&
-        value.MaximumWidthMillimeters is null or > 0 &&
-        value.MaximumHeightMillimeters is null or > 0;
+        value.Packages.Count == value.PackageCount &&
+        value.Packages.All(sides =>
+            sides is not null &&
+            sides.LengthMillimeters is null or > 0 &&
+            sides.WidthMillimeters is null or > 0 &&
+            sides.HeightMillimeters is null or > 0);
 
-    private static void EvaluateDimension(
-        List<string> codes,
-        int? actual,
-        int limit,
-        bool required,
-        string code) =>
-        AddWhen(codes, (required && actual is null) || actual > limit, code);
+    /// <summary>
+    /// DRV-ELIGIBILITY-SORTED-DIMENSIONS-2026-10-20: a package fits when, with its measured sides and the vehicle's
+    /// three limits both sorted from largest to smallest, each side is at most the limit in the same place; the order
+    /// fits when every package fits. A side that was not measured is not checked, so one measured side is compared
+    /// with the largest limit and two with the two largest. A side that does not fit reports the code of its place:
+    /// the largest <c>PACKAGE_LENGTH_EXCEEDED</c>, the middle <c>PACKAGE_WIDTH_EXCEEDED</c> and the smallest
+    /// <c>PACKAGE_HEIGHT_EXCEEDED</c>. When the vehicle requires dimensions, a side left blank fails with the code of
+    /// its field (length, width or height). Codes keep their fixed order and appear once.
+    /// </summary>
+    private static void EvaluateSides(
+        IReadOnlyList<PackageSides> packages,
+        VehicleCapacityLimits limits,
+        List<string> codes)
+    {
+        var sortedLimits = SortedDescending(
+            limits.MaximumLengthMillimeters,
+            limits.MaximumWidthMillimeters,
+            limits.MaximumHeightMillimeters);
+        var failed = new bool[SideCodes.Length];
+        foreach (var package in packages)
+        {
+            if (limits.RequireDimensions)
+            {
+                failed[0] |= package.LengthMillimeters is null;
+                failed[1] |= package.WidthMillimeters is null;
+                failed[2] |= package.HeightMillimeters is null;
+            }
+
+            var sortedSides = SortedDescending(
+                package.LengthMillimeters,
+                package.WidthMillimeters,
+                package.HeightMillimeters);
+            for (var place = 0; place < sortedSides.Length; place++)
+            {
+                failed[place] |= sortedSides[place] > sortedLimits[place];
+            }
+        }
+
+        for (var place = 0; place < SideCodes.Length; place++)
+        {
+            AddWhen(codes, failed[place], SideCodes[place]);
+        }
+    }
+
+    /// <summary>The measured values, largest first; the one sort the policy applies to packages and limits.</summary>
+    private static int[] SortedDescending(int? first, int? second, int? third)
+    {
+        var measured = new List<int>(3);
+        foreach (var value in new[] { first, second, third })
+        {
+            if (value is { } side)
+            {
+                measured.Add(side);
+            }
+        }
+
+        measured.Sort((left, right) => right.CompareTo(left));
+        return [.. measured];
+    }
 
     private static DriverEligibilityResult Result(
         Guid? driverId,

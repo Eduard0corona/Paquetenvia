@@ -23,12 +23,12 @@ public sealed class OrderPackageDimensionsReaderTests : PackageDimensionsReaderC
     {
         var requirement = OrderTransitionEligibility.Aggregate([(500, NoMeasurements)]);
 
-        Assert.Equal(new DriverCapacityRequirement(1, 500, 500, null, null, null), requirement);
+        Assert.Equal(new DriverCapacityRequirement(1, 500, 500, [new PackageSides(null, null, null)]), requirement);
         Assert.NotEqual(OrderTransitionEligibility.InvalidRequirement, requirement);
     }
 
     [Fact]
-    public void Null_and_present_measurements_aggregate_to_the_maximum_present()
+    public void Null_and_present_measurements_stay_with_their_package()
     {
         var requirement = OrderTransitionEligibility.Aggregate(
         [
@@ -36,7 +36,28 @@ public sealed class OrderPackageDimensionsReaderTests : PackageDimensionsReaderC
             (700, """{"length_mm":120,"width_mm":null,"height_mm":60}"""),
         ]);
 
-        Assert.Equal(new DriverCapacityRequirement(2, 1_200, 700, 120, null, 60), requirement);
+        Assert.Equal(
+            new DriverCapacityRequirement(
+                2,
+                1_200,
+                700,
+                [new PackageSides(null, null, null), new PackageSides(120, null, 60)]),
+            requirement);
+    }
+
+    [Fact]
+    public void A_package_typed_with_its_sides_in_another_order_attests_capacity()
+    {
+        // DRV-ELIGIBILITY-SORTED-DIMENSIONS-2026-10-20: 300 x 400 x 500 fits the 500 x 400 x 300 limits turned.
+        var requirement = OrderTransitionEligibility.Aggregate(
+            [(500, """{"length_mm":300,"width_mm":400,"height_mm":500}""")]);
+
+        Assert.Equal((true, true), Evaluate(requirement, requireDimensions: true));
+        Assert.Equal(
+            (true, false),
+            Evaluate(
+                OrderTransitionEligibility.Aggregate([(500, """{"length_mm":300,"width_mm":400,"height_mm":501}""")]),
+                requireDimensions: true));
     }
 
     [Fact]
