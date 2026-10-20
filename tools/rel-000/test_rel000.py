@@ -5949,7 +5949,6 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
             {
                 rel000.WEB_TRANSITIVE_REMEDIATION_ID,
                 rel000.BRACES_KNOWN_ADVISORY_ID,
-                rel000.OPENAPI_YAMLREADER_REMEDIATION_ID,
             },
             {item["id"] for item in policy["active_remediations"]},
         )
@@ -5957,6 +5956,9 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
         self.assertEqual("MERGED", historical[rel000.SHARP_REMEDIATION_ID]["status"])
         self.assertEqual(
             "MERGED", historical[rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID]["status"]
+        )
+        self.assertEqual(
+            "MERGED", historical[rel000.OPENAPI_YAMLREADER_REMEDIATION_ID]["status"]
         )
         self.assertEqual("MERGED", historical[rel000.NEXT_CRITICAL_REMEDIATION_ID]["status"])
         self.assertEqual("MERGED", historical[rel000.NEXT_OG_CRITICAL_REMEDIATION_ID]["status"])
@@ -6240,6 +6242,9 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
         self.assertNotIn(
             rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID, fixture["remediation_issues"]
         )
+        self.assertNotIn(
+            rel000.OPENAPI_YAMLREADER_REMEDIATION_ID, fixture["remediation_issues"]
+        )
         self.assertIn("fix/security-2026-08-web-transitives", workflow)
         self.assertIn("SEC-2026-08-SECURITY-BASELINE", workflow)
         self.assertNotIn("github.head_ref == 'fix/security-sharp-035-override'", workflow)
@@ -6262,6 +6267,10 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
                     "github.head_ref == 'fix/security-2026-12-signalr-common'", retired
                 )
                 self.assertNotIn("SEC-2026-12-SIGNALR-CRYPTOGRAPHY", retired)
+                self.assertNotIn(
+                    "github.head_ref == 'fix/security-2026-13-openapi-yamlreader'", retired
+                )
+                self.assertNotIn("SEC-2026-13-OPENAPI-YAMLREADER", retired)
 
 
 class NextCriticalRemediationPolicyTests(unittest.TestCase):
@@ -9093,11 +9102,12 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
 
         policy = rel000.load_remediation_policy(self.repository_policy_path)
         graphs = rel000.security_remediation_nuget_graphs(policy)
-        # SEC-2026-13 is active and declares its own graph, which the checkout also carries.
+        # SEC-2026-13 is retired too and declares its own graph, which the checkout also
+        # carries.
         self.assertEqual(
             [
                 (rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID, "MERGED"),
-                (rel000.OPENAPI_YAMLREADER_REMEDIATION_ID, None),
+                (rel000.OPENAPI_YAMLREADER_REMEDIATION_ID, "MERGED"),
             ],
             [(item["id"], item.get("status")) for item in graphs],
         )
@@ -9363,7 +9373,14 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
                 for item in value["active_remediations"]
                 if item["id"] != rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID
             ]
-            value["historical_remediations"].append(retired)
+            # Back in its own historical slot, just before the retired SEC-2026-13.
+            historical = value["historical_remediations"]
+            historical.insert(
+                [item["id"] for item in historical].index(
+                    rel000.OPENAPI_YAMLREADER_REMEDIATION_ID
+                ),
+                retired,
+            )
             path = self.root / "retired.json"
             path.write_text(json.dumps(value), encoding="utf-8")
             return path
@@ -9626,8 +9643,9 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
         authorization = self.authorization()
         moves = authorization["expected_nuget_package_moves"]
         graphs = rel000.security_remediation_nuget_graphs(policy)
-        # The replay appends SEC-2026-12 after the active SEC-2026-13, whose graph the
-        # checkout also carries.
+        # The replay puts SEC-2026-12 back among the active authorizations, which come after
+        # the historical ones, the retired SEC-2026-13 included; the checkout carries both
+        # graphs.
         self.assertEqual(
             [rel000.OPENAPI_YAMLREADER_REMEDIATION_ID, rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID],
             [item["id"] for item in graphs],
@@ -9910,8 +9928,29 @@ class OpenApiYamlReaderRemediationPolicyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="rel000-openapi-yamlreader-tests-")
         self.root = Path(self.temp.name)
-        self.policy_path = REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH
-        self.policy_value = json.loads(self.policy_path.read_text(encoding="utf-8"))
+        self.repository_policy_path = REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH
+        current_policy = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+        # PR #282 merged, so the authorization is historical; the regression suite replays it
+        # as the active authorization it was while the remediation branch was open.
+        openapi_yamlreader = copy.deepcopy(
+            next(
+                item
+                for item in current_policy["historical_remediations"]
+                if item["id"] == rel000.OPENAPI_YAMLREADER_REMEDIATION_ID
+            )
+        )
+        for field in ("status", "validated_target_sha", "tracked_pull_request"):
+            openapi_yamlreader.pop(field, None)
+        self.policy_value = copy.deepcopy(current_policy)
+        self.policy_value["historical_remediations"] = [
+            item
+            for item in self.policy_value["historical_remediations"]
+            if item["id"] != rel000.OPENAPI_YAMLREADER_REMEDIATION_ID
+        ]
+        # Its original slot was the last active authorization.
+        self.policy_value["active_remediations"].append(openapi_yamlreader)
+        self.policy_path = self.root / "active-policy.json"
+        self.policy_path.write_text(json.dumps(self.policy_value), encoding="utf-8")
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -9940,11 +9979,25 @@ class OpenApiYamlReaderRemediationPolicyTests(unittest.TestCase):
             cwd=REPOSITORY_ROOT,
         )
 
+    def retired(self) -> dict[str, Any]:
+        policy = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+        return next(
+            item
+            for item in policy["historical_remediations"]
+            if item["id"] == rel000.OPENAPI_YAMLREADER_REMEDIATION_ID
+        )
+
     def target_file(self, relative: str) -> bytes:
-        # The remediation is active, so its graph is the checkout's (as SEC-2026-12 did while
-        # PR #261 was open). Once a later change moves the graph, pin validated_target_sha
-        # and replay that commit instead.
-        return (REPOSITORY_ROOT / relative).read_bytes()
+        """The file exactly as PR #282 validated it (validated_target_sha), not the checkout.
+
+        Later changes may move the checkout past this graph, so the regression suite replays
+        the exact target that Foundation CI passed 13/13 on.
+        """
+
+        return subprocess.check_output(
+            ["git", "show", f"{self.retired()['validated_target_sha']}:{relative}"],
+            cwd=REPOSITORY_ROOT,
+        )
 
     def dependency_repo(self):
         """A repository at the authorized base files, then the remediation's files on top.
@@ -10137,6 +10190,161 @@ class OpenApiYamlReaderRemediationPolicyTests(unittest.TestCase):
             authorization or self.authorization(),
             accepted,
         )
+
+    def test_merged_authorization_is_historical_and_not_active(self):
+        policy = rel000.load_remediation_policy(self.repository_policy_path)
+        retired = {item["id"]: item for item in policy["historical_remediations"]}[
+            rel000.OPENAPI_YAMLREADER_REMEDIATION_ID
+        ]
+        self.assertEqual("MERGED", retired["status"])
+        self.assertEqual(282, retired["tracked_pull_request"])
+        # The head Foundation CI passed 13/13 on, as #263 pinned PR #261's head; its tree is
+        # the one main got from merge commit b949dd8.
+        self.assertEqual(
+            "39252f466e7e7f352faa0c12c03ba74a3d541400", retired["validated_target_sha"]
+        )
+        self.assertEqual(
+            *(
+                subprocess.check_output(
+                    ["git", "rev-parse", f"{commit}^{{tree}}"], cwd=REPOSITORY_ROOT, text=True
+                ).strip()
+                for commit in (retired["validated_target_sha"], "b949dd8")
+            )
+        )
+        # The policy still loads, so the exact graph stays declared on the historical entry.
+        self.assertEqual(
+            rel000.OPENAPI_YAMLREADER_NUGET_PACKAGE_MOVES,
+            retired["expected_nuget_package_moves"],
+        )
+        self.assertNotIn(
+            rel000.OPENAPI_YAMLREADER_REMEDIATION_ID,
+            {item["id"] for item in policy["active_remediations"]},
+        )
+        self.assert_reason(
+            "REMEDIATION_ID_NOT_ACTIVE",
+            lambda: rel000.resolve_rel000_mode(
+                policy,
+                "fix/security-2026-13-openapi-yamlreader",
+                rel000.OPENAPI_YAMLREADER_REMEDIATION_ID,
+            ),
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(policy, "fix/security-2026-13-openapi-yamlreader"),
+        )
+
+    def test_permanent_graph_reads_the_retired_authorization(self):
+        """test_k keeps accepting exactly the 2 moves once the entry is historical."""
+
+        policy = rel000.load_remediation_policy(self.repository_policy_path)
+        graphs = rel000.security_remediation_nuget_graphs(policy)
+        # Both NuGet remediations are retired, in the order they merged.
+        self.assertEqual(
+            [
+                (rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID, "MERGED"),
+                (rel000.OPENAPI_YAMLREADER_REMEDIATION_ID, "MERGED"),
+            ],
+            [(item["id"], item["status"]) for item in graphs],
+        )
+        self.assertEqual(
+            rel000.OPENAPI_YAMLREADER_NUGET_PACKAGE_MOVES,
+            graphs[1]["expected_nuget_package_moves"],
+        )
+        admissions = policy["dependency_admissions"]
+        changed = sorted(
+            {
+                path
+                for output in (
+                    rel000.run_git(REPOSITORY_ROOT, "diff", "--name-only", self.MVP0_BASELINE),
+                    rel000.run_git(REPOSITORY_ROOT, "ls-files", "--others", "--exclude-standard"),
+                )
+                for path in output.splitlines()
+                if path.strip()
+            }
+        )
+        lockfiles = sorted(path for path in changed if Path(path).name == "packages.lock.json")
+        self.assertTrue(set(rel000.OPENAPI_YAMLREADER_LOCK_FILES) <= set(lockfiles))
+        # With the retired graph the checkout passes the permanent check; without it (alone
+        # or next to SEC-2026-12's), it fails.
+        self.assertEqual(
+            lockfiles,
+            rel000.package_graph_lockfile_diff(
+                REPOSITORY_ROOT, self.MVP0_BASELINE, changed, admissions, graphs
+            )[0],
+        )
+        self.assertTrue(
+            rel000.validate_admitted_central_packages(
+                REPOSITORY_ROOT, self.MVP0_BASELINE, admissions, graphs
+            )["changed"]
+        )
+        for name, subset in (("none", None), ("SEC-2026-12 only", graphs[:1])):
+            with self.subTest(graphs=name):
+                self.assert_reason(
+                    "BASELINE_CENTRAL_PACKAGES_CHANGED",
+                    lambda: rel000.validate_admitted_central_packages(
+                        REPOSITORY_ROOT, self.MVP0_BASELINE, admissions, subset
+                    ),
+                )
+                self.assert_reason(
+                    "BASELINE_CENTRAL_PACKAGES_CHANGED",
+                    lambda: rel000.package_graph_lockfile_diff(
+                        REPOSITORY_ROOT, self.MVP0_BASELINE, changed, admissions, subset
+                    ),
+                )
+        # Retired with any other move, the policy no longer loads (see the exclusivity test).
+        value = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+        for item in value["historical_remediations"]:
+            if item["id"] == rel000.OPENAPI_YAMLREADER_REMEDIATION_ID:
+                item["expected_nuget_package_moves"]["Microsoft.OpenApi.YamlReader"][
+                    "lock_files"
+                ].append(self.INTEGRATION_LOCK)
+        path = self.root / "tampered-retired.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        self.assert_reason(
+            "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+        )
+
+    def test_release_evidence_never_undoes_the_remediation_graph(self):
+        """Normal mode judges the moves as plain drift: only test_k passes the graph."""
+
+        root, base, _ = self.dependency_repo()
+        admissions = rel000.load_remediation_policy(self.repository_policy_path)[
+            "dependency_admissions"
+        ]
+        calls: list[Any] = []
+        original_lock = rel000._nuget_remediations_reverted_lock
+        original_props = rel000._nuget_remediations_reverted_props
+
+        def record_lock(relative, lock, remediations):
+            calls.append(remediations)
+            return original_lock(relative, lock, remediations)
+
+        def record_props(text, remediations):
+            calls.append(remediations)
+            return original_props(text, remediations)
+
+        # Against a base without the remediation (13765fb), normal mode finds the two central
+        # versions moved from the MVP-0 freeze and fails closed; it never undoes the graph.
+        with patch.object(rel000, "_nuget_remediations_reverted_lock", record_lock), patch.object(
+            rel000, "_nuget_remediations_reverted_props", record_props
+        ):
+            failure = self.assert_reason(
+                "BASELINE_CENTRAL_PACKAGES_CHANGED",
+                lambda: rel000.validate_dependency_diff(
+                    root,
+                    base,
+                    rel000.NORMAL_RELEASE_EVIDENCE,
+                    None,
+                    admissions,
+                    "feature/other",
+                    "2026-10-20",
+                ),
+            )
+        self.assertEqual(
+            ["Microsoft.OpenApi", "Microsoft.OpenApi.YamlReader"], failure.details["packages"]
+        )
+        self.assertTrue(calls)
+        self.assertFalse([value for value in calls if value])
 
     def test_policy_loads_and_mode_requires_exact_branch_id_and_base(self):
         policy = self.policy()
@@ -10935,17 +11143,16 @@ class OpenApiYamlReaderRemediationPolicyTests(unittest.TestCase):
         )
 
     def test_fixture_and_both_workflows_bind_issue_branch_and_remediation(self):
-        fixture = json.loads(
-            (REPOSITORY_ROOT / "tests/fixtures/rel-000/security-tracking.json").read_text(
-                encoding="utf-8"
-            )
-        )
+        # The retirement removed this binding from the checkout (see the web-transitive
+        # binding test); the tree PR #282 validated (validated_target_sha) carried it in the
+        # fixture and in both workflows.
+        fixture = json.loads(self.target_file("tests/fixtures/rel-000/security-tracking.json"))
         self.assertEqual(
             280, fixture["remediation_issues"][rel000.OPENAPI_YAMLREADER_REMEDIATION_ID]
         )
         self.assertEqual({rel000.BRACES_KNOWN_ADVISORY_ID: 180}, fixture["known_advisory_issues"])
         for name in ("ci.yml", "pr-validation.yml"):
-            workflow = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            workflow = self.target_file(f".github/workflows/{name}").decode("utf-8")
             with self.subTest(workflow=name):
                 self.assertIn(
                     "github.head_ref == 'fix/security-2026-13-openapi-yamlreader' "
