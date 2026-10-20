@@ -619,9 +619,10 @@ base `13765fb`) remedia `GHSA-7pxr-59rr-hqj2` (CVE-2026-72923, alta): denegació
 expansión de alias YAML en `Microsoft.OpenApi.YamlReader` `>=2.0.0-preview.11 <2.12.0`. Sólo
 ContractTests usa ese paquete, para leer el AI-05 del propio repositorio. `Microsoft.OpenApi`
 (núcleo) no tiene aviso, pero YamlReader 2.12.0 exige `Microsoft.OpenApi` 2.12.0. El owner
-decidió "Remediar con la tabla" (2026-10-19), por la misma ruta que SEC-2026-12. La fila del
-decision-log y su entrada del CHANGELOG entran con el PR de retiro hacia `development`. El cambio
-es exactamente la tabla del owner:
+decidió "Remediar con la tabla" (2026-10-19), por la misma ruta que SEC-2026-12. La fila
+`SEC-2026-13-NUGET-REMEDIATION-2026-10-19` del decision-log y su entrada del CHANGELOG entraron con el
+PR de retiro hacia `development`, como en SEC-2026-12. Así el PR de remediación a `main` no tocó
+`docs/normative/**` y el back-sync no tuvo conflictos. El cambio es exactamente la tabla del owner:
 
 - `Microsoft.OpenApi` pasa de 2.7.5 a 2.12.0 en los locks de la API y de ContractTests (`Direct`) y en
   los de ArchitectureTests e IntegrationTests (`CentralTransitive`), sin cambiar de tipo;
@@ -652,6 +653,27 @@ permanente (`test_k`) deshace ambos; sin el de SEC-2026-13 el checkout falla con
 
 El documento OpenAPI que genera la API (`/openapi/v1.json`, sólo en `Development`) es idéntico byte
 a byte con 2.7.5 y con 2.12.0.
+
+Historia de la remediación:
+
+- **Fusión.** Entró a `main` con #282 (merge `b949dd8`). La corrida de Foundation por `push` en `main`
+  sobre `b949dd8` pasó 13/13.
+- **Back-sync.** Llegó a `development` con #286 (merge `be6e84c`). Su PR Validation pasó en el primer
+  intento, con el plan certificado por esa corrida de Foundation; REL-000 no era requerido.
+- **Retiro.** La autorización quedó en `historical_remediations` con:
+  - `status` `MERGED`;
+  - `tracked_pull_request` 282;
+  - `validated_target_sha` `39252f4`, la cabeza que Foundation CI validó 13/13 (como en SEC-2026-12); su
+    árbol es idéntico al de `b949dd8`.
+
+  Las pruebas de SEC-2026-13 reproducen ese commit. El grafo permanente sigue leyendo la entrada retirada,
+  después de la de SEC-2026-12.
+- **Después del retiro.** Un PR hacia `development` en modo normal se juzga contra una base que ya tiene
+  esos nodos:
+  - los locks que no cambia no se juzgan;
+  - un cambio legítimo de uno de los cuatro locks (sólo nodos `Project`, o un paquete admitido) pasa;
+  - volver a mover `Microsoft.OpenApi` o `Microsoft.OpenApi.YamlReader` (por ejemplo, de regreso a 2.7.5 o
+    a 2.12.2), o mover `SharpYaml`, falla cerrado.
 
 ## Rollback REL-000
 

@@ -29,6 +29,38 @@
   foto que no se puede decodificar no deja nada). Notas: `docs/development/drv-002-offline-events-pod.md`; borradores
   legales actualizados. Sin cambios de API, SQL, migraciones, roles, esquema de IndexedDB, Service Worker ni paquetes.
 
+## Remediación de seguridad NuGet: Microsoft.OpenApi y Microsoft.OpenApi.YamlReader a 2.12.0 (SEC-2026-13-NUGET-REMEDIATION-2026-10-19) — 2026-10-19
+
+- Respuesta literal del project owner (2026-10-19), registrada en `decision-log.md` con su contexto y las opciones no
+  elegidas ("Subir a 2.12.2" y "Registrar y esperar"): "Remediar con la tabla (Recommended)".
+- Un aviso del 2026-10-14, corregido en 2.12.0: `GHSA-7pxr-59rr-hqj2` (CVE-2026-72923, alta), denegación de servicio
+  por expansión de alias YAML en `Microsoft.OpenApi.YamlReader` `>=2.0.0-preview.11 <2.12.0`. Sólo ContractTests usa
+  ese paquete. El tracking es el Issue #280 y la ruta es la de SEC-2026-12 (PR de remediación a `main`, back-sync a
+  `development` y retiro).
+- `Directory.Packages.props`: `Microsoft.OpenApi` y `Microsoft.OpenApi.YamlReader` pasan de 2.7.5 a 2.12.0, en su
+  lugar. No se agrega ningún `PackageVersion` y el fijado transitivo sigue como lo dejó SEC-2026-12.
+- Los locks se regeneran con `dotnet restore --force-evaluate` y se mueve exactamente la tabla del owner:
+  - `Microsoft.OpenApi` en los locks de la API y de ContractTests (`Direct`) y en los de ArchitectureTests e
+    IntegrationTests (`CentralTransitive`), sin cambiar de tipo; en esos dos últimos, el nodo `Project`
+    `paqueteria.api` pide `[2.12.0, )` en vez de `[2.7.5, )`;
+  - `Microsoft.OpenApi.YamlReader` sólo en el lock de ContractTests, con su arista a `Microsoft.OpenApi`.
+
+  `SharpYaml` sigue en 2.1.4, byte a byte. Ningún otro lock cambia, tampoco el del Worker. El documento OpenAPI que
+  genera la API es idéntico byte a byte y las pruebas de la línea base de AI-05 pasan sin cambios.
+- REL-000 agrega:
+  - la autorización `SEC-2026-13-OPENAPI-YAMLREADER`;
+  - el validador de grafo exacto de SEC-2026-12, ahora compartido (`validate_nuget_security_remediation_diff`):
+    ediciones del manifiesto en su lugar, los 2 movimientos con versiones y hashes exactos, y el SHA-256 de cada lock;
+  - dos extensiones exactas de ese validador, simétricas al deshacer: un nodo que ya es `CentralTransitive` con
+    `requested` igual a `[from, )` se mueve a `[to, )` y conserva su tipo, y la petición de un nodo `Project` por un
+    paquete movido sigue al movimiento sólo si es exactamente `[from, )`.
+- El grafo permanente MVP-0 (`test_k`) también acepta exactamente esos movimientos (`nuget_remediations`). La evidencia
+  de liberación no lo usa, así que el modo normal y el código de admisión de dependencias no cambian. Nota:
+  `docs/development/rel-000-internal-release.md`.
+- Sin cambios en código de producción, migraciones, AI-04, AI-05, AI-06, AI-18, roles ni permisos.
+- Fusionada en `main` por #282 (b949dd8), sincronizada a `development` por #286 (be6e84c) y retirada a
+  `historical_remediations` por este PR.
+
 ## Repartidor: sesión vencida y recarga sin señal (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19) — 2026-10-19
 
 - Respuestas literales del project owner (2026-10-19), registradas en `decision-log.md` con su contexto y las opciones
