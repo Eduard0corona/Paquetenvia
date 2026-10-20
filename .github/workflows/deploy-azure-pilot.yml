@@ -593,6 +593,67 @@ jobs:
             --parameters "@deploy/azure/pilot/observability.parameters.json" "postgresServerName=${POSTGRES_NAME}" \
             --only-show-errors --output none
 
+      # ENV-001 F-06: a successful stage 4 does not mean the new code serves. In single revision mode Container Apps
+      # keeps the previous revision serving until the new one is ready, and keeps it serving if the new one never
+      # becomes ready, so the smoke test below would pass on old code. Each app must reach a latest revision that is
+      # ready, runs the digest this run pushed, is active and Healthy. Up to 40 polls 15 s apart (about 10 minutes) for
+      # the three apps together; health is polled too, because a revision the start step above re-activated (README
+      # §6.4 step 5) is ready again before its replicas pass their probes. Nothing secret is read or printed.
+      - name: Check that the new API, Worker and Web revisions serve this run's images
+        id: revisions
+        shell: bash
+        env:
+          API_IMAGE: ${{ steps.images.outputs.api }}
+          WORKER_IMAGE: ${{ steps.images.outputs.worker }}
+          WEB_IMAGE: ${{ steps.images.outputs.web }}
+        run: |
+          set -euo pipefail
+          polls_left=40
+          # fail APP MESSAGE: one annotation with the revision and where to read why it did not start.
+          fail() {
+            echo "::error::$1: $2 Read its system log: az containerapp logs show --name $1 --resource-group ${PILOT_RESOURCE_GROUP} --type system (README §6.7)."
+          }
+          # check_revision OUTPUT APP IMAGE
+          check_revision() {
+            local output="$1" app="$2" image="$3" state latest ready revision images active health status
+            [[ "${image##*@}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::${app}: this run pushed no digest-pinned image"; return 1; }
+            while true; do
+              state="$(az containerapp show --name "${app}" --resource-group "${PILOT_RESOURCE_GROUP}" \
+                --query "{latest: properties.latestRevisionName, ready: properties.latestReadyRevisionName}" -o json)"
+              latest="$(jq -r '.latest // ""' <<<"${state}")"
+              ready="$(jq -r '.ready // ""' <<<"${state}")"
+              if [[ -n "${latest}" && "${latest}" == "${ready}" ]]; then
+                revision="$(az containerapp revision show --name "${app}" --resource-group "${PILOT_RESOURCE_GROUP}" --revision "${ready}" \
+                  --query "{active: properties.active, health: properties.healthState, images: properties.template.containers[].image}" -o json)"
+                images="$(jq -r '(.images // []) | join(" ")' <<<"${revision}")"
+                if [[ "${images}" != "${image}" ]]; then
+                  fail "${app}" "revision ${ready} runs '${images}', not the image this run pushed (${image})."
+                  return 1
+                fi
+                active="$(jq -r '.active // false' <<<"${revision}")"
+                health="$(jq -r '.health // ""' <<<"${revision}")"
+                if [[ "${active}" == "true" && "${health}" == "Healthy" ]]; then
+                  echo "${app}: revision ${ready} is ready, active and Healthy, and runs ${image}"
+                  echo "${output}=${ready}" >> "${GITHUB_OUTPUT}"
+                  return 0
+                fi
+                status="revision ${ready} is ready but active=${active}, healthState=${health:-none}"
+              else
+                status="latest revision ${latest:-none} is not ready (latest ready revision: ${ready:-none})"
+              fi
+              if (( polls_left == 0 )); then
+                fail "${app}" "${status} after about 10 minutes; the previous revision, if any, is still serving."
+                return 1
+              fi
+              polls_left=$((polls_left - 1))
+              echo "${app}: ${status}; polling again in 15 s"
+              sleep 15
+            done
+          }
+          check_revision api_revision ca-pv-pilot-api "${API_IMAGE}"
+          check_revision worker_revision ca-pv-pilot-worker "${WORKER_IMAGE}"
+          check_revision web_revision ca-pv-pilot-web "${WEB_IMAGE}"
+
       - name: Smoke test same-origin routing
         shell: bash
         env:
@@ -622,6 +683,13 @@ jobs:
           VERIFICATION_ID: ${{ steps.platform.outputs.customDomainVerificationId }}
           ROUTE_FQDN: ${{ steps.apps.outputs.routeFqdn }}
           POSTGRES_NAME: ${{ steps.platform.outputs.postgresName }}
+          API_IMAGE: ${{ steps.images.outputs.api }}
+          WORKER_IMAGE: ${{ steps.images.outputs.worker }}
+          DBOPS_IMAGE: ${{ steps.images.outputs.dbops }}
+          WEB_IMAGE: ${{ steps.images.outputs.web }}
+          API_REVISION: ${{ steps.revisions.outputs.api_revision }}
+          WORKER_REVISION: ${{ steps.revisions.outputs.worker_revision }}
+          WEB_REVISION: ${{ steps.revisions.outputs.web_revision }}
         run: |
           {
             echo "## ENV-001 pilot deployment"
@@ -629,6 +697,16 @@ jobs:
             echo "- PostgreSQL server: \`${POSTGRES_NAME:-not deployed}\`"
             echo "- route FQDN: \`${ROUTE_FQDN:-not deployed}\`"
             echo "- custom domain phase: \`${CUSTOM_DOMAIN_PHASE}\`"
+            echo ""
+            # ENV-001 F-05/F-06: the digests this run pushed, and the revision of each app that is ready, active,
+            # Healthy and runs its digest (empty when the check did not pass).
+            echo "### Images pushed by this run"
+            echo "| Image | Pushed by digest | Serving revision |"
+            echo "|---|---|---|"
+            echo "| API | \`${API_IMAGE:-not pushed}\` | \`${API_REVISION:-not verified}\` |"
+            echo "| Worker | \`${WORKER_IMAGE:-not pushed}\` | \`${WORKER_REVISION:-not verified}\` |"
+            echo "| Web | \`${WEB_IMAGE:-not pushed}\` | \`${WEB_REVISION:-not verified}\` |"
+            echo "| DB ops (migrate, logins and verify jobs) | \`${DBOPS_IMAGE:-not pushed}\` | job image, no revision |"
             echo ""
             echo "### DNS records for ${PILOT_HOST} (create at the DNS host, then re-run with custom_domain_phase=bind)"
             echo "| Type | Host | Value |"

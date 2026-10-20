@@ -119,8 +119,8 @@ y el nombre de cada valor que falta. El formato, para cada tipo de vehículo (`M
 
 No hay valores por defecto: son reglas de negocio tuyas y el repo no las inventa. Van por PR → `development`
 → `main` como cualquier cambio del archivo (README §4, "Driver eligibility rules"). Sin este alto, un deploy
-fallaría solo en el smoke test (`/auth/session is not served by the API`) o dejaría sirviendo la revisión
-anterior.
+fallaría solo después de Stage 4, en la comprobación de revisiones (la revisión nueva de la API nunca queda lista,
+README §6.1 paso 5), con la revisión anterior, si la hay, todavía sirviendo.
 
 > **Versiones de términos y aviso de privacidad (bloquea el deploy):** `PAQUETERIA_TERMS_VERSION` y
 > `PAQUETERIA_PRIVACY_VERSION` del contenedor web ya están cableados en `apps.bicep`. Sus valores van en
@@ -705,9 +705,10 @@ Del *Summary* del run copia la IP estática y el `asuid` (paso 4).
 ### 7.4 Run 2 (`none`) y Run 3 (`bind`)
 
 - **Run 2:** mismos inputs, `custom_domain_phase=none`. Debe terminar en verde: imágenes por digest,
-  jobs `job-pv-pilot-migrate`, `-logins` y `-verify`, apps, Stage 5 (alertas OBS-002) y el smoke test
-  sobre el FQDN de la ruta (`/` → 200, `/auth/session` → JSON, `/auth/backchannel-logout` →
-  `invalid_request`).
+  jobs `job-pv-pilot-migrate`, `-logins` y `-verify`, apps, Stage 5 (alertas OBS-002), la comprobación de que la
+  revisión nueva de la API, el Worker y la Web está lista, activa, `Healthy` y corre el digest de este run, y el smoke
+  test sobre el FQDN de la ruta (`/` → 200, `/auth/session` → JSON, `/auth/backchannel-logout` →
+  `invalid_request`). El *Summary* del run lista los cuatro digests que subió y la revisión que sirve cada app.
 - **Run 3:** cuando el DNS ya resuelva, mismos inputs con `custom_domain_phase=bind`. Desde aquí, **usa
   siempre `bind`**: con `none` se desvincula el apex (README §6.2).
 

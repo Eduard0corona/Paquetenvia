@@ -8,7 +8,7 @@ guards; they check the pilot's own owner decisions against the compiled ARM outp
 (`bicep build`) and the workflow. They never contact Azure.
 
 Commands:
-  check            evaluate every pilot guard (P00..P25)
+  check            evaluate every pilot guard (P00..P26)
   settings-check   validate deploy/azure/pilot/apps.settings.json (fails while an owner value is missing)
   observability-check  validate deploy/azure/pilot/observability.parameters.json (OBS-002 alert e-mail)
   web-check        validate deploy/azure/pilot/web.parameters.json (UI-001 accepted terms/privacy versions)
@@ -1648,6 +1648,79 @@ def guard_25_postgres_server_setting(ctx: Context) -> GuardResult:
                    "one parameter with the first server as default; outputs, alerts, credentials, jobs and drills follow it")
 
 
+# ---------------------------------------------------------------------------------------------- ENV-001 F-06 (P26)
+REVISION_IMAGE_ENV = {
+    "API_IMAGE": "${{ steps.images.outputs.api }}",
+    "WORKER_IMAGE": "${{ steps.images.outputs.worker }}",
+    "WEB_IMAGE": "${{ steps.images.outputs.web }}",
+}
+REVISION_CHECK_CALLS = (
+    f'check_revision api_revision {API_APP} "${{API_IMAGE}}"',
+    f'check_revision worker_revision {WORKER_APP} "${{WORKER_IMAGE}}"',
+    f'check_revision web_revision {WEB_APP} "${{WEB_IMAGE}}"',
+)
+# What the check reads and asserts; a bounded poll, and the system-log hint on every failure.
+REVISION_CHECK_FRAGMENTS = (
+    "{latest: properties.latestRevisionName, ready: properties.latestReadyRevisionName}",
+    "{active: properties.active, health: properties.healthState, images: properties.template.containers[].image}",
+    '[[ -n "${latest}" && "${latest}" == "${ready}" ]]',
+    '[[ "${images}" != "${image}" ]]',
+    '[[ "${active}" == "true" && "${health}" == "Healthy" ]]',
+    "polls_left=40\n",
+    "(( polls_left == 0 ))",
+    "sleep 15",
+    "az containerapp logs show --name $1 --resource-group ${PILOT_RESOURCE_GROUP} --type system",
+    '"${image##*@}" =~ ^sha256:[0-9a-f]{64}$',
+)
+SUMMARY_ENV = {
+    **REVISION_IMAGE_ENV,
+    "DBOPS_IMAGE": "${{ steps.images.outputs.dbops }}",
+    "API_REVISION": "${{ steps.revisions.outputs.api_revision }}",
+    "WORKER_REVISION": "${{ steps.revisions.outputs.worker_revision }}",
+    "WEB_REVISION": "${{ steps.revisions.outputs.web_revision }}",
+}
+
+
+def guard_26_revision_check(ctx: Context) -> GuardResult:
+    """ENV-001 F-06: in single revision mode Container Apps keeps the previous revision serving while a new one never
+    becomes ready, so a green stage 4 and smoke test can hide old code. After stage 4 and before the smoke test, one
+    unconditional step (id revisions) must check, for the API, the Worker and the Web, that the latest revision is ready,
+    runs the digest this run pushed, and is active and Healthy, with a bounded poll and the system-log hint on failure.
+    The always-run summary lists the four pushed digests (F-05) and the serving revisions."""
+    failures: list[str] = []
+    deploy = (ctx.workflow.get("jobs", {}) or {}).get("deploy", {}) or {}
+    steps = [s for s in deploy.get("steps", []) or [] if isinstance(s, dict)]
+    run = lambda step: str(step.get("run", ""))  # noqa: E731
+    env = lambda step: step.get("env", {}) or {}  # noqa: E731
+    checks = _step_index(steps, lambda s: s.get("id") == "revisions")
+    apps = _step_index(steps, lambda s: '"${RUNNER_TEMP}/arm/apps.json"' in run(s))
+    smoke = _step_index(steps, lambda s: "Same-origin routing smoke test passed" in run(s))
+    if len(checks) != 1:
+        failures.append("one deploy step (id revisions) must check the new API, Worker and Web revisions")
+    else:
+        step = steps[checks[0]]
+        text = run(step)
+        if env(step) != REVISION_IMAGE_ENV:
+            failures.append(f"the revision check must read exactly the pushed images {REVISION_IMAGE_ENV}")
+        missing = [fragment for fragment in REVISION_CHECK_FRAGMENTS if fragment not in text]
+        if missing:
+            failures.append(f"the revision check must poll, assert and hint with {missing}")
+        lines = [line.strip() for line in text.splitlines()]
+        if [line for line in lines if line.startswith("check_revision ")] != list(REVISION_CHECK_CALLS):
+            failures.append(f"the revision check must end with {list(REVISION_CHECK_CALLS)}")
+        if "if" in step or "continue-on-error" in step or not text.startswith("set -euo pipefail\n"):
+            failures.append("the revision check must always run, with set -euo pipefail, and fail the run")
+        if len(apps) != 1 or len(smoke) != 1 or not apps[0] < checks[0] < smoke[0]:
+            failures.append("the revision check must run after stage 4 and before the smoke test")
+    summary = [s for s in steps if "GITHUB_STEP_SUMMARY" in run(s)]
+    if len(summary) != 1 or summary[0].get("if") != "always()" \
+            or any(env(summary[0]).get(name) != value for name, value in SUMMARY_ENV.items()) \
+            or any(f"${{{name}:-" not in run(summary[0]) for name in SUMMARY_ENV):
+        failures.append("the always-run summary must list the four pushed image digests and the serving revisions")
+    return _result(26, "new revisions serve this run's digests (ENV-001 F-06)", failures,
+                   "after stage 4 the API, Worker and Web revisions are ready, active, Healthy and on this run's digests")
+
+
 def guard_20_guard_tool_dependencies(ctx: Context) -> GuardResult:
     """Every job that runs a guard tool (both import PyYAML at module scope) installs the pinned PyYAML
     with actions/setup-python first, in the same job."""
@@ -1703,6 +1776,7 @@ GUARDS: tuple[Callable[[Context], GuardResult], ...] = (
     guard_23_realtime_dispatcher_credential,
     guard_24_non_root_images,
     guard_25_postgres_server_setting,
+    guard_26_revision_check,
 )
 
 

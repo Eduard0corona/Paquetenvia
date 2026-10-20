@@ -1196,6 +1196,197 @@ class WorkflowAppRestartTests(WorkflowStepHarness):
         self.assertTrue(names[index + 1].startswith("Stage 4 - "), names[index + 1])
 
 
+# A stand-in for the Azure CLI as the revision check calls it. $AZ_STATE/revisions.json holds, per app, the
+# [latestRevisionName, latestReadyRevisionName] pairs that successive `az containerapp show` calls return, and per
+# "<app>/<revision>" the {active, health, images} states that successive `az containerapp revision show` calls return;
+# the last item of each list repeats. Only the step's two queries are answered; every call is logged to $AZ_STATE/calls.
+FAKE_AZ_REVISIONS = r'''#!/usr/bin/env python3
+import json, os, sys
+state = os.environ["AZ_STATE"]
+args = sys.argv[1:]
+def opt(name):
+    return args[args.index(name) + 1] if name in args else None
+with open(os.path.join(state, "calls"), "a", encoding="utf-8") as log:
+    log.write(" ".join(args[:3] if args[1] == "revision" else args[:2]) + " " + (opt("--name") or "") + " " + (opt("--revision") or "") + "\n")
+path = os.path.join(state, "revisions.json")
+data = json.load(open(path, encoding="utf-8"))
+counts = data.setdefault("counts", {})
+def next_item(key, items):
+    index = counts.get(key, 0)
+    counts[key] = index + 1
+    json.dump(data, open(path, "w", encoding="utf-8"))
+    return items[min(index, len(items) - 1)]
+if opt("--resource-group") != "rg-pv-pilot" or opt("-o") != "json":
+    print("unexpected resource group or output", file=sys.stderr); sys.exit(8)
+if args[:2] == ["containerapp", "show"] and opt("--query") == "{latest: properties.latestRevisionName, ready: properties.latestReadyRevisionName}":
+    latest, ready = next_item(opt("--name"), data["apps"][opt("--name")])
+    print(json.dumps({"latest": latest, "ready": ready}, indent=2))
+elif args[:3] == ["containerapp", "revision", "show"] and opt("--query") == (
+        "{active: properties.active, health: properties.healthState, images: properties.template.containers[].image}"):
+    key = opt("--name") + "/" + opt("--revision")
+    print(json.dumps(next_item(key, data["revisions"][key]), indent=2))
+else:
+    print("unexpected az call: " + " ".join(args), file=sys.stderr); sys.exit(9)
+'''
+
+
+class WorkflowRevisionCheckTests(WorkflowStepHarness):
+    """ENV-001 F-06: after stage 4 each of the API, the Worker and the Web must reach a latest revision that is ready,
+    runs the digest this run pushed, is active and Healthy. The poll is bounded (40 polls 15 s apart for the three apps
+    together); a failure names the app and the revision and points to its system log; nothing secret is read."""
+
+    APPS = (guards.API_APP, guards.WORKER_APP, guards.WEB_APP)
+    REGISTRY = "crpvpilotabcdefghijklm.azurecr.io"
+
+    def setUp(self):
+        super().setUp()
+        self.step = workflow_step(lambda s: s.get("id") == "revisions")
+        (self.root / "bin" / "az").write_text(FAKE_AZ_REVISIONS, encoding="utf-8")
+        sleep = self.root / "bin" / "sleep"
+        sleep.write_text('#!/bin/sh\necho "sleep $*" >> "${AZ_STATE}/calls"\n', encoding="utf-8")
+        sleep.chmod(0o755)
+        self.images = {app: f"{self.REGISTRY}/paquetenvia-{app.split('-')[-1]}@sha256:{digit * 64}"
+                       for app, digit in zip(self.APPS, "abc")}
+
+    def healthy(self, app: str, **changes) -> dict:
+        return {"active": True, "health": "Healthy", "images": [self.images[app]], **changes}
+
+    def run_check(self, apps: dict | None = None, revisions: dict | None = None, **env: str) -> subprocess.CompletedProcess:
+        """Every app ready on the first poll with a healthy revision `<app>--new`, unless `apps`/`revisions` say otherwise."""
+        state = {"apps": {app: [[f"{app}--new", f"{app}--new"]] for app in self.APPS},
+                 "revisions": {f"{app}/{app}--new": [self.healthy(app)] for app in self.APPS}}
+        state["apps"].update(apps or {})
+        state["revisions"].update(revisions or {})
+        (self.state / "revisions.json").write_text(json.dumps(state), encoding="utf-8")
+        (self.state / "calls").write_text("", encoding="utf-8")
+        images = {"API_IMAGE": self.images[guards.API_APP], "WORKER_IMAGE": self.images[guards.WORKER_APP],
+                  "WEB_IMAGE": self.images[guards.WEB_APP]}
+        images.update(env)
+        return self.run_step(self.step, **images)
+
+    def calls(self) -> list[str]:
+        return [line.strip() for line in (self.state / "calls").read_text(encoding="utf-8").splitlines()]
+
+    def sleeps(self) -> int:
+        return sum(1 for line in self.calls() if line == "sleep 15")
+
+    def assert_failed(self, result: subprocess.CompletedProcess, app: str, message: str) -> None:
+        self.assertNotEqual(0, result.returncode)
+        errors = [line for line in result.stdout.splitlines() if line.startswith("::error::")]
+        self.assertEqual(1, len(errors), result.stdout)
+        self.assertTrue(errors[0].startswith(f"::error::{app}: "), errors[0])
+        self.assertIn(message, errors[0])
+        self.assertIn(f"az containerapp logs show --name {app} --resource-group rg-pv-pilot --type system", errors[0])
+
+    def test_the_step_reads_only_this_runs_images_and_runs_after_stage_4_and_before_the_smoke_test(self):
+        self.assertEqual(guards.REVISION_IMAGE_ENV, self.step["env"])
+        names = [s.get("name", "") for s in guards.load_yaml(REPO_ROOT / guards.PILOT_WORKFLOW)["jobs"]["deploy"]["steps"]]
+        index = names.index(self.step["name"])
+        self.assertLess(next(i for i, name in enumerate(names) if name.startswith("Stage 4 - ")), index)
+        self.assertEqual("Smoke test same-origin routing", names[index + 1])
+
+    def test_revisions_ready_on_the_first_poll_pass(self):
+        result = self.run_check()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(0, self.sleeps())
+        self.assertEqual({"api_revision": f"{guards.API_APP}--new", "worker_revision": f"{guards.WORKER_APP}--new",
+                          "web_revision": f"{guards.WEB_APP}--new"}, self.outputs())
+        for app in self.APPS:
+            self.assertIn(f"{app}: revision {app}--new is ready, active and Healthy, and runs {self.images[app]}", result.stdout)
+        self.assertNotIn("::error::", result.stdout)
+
+    def test_revisions_that_become_ready_after_some_polls_pass(self):
+        api, worker = guards.API_APP, guards.WORKER_APP
+        result = self.run_check(apps={api: [[f"{api}--new", f"{api}--old"]] * 3 + [[f"{api}--new", f"{api}--new"]],
+                                      worker: [[f"{worker}--new", None]] * 2 + [[f"{worker}--new", f"{worker}--new"]]})
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(5, self.sleeps())
+        self.assertIn(f"{api}: latest revision {api}--new is not ready (latest ready revision: {api}--old); polling again in 15 s",
+                      result.stdout)
+        self.assertIn(f"{worker}: latest revision {worker}--new is not ready (latest ready revision: none); polling again",
+                      result.stdout)
+        self.assertEqual(f"{api}--new", self.outputs()["api_revision"])
+        # A revision is only read once it is the latest ready one.
+        self.assertNotIn(f"containerapp revision show {api} {api}--old", self.calls())
+
+    def test_a_revision_that_never_becomes_ready_fails_with_the_system_log_hint(self):
+        api = guards.API_APP
+        result = self.run_check(apps={api: [[f"{api}--new", f"{api}--old"]]})
+        self.assert_failed(result, api, f"latest revision {api}--new is not ready (latest ready revision: {api}--old) "
+                                        "after about 10 minutes; the previous revision, if any, is still serving.")
+        self.assertEqual(40, self.sleeps())
+        self.assertEqual(41, self.calls().count(f"containerapp show {api}"))
+        # The run stops at the first app that fails; nothing is reported as serving.
+        self.assertFalse(any(guards.WORKER_APP in line for line in self.calls()))
+        self.assertEqual({}, self.outputs())
+
+    def test_a_first_deploy_that_never_becomes_ready_fails(self):
+        web = guards.WEB_APP
+        result = self.run_check(apps={web: [[f"{web}--first", None]]})
+        self.assert_failed(result, web, f"latest revision {web}--first is not ready (latest ready revision: none) after about 10 minutes")
+        self.assertEqual({"api_revision", "worker_revision"}, set(self.outputs()))
+
+    def test_the_three_apps_share_one_poll_budget(self):
+        api, worker = guards.API_APP, guards.WORKER_APP
+        result = self.run_check(apps={api: [[f"{api}--new", f"{api}--old"]] * 30 + [[f"{api}--new", f"{api}--new"]],
+                                      worker: [[f"{worker}--new", f"{worker}--old"]]})
+        self.assert_failed(result, worker, f"latest revision {worker}--new is not ready")
+        self.assertEqual(40, self.sleeps())
+
+    def test_a_ready_revision_on_another_image_fails_at_once(self):
+        worker = guards.WORKER_APP
+        old = f"{self.REGISTRY}/paquetenvia-worker@sha256:{'d' * 64}"
+        for images, shown in (([old], old), ([], ""), ([self.images[worker], old], f"{self.images[worker]} {old}")):
+            with self.subTest(images=images):
+                result = self.run_check(revisions={f"{worker}/{worker}--new": [self.healthy(worker, images=images)]})
+                self.assert_failed(result, worker, f"revision {worker}--new runs '{shown}', not the image this run pushed "
+                                                   f"({self.images[worker]}).")
+                self.assertEqual(0, self.sleeps())
+                self.assertNotIn("worker_revision", self.outputs())
+
+    def test_an_unhealthy_or_inactive_revision_fails(self):
+        web = guards.WEB_APP
+        for changes, status in (({"health": "Unhealthy"}, "active=true, healthState=Unhealthy"),
+                                ({"health": "None"}, "active=true, healthState=None"),
+                                ({"health": None}, "active=true, healthState=none"),
+                                ({"active": False}, "active=false, healthState=Healthy")):
+            with self.subTest(changes=changes):
+                result = self.run_check(revisions={f"{web}/{web}--new": [self.healthy(web, **changes)]})
+                self.assert_failed(result, web, f"revision {web}--new is ready but {status} after about 10 minutes")
+                self.assertEqual(40, self.sleeps())
+                self.assertNotIn("web_revision", self.outputs())
+
+    def test_a_revision_the_start_step_reactivated_passes_once_its_replicas_are_healthy(self):
+        # Real restore (README §6.4): the start step activated the stopped revision before stage 4. When stage 4 creates
+        # no new revision, the reactivated one is still the latest ready revision, and becomes Healthy once its
+        # replicas pass their probes.
+        api = guards.API_APP
+        result = self.run_check(apps={api: [[f"{api}--old", f"{api}--old"]]},
+                                revisions={f"{api}/{api}--old": [self.healthy(api, health="None"), self.healthy(api, health="Unhealthy"),
+                                                                 self.healthy(api)]})
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(2, self.sleeps())
+        self.assertEqual(f"{api}--old", self.outputs()["api_revision"])
+
+    def test_after_a_real_restore_the_new_revision_replaces_the_reactivated_one(self):
+        # Real restore (README §6.4): stage 4 puts the apps back in single revision mode with this run's images; the
+        # reactivated revision serves until the new one is ready, and only the new one is accepted.
+        result = self.run_check(apps={app: [[f"{app}--new", f"{app}--old"]] * 2 + [[f"{app}--new", f"{app}--new"]]
+                                      for app in (guards.API_APP, guards.WORKER_APP)})
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(4, self.sleeps())
+        self.assertEqual({f"{app}--new" for app in self.APPS}, set(self.outputs().values()))
+        self.assertFalse(any(line.endswith("--old") and "revision show" in line for line in self.calls()))
+
+    def test_an_image_that_is_not_digest_pinned_fails_before_reading_azure(self):
+        for image in (f"{self.REGISTRY}/paquetenvia-api:{'a' * 40}", "", f"{self.REGISTRY}/paquetenvia-api@sha256:{'A' * 64}"):
+            with self.subTest(image=image):
+                result = self.run_check(API_IMAGE=image)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(f"::error::{guards.API_APP}: this run pushed no digest-pinned image", result.stdout)
+                self.assertEqual([], self.calls())
+
+
 # A stand-in for the Azure CLI as restore-drill.sh calls it. Servers are files in $AZ_STATE/servers; every call is
 # logged to $AZ_STATE/calls (command and names only); FAKE_VERIFY_STATUS is the verify job's final status.
 FAKE_DRILL_AZ = r'''#!/usr/bin/env python3
@@ -2233,6 +2424,44 @@ class TemplateGuardTests(unittest.TestCase):
                 ctx = self.context()
                 ctx.repo_root = root
                 self.assertFalse(guards.guard_25_postgres_server_setting(ctx).passed, old)
+
+    def test_p26_revision_check_fails_closed(self):
+        text = (REPO_ROOT / guards.PILOT_WORKFLOW).read_text(encoding="utf-8")
+        mutations = {
+            "no revision step": (("        id: revisions\n", "        id: other\n"), "one deploy step (id revisions)"),
+            "another app's image": (("WEB_IMAGE: ${{ steps.images.outputs.web }}\n        run: |\n          set -euo pipefail\n          polls_left",
+                                     "WEB_IMAGE: ${{ steps.images.outputs.api }}\n        run: |\n          set -euo pipefail\n          polls_left"),
+                                    "must read exactly the pushed images"),
+            "latest never compared with ready": (('[[ -n "${latest}" && "${latest}" == "${ready}" ]]', '[[ -n "${latest}" ]]'),
+                                                 "must poll, assert and hint"),
+            "image not compared": (('[[ "${images}" != "${image}" ]]', '[[ -z "${images}" ]]'), "must poll, assert and hint"),
+            "health not asserted": (('[[ "${active}" == "true" && "${health}" == "Healthy" ]]', '[[ "${active}" == "true" ]]'),
+                                    "must poll, assert and hint"),
+            "unbounded poll": (("polls_left=40\n", "polls_left=4000\n"), "must poll, assert and hint"),
+            "no system-log hint": (("--type system (README §6.7)", "(README §6.7)"), "must poll, assert and hint"),
+            "an app left unchecked": (('          check_revision web_revision ca-pv-pilot-web "${WEB_IMAGE}"\n', ""), "must end with"),
+            "allowed to fail": (("        id: revisions\n", "        id: revisions\n        continue-on-error: true\n"),
+                                "must always run"),
+            "conditional": (("        id: revisions\n", "        id: revisions\n        if: success()\n"), "must always run"),
+            "summary only on success": (("      - name: Summary and DNS records for the owner\n        if: always()\n",
+                                         "      - name: Summary and DNS records for the owner\n"), "always-run summary"),
+            "summary without the db-ops digest": (("| \\`${DBOPS_IMAGE:-not pushed}\\` |", "| |"), "always-run summary"),
+            "summary without the serving revision": (("API_REVISION: ${{ steps.revisions.outputs.api_revision }}",
+                                                      "API_REVISION: ${{ steps.revisions.outputs.worker_revision }}"),
+                                                     "always-run summary"),
+        }
+        for name, ((old, new), fragment) in mutations.items():
+            with self.subTest(name=name):
+                self.assertEqual(1, text.count(old), old)
+                self.assert_fails(26, self.context(workflow_text=text.replace(old, new, 1)), fragment)
+        # The check must come after stage 4 and before the smoke test.
+        check = text[text.index("      # ENV-001 F-06: a successful stage 4"):text.index("      - name: Smoke test same-origin routing")]
+        summary = "      - name: Summary and DNS records for the owner\n"
+        stage_4 = "      - name: Stage 4 - "
+        for moved in (text.replace(check, "", 1).replace(summary, check + summary, 1),
+                      text.replace(check, "", 1).replace(stage_4, check + stage_4, 1)):
+            self.assertNotEqual(text, moved)
+            self.assert_fails(26, self.context(workflow_text=moved), "after stage 4 and before the smoke test")
 
     def restored_server(self, **changes):
         """A restored server as `az resource show --api-version 2024-08-01` describes it (ARM GET)."""

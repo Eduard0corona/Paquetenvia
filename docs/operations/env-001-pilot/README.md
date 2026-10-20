@@ -14,7 +14,7 @@ files (`deploy/azure/*.bicep`, `deploy-core.ps1`, `deploy-azure-dev.yml`) or gua
 | OBS-002 alert e-mail (owner) | `deploy/azure/pilot/observability.parameters.json` |
 | Accepted terms and privacy versions for the web (owner, UI-001) | `deploy/azure/pilot/web.parameters.json` |
 | Deployment workflow | `.github/workflows/deploy-azure-pilot.yml` (`workflow_dispatch`, GitHub Environment `azure-pilot`) |
-| Static guards | `tools/azr-001/env001_pilot_guards.py` (26 guards) and `test_env001_pilot_guards.py` |
+| Static guards | `tools/azr-001/env001_pilot_guards.py` (27 guards) and `test_env001_pilot_guards.py` |
 | Restore drill and real restore | `deploy/azure/pilot/restore-drill.sh` (§6.4) |
 | One-time bootstrap (owner) | [`bootstrap.md`](bootstrap.md) |
 
@@ -364,8 +364,9 @@ any rule goes missing it stops with
 `STOP_FOR_OWNER_DECISION: driver eligibility rules for vehicle type <TYPE> are missing: ...`, naming each missing
 setting, so **the pilot deploy stops before touching Azure** until all five vehicle types are complete again. It
 applies the API's rules to every entry present and accepts only the exact names above. Guard P17 (`check`) refuses an
-invalid entry but not a missing one. Without this stop, a deploy would fail only at the smoke test (`/auth/session is
-not served by the API`) or leave the earlier revision serving. `PilotApiStartupConfigurationTests` starts the pilot API
+invalid entry but not a missing one. Without this stop, a deploy would fail only after stage 4, at the revision check
+(the new API revision never becomes ready, §6.1 step 5), with the earlier revision, if any, still serving.
+`PilotApiStartupConfigurationTests` starts the pilot API
 with the file as it is, checks that Drivers, Routing, Dispatch and Orders bind exactly its entries, and pins the two
 start failures without them (`MissingEligibilityStartFailures`); `test_env001_pilot_guards.py` pins the approved
 values.
@@ -501,6 +502,18 @@ Two further caveats:
    and head SHA.
 5. Actions → *Deploy Azure PILOT* → Run workflow on `main`: `tested_git_sha=<head SHA>`,
    `foundation_run_id=<run id>`, `custom_domain_phase=none`.
+
+   A green run proves more than "the templates deployed" (ENV-001 F-05, F-06):
+   - The images it builds come from the same Dockerfiles that CI builds and smoke-tests on every PR that touches
+     them (`docs/development/branching-and-ci.md`, *Deploy image build smoke*).
+   - After stage 4, the step *Check that the new API, Worker and Web revisions serve this run's images* waits, for
+     each app, until its latest revision is ready, then requires that revision to run the digest this run pushed and
+     to be active and `Healthy` (at most about 10 minutes for the three apps). Container Apps keeps the previous
+     revision serving while a new one never becomes ready, so without this step a run could stay green on old code.
+     If it fails, the error names the app and the revision and gives the `az containerapp logs show ... --type system`
+     command (§6.7).
+   - The run summary lists the four digests it pushed (API, Worker, Web, DB ops) and the revision that serves each
+     app.
 6. The first run creates the vault, then stops with *"lacks authcenter-paquetenvia-client-secret"*. The
    workflow requires four owner secrets and reports the first one missing. Write all four straight into
    the vault (§6.6) and run again:
@@ -619,14 +632,24 @@ workflow:
 - redeploys the five templates idempotently (stage 5 is the OBS-002 alerts, §10) on the PostgreSQL server named by
   `PILOT_POSTGRES_SERVER_NAME` (empty: the first server);
 - keeps every generated secret (a runtime credential only while its host is that server);
-- rebuilds the images from `tested_git_sha` and deploys them by digest;
+- rebuilds the images from `tested_git_sha`, pushes them, deploys them by digest and lists the four digests in the run
+  summary;
 - runs pending migrations, re-applies the runtime logins and runs `assert`;
+- checks that the new API, Worker and Web revisions are ready, active, `Healthy` and on those digests (§6.1 step 5),
+  and fails otherwise, even while the previous revision still answers;
 - smoke-tests the route.
+
+The run summary is where to read what each run deployed. A digest there is `<registry>/paquetenvia-<image>@sha256:...`;
+the tag `paquetenvia-<image>:<tested_git_sha>` names the commit, but a later run of the same SHA pushes new digests
+under the same tag, so the digest, not the tag, identifies the deployed bytes.
 
 ### 6.3 Rollback
 
-- **Application:** dispatch again with an earlier certified SHA and its Foundation run id. Container
-  Apps run in single-revision mode, so the earlier digests replace the current ones.
+- **Application:** dispatch again with an earlier certified SHA and its Foundation run id. The run builds that SHA's
+  images again: the base images are tags, so the bytes can differ from the earlier run's (compare the digests in both
+  run summaries). A rollback does not reuse the earlier run's digests. In single revision mode the new revisions
+  replace the current ones only once they are ready; if they never are, the revision check fails the run and the
+  current revisions keep serving.
 - **Database:** migrations are forward-only in the pilot. An application rollback is only safe while
   the older code still works with the newer schema; every lane is additive, see each lane's rollback
   notes. For data loss or a bad migration, use a point-in-time restore (§6.4). The template tooling
@@ -896,6 +919,15 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
 
 ### 6.7 Troubleshooting
 
+- **The revision check failed** (*Check that the new API, Worker and Web revisions serve this run's images*):
+  - *"latest revision ... is not ready ... after about 10 minutes"*: the new revision never passed its probes, and the
+    previous revision, if any, still serves. Read why with the command in the error,
+    `az containerapp logs show --name <app> --resource-group <rg> --type system`, then the app's console logs (below).
+    A setting or secret the app refuses to start without shows up there.
+  - *"... is ready but active=..., healthState=..."*: the revision started but is inactive or not `Healthy` after the
+    wait. `az containerapp revision list -n <app> -g <rg> -o table` shows every revision with its state.
+  - *"runs '...', not the image this run pushed"*: the latest ready revision does not run this run's image, so stage 4
+    did not apply it. Read the stage 4 output and run the workflow again.
 - **Job console logs:** Log Analytics →
   `ContainerAppConsoleLogs_CL | where ContainerJobName_s startswith "job-pv-pilot" | order by TimeGenerated desc`.
 - **App logs:** `ContainerAppConsoleLogs_CL | where ContainerAppName_s == "ca-pv-pilot-api"`. The logs
@@ -1020,7 +1052,7 @@ Details, format and error codes: `docs/development/mdm-001-master-data-loader.md
 
 ## 8. Static guards (`tools/azr-001/env001_pilot_guards.py`)
 
-The 26 guards (P00–P25) run on the compiled ARM output, the workflow, the pilot Dockerfiles and the restore drill
+The 27 guards (P00–P26) run on the compiled ARM output, the workflow, the pilot Dockerfiles and the restore drill
 script:
 
 - **Resources:** only authorized resource types and exactly six workloads. Redis, Azure SignalR,
@@ -1122,6 +1154,16 @@ script:
   `deploy/`, `.github/`, `tools/` and the operations and development docs: the name prefix appears only in the two
   defaults, the guards' prefix constant and the drill script's check, and every docs line that names the server also
   names `PILOT_POSTGRES_SERVER_NAME`.
+- **Revision check and pushed digests (P26, ENV-001 F-05/F-06):** after stage 4 and before the smoke test, one
+  unconditional step (`id: revisions`) reads the three pushed images from `steps.images.outputs` and, for
+  `ca-pv-pilot-api`, `ca-pv-pilot-worker` and `ca-pv-pilot-web` in that order, polls `latestRevisionName` against
+  `latestReadyRevisionName` (`polls_left=40`, `sleep 15`), then requires the ready revision's
+  `template.containers[].image` to equal the pushed digest and the revision to be `active` and `Healthy`; every failure
+  carries the `az containerapp logs show ... --type system` hint. The always-run summary step reads the four image
+  outputs and the three serving revisions. The unit tests also run the step with a stand-in `az`: ready on the first
+  poll, ready after some polls, never ready, a first deploy never ready, one poll budget for the three apps, another
+  image, unhealthy or inactive, a revision the start step re-activated after a real restore, the new revision that
+  replaces it, and an image without a digest.
 
 The unit tests compile the real templates whenever the pinned Bicep CLI is present (the azr-static CI
 job installs it). They mutate the ARM output to prove that each guard fails closed.
@@ -1134,7 +1176,7 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
 **Verified without Azure:**
 
 - `bicep build` and `bicep lint` pass with the pinned v0.47.16, with no warnings.
-- 26/26 pilot guards (P00–P25) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
+- 27/27 pilot guards (P00–P26) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
   tooling tests. The gitleaks scan was not re-run for OBS-002.
 - The SCL-007 PostgreSQL connection and resource alerts build and lint with no diagnostic, and P21 pins them.
 - The OBS-002 alert and workbook queries parse and type-check offline (Kusto language service).
@@ -1151,6 +1193,10 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
   image. That run used a local `postgres` superuser, so it did not use `--azure-ownership-bridge`.
   `DbOpsImageArchitectureTests` fails if a file the migrator reads is not copied into every
   `deploy/**/Dockerfile.db-ops*`.
+- ENV-001 F-05: CI builds every Dockerfile under `deploy/azure` (the four pilot images and the two DEV-SYNTHETIC
+  ones) with the pilot workflow's build arguments, checks that none runs as uid 0 and that both db-ops images pass
+  `verify`, on every PR that touches a file those images are built from and on every Foundation run
+  (`docs/development/branching-and-ci.md`, *Deploy image build smoke*).
 
 **Unverified until the first real deployment:**
 
@@ -1195,6 +1241,17 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
     scope change only for metric rules based on logs);
   - `az containerapp revision set-mode`, `deactivate` and `activate` on the API and Worker, and `apps.bicep` putting
     them back in single revision mode.
+- ENV-001 F-06 revision check, checked against Microsoft Learn (*Revisions*: in single revision mode "the existing
+  active revision isn't deactivated until the new revision is ready") and the ARM reference (`latestRevisionName`,
+  `latestReadyRevisionName`, revision `active`, `healthState` Healthy/Unhealthy/None, `template.containers[].image`),
+  never against Azure:
+  - that `latestRevisionName` names the new revision once stage 4's `az deployment group create` returns, and that the
+    revision's `template.containers[].image` is the exact `<registry>/paquetenvia-<image>@sha256:...` string stage 4
+    passed;
+  - what `latestReadyRevisionName` and `healthState` show right after the start step re-activates a revision stopped
+    for a real restore (§6.4 step 5). The check tolerates a transient `None` or `Unhealthy` within its wait, so either
+    behaviour passes once the replicas are healthy;
+  - that the Web, which has no explicit probes, reports `Healthy` through the default probes Container Apps adds.
 - OBS-003:
   - ARM acceptance of the workspace-based component;
   - that the exporter reaches the Mexico Central ingestion endpoint from inside the VNet, and the real volume
