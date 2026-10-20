@@ -1014,6 +1014,10 @@ The 25 guards (P00–P24) run on the compiled ARM output, the workflow and the p
   and the last `USER` of each final stage is non-root: `$APP_UID` (uid 1654, the `app` user) on an official
   `mcr.microsoft.com/dotnet/` base whose `APP_UID` no `ARG` or `ENV` redefines, or a literal user other than
   `root`/`0` (`node` for the web). A missing `USER`, a later `USER root` or an unresolvable variable fails.
+  This workflow does not build the AZR-001 DEV-SYNTHETIC images `deploy/azure/Dockerfile.web` (`USER node`) and
+  `deploy/azure/Dockerfile.db-ops` (`USER $APP_UID`), so P24 does not read them. They also run as non-root.
+  `DevSyntheticNonRootImageTests` in `tools/azr-001/test_azr001_static_guards.py` applies the same check to every
+  `deploy/azure/Dockerfile*`.
 
 The unit tests compile the real templates whenever the pinned Bicep CLI is present (the azr-static CI
 job installs it). They mutate the ARM output to prove that each guard fails closed.
