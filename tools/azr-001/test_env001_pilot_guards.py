@@ -901,7 +901,7 @@ class ConnectionHostTests(unittest.TestCase):
     """The workflow keeps a runtime credential only while its Host is the server in service; the host is read without
     ever printing the connection string."""
 
-    PASSWORD = "0123456789abcdef" * 4
+    PASSWORD = "ab" * 32  # a 64-character stand-in, like the workflow's hex passwords
     HOST = "pg-pv-pilot-abcdefghijklm.postgres.database.azure.com"
 
     def connection(self, host: str = HOST, key: str = "Host") -> str:
