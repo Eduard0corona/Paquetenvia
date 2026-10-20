@@ -357,6 +357,10 @@ CREATE INDEX orders_city_status_idx ON orders.orders(city_id,status,created_at D
 CREATE INDEX orders_claim_window_idx ON orders.orders(claim_window_ends_at) WHERE status='CLOSED' AND finalized_at IS NULL;
 -- AI06-PILOT-INDEXES: recency scans by last change.
 CREATE INDEX orders_updated_at_idx ON orders.orders(updated_at);
+-- DP-INDEXES-ORDERS-DISPATCH-2026-10-20: the operations dashboard's price-review filter (an order that has not finished
+-- and is below its minimum snapshot or carries an authorized financial override), newest change first. The predicate
+-- repeats the reader's text exactly, so the planner can prove it; the index holds only those orders, never history.
+CREATE INDEX orders_price_review_idx ON orders.orders(updated_at DESC,id DESC) WHERE status NOT IN ('DELIVERED','RETURNED','CLAIM_RESOLVED','CLOSED','CANCELLED') AND (COALESCE(total_cents < minimum_total_cents_snapshot,false) OR COALESCE(financial_override ?& ARRAY['actor_id','reason','valid_until'],false));
 
 CREATE TABLE orders.package_items (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -388,6 +392,9 @@ CREATE TABLE orders.order_events (
 );
 CREATE INDEX order_events_tenant_order_time_idx ON orders.order_events(owner_org_id,order_id,occurred_at);
 CREATE INDEX order_events_operator_time_idx ON orders.order_events(operator_org_id,occurred_at) WHERE operator_org_id IS NOT NULL;
+-- DP-INDEXES-ORDERS-DISPATCH-2026-10-20: one actor's status changes in a time range (the driver's completed_today
+-- count reads one day of its own changes, not the tenant's history).
+CREATE INDEX order_events_actor_status_time_idx ON orders.order_events(actor_id,occurred_at) WHERE actor_id IS NOT NULL AND event_type='ORDER_STATUS_CHANGED';
 
 -- TRK-002-AUTO-LINK: a link is derived as HMAC-SHA256(key, "paquetenvia-trk-v1|key_version|order_id|generation")
 -- and only the SHA-256 of the token is stored. generation starts at 1 and a revoked generation is never derived
@@ -542,6 +549,10 @@ CREATE UNIQUE INDEX one_active_assignment_per_order ON dispatch.assignments(orde
 -- AI06-PILOT-INDEXES: driver workload and route membership lookups.
 CREATE INDEX assignments_driver_idx ON dispatch.assignments(driver_id);
 CREATE INDEX assignments_route_idx ON dispatch.assignments(route_id) WHERE route_id IS NOT NULL;
+-- DP-INDEXES-ORDERS-DISPATCH-2026-10-20: a driver's open assignments (stops, fleet list and assignment picker) without
+-- the driver's history, and one order's assignment to one driver in any status (completed_today).
+CREATE INDEX assignments_driver_open_idx ON dispatch.assignments(driver_id) WHERE status IN ('ACCEPTED','ACTIVE');
+CREATE INDEX assignments_order_driver_idx ON dispatch.assignments(order_id,driver_id);
 
 -- Custody and incidents ---------------------------------------------------------
 CREATE TABLE custody.proof_upload_sessions (

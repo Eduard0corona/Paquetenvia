@@ -1028,10 +1028,12 @@ items:
   - consultas críticas cumplen presupuesto
   - migraciones son expand/contract
   - tablas candidatas tienen plan probado sin downtime destructivo
+  - 'DECIDED DP-INDEXES-ORDERS-DISPATCH-2026-10-20 (project owner, "Ahora, en un PR (Recommended)"): AI-06 and the Orders and Dispatch lanes carry four read indexes - order_events_actor_status_time_idx and assignments_order_driver_idx for the driver''s completed_today count, assignments_driver_open_idx for listMyStops, listOrganizationDrivers and the assignment picker, and orders_price_review_idx for the operations dashboard price-review filter; each lane step adopts the AI-06 index, refuses one of another shape, never uses CONCURRENTLY and rolls back by dropping exactly its two indexes; the default order list, the queue counts and the COD-pending filter are not served by an index alone and stay unchanged until the owner decides'
   required_tests:
   - query benchmark
   - migration compatibility test
   - restore with partitioned sample
+  - read index plans - the runtime statements, read from their sources and planned as paqueteria_app under FORCE RLS on synthetic history, use their DP-INDEXES-ORDERS-DISPATCH-2026-10-20 index instead of the driver's assignment history or every order; both lane steps roll back and forward as the migrator (PostgreSQL)
   approval_gate: GATE-014
 - id: SCL-004
   epic: Scalability

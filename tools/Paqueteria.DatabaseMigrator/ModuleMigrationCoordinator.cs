@@ -51,10 +51,10 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20261011000100_AddDriverVoiceBridge.cs"),
         ("Pricing", "__ef_migrations_history_pricing", RequireMazatlanTimeZoneInMasterDataLoader.MigrationId,
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20261002000100_RequireMazatlanTimeZoneInMasterDataLoader.cs"),
-        ("Orders", "__ef_migrations_history_orders", AddOrderAutoCloseDiscovery.MigrationId,
-            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20261010000100_AddOrderAutoCloseDiscovery.cs"),
-        ("Dispatch", "__ef_migrations_history_dispatch", AddOutboxTraceContext.MigrationId,
-            "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20261013000100_AddOutboxTraceContext.cs"),
+        ("Orders", "__ef_migrations_history_orders", AddOrderReadIndexes.MigrationId,
+            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20261020000100_AddOrderReadIndexes.cs"),
+        ("Dispatch", "__ef_migrations_history_dispatch", AddAssignmentReadIndexes.MigrationId,
+            "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20261020000100_AddAssignmentReadIndexes.cs"),
         ("Custody", "__ef_migrations_history_custody", AddBffSessionPurge.MigrationId,
             "src/Modules/Custody/Custody.Infrastructure/Persistence/Migrations/20260927000400_AddBffSessionPurge.cs"),
         ("Incidents", "__ef_migrations_history_incidents", AllowDispatchDecidedNextAction.MigrationId,
@@ -118,11 +118,10 @@ internal sealed class ModuleMigrationCoordinator
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
-                // ORD-AUTO-CLOSE-2026-10-10: the lane's latest step only adds the auto-close executor, its two column
-                // grants and its read-only discovery function; its rollback drops exactly that function (role and
-                // grants are declared by AI-18 and stay inert). ORD-SERVICE-WINDOW-OPTIONAL, TRK-002-AUTO-LINK and
-                // LIF-001 are verified below with their own fail-closed rollbacks.
-                "Orders" => IsOrderAutoCloseSource(source),
+                // DP-INDEXES-ORDERS-DISPATCH-2026-10-20: the lane's latest step only adds two read indexes (or adopts the
+                // AI-06 ones) and its rollback drops exactly those two. ORD-AUTO-CLOSE is verified below with its own
+                // rule; ORD-SERVICE-WINDOW-OPTIONAL, TRK-002-AUTO-LINK and LIF-001 with their fail-closed rollbacks.
+                "Orders" => IsOrderReadIndexesSource(source),
                 // OPS-003-CLEANUP-ROLE: the lane only adds the cleanup executor, its two functions and the
                 // BFF session purge; every purged row is a lifecycle fact, so its rollback fails closed.
                 "Custody" =>
@@ -142,8 +141,10 @@ internal sealed class ModuleMigrationCoordinator
                 // trace_parent column and its check to both outbox tables, one executor column grant and the operator
                 // outbox definer body derived from the published one; its rollback, refused while the Notifications
                 // step that writes the column is recorded, restores the definer and drops exactly those two columns.
-                // DSP-OPERATOR-OWNER-OUTBOX is verified below with its own rule.
-                "Dispatch" => IsOutboxTraceContextDispatchSource(source),
+                // DSP-OPERATOR-OWNER-OUTBOX is verified below with its own rule. DP-INDEXES-ORDERS-DISPATCH-2026-10-20
+                // follows it: the lane's latest step only adds two read indexes (or adopts the AI-06 ones) and its
+                // rollback drops exactly those two; the OBS-003 step is verified below with its own rule.
+                "Dispatch" => IsAssignmentReadIndexesSource(source),
                 // VOICE-001-MASKED-CALLS-2026-10-11: the lane's latest migration only adds the driver phone columns
                 // and the recipient call request table; its rollback refuses while any request or phone exists and
                 // otherwise drops exactly those objects. DRV-003 is verified below as an adoption.
@@ -182,6 +183,11 @@ internal sealed class ModuleMigrationCoordinator
                 "VERIFIED"));
         }
 
+        VerifyOrdersSource(
+            root,
+            AddOrderAutoCloseDiscovery.MigrationId,
+            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20261010000100_AddOrderAutoCloseDiscovery.cs",
+            IsOrderAutoCloseSource);
         VerifyOrdersSource(
             root,
             AddOrderServiceWindow.MigrationId,
@@ -305,6 +311,12 @@ internal sealed class ModuleMigrationCoordinator
             AddRealtimeDispatcherRole.MigrationId,
             "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261012000100_AddRealtimeDispatcherRole.cs",
             IsRealtimeDispatcherRoleSource);
+        VerifyLaneSource(
+            root,
+            "Dispatch",
+            AddOutboxTraceContext.MigrationId,
+            "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20261013000100_AddOutboxTraceContext.cs",
+            IsOutboxTraceContextDispatchSource);
         VerifyLaneSource(
             root,
             "Dispatch",
@@ -536,6 +548,7 @@ internal sealed class ModuleMigrationCoordinator
                     AddTrackingLinkGenerations.MigrationId,
                     AddOrderServiceWindow.MigrationId,
                     AddOrderAutoCloseDiscovery.MigrationId,
+                    AddOrderReadIndexes.MigrationId,
                 ],
             "Notifications" =>
                 [
@@ -574,6 +587,7 @@ internal sealed class ModuleMigrationCoordinator
                     AdoptCanonicalDispatchAssignmentsBaseline.MigrationId,
                     AddOperatorOwnerOutboxExecutor.MigrationId,
                     AddOutboxTraceContext.MigrationId,
+                    AddAssignmentReadIndexes.MigrationId,
                 ],
             "DataProtection" =>
                 [AddDistributedDataProtectionKeyRing.MigrationId],
@@ -653,6 +667,50 @@ internal sealed class ModuleMigrationCoordinator
                 "Notifications evolution migration is destructive or has an unexpected identifier.");
         }
     }
+
+    /// <summary>DP-INDEXES-ORDERS-DISPATCH-2026-10-20 (Orders lane): only the two read indexes, created with a plain
+    /// CREATE INDEX IF NOT EXISTS in the lane's transaction (never CONCURRENTLY); the rollback drops exactly those two
+    /// indexes. No table, column, constraint, policy, grant, function, role or row is added, dropped or rewritten.</summary>
+    private static bool IsOrderReadIndexesSource(string source) =>
+        source.Contains(AddOrderReadIndexes.DecisionId, StringComparison.Ordinal) &&
+        source.Contains("DROP INDEX IF EXISTS orders.order_events_actor_status_time_idx;", StringComparison.Ordinal) &&
+        source.Contains("DROP INDEX IF EXISTS orders.orders_price_review_idx;", StringComparison.Ordinal) &&
+        IsReadIndexesOnlySource(source);
+
+    /// <summary>DP-INDEXES-ORDERS-DISPATCH-2026-10-20 (Dispatch lane): only the two read indexes, created with a plain
+    /// CREATE INDEX IF NOT EXISTS in the lane's transaction (never CONCURRENTLY); the rollback drops exactly those two
+    /// indexes. No table, column, constraint, policy, grant, function, role or row is added, dropped or rewritten.</summary>
+    private static bool IsAssignmentReadIndexesSource(string source) =>
+        source.Contains(AddAssignmentReadIndexes.DecisionId, StringComparison.Ordinal) &&
+        source.Contains("DROP INDEX IF EXISTS dispatch.assignments_driver_open_idx;", StringComparison.Ordinal) &&
+        source.Contains("DROP INDEX IF EXISTS dispatch.assignments_order_driver_idx;", StringComparison.Ordinal) &&
+        IsReadIndexesOnlySource(source);
+
+    /// <summary>The shape both DP-INDEXES-ORDERS-DISPATCH steps share: two indexes created, two dropped, nothing else.</summary>
+    private static bool IsReadIndexesOnlySource(string source) =>
+        source.Split("CREATE INDEX IF NOT EXISTS", StringSplitOptions.None).Length - 1 == 2 &&
+        source.Split("DROP ", StringSplitOptions.None).Length - 1 == 2 &&
+        source.Split("DROP INDEX IF EXISTS", StringSplitOptions.None).Length - 1 == 2 &&
+        !source.Contains("INDEX CONCURRENTLY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE UNIQUE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("ALTER ", StringComparison.Ordinal) &&
+        !source.Contains("CREATE TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE OR REPLACE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("GRANT ", StringComparison.Ordinal) &&
+        !source.Contains("REVOKE ", StringComparison.Ordinal) &&
+        !source.Contains("SET ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("SET LOCAL ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("INSERT INTO", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE orders", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE dispatch", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
 
     /// <summary>ORD-AUTO-CLOSE-2026-10-10: only the auto-close executor, its two column grants and its read-only
     /// discovery function; the rollback drops exactly that function and nothing else.</summary>

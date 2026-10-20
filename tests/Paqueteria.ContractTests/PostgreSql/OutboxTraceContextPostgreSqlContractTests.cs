@@ -527,7 +527,9 @@ public sealed class OutboxTraceContextPostgreSqlContractTests(PostgreSqlContract
         var ids = context.GetService<IMigrationsAssembly>().Migrations.Keys.Order(StringComparer.Ordinal).ToArray();
         var index = Array.IndexOf(ids, migrationId);
         Assert.True(index > 0, $"{migrationId} must follow an earlier step of its lane");
-        Assert.Equal(ids.Length - 1, index);
+        // Only the DP-INDEXES-ORDERS-DISPATCH-2026-10-20 read-index step may follow the OBS-003 step: rolling back to the
+        // previous step reverts it first, and it touches no outbox object, grant or function.
+        Assert.All(ids[(index + 1)..], later => Assert.Equal(AddAssignmentReadIndexes.MigrationId, later));
         return ids[index - 1];
     }
 

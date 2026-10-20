@@ -808,7 +808,8 @@ public sealed class OrderAutoClosePostgreSqlContractTests(PostgreSqlContractFixt
                 $"""
                 DROP OWNED BY {Executor};
                 DROP ROLE {Executor};
-                DELETE FROM platform."__ef_migrations_history_orders" WHERE "MigrationId"='{AddOrderAutoCloseDiscovery.MigrationId}';
+                DELETE FROM platform."__ef_migrations_history_orders" WHERE "MigrationId" IN (
+                  '{AddOrderAutoCloseDiscovery.MigrationId}','{AddOrderReadIndexes.MigrationId}');
                 """);
             await using (var connection = await fixture.AdminDataSource.OpenConnectionAsync())
             {

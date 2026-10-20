@@ -1158,10 +1158,10 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
         await using var reader = await security.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         // DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: the adoption is followed by the operator outbox executor lane,
-        // then by the OBS-003-OUTBOX-TRACE-CONTEXT step.
+        // then by the OBS-003-OUTBOX-TRACE-CONTEXT step and the DP-INDEXES-ORDERS-DISPATCH-2026-10-20 read indexes.
         Assert.Equal(
             "20260723_AdoptCanonicalDispatchAssignmentsBaseline," + AddOperatorOwnerOutboxExecutor.MigrationId + "," +
-            AddOutboxTraceContext.MigrationId,
+            AddOutboxTraceContext.MigrationId + "," + AddAssignmentReadIndexes.MigrationId,
             reader.GetString(0));
         Assert.Equal("paqueteria_migrator", reader.GetString(1));
         Assert.True(reader.GetBoolean(2));

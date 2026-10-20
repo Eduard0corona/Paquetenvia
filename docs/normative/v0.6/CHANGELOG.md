@@ -1,5 +1,25 @@
 # Changelog
 
+## Índices de lectura de órdenes y despacho (DP-INDEXES-ORDERS-DISPATCH-2026-10-20) — 2026-10-20
+
+- Respuesta literal del project owner (2026-10-20, pregunta G3), registrada en `decision-log.md` con su contexto y la
+  opción no elegida: "Índices de rendimiento: «hechas hoy» lee todos los eventos de la organización, el selector de repartidor lee todo el historial de asignaciones y la lista de órdenes recorre todas las órdenes. Con 20 entregas al día no se nota. ¿Los agregamos?" Respuesta: "Ahora, en un PR (Recommended)" ("Cambio a AI-06 y migración con subida y bajada probadas. 0 USD. Crearlos con las tablas casi vacías es instantáneo; después tardan más.").
+- AI-06 declara cuatro índices de lectura y las instalaciones existentes los reciben por su carril: Orders
+  `20261020000100_AddOrderReadIndexes` (`order_events_actor_status_time_idx` y `orders_price_review_idx`) y Dispatch
+  `20261020000100_AddAssignmentReadIndexes` (`assignments_driver_open_idx` y `assignments_order_driver_idx`). Cada paso
+  adopta el índice que AI-06 ya creó, rechaza uno con el mismo nombre y otra forma, comprueba la definición exacta y su
+  bajada quita solo sus dos índices. Se crean con `CREATE INDEX` normal dentro de la transacción del carril (nunca
+  `CONCURRENTLY`); con las tablas casi vacías es instantáneo.
+- «Hechas hoy» del repartidor lee solo sus cambios de estado del día y una consulta por cambio, en vez de todas las
+  asignaciones que tuvo; las paradas, la lista de repartidores y el selector de repartidor leen solo las asignaciones
+  abiertas; el filtro de revisión de precio del tablero lee solo las órdenes sin terminar en revisión. En PostgreSQL 18.4
+  con 150 000 órdenes sintéticas: 11.7 a 1.5 ms, 55 a 19 ms, 35 a 5.6 ms y 216 a 0.14 ms.
+- Sin cambio: la lista de órdenes por defecto («Todos los estados»), los conteos de la bandeja y el filtro de cobros
+  contra entrega pendientes siguen leyendo todas las órdenes de la organización; un índice solo no lo evita (hace falta
+  reescribir la consulta, un modelo de lectura o una ventana de fechas) y queda para una decisión del owner.
+- AI-08 SCL-003: un criterio DECIDED y la prueba requerida de planes. Sin cambios de AI-18, API, consultas, columnas,
+  restricciones, políticas, roles, permisos ni paquetes. Nota: `docs/development/dp-indexes-orders-dispatch.md`.
+
 ## Repartidor: sesión vencida y recarga sin señal (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19) — 2026-10-19
 
 - Respuestas literales del project owner (2026-10-19), registradas en `decision-log.md` con su contexto y las opciones

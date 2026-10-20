@@ -34,6 +34,9 @@ internal sealed class PostgreSqlOperationsDashboardReader(
         LIMIT 1;
         """;
 
+    // DP-INDEXES-ORDERS-DISPATCH-2026-10-20: the price_review branch below repeats the predicate of the AI-06 partial
+    // index orders_price_review_idx text for text (the unfinished statuses, then the two COALESCE terms), so the planner
+    // proves it and reads only those orders, newest change first; a change to either needs the other.
     private const string ProjectionSql = """
         WITH page AS (
           SELECT

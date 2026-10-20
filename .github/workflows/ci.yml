@@ -39,7 +39,7 @@ jobs:
         shell: bash
         run: |
           actual="$(sha256sum ./docs/normative/v0.6/database/AI-06_SCHEMA.sql | cut -d ' ' -f 1)"
-          test "$actual" = "3a491699ee7462ffd6071bcf2a1092d66654916ed2502bf474b9e4fac78b6754"
+          test "$actual" = "5f51376f5507780a645206b5c235b35f797627deb61d614e3030a43b94acf2ef"
 
       - name: Verify AI-18 remains unchanged
         shell: bash

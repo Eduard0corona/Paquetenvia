@@ -993,7 +993,8 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
               WHERE "MigrationId" IN ('{E002LifecycleStateReader.Lif001MigrationId}',
                 '{Orders.Infrastructure.Persistence.Migrations.AddTrackingLinkGenerations.MigrationId}',
                 '{Orders.Infrastructure.Persistence.Migrations.AddOrderServiceWindow.MigrationId}',
-                '{E002OrderAutoCloseStateReader.MigrationId}');
+                '{E002OrderAutoCloseStateReader.MigrationId}',
+                '{Orders.Infrastructure.Persistence.Migrations.AddOrderReadIndexes.MigrationId}');
             """);
         Assert.Equal("PENDING", await OrdersLaneAsync());
         const string SecurityAclSql = "SELECT nspacl::text FROM pg_namespace WHERE nspname='security'";
@@ -1099,13 +1100,15 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         await coordinator.ApplyAsync(environment.AdminConnectionString, CancellationToken.None, azureOwnershipBridge: true);
         // OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13: the later Dispatch step is undone with it (its executor grant and its
         // history row; the AI-06 trace_parent column stays and is adopted again), so the lane is pending from the
-        // DSP-OPERATOR-OWNER-OUTBOX step on and the bridge applies both steps.
+        // DSP-OPERATOR-OWNER-OUTBOX step on and the bridge applies both steps. The DP-INDEXES-ORDERS-DISPATCH-2026-10-20
+        // step after them loses only its history row: its AI-06 indexes stay and are adopted again.
         await environment.AdminExecuteAsync($"""
             DROP FUNCTION {Dispatch.Infrastructure.Persistence.Migrations.AddOperatorOwnerOutboxExecutor.OutboxFunctionSignature};
             DROP FUNCTION {Dispatch.Infrastructure.Persistence.Migrations.AddOperatorOwnerOutboxExecutor.AuditFunctionSignature};
             REVOKE INSERT (trace_parent) ON platform.outbox_events FROM paqueteria_operator_outbox_executor;
             DELETE FROM platform."__ef_migrations_history_dispatch"
-              WHERE "MigrationId" IN ('{E002OperatorOutboxStateReader.MigrationId}','{E002OperatorOutboxStateReader.OutboxTraceContextMigrationId}');
+              WHERE "MigrationId" IN ('{E002OperatorOutboxStateReader.MigrationId}','{E002OperatorOutboxStateReader.OutboxTraceContextMigrationId}',
+                '{Dispatch.Infrastructure.Persistence.Migrations.AddAssignmentReadIndexes.MigrationId}');
             """);
         Assert.Equal("PENDING", await DispatchLaneAsync());
         const string MembershipSql = """
@@ -1203,7 +1206,8 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         await environment.AdminExecuteAsync($"""
             DROP FUNCTION {Orders.Infrastructure.Persistence.Migrations.AddOrderAutoCloseDiscovery.FunctionSignature};
             DELETE FROM platform."__ef_migrations_history_orders"
-              WHERE "MigrationId"='{E002OrderAutoCloseStateReader.MigrationId}';
+              WHERE "MigrationId" IN ('{E002OrderAutoCloseStateReader.MigrationId}',
+                '{Orders.Infrastructure.Persistence.Migrations.AddOrderReadIndexes.MigrationId}');
             """);
         Assert.Equal("PENDING", await OrdersLaneAsync());
         const string MembershipSql = """
