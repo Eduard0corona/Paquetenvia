@@ -640,7 +640,7 @@ recipient_notices:
       constant time before the body is parsed; the body size is bounded
     email: POST /api/v1/messaging/email/events - the Event Grid subscription validation handshake, then authenticated
       deliveries only (Microsoft Entra protected delivery or a Key Vault secret header, chosen and recorded by NTF-006)
-    unsubscribe: POST /api/v1/recipient-notices/unsubscribe/{token} - the token binds the owner organization and the
+    unsubscribe: POST /api/v1/recipient-notices/unsubscribe/{unsubscribeToken} - the token binds the owner organization and the
       notification id under HMAC-SHA256 (contact lookup key, prefix paquetenvia-unsubscribe-v1), checked in constant
       time and never stored or logged; a GET never opts out, so link scanners cannot
     common: anonymous (no session, cookie or CSRF), rate limited under SEC-004 (their budgets are an owner decision
