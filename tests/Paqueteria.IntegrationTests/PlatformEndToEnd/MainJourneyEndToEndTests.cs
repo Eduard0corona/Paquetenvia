@@ -9,6 +9,7 @@ using Microsoft.Playwright;
 using Paqueteria.Infrastructure.Database.Pooling;
 using Paqueteria.Infrastructure.Observability;
 using Paqueteria.IntegrationTests.Custody;
+using Paqueteria.IntegrationTests.Driver;
 using Paqueteria.IntegrationTests.Observability;
 using Realtime.Application.Configuration;
 using Xunit.Abstractions;
@@ -43,11 +44,6 @@ public sealed class MainJourneyEndToEndTests(PlatformEndToEndFixture fixture, IT
 
     private static readonly TimeSpan DeliveryBudget =
         TimeSpan.FromMilliseconds(OutboxDispatcherOptionsValidator.EventDeliveryBudgetMilliseconds);
-
-    /// <summary>Synthetic photos: the PNG and JPEG signatures only, as the DRV-002 browser suite sends.</summary>
-    private static readonly byte[] SyntheticPng = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-
-    private static readonly byte[] SyntheticJpeg = [0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46];
 
     private static readonly string[] ExpectedStatusChanges =
     [
@@ -255,10 +251,22 @@ public sealed class MainJourneyEndToEndTests(PlatformEndToEndFixture fixture, IT
         await page.GetByText(order.PublicId, new() { Exact = true }).First.WaitForAsync();
 
         await page.GetByRole(AriaRole.Button, new() { Name = "Llegué a recolección", Exact = true }).ClickAsync();
-        await UsePhotoAsync(page, "Confirmar recolección", "pickup-ops005-synthetic.png", "image/png", SyntheticPng);
+        // Synthetic photos the phone can decode (DRV-PROOF-PHOTO-REDUCE-2026-10-20 reduces each before it is queued):
+        // a 1x1 PNG at the pickup and the EXIF GPS camera JPEG of the driver suites at the delivery.
+        await UsePhotoAsync(
+            page,
+            "Confirmar recolección",
+            "pickup-ops005-synthetic.png",
+            "image/png",
+            ProofPhotoEvidence.TealPixelPng);
         await page.GetByRole(AriaRole.Button, new() { Name = "Iniciar traslado", Exact = true }).ClickAsync();
         await page.GetByRole(AriaRole.Button, new() { Name = "Llegué al destino", Exact = true }).ClickAsync();
-        await UsePhotoAsync(page, "Confirmar entrega", "delivery-ops005-synthetic.jpg", "image/jpeg", SyntheticJpeg);
+        await UsePhotoAsync(
+            page,
+            "Confirmar entrega",
+            "delivery-ops005-synthetic.jpg",
+            "image/jpeg",
+            ProofPhotoEvidence.ExifGpsJpeg());
 
         // The PWA sends its queue by itself; the photos wait for the Worker's validation and are retried by the
         // queue's own backoff. "Sincronizar ahora" is the driver's button for sending it at once.
@@ -335,6 +343,7 @@ public sealed class MainJourneyEndToEndTests(PlatformEndToEndFixture fixture, IT
                     WHERE e.order_id=o.id AND e.event_type='ORDER_STATUS_CHANGED' ORDER BY e.aggregate_version),
               ARRAY(SELECT p.proof_type FROM custody.proofs p WHERE p.order_id=o.id ORDER BY p.captured_at),
               ARRAY(SELECT p.object_key FROM custody.proofs p WHERE p.order_id=o.id ORDER BY p.captured_at),
+              ARRAY(SELECT p.content_type FROM custody.proofs p WHERE p.order_id=o.id ORDER BY p.captured_at),
               (SELECT count(*)::integer FROM custody.proof_upload_sessions s WHERE s.order_id=o.id AND s.status='CONSUMED'),
               (SELECT count(*)::integer FROM dispatch.assignments a
                WHERE a.order_id=o.id AND a.driver_id=@driver AND a.cost_cents=4500)
@@ -349,20 +358,28 @@ public sealed class MainJourneyEndToEndTests(PlatformEndToEndFixture fixture, IT
         Assert.Equal(order.PublicId, row[2]);
         Assert.Equal(ExpectedStatusChanges, Assert.IsType<string[]>(row[3]));
         Assert.Equal(new[] { "PICKUP_PHOTO", "DELIVERY_PHOTO" }, Assert.IsType<string[]>(row[4]));
-        Assert.Equal(2, row[6]);
-        Assert.Equal(1, row[7]);
+        Assert.Equal(["image/jpeg", "image/jpeg"], Assert.IsType<string[]>(row[6]));
+        Assert.Equal(2, row[7]);
+        Assert.Equal(1, row[8]);
 
-        // The photo bytes are in the bucket under each proof's final key.
+        // The photo bytes are in the bucket under each proof's final key: the JPEGs the phone reduced, without
+        // metadata (DRV-PROOF-PHOTO-REDUCE-2026-10-20); the EXIF GPS delivery photo is kept as 800x1600.
         using var storage = fixture.Storage.CreateClient();
+        var shapes = new List<(int Width, int Height)>();
         foreach (var key in Assert.IsType<string[]>(row[5]))
         {
-            var metadata = await storage.GetObjectMetadataAsync(new GetObjectMetadataRequest
+            using var stored = await storage.GetObjectAsync(new GetObjectRequest
             {
                 BucketName = CorsCapableS3Fixture.Bucket,
                 Key = key,
             });
-            Assert.True(metadata.ContentLength > 0, "A proof has no object in storage.");
+            using var content = new MemoryStream();
+            await stored.ResponseStream.CopyToAsync(content);
+            Assert.True(content.Length > 0, "A proof has no object in storage.");
+            var header = ProofPhotoEvidence.AssertReducedJpeg(content.ToArray());
+            shapes.Add((header.Width, header.Height));
         }
+        Assert.Equal([(1, 1), (800, 1600)], shapes);
 
         // Invariant 13: the browser sent each photo to the signed storage origin, and the API received no multipart.
         var puts = uploads.Successful("PUT", fixture.StorageOrigin);

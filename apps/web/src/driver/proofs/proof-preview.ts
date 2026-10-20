@@ -1,4 +1,5 @@
 import { checkDriverProofFile, MaximumDriverProofBytes } from "./proof-file";
+import { reduceDriverProofPhoto } from "./proof-photo-reduce";
 
 /** Why the photo step shows a message; each value has es-MX copy below. */
 export type DriverProofPreviewProblem =
@@ -6,6 +7,8 @@ export type DriverProofPreviewProblem =
   | "empty"
   | "too-large"
   | "unsupported-type"
+  /** DRV-PROOF-PHOTO-REDUCE-2026-10-20: the phone could not decode or reduce the photo. */
+  | "unprocessable"
   | "not-saved";
 
 export type DriverProofPreviewState =
@@ -14,7 +17,9 @@ export type DriverProofPreviewState =
       readonly phase: "capture";
       readonly problem: DriverProofPreviewProblem | null;
     }
-  /** "Vista previa de la foto": shown from an in-memory object URL; nothing is stored yet. */
+  /** The picked photo is being reduced on the phone; nothing is shown or stored yet. */
+  | { readonly phase: "preparing" }
+  /** "Vista previa de la foto": the reduced photo from an in-memory object URL; nothing is stored yet. */
   | {
       readonly phase: "preview";
       readonly objectUrl: string;
@@ -28,6 +33,8 @@ export type DriverProofPreviewState =
 export interface DriverProofPreviewOptions {
   readonly createObjectUrl?: (photo: Blob) => string;
   readonly revokeObjectUrl?: (url: string) => void;
+  /** Turns the picked file into the evidence photo; defaults to reduceDriverProofPhoto. */
+  readonly reduce?: (photo: Blob) => Promise<Blob>;
 }
 
 const capturing: DriverProofPreviewState = Object.freeze({
@@ -37,15 +44,19 @@ const capturing: DriverProofPreviewState = Object.freeze({
 
 /**
  * UI-001 phase 3: the driver sees the proof photo before it is queued. The photo exists
- * only in memory (the picked Blob and one object URL at a time); nothing new is persisted
- * or logged. "Usar esta foto" hands that same Blob to the offline queue, which validates,
- * hashes and stores it exactly as before. Every object URL created here is revoked on
- * "Repetir", on "Usar esta foto" and on `release` (unmount).
+ * only in memory (the reduced Blob and one object URL at a time); nothing new is persisted
+ * or logged. DRV-PROOF-PHOTO-REDUCE-2026-10-20: the picked file is first reduced on the
+ * phone (a JPEG of at most 1600 px per side, quality 0.8, without metadata); the preview
+ * shows that reduced photo and "Usar esta foto" hands that same reduced Blob to the
+ * offline queue, which validates, hashes and stores it. The picked file itself is never
+ * kept, previewed or queued, also when it cannot be reduced. Every object URL created
+ * here is revoked on "Repetir", on "Usar esta foto" and on `release` (unmount).
  */
 export class DriverProofPreview {
   private readonly listeners = new Set<() => void>();
   private readonly createObjectUrl: (photo: Blob) => string;
   private readonly revokeObjectUrl: (url: string) => void;
+  private readonly reduce: (photo: Blob) => Promise<Blob>;
   private state: DriverProofPreviewState = capturing;
   private photo: Blob | null = null;
   private objectUrl: string | null = null;
@@ -56,6 +67,7 @@ export class DriverProofPreview {
       options.createObjectUrl ?? ((photo) => URL.createObjectURL(photo));
     this.revokeObjectUrl =
       options.revokeObjectUrl ?? ((url) => URL.revokeObjectURL(url));
+    this.reduce = options.reduce ?? ((photo) => reduceDriverProofPhoto(photo));
   }
 
   public readonly getSnapshot = (): DriverProofPreviewState => this.state;
@@ -67,16 +79,23 @@ export class DriverProofPreview {
     };
   };
 
-  /** The file input changed: exactly one acceptable JPEG or PNG opens the preview. */
-  public select(files: ArrayLike<Blob> | null): void {
+  /**
+   * The file input changed: exactly one acceptable JPEG or PNG is reduced on the phone
+   * and its reduced photo opens the preview. A photo the phone cannot reduce shows
+   * "unprocessable" and nothing is kept. Resolves once the step shows the outcome.
+   */
+  public async select(files: ArrayLike<Blob> | null): Promise<void> {
     if (this.state.phase === "saving" || this.state.phase === "queued") return;
     this.forgetPhoto();
+    // A later pick or `release` supersedes a reduction still running.
+    this.generation += 1;
+    const generation = this.generation;
     if (!files || files.length !== 1) {
       this.setState({ phase: "capture", problem: "select-one" });
       return;
     }
-    const photo = files[0];
-    const failure = checkDriverProofFile(photo);
+    const picked = files[0];
+    const failure = checkDriverProofFile(picked);
     if (failure !== null) {
       this.setState({
         phase: "capture",
@@ -84,7 +103,18 @@ export class DriverProofPreview {
       });
       return;
     }
-    this.showPreview(photo, null);
+    this.setState({ phase: "preparing" });
+    let reduced: Blob;
+    try {
+      reduced = await this.reduce(picked);
+    } catch {
+      if (generation === this.generation) {
+        this.setState({ phase: "capture", problem: "unprocessable" });
+      }
+      return;
+    }
+    if (generation !== this.generation) return;
+    this.showPreview(reduced, null);
   }
 
   /** "Repetir": drop the previewed photo and wait for a new one. */
@@ -174,6 +204,8 @@ export function driverProofPreviewProblemMessage(
       return `La foto pesa más de ${maximumMebibytes} MiB. Tómala de nuevo con menor resolución.`;
     case "unsupported-type":
       return "La foto debe ser JPEG o PNG. Tómala de nuevo.";
+    case "unprocessable":
+      return "No se pudo procesar la foto en el teléfono. Tómala de nuevo.";
     case "not-saved":
       return "No se pudo guardar la foto en el dispositivo. Vuelve a intentarlo o repite la foto.";
   }
@@ -184,6 +216,8 @@ export function driverProofPreviewStatus(state: DriverProofPreviewState): string
   switch (state.phase) {
     case "capture":
       return "";
+    case "preparing":
+      return "Preparando la foto…";
     case "preview":
       return state.problem === null
         ? "Revisa la foto: elige «Usar esta foto» o «Repetir»."
