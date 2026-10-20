@@ -80,7 +80,7 @@ describe("saved dispatch contact", () => {
     expect(() => validateDriverDispatchContact(record, partition.key)).toThrow(DriverStopsCacheError);
   });
 
-  it("leaves the phone with its partition on 401 or 403, and every partition's on logout", async () => {
+  it("leaves the phone with its partition on 403 (never on 401), and every partition's on logout", async () => {
     const contacts = new IndexedDbDriverDispatchContactCache();
     const roles = new IndexedDbDriverOrganizationRolesCache();
     const stops = new IndexedDbDriverStopsCache();

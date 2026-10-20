@@ -27,6 +27,12 @@ export type DriverStopsPhase =
   | "empty"
   | "offline"
   | "offline-empty"
+  /**
+   * DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (owner answer E2): the session
+   * ended (401). Everything saved for the partition stays; the screen asks
+   * the driver to sign in again.
+   */
+  | "session-ended"
   | "unauthorized"
   | "forbidden"
   | "recoverable-error"
@@ -265,12 +271,19 @@ export class DriverStopsController {
     }
   }
 
+  /**
+   * Stops reading and realtime for this session. A 403 (`forbidden`) or a
+   * session without a usable credential (`unauthorized`) also wipes the
+   * partition's snapshot, roles and dispatch contact; a 401
+   * (`session-ended`, DRV-SESSION-EXPIRY-OFFLINE-2026-10-19) keeps them, so
+   * the same driver finds them again after signing in.
+   */
   public async revokeAccess(
-    category: "unauthorized" | "forbidden",
+    category: "session-ended" | "unauthorized" | "forbidden",
   ): Promise<void> {
     await this.stopRealtime();
     this.abortController?.abort();
-    if (this.partition) {
+    if (this.partition && category !== "session-ended") {
       await this.options.cache.clearPartition(this.partition).catch(() => undefined);
     }
     this.setState({
@@ -442,7 +455,11 @@ export class DriverStopsController {
     if (error.category === "cancelled") {
       return;
     }
-    if (error.category === "unauthorized" || error.category === "forbidden") {
+    if (
+      error.category === "session-ended" ||
+      error.category === "unauthorized" ||
+      error.category === "forbidden"
+    ) {
       await this.revokeAccess(error.category);
       return;
     }

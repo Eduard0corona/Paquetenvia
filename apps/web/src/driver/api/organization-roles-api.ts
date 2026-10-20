@@ -12,13 +12,16 @@ import {
 export const MyOrganizationRolesPath = "/api/v1/me/organization-roles";
 
 /**
- * - `unauthorized` / `forbidden`: 401 or 403, the session is no longer a member there;
+ * - `session-ended`: 401, the session ended; the saved answer stays (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19);
+ * - `unauthorized`: the session has no usable credential, so nothing was sent;
+ * - `forbidden`: 403, the session is no longer a member there;
  * - `not-found`: 404, an API older than this app, without the operation;
  * - `recoverable`: no answer, a timeout or a 5xx;
  * - `invalid-contract`: any other answer, or one that breaks the contract;
  * - `cancelled`: the caller aborted.
  */
 export type DriverOrganizationRolesApiFailure =
+  | "session-ended"
   | "unauthorized"
   | "forbidden"
   | "not-found"
@@ -64,6 +67,13 @@ export function createDriverOrganizationRolesApi(
         if (signal?.aborted) {
           throw new DriverOrganizationRolesApiError("cancelled");
         }
+        // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19: a remembered session is not
+        // confirmed by the server, so it never reaches the network (the
+        // cookie may belong to someone else); the caller falls back to what
+        // the partition saved.
+        if (options.session.remembered === true) {
+          throw new DriverOrganizationRolesApiError("recoverable");
+        }
         let authorization: RequestAuthorization;
         try {
           authorization = await resolveRequestAuthorization(options.session, "GET");
@@ -83,7 +93,7 @@ export function createDriverOrganizationRolesApi(
           },
         });
 
-        if (response.status === 401) throw new DriverOrganizationRolesApiError("unauthorized");
+        if (response.status === 401) throw new DriverOrganizationRolesApiError("session-ended");
         if (response.status === 403) throw new DriverOrganizationRolesApiError("forbidden");
         if (response.status === 404) throw new DriverOrganizationRolesApiError("not-found");
         if (response.status >= 500) throw new DriverOrganizationRolesApiError("recoverable");
