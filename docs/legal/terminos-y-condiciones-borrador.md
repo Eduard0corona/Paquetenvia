@@ -395,8 +395,8 @@ después del fin del envío y hoy no se borran.]**
 apagados y nada los usa. El personal puede ver y copiar el enlace de seguimiento de cada orden.
 
 El owner ya decidió cómo funcionarán cuando se construyan y se habiliten **[PENDIENTE: GATE-004 y GATE-007; ninguna de
-estas decisiones está construida ni registrada en el decision log]**. Este borrador las recoge para que el abogado
-revise las obligaciones del Cliente:
+estas decisiones está construida, y todas, salvo el texto del diálogo de "Detener avisos", ya están registradas en el
+decision log]**. Este borrador las recoge para que el abogado revise las obligaciones del Cliente:
 
 10.1. **Qué avisos.** Por WhatsApp: el enlace de seguimiento cuando la orden queda confirmada, "Va en camino" cuando el
 repartidor inicia el traslado, "No se pudo entregar" (sin el motivo; no se avisa si falla la recolección) y
@@ -411,19 +411,32 @@ y cuándo.
 recibir los avisos por WhatsApp. **[PENDIENTE: redacción de esta declaración, qué prueba debe conservar el Cliente y
 qué pasa si resulta falsa. Meta exige ese permiso y puede limitar o bloquear el número si se incumple.]**
 
-10.4. **Baja.** El destinatario puede dejar de recibir avisos respondiendo "BAJA" o tocando "No recibir avisos" en
-WhatsApp, con el enlace de cada correo, o pidiéndolo por teléfono para que el personal toque "Detener avisos" en la
-orden. La baja vale para todos los envíos que le manden, de cualquier empresa, porque el número de WhatsApp es uno
-solo.
+10.4. **Baja.** El destinatario puede dejar de recibir avisos de tres formas:
 
-10.5. **Contenido.** Los avisos no llevan marca ni el nombre del Cliente ni de nadie, tutean al destinatario y tienen un
-botón "Ver seguimiento". En WhatsApp aparece la razón social de la Plataforma como nombre; los correos salen de
+- **Por WhatsApp**, respondiendo "BAJA" o tocando "No recibir avisos". Recibe una sola vez la confirmación "Listo. Ya
+  no recibirás avisos en este número." Deja de recibir los avisos por WhatsApp.
+- **Por correo**, con el enlace de baja de cada correo. El enlace abre una página con un botón para darse de baja; al
+  tocarlo, la página confirma la baja en pantalla y no se le manda ningún mensaje. Deja de recibir los avisos por
+  correo.
+- **Por teléfono**, pidiéndolo para que el personal toque "Detener avisos" en la orden. Antes de detenerlos, el
+  personal ve: "El destinatario dejará de recibir avisos de todas las empresas. Durante el piloto no se puede
+  deshacer." Al destinatario no se le manda nada. Deja de recibir los avisos por WhatsApp y por correo.
+
+La baja vale para todos los envíos que le manden, de cualquier empresa, porque el número de WhatsApp es uno solo.
+Durante el piloto la baja es definitiva: no la deshace una casilla marcada en una orden nueva, ni el personal, ni un
+mensaje del destinatario. Si alguien la pidió por error, no hay forma de reactivarla. **[PENDIENTE: cómo podrá volver a
+recibir avisos quien se dio de baja. El owner lo revisa al terminar el piloto.]**
+
+10.5. **Contenido.** Los avisos no llevan marca ni el nombre del Cliente ni de nadie, y tutean al destinatario. Los de
+WhatsApp tienen el botón "Ver seguimiento". Los correos no tienen botones: llevan el enlace de seguimiento completo en
+una línea aparte. En WhatsApp aparece la razón social de la Plataforma como nombre; los correos salen de
 avisos@paquetenvia.com con el nombre "Seguimiento de envío" y sin buzón de respuestas. Solo se envían de 8:00 a 21:00,
 hora de Mazatlán; lo que ocurra fuera de ese horario sale a las 8:00, salvo que ya no aplique.
 
-10.6. **Dudas del destinatario.** Si el destinatario responde al WhatsApp, recibe una respuesta automática: "Este
-número solo envía avisos. Para dudas sobre tu envío contacta a quien te lo envió." **[PENDIENTE: obligación del
-Cliente de atender esas dudas, y medio de contacto con la Plataforma para casos que el Cliente no pueda resolver.]**
+10.6. **Dudas del destinatario.** Si el destinatario responde al WhatsApp con un mensaje que no sea una baja (sección
+10.4), recibe una respuesta automática: "Este número solo envía avisos. Para dudas sobre tu envío contacta a quien te
+lo envió." **[PENDIENTE: obligación del Cliente de atender esas dudas, y medio de contacto con la Plataforma para casos
+que el Cliente no pueda resolver.]**
 
 10.7. El Cliente no recibe avisos automáticos de sus propios envíos. **[PENDIENTE: cómo se entera el Cliente del
 estado. Hoy, por el enlace de seguimiento que le pase el personal.]**
@@ -436,8 +449,18 @@ estado. Hoy, por el enlace de seguimiento que le pase el personal.]**
 > ("Al quedar confirmada (Recommended)"), E4-P5 ("Sin motivo, con enlace (Recommended)"), E4-P6 ("De \"tú\", sin
 > nombres (Recommended)"), E4-P7 ("La razón social (Recommended)"), E4-P8 ("Las tres vías (Recommended)"), E4-P9
 > ("Respuesta automática (Recommended)"), E4-P10 ("8:00 a 21:00 (Recommended)"), E4-P11 ("Por los dos siempre
-> (Recommended)"), E4-P12 ("avisos@paquetenvia.com (Recommended)") y E4-P13 ("Fuera de este trabajo (Recommended)").
-> Canales: GATE-004-CHANNELS. Si la implementación cambia algo de esto, hay que revisar esta sección.
+> (Recommended)"), E4-P12 ("avisos@paquetenvia.com (Recommended)"), E4-P13 ("Fuera de este trabajo (Recommended)"),
+> E4-P14 ("Corregir los dos (Recommended)"), E4-P15 ("Sí, una línea (Recommended)"), E4-P16 ("No en el piloto
+> (Recommended)") e I4 ("Sí, decirlo (Recommended)"). E4 a E4-P16 están registradas en
+> NTF-RECIPIENT-NOTICES-2026-10-20 (decision log) y en `docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md`, puntos 5 y 7.
+> Textos de WhatsApp y cuerpos de correo: AI-24 `recipient_notices.templates`; el correo, que no tiene botones, dice
+> "en el enlace de abajo" donde WhatsApp dice "con el botón Ver seguimiento" (E4-P14). Confirmaciones y permanencia de
+> la baja: AI-24 `recipient_notices.opt_out` (`confirmation` y `permanence`) y AI-08 NTF-006. Página de baja del
+> correo: AI-07 `/avisos/baja/:token` (abrirla no cambia nada; un botón da la baja). "Detener avisos" detiene
+> los dos canales del contacto de la orden (`opt_out.dispatcher`). El texto de su diálogo es la decisión I4, que se
+> aplica en AI-08 NTF-007 y todavía no está en el decision log; AI-07 (`/ops/orders/:id`, `recipient_notices.stop`)
+> solo pide que diga que el destinatario deja de recibir avisos de todas las organizaciones. Canales:
+> GATE-004-CHANNELS. Si la implementación cambia algo de esto, hay que revisar esta sección.
 
 ---
 
@@ -680,8 +703,9 @@ estos términos:]**
 3. Cuál es la Norma Mexicana a que se refiere el artículo 76 BIS 1 de la Ley Federal de Protección al Consumidor.
 4. Las condiciones de Meta (WhatsApp Business) sobre el permiso del destinatario, citadas solo como las describió la
    pregunta del owner E4-P1; no se abrieron sus políticas.
-5. Las decisiones E4 a E4-P13 están en las respuestas literales del owner, pero todavía no en el decision log ni en el
-   código. Si su implementación cambia, la sección 10 cambia.
+5. Las decisiones E4 a E4-P16 están en el decision log (NTF-RECIPIENT-NOTICES-2026-10-20), pero todavía no en el
+   código; la I4 (el diálogo de "Detener avisos") está solo en las respuestas literales del owner. Si su implementación
+   cambia, la sección 10 cambia.
 6. Qué hará la Plataforma fuera del sistema: cobro del envío, entrega del efectivo al Cliente, atención de
    reclamaciones y copias de fotos. Nada de eso existe en el código.
 
