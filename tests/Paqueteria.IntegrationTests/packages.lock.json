@@ -1165,7 +1165,7 @@
           "Locations.Endpoints": "[1.0.0, )",
           "Locations.Infrastructure": "[1.0.0, )",
           "Microsoft.AspNetCore.OpenApi": "[10.0.10, )",
-          "Microsoft.OpenApi": "[2.7.5, )",
+          "Microsoft.OpenApi": "[2.12.0, )",
           "OpenTelemetry.Extensions.Hosting": "[1.19.1, )",
           "Orders.Endpoints": "[1.0.0, )",
           "Orders.Infrastructure": "[1.0.0, )",
@@ -1515,9 +1515,9 @@
       },
       "Microsoft.OpenApi": {
         "type": "CentralTransitive",
-        "requested": "[2.7.5, )",
-        "resolved": "2.7.5",
-        "contentHash": "0FA67RSnRM4tcBKqiqVu/HPdZ9+QOKbmeRjxRUGTCjPU4C0bmUhd97Dso7Yild5P7nOV6GxJ2xrK0Kv/O9xp0w=="
+        "requested": "[2.12.0, )",
+        "resolved": "2.12.0",
+        "contentHash": "0xB/be+f6qYOhvQPUrVsLrau+fkowYv6gt9RIkajMhwT7sZnqtcA797yW3bS5kgSje+AQW4xZgyLnW641YFioQ=="
       },
       "NetTopologySuite": {
         "type": "CentralTransitive",
