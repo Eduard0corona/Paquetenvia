@@ -688,6 +688,28 @@ def guard_11_private_postgres(ctx: Context) -> GuardResult:
     return _result(11, "private PostgreSQL 18 in the VNet", failures, "no public endpoint, secure transport, >=7 day backups")
 
 
+# ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20 (owner: "Borrado suave más largo (Recommended)"): a deleted or overwritten
+# proof photo stays recoverable for 30 days. With versioning off (ADP-001) an overwrite keeps the prior state as a
+# soft-deleted snapshot (learn.microsoft.com/en-us/azure/storage/blobs/soft-delete-blob-overview). The container gets
+# the same 30 days, so deleting `proofs` is not a shorter way to lose the photos. Exactly 30: soft-deleted data is
+# billed as stored data, and a different period needs a new owner decision.
+PROOF_SOFT_DELETE_DAYS = 30
+PROOF_SOFT_DELETE_POLICIES = ("deleteRetentionPolicy", "containerDeleteRetentionPolicy")
+
+
+def _proof_soft_delete_failures(service_properties: dict[str, Any]) -> list[str]:
+    failures = []
+    for policy in PROOF_SOFT_DELETE_POLICIES:
+        retention = service_properties.get(policy) or {}
+        days = retention.get("days")
+        if retention.get("enabled") is not True or type(days) is not int or days != PROOF_SOFT_DELETE_DAYS:
+            failures.append(f"blob service {policy} must be enabled for exactly {PROOF_SOFT_DELETE_DAYS} days "
+                            f"(ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20), found enabled={retention.get('enabled')} days={days}")
+        if retention.get("allowPermanentDelete") not in (None, False):
+            failures.append(f"blob service {policy} must not allow permanent delete, which ends the 30 days early")
+    return failures
+
+
 def guard_12_storage(ctx: Context) -> GuardResult:
     failures = []
     accounts = ctx.resources("Microsoft.Storage/storageAccounts")
@@ -697,9 +719,14 @@ def guard_12_storage(ctx: Context) -> GuardResult:
     for key, expected in (("allowBlobPublicAccess", False), ("allowSharedKeyAccess", False), ("supportsHttpsTrafficOnly", True), ("isHnsEnabled", False), ("minimumTlsVersion", "TLS1_2")):
         if properties.get(key) != expected:
             failures.append(f"storage {key} must be {expected}")
-    for _, service in ctx.resources("Microsoft.Storage/storageAccounts/blobServices"):
-        if (service.get("properties", {}) or {}).get("isVersioningEnabled") is not False:
+    services = ctx.resources("Microsoft.Storage/storageAccounts/blobServices")
+    if len(services) != 1:
+        failures.append(f"expected one blob service, found {len(services)}")
+    for _, service in services:
+        service_properties = service.get("properties", {}) or {}
+        if service_properties.get("isVersioningEnabled") is not False:
             failures.append("blob versioning must be off (ADP-001)")
+        failures.extend(_proof_soft_delete_failures(service_properties))
     containers = ctx.resources("Microsoft.Storage/storageAccounts/blobServices/containers")
     if not containers or any((c.get("properties", {}) or {}).get("publicAccess") != "None" for _, c in containers):
         failures.append("proof container must be private")
@@ -710,7 +737,8 @@ def guard_12_storage(ctx: Context) -> GuardResult:
         settings = defenders[0][1].get("properties", {}) or {}
         if settings.get("isEnabled") is not True or ((settings.get("malwareScanning", {}) or {}).get("onUpload", {}) or {}).get("isEnabled") is not True:
             failures.append("Defender for Storage on-upload malware scanning must be enabled")
-    return _result(12, "proof storage private, Entra-only, malware scanned", failures, "no anonymous or shared-key access, Defender on upload")
+    return _result(12, "proof storage private, Entra-only, malware scanned, 30-day soft delete", failures,
+                   f"no anonymous or shared-key access, Defender on upload, blob and container soft delete {PROOF_SOFT_DELETE_DAYS} days")
 
 
 def guard_13_key_vault(ctx: Context) -> GuardResult:
