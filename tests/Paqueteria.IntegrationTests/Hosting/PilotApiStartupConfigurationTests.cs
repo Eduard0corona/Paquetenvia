@@ -1,14 +1,18 @@
 using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using System.Text.RegularExpressions;
+using Dispatch.Infrastructure;
+using Drivers.Infrastructure;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Orders.Infrastructure.Orders;
 using Paqueteria.Infrastructure.Database.Baseline;
-using Paqueteria.IntegrationTests.Orders;
 using Realtime.Application.Configuration;
+using Routing.Infrastructure;
 
 namespace Paqueteria.IntegrationTests.Hosting;
 
@@ -17,8 +21,8 @@ namespace Paqueteria.IntegrationTests.Hosting;
 /// (<c>deploy/azure/pilot/apps.bicep</c> <c>apiEnv</c> plus <c>apps.settings.json</c>) is checked against every
 /// <c>ValidateOnStart</c> rule. Each Key Vault mapping of the API is replaced by a synthetic value under its mapped
 /// configuration key, as the ADP-001 Key Vault secrets source would deliver it; nothing reaches Azure or a database
-/// (the connections point to a closed local port). The only failures left are the owner-pending settings listed in
-/// <see cref="OwnerPendingStartFailures"/>; with stand-ins for those, the host starts.
+/// (the connections point to a closed local port). Since GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20 the settings
+/// carry the owner's driver eligibility maps, so the host starts with exactly the pilot's settings.
 /// </summary>
 /// <remarks>
 /// Before this decision the pilot API ran the realtime outbox dispatchers with no
@@ -30,17 +34,18 @@ public sealed partial class PilotApiStartupConfigurationTests
     private const string ClosedPort = "Host=127.0.0.1;Port=1;Database=paqueteria;Password=unused;Timeout=3;Pooling=false";
 
     /// <summary>
-    /// The start validation failures the pilot API settings still produce, each awaiting an owner decision outside
-    /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12. <c>Drivers:Provider</c> and <c>Routing:Provider</c> are
-    /// <c>PostgreSql</c> in the pilot, so the API needs the per-vehicle-type driver eligibility maps (required document
-    /// types and capacities); <c>apps.settings.json</c> carries none yet. When the owner supplies them this list
-    /// becomes empty and the pilot settings must start as they are.
+    /// The start validation failures the pilot API produces without its driver eligibility maps: <c>Drivers:Provider</c>
+    /// and <c>Routing:Provider</c> are <c>PostgreSql</c> in the pilot, so both validate the per-vehicle-type required
+    /// document types and capacities that <c>apps.settings.json</c> carries
+    /// (GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20).
     /// </summary>
-    private static readonly string[] OwnerPendingStartFailures =
+    private static readonly string[] MissingEligibilityStartFailures =
     [
         "Drivers:Eligibility must define a valid document and capacity policy for every vehicle type.",
         "Drivers:Eligibility must define the DSP-001 policy used by PostgreSQL routing.",
     ];
+
+    private const string EligibilitySection = "Drivers:Eligibility";
 
     /// <summary>
     /// OBS-003: the pilot keeps the export off with a valid <c>TelemetryExport</c> section, and maps the organization
@@ -81,27 +86,10 @@ public sealed partial class PilotApiStartupConfigurationTests
     }
 
     [Fact]
-    public async Task Pilot_api_settings_fail_start_validation_only_on_owner_pending_settings()
+    public async Task The_pilot_api_starts_with_its_own_settings_and_its_realtime_dispatchers()
     {
+        // GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20: no stand-in any more; every value is the pilot's own.
         await using var api = new PilotApiFactory(PilotApiSettings.Load().Resolved());
-
-        var failures = StartFailures(Record.Exception(() => api.Services));
-
-        // Nothing about the realtime dispatcher or any connection string is missing any more.
-        Assert.Equal(OwnerPendingStartFailures.Order(StringComparer.Ordinal), failures.Order(StringComparer.Ordinal));
-    }
-
-    [Fact]
-    public async Task With_the_owner_pending_settings_the_pilot_api_starts_with_its_realtime_dispatchers()
-    {
-        // Synthetic stand-ins for the owner-pending driver eligibility maps only; every other value is the pilot's own.
-        var settings = PilotApiSettings.Load().Resolved();
-        foreach (var pair in OrderTransitionGuardsApiFactory.DriverEligibilitySettings)
-        {
-            settings[pair.Key] = pair.Value;
-        }
-
-        await using var api = new PilotApiFactory(settings);
         var dispatcher = api.Services.GetRequiredService<IOptions<OutboxDispatcherOptions>>().Value;
 
         Assert.Equal(OutboxDispatcherProviderKind.PostgreSql, dispatcher.Provider);
@@ -111,6 +99,57 @@ public sealed partial class PilotApiStartupConfigurationTests
         Assert.Equal(1_000, dispatcher.Business.MaximumIdleWaitMilliseconds);
         Assert.Equal(500, dispatcher.Location.PollIntervalMilliseconds);
         Assert.Equal(1_000, dispatcher.Location.MaximumIdleWaitMilliseconds);
+    }
+
+    [Fact]
+    public async Task Every_module_of_the_pilot_api_binds_exactly_the_reviewed_driver_eligibility_maps()
+    {
+        // Drivers (DSP-001), Routing (RTE-001), Dispatch (DSP-002) and Orders (ORD-002) each bind Drivers:Eligibility on
+        // their own; all four must hold exactly the entries of apps.settings.json, so they never decide differently.
+        var settings = PilotApiSettings.Load();
+        var reviewed = settings.Configuration
+            .Where(pair => pair.Key.StartsWith(EligibilitySection + ":", StringComparison.OrdinalIgnoreCase))
+            .Select(pair => pair.Key + "=" + pair.Value)
+            .ToHashSet(StringComparer.Ordinal);
+        Assert.Contains(EligibilitySection + ":RequiredDocumentTypesByVehicleType:WALKER:0=IDENTITY", reviewed);
+        Assert.DoesNotContain(reviewed, entry => entry.Contains(":NonExpiringDocumentTypes:", StringComparison.Ordinal));
+
+        await using var api = new PilotApiFactory(settings.Resolved());
+        var bound = new Dictionary<string, HashSet<string>>(StringComparer.Ordinal)
+        {
+            ["Drivers"] = Flatten(api.Services.GetRequiredService<IOptions<DriversOptions>>().Value.Eligibility),
+            ["Routing"] = Flatten(api.Services.GetRequiredService<IOptions<RoutingDriverEligibilityOptions>>().Value),
+            ["Dispatch"] = Flatten(api.Services.GetRequiredService<IOptions<DispatchDriverEligibilityOptions>>().Value),
+            ["Orders"] = Flatten(
+                api.Services.GetRequiredService<IOptions<OrderTransitionDriverEligibilityOptions>>().Value),
+        };
+
+        foreach (var (module, entries) in bound)
+        {
+            Assert.True(
+                reviewed.SetEquals(entries),
+                $"{module} binds Drivers:Eligibility differently from apps.settings.json: " +
+                string.Join(", ", entries.Except(reviewed).Concat(reviewed.Except(entries)).Order(StringComparer.Ordinal)));
+        }
+    }
+
+    [Fact]
+    public async Task Without_its_driver_eligibility_maps_the_pilot_api_refuses_to_start()
+    {
+        var settings = PilotApiSettings.Load().Resolved();
+        foreach (var key in settings.Keys
+                     .Where(key => key.StartsWith(EligibilitySection + ":", StringComparison.OrdinalIgnoreCase))
+                     .ToArray())
+        {
+            settings.Remove(key);
+        }
+
+        await using var api = new PilotApiFactory(settings);
+        var failures = StartFailures(Record.Exception(() => api.Services));
+
+        Assert.Equal(
+            MissingEligibilityStartFailures.Order(StringComparer.Ordinal),
+            failures.Order(StringComparer.Ordinal));
     }
 
     [Fact]
@@ -174,6 +213,45 @@ public sealed partial class PilotApiStartupConfigurationTests
     }
 
     private static string Connection(string login) => ClosedPort + ";Username=" + login;
+
+    /// <summary>
+    /// A bound eligibility options object as <c>Drivers:Eligibility:...=value</c> entries, the way configuration spells
+    /// them (lists by index, booleans in lowercase); empty lists and maps give no entry.
+    /// </summary>
+    private static HashSet<string> Flatten<TOptions>(TOptions options)
+    {
+        var entries = new HashSet<string>(StringComparer.Ordinal);
+        Visit(JsonSerializer.SerializeToNode(options), EligibilitySection);
+        return entries;
+
+        void Visit(JsonNode? node, string path)
+        {
+            switch (node)
+            {
+                case JsonObject members:
+                    foreach (var (name, member) in members)
+                    {
+                        Visit(member, path + ":" + name);
+                    }
+
+                    break;
+                case JsonArray items:
+                    for (var index = 0; index < items.Count; index++)
+                    {
+                        Visit(items[index], path + ":" + index);
+                    }
+
+                    break;
+                case JsonValue value:
+                    entries.Add(path + "=" + (value.GetValueKind() == JsonValueKind.String
+                        ? value.GetValue<string>()
+                        : value.ToJsonString()));
+                    break;
+                default:
+                    throw new Xunit.Sdk.XunitException($"{path} is null after binding.");
+            }
+        }
+    }
 
     /// <summary>The API settings the pilot deploys, read from the reviewed templates.</summary>
     private sealed partial record PilotApiSettings(

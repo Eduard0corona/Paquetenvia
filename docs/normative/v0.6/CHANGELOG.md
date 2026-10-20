@@ -1,5 +1,33 @@
 # Changelog
 
+## Reglas de elegibilidad por tipo de vehículo en el piloto y tarea de documentos de repartidor (GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20) — 2026-10-20
+
+- Respuestas literales del project owner (2026-10-20, preguntas G4, H1, H2 y H3), registradas en `decision-log.md` con
+  el contexto de las rondas G y H y las opciones no elegidas:
+  - "Reglas de elegibilidad por vehículo (GATE-010): sin ellas la API del piloto no arranca, y cada uno de los 5 tipos necesita capacidad mayor a cero (peso, volumen y número de paquetes). ¿Te propongo valores?" Respuesta: "Sí, propónmelos (Recommended)" ("Te paso una tabla con valores por tipo de vehículo, con su fuente, para que la apruebes o la cambies. No se aplica nada sin tu respuesta.");
+  - "Bloqueo nuevo (G4): hoy no hay forma de registrar documentos de repartidor. El API los define, pero nada los guarda ni los valida; solo los datos sintéticos tienen. La regla exige documentos válidos, así que con cualquier valor la API arranca pero no se puede asignar a ningún repartidor real. ¿Qué hacemos?" Respuesta: "Tarea nueva, tras GATE-007 (Recommended)" ("Se aprueba la lista de documentos como objetivo y se abre una tarea para registrarlos y que despacho los valide. Depende de GATE-007, igual que los perfiles reales de repartidor, así que casi no agrega espera.");
+  - "Capacidad por pedido (propuesta con fuentes: Lalamove, Uber Envíos Culiacán, NOM-036 de carga). Moto 5 paq./20 kg/10 kg por paquete/40×40×35 cm. Auto 10/100 kg/20 kg/90×80×60. Van 20/400 kg/20 kg/200×120×120. Bici 3/10 kg/10 kg/45×40×30. A pie 2/5 kg/5 kg/45×40×30. Medidas opcionales. Los límites son por pedido; despacho decide cuántos pedidos lleva cada quien. ¿La apruebas?" Respuesta: "Aprobar la tabla (Recommended)" ("Tal cual. Los números de paquetes de moto, auto, bici y a pie, y el peso y tamaño a pie, son supuestos sin fuente; se ajustan después con la operación real. Pickup cuenta como van y bici de carga como bici.");
+  - "Documentos exigidos: moto, auto y van piden INE, licencia, tarjeta de circulación y seguro; bici y a pie solo INE. Todos con fecha de vencimiento; a una licencia permanente de Sinaloa se le pone una fecha de revisión que tú definas. Sin antecedentes penales por ahora (se decide con GATE-007 y GATE-008). ¿La apruebas?" Respuesta: "Aprobar la lista (Recommended)" ("Tal cual. El seguro es política tuya (GATE-009 sigue abierto); si contratas una póliza de flotilla se quita.").
+- `deploy/azure/pilot/apps.settings.json` conserva `Finance__OperationalTimeZone` y agrega las reglas aprobadas, iguales
+  para todas las organizaciones. Por pedido (paquetes / peso total / paquete más pesado / largo × ancho × alto): moto 5 /
+  20 kg / 10 kg / 40 × 40 × 35 cm, auto 10 / 100 kg / 20 kg / 90 × 80 × 60 cm, van 20 / 400 kg / 20 kg / 200 × 120 ×
+  120 cm, bici 3 / 10 kg / 10 kg / 45 × 40 × 30 cm, a pie 2 / 5 kg / 5 kg / 45 × 40 × 30 cm; medidas opcionales en los
+  cinco. Documentos: INE, licencia, tarjeta de circulación y seguro para moto, auto y van; solo INE para bici y a pie;
+  todos con fecha de vencimiento y sin antecedentes penales. Pickup cuenta como van y bici de carga como bici.
+- La API del piloto ya arranca con su propia configuración y `settings-check` imprime `ENV001_SETTINGS=PASS`. Ningún
+  repartidor real se puede asignar todavía: nada registra ni valida documentos, así que cada repartidor recibe
+  `REQUIRED_DOCUMENT_MISSING` hasta que lleguen DRV-DOC-001 y GATE-007. Los límites son por pedido; despacho decide
+  cuántos pedidos lleva cada repartidor.
+- AI-08: nueva tarea DRV-DOC-001 (registro de documentos de repartidor y validación por despacho: `registerMyDriverDocument`
+  y `listMyDriverDocuments` de `/driver/me/documents` más una operación de despacho que marca VALID o REJECTED, o una
+  extensión del cargador MDM-001, a elegir con un ADR), depende de DSP-001 y MDM-001, `approval_gate` GATE-007; MDM-001
+  gana un criterio DECIDED con los valores. Sin código nuevo.
+- Pruebas: `PilotApiStartupConfigurationTests` arranca la API con la configuración del piloto, comprueba que Drivers,
+  Routing, Dispatch y Orders leen exactamente esas reglas y sigue fijando las dos fallas de arranque sin ellas;
+  `test_env001_pilot_guards.py` fija los valores aprobados. Ninguna regla del guard cambia.
+- GATE-010 sigue abierto (zonas, horarios, artículos prohibidos, SLA) y GATE-009 también. Fuentes de los valores en la
+  fila del decision-log. Sin cambios de esquema, roles, permisos, migraciones, paquetes, `apps.bicep` ni topología de CI.
+
 ## Avisos al destinatario: contratos (NTF-RECIPIENT-NOTICES-2026-10-20) — 2026-10-20
 
 - Respuestas literales del project owner (2026-10-19 y 2026-10-20), registradas en `decision-log.md` con su

@@ -33,6 +33,7 @@ lists what could only be checked statically.
 | PILOT-SAME-ORIGIN-ROUTING | Container Apps rule-based routing (§3) |
 | ADP-001-POD-BLOB-DEFENDER | Storage account (Entra-only, no anonymous or shared-key access), private container `proofs`, Defender for Storage on-upload malware scanning, RBAC from the ADP-001 table |
 | ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20 | Blob and container soft delete 30 days on the proof storage, versioning off: a deleted or overwritten photo can be recovered for 30 days (§6.4, guard P12) |
+| GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20 | The driver eligibility rules per vehicle type (per-order capacity and required documents) in `apps.settings.json` (§4 "Driver eligibility rules"); GATE-010 stays open |
 | ADP-001-PII-KEYVAULT-ENVELOPE | Key Vault RSA-3072 `pii-kek` (wrap/unwrap only). The API alone has *Key Vault Crypto Service Encryption User* on it. |
 | SCL-001 / ENV-001 Data Protection KEK | Key Vault RSA-3072 `dataprotection-kek`. API and Worker have *Crypto Service Encryption User*, and the workloads get `DataProtection__KeyEncryption__*`. |
 | GATE-013 | API and Worker run with `minReplicas = maxReplicas = 1`, SignalR `InProcess`, no Redis and no Azure SignalR Service (guard P08) |
@@ -290,8 +291,8 @@ App settings wired by `apps.bicep`:
 API and Worker settings. It cannot override any platform-managed prefix, and it cannot carry a
 mock/synthetic value or a secret-looking name (guard P17). The workflow refuses to deploy while any
 value is still `OWNER_DECISION_REQUIRED` or while the driver eligibility rules are missing (below). Today the
-file only carries `Finance__OperationalTimeZone=America/Mazatlan`, so the owner still has to supply the driver
-eligibility rules before the first deploy.
+file carries `Finance__OperationalTimeZone=America/Mazatlan` and the driver eligibility rules the owner approved
+(GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20, below), so it no longer blocks the first deploy.
 
 There is no assignment or driver eligibility policy version setting (POLICY-VERSIONS-PER-ORG-2026-10-02,
 owner 2026-10-02: "Por empresa, piloto-2026-10-v1"). Each organization carries its own versions in
@@ -308,8 +309,8 @@ organization versions its own pricing policy in `pricing.tariff_rules.policy_ver
 tariffs (MDM-001), and every quote freezes the version of the rule it selected. The API refuses to
 start if `Pricing__PricingPolicyVersion` is still set.
 
-**Driver eligibility rules (owner decision pending, blocks the deploy).** The API runs with
-`Drivers__Provider=PostgreSql` and `Routing__Provider=PostgreSql`, so it refuses to start until the same file gives
+**Driver eligibility rules (GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20).** The API runs with
+`Drivers__Provider=PostgreSql` and `Routing__Provider=PostgreSql`, so it refuses to start unless the same file gives
 every vehicle type (`MOTORCYCLE`, `CAR`, `VAN`, `BICYCLE`, `WALKER`) its rules:
 
 - `Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TYPE>__<n>`, numbered from `0`: the documents a driver
@@ -322,14 +323,47 @@ every vehicle type (`MOTORCYCLE`, `CAR`, `VAN`, `BICYCLE`, `WALKER`) its rules:
   dimensions; `false` when absent) and `Drivers__Eligibility__NonExpiringDocumentTypes__<n>` (document types that need
   no expiry date; every other required document needs one that has not passed).
 
-The file has none today and there is no default: they are business rules the owner chooses.
-`env001_pilot_guards.py settings-check` (provenance job and Stage 4) stops with
+There is no default: they are business rules the owner chooses. The file carries the ones the owner approved on
+2026-10-20 (G4 "Sí, propónmelos (Recommended)", H2 "Aprobar la tabla (Recommended)", H3 "Aprobar la lista
+(Recommended)"), as they were proposed. Capacity is per order:
+
+| Type | Packages | Total weight (g) | Heaviest package (g) | Length × width × height (mm) | `RequireDimensions` | Required documents |
+|---|---|---|---|---|---|---|
+| `MOTORCYCLE` | 5 | 20000 | 10000 | 400 × 400 × 350 | `false` | `IDENTITY`, `DRIVER_LICENSE`, `VEHICLE_CARD`, `INSURANCE` |
+| `CAR` | 10 | 100000 | 20000 | 900 × 800 × 600 | `false` | `IDENTITY`, `DRIVER_LICENSE`, `VEHICLE_CARD`, `INSURANCE` |
+| `VAN` | 20 | 400000 | 20000 | 2000 × 1200 × 1200 | `false` | `IDENTITY`, `DRIVER_LICENSE`, `VEHICLE_CARD`, `INSURANCE` |
+| `BICYCLE` | 3 | 10000 | 10000 | 450 × 400 × 300 | `false` | `IDENTITY` |
+| `WALKER` | 2 | 5000 | 5000 | 450 × 400 × 300 | `false` | `IDENTITY` |
+
+- There is no `NonExpiringDocumentTypes` entry: every required document needs an expiry date that has not passed, and
+  a permanent Sinaloa driver license gets a review date the owner defines. There is no `BACKGROUND_CHECK` for now; it
+  is decided with GATE-007 and GATE-008 (H3).
+- The package counts of `MOTORCYCLE`, `CAR`, `BICYCLE` and `WALKER`, and the weights and size of `WALKER`, are
+  assumptions without a source, to be adjusted with the real operation (H2). `INSURANCE` is the owner's policy while
+  GATE-009 is open; it is removed if the company contracts a fleet policy (H3).
+- **Pickups count as `VAN` and cargo bikes as `BICYCLE`** (H2); there is no other vehicle type.
+- **For operations: the limits apply per order.** Each order is compared on its own, with all its packages (total
+  weight, heaviest package, the largest length, width and height captured); nobody adds up the orders a driver already
+  carries or a route holds. Dispatch decides how many orders each driver carries. A quote does not check any vehicle,
+  so an order larger than the `VAN` row can be created but no driver can take it.
+- **The API starts, but no real driver can be assigned yet.** Nothing registers or validates driver documents: AI-05
+  `/driver/me/documents` is not implemented and only the synthetic DevSeed writes `drivers.driver_documents`. Until the
+  AI-08 task DRV-DOC-001 (driver document registration and dispatch validation, owner decision H1) and GATE-007 land,
+  every driver is refused with `REQUIRED_DOCUMENT_MISSING`.
+- GATE-010 stays open (zones, hours, prohibited items, SLA): this decision covers only these vehicle rules. Changing a
+  value is a new owner decision and a PR to this file; an organization's `driver_eligibility_policy_version` (above) is
+  not raised automatically, so evaluations under different rules would share one version label until it is.
+
+`env001_pilot_guards.py settings-check` (provenance job and Stage 4) prints `ENV001_SETTINGS=PASS` on the file. If
+any rule goes missing it stops with
 `STOP_FOR_OWNER_DECISION: driver eligibility rules for vehicle type <TYPE> are missing: ...`, naming each missing
-setting, so **the pilot deploy stops before touching Azure** until all five vehicle types are complete. It applies the
-API's rules to every entry present and accepts only the exact names above. Guard P17 (`check`) refuses an invalid entry
-but not a missing one. Without this stop, a first deploy would fail only at the smoke test (`/auth/session is not
-served by the API`), and a later one would leave the earlier revision serving. `PilotApiStartupConfigurationTests`
-pins the two start failures (`OwnerPendingStartFailures`) until the owner supplies the rules.
+setting, so **the pilot deploy stops before touching Azure** until all five vehicle types are complete again. It
+applies the API's rules to every entry present and accepts only the exact names above. Guard P17 (`check`) refuses an
+invalid entry but not a missing one. Without this stop, a deploy would fail only at the smoke test (`/auth/session is
+not served by the API`) or leave the earlier revision serving. `PilotApiStartupConfigurationTests` starts the pilot API
+with the file as it is, checks that Drivers, Routing, Dispatch and Orders bind exactly its entries, and pins the two
+start failures without them (`MissingEligibilityStartFailures`); `test_env001_pilot_guards.py` pins the approved
+values.
 
 **Dispatch number for the driver app (DRV-DISPATCH-CONTACT-2026-10-12, owner 2026-10-12: "Sí, configurable
 (Recommended)").** The driver app shows "Llamar a despacho" (a `tel:` link) next to its texts that ask the driver to
@@ -449,9 +483,9 @@ Two further caveats:
    `PILOT_GATE_012_DECISION=GATE-012-PILOT-SCOPE` is already approved (owner, 2026-09-28).
 3. The owner replaces every `OWNER_DECISION_REQUIRED` and supplies the missing owner values (PR → `development` →
    `main`):
-   - `deploy/azure/pilot/apps.settings.json`: no placeholder remains since POLICY-VERSIONS-PER-ORG-2026-10-02, but
-     the driver eligibility rules (documents and capacity per vehicle type, §4 "Driver eligibility rules") are
-     missing;
+   - `deploy/azure/pilot/apps.settings.json`: nothing left to supply. No placeholder remains since
+     POLICY-VERSIONS-PER-ORG-2026-10-02, and the driver eligibility rules (documents and capacity per vehicle type)
+     are in the file since GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20 (§4 "Driver eligibility rules");
    - the alert e-mail in `deploy/azure/pilot/observability.parameters.json`;
    - `webTermsVersion` and `webPrivacyVersion` in `deploy/azure/pilot/web.parameters.json`, the accepted
      terms and privacy notice versions that come with the approved notice (§4).
@@ -561,14 +595,15 @@ the owner can confirm in Log Analytics that `ca-pv-pilot-api` logs `realtime_out
 `provider=postgresql` and no `realtime_outbox_message_failed`.
 
 **Driver eligibility rules (step 3, found by `PilotApiStartupConfigurationTests`):** with
-`Drivers__Provider=PostgreSql` and `Routing__Provider=PostgreSql` the API refuses to start until
+`Drivers__Provider=PostgreSql` and `Routing__Provider=PostgreSql` the API refuses to start unless
 `apps.settings.json` carries the driver eligibility rules for every vehicle type (MOTORCYCLE, CAR, VAN, BICYCLE,
 WALKER): `Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TYPE>__<n>` and
 `Drivers__Eligibility__VehicleCapacity__<TYPE>__{MaximumPackageCount,MaximumTotalWeightGrams,MaximumSinglePackageWeightGrams,MaximumLengthMillimeters,MaximumWidthMillimeters,MaximumHeightMillimeters}`
 (optionally `Drivers__Eligibility__NonExpiringDocumentTypes__<n>` and
-`Drivers__Eligibility__VehicleCapacity__<TYPE>__RequireDimensions`; §4 "Driver eligibility rules"). The file has
-none today; the values are business rules the owner must choose. `settings-check` stops the deploy before touching
-Azure while any is missing.
+`Drivers__Eligibility__VehicleCapacity__<TYPE>__RequireDimensions`; §4 "Driver eligibility rules"). The file carries
+the rules the owner approved (GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20), so the API starts and `settings-check`
+passes; it stops the deploy before touching Azure if any goes missing. After the deploy no real driver can be assigned
+until DRV-DOC-001 and GATE-007 land: every driver gets `REQUIRED_DOCUMENT_MISSING` (§4).
 
 ### 6.2 Redeploy
 

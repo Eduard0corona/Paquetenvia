@@ -28,8 +28,33 @@ import env001_pilot_guards as guards  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20 (owner answers G4, H2 and H3): the per-order capacity of each vehicle
+# type (packages, total grams, grams of the heaviest package, length, width and height in millimetres; dimensions
+# optional) and its required documents, each with an expiry date (no NonExpiringDocumentTypes, no BACKGROUND_CHECK).
+APPROVED_CAPACITY = {
+    "MOTORCYCLE": (5, 20000, 10000, 400, 400, 350),
+    "CAR": (10, 100000, 20000, 900, 800, 600),
+    "VAN": (20, 400000, 20000, 2000, 1200, 1200),
+    "BICYCLE": (3, 10000, 10000, 450, 400, 300),
+    "WALKER": (2, 5000, 5000, 450, 400, 300),
+}
+MOTOR_VEHICLE_DOCUMENTS = ("IDENTITY", "DRIVER_LICENSE", "VEHICLE_CARD", "INSURANCE")
+APPROVED_DOCUMENTS = {
+    "MOTORCYCLE": MOTOR_VEHICLE_DOCUMENTS,
+    "CAR": MOTOR_VEHICLE_DOCUMENTS,
+    "VAN": MOTOR_VEHICLE_DOCUMENTS,
+    "BICYCLE": ("IDENTITY",),
+    "WALKER": ("IDENTITY",),
+}
+
+
+def without_eligibility(entries):
+    """The settings with every Drivers__Eligibility entry removed."""
+    return [entry for entry in entries if not guards.is_eligibility_name(entry["name"])]
+
 # A complete, synthetic driver eligibility policy: the values OrderTransitionGuardsApiFactory.DriverEligibilitySettings
-# gives the API (PilotApiStartupConfigurationTests starts the pilot API with them). Never the owner's rules.
+# gives the API in its tests. Never the owner's rules, which apps.settings.json carries since
+# GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20 (PilotApiStartupConfigurationTests starts the pilot API with them).
 SYNTHETIC_CAPACITY = {
     "MaximumPackageCount": "4",
     "MaximumTotalWeightGrams": "4000",
@@ -86,16 +111,20 @@ class ScramVerifierTests(unittest.TestCase):
 
 
 class SettingsTests(unittest.TestCase):
-    def test_repository_settings_are_well_formed_and_still_await_the_driver_eligibility_rules(self):
+    def test_repository_settings_are_well_formed_and_carry_the_driver_eligibility_rules(self):
         # POLICY-VERSIONS-PER-ORG-2026-10-02 removed the last two OWNER_DECISION_REQUIRED settings (the global
-        # assignment and eligibility policy versions), but the file still lacks the driver eligibility rules the pilot
-        # API needs to start: the static guard (P17) accepts the file, the deploy (settings-check) does not.
+        # assignment and eligibility policy versions) and GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20 added the
+        # driver eligibility rules the pilot API needs to start: the static guard (P17) and the deploy (settings-check)
+        # both accept the file. Without the rules the deploy still stops, once per vehicle type.
         entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
         self.assertEqual([], guards.validate_settings(entries, allow_sentinel=True))
-        failures = guards.validate_settings(entries, allow_sentinel=False)
+        self.assertEqual([], guards.validate_settings(entries, allow_sentinel=False))
+        failures = guards.validate_settings(without_eligibility(entries), allow_sentinel=False)
         self.assertEqual(len(guards.ELIGIBILITY_VEHICLE_TYPES), len(failures), failures)
         self.assertTrue(all(failure.startswith("driver eligibility rules for vehicle type ") for failure in failures), failures)
-        self.assertEqual([], guards.validate_settings(entries + SYNTHETIC_ELIGIBILITY, allow_sentinel=False))
+        self.assertEqual([], guards.validate_settings(without_eligibility(entries), allow_sentinel=True))
+        self.assertEqual(
+            [], guards.validate_settings(without_eligibility(entries) + SYNTHETIC_ELIGIBILITY, allow_sentinel=False))
         self.assertTrue(guards.validate_settings([{"name": "Finance__OperationalTimeZone", "value": guards.OWNER_SENTINEL}], allow_sentinel=False))
 
     def test_platform_managed_mock_and_secret_settings_are_rejected(self):
@@ -269,8 +298,9 @@ class SettingsTests(unittest.TestCase):
 
 class DriverEligibilitySettingsTests(unittest.TestCase):
     """The pilot API (Drivers__Provider and Routing__Provider PostgreSql) refuses to start without a driver eligibility
-    policy for every vehicle type (PilotApiStartupConfigurationTests.OwnerPendingStartFailures). The rules are the
-    owner's: settings-check stops while any is missing and holds every entry present to the API's start validation."""
+    policy for every vehicle type (PilotApiStartupConfigurationTests.MissingEligibilityStartFailures). The rules are the
+    owner's (GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20): settings-check stops while any is missing and holds every
+    entry present to the API's start validation."""
 
     VEHICLES = ("MOTORCYCLE", "CAR", "VAN", "BICYCLE", "WALKER")
     DOCUMENT = "Drivers__Eligibility__RequiredDocumentTypesByVehicleType__{}__{}"
@@ -288,8 +318,41 @@ class DriverEligibilitySettingsTests(unittest.TestCase):
         return subprocess.run([sys.executable, guards.__file__, "settings-check", "--file", str(path)],
                               capture_output=True, text=True)
 
-    def test_the_repository_file_stops_the_deploy_naming_each_vehicle_type_and_setting(self):
+    def test_the_repository_file_passes_the_deploy_check(self):
         result = self.settings_check(REPO_ROOT / guards.SETTINGS_FILE)
+        self.assertEqual(0, result.returncode, result.stdout)
+        self.assertEqual("ENV001_SETTINGS=PASS", result.stdout.strip())
+
+    def test_the_repository_file_carries_exactly_the_approved_rules(self):
+        # GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20: G4, H2 "Aprobar la tabla (Recommended)" and H3 "Aprobar la
+        # lista (Recommended)", applied as approved. Changing a value is a new owner decision, so it fails here first.
+        expected = {}
+        for vehicle in self.VEHICLES:
+            for index, document in enumerate(APPROVED_DOCUMENTS[vehicle]):
+                expected[self.DOCUMENT.format(vehicle, index)] = document
+            for field, value in zip(SYNTHETIC_CAPACITY, APPROVED_CAPACITY[vehicle]):
+                expected[self.CAPACITY.format(vehicle, field)] = str(value)
+            expected[self.CAPACITY.format(vehicle, "RequireDimensions")] = "false"
+        entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
+        eligibility = [entry for entry in entries if guards.is_eligibility_name(entry["name"])]
+        self.assertEqual(len(expected), len(eligibility))
+        self.assertEqual(expected, {entry["name"]: entry["value"] for entry in eligibility})
+        self.assertFalse(any("NonExpiringDocumentTypes" in entry["name"] for entry in eligibility))
+        self.assertFalse(any(entry["value"] == "BACKGROUND_CHECK" for entry in eligibility))
+        self.assertIn({"name": "Finance__OperationalTimeZone", "value": "America/Mazatlan"}, entries)
+        # Length, width and height are compared axis by axis, so every row keeps length >= width >= height.
+        for vehicle, (_, total, single, length, width, height) in APPROVED_CAPACITY.items():
+            with self.subTest(vehicle=vehicle):
+                self.assertLessEqual(single, total)
+                self.assertGreaterEqual(length, width)
+                self.assertGreaterEqual(width, height)
+
+    def test_without_its_rules_the_file_stops_the_deploy_naming_each_vehicle_type_and_setting(self):
+        entries = without_eligibility(guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "apps.settings.json"
+            path.write_text(json.dumps(entries), encoding="utf-8")
+            result = self.settings_check(path)
         self.assertEqual(1, result.returncode, result.stdout)
         lines = result.stdout.splitlines()
         self.assertEqual("ENV001_SETTINGS=FAIL", lines[-1])
@@ -301,7 +364,7 @@ class DriverEligibilitySettingsTests(unittest.TestCase):
                 self.assertIn(name, line)
 
     def test_a_complete_policy_passes(self):
-        entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE) + SYNTHETIC_ELIGIBILITY
+        entries = without_eligibility(guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)) + SYNTHETIC_ELIGIBILITY
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "apps.settings.json"
             path.write_text(json.dumps(entries), encoding="utf-8")
@@ -448,8 +511,9 @@ class DriverEligibilitySettingsTests(unittest.TestCase):
                               re.findall(r"public (\w+) (\w+) \{ get; set; \}", body.group(1))}
                 self.assertEqual(expected, properties)
 
-        # The policy that passes settings-check here is the one PilotApiStartupConfigurationTests starts the pilot API
-        # with, so the guard and the API agree on a complete policy as well as on a missing one.
+        # The synthetic policy that passes settings-check here is the one the OrderTransitionGuards API tests start the
+        # API with, so the guard and the API agree on a complete policy as well as on a missing one (the repository
+        # file itself starts the pilot API in PilotApiStartupConfigurationTests).
         fixture = (REPO_ROOT / "tests/Paqueteria.IntegrationTests/Orders/OrderTransitionGuardsHttpFixture.cs").read_text(
             encoding="utf-8")
         body = re.search(r"Dictionary<string, string\?> CreateEligibility\(\)\n    \{\n(.*?)\n    \}\n", fixture, re.DOTALL)
