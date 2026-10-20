@@ -32,6 +32,8 @@ Convenciones:
 | SHA no certificado 13/13 por Foundation CI en `main`, o workflow no lanzado desde `main` | `azr001_static_guards.py deploy-gate` | Antes de tocar Azure | 7 |
 | Variables del environment faltantes o con formato inválido | Paso "Validate inputs and environment variables" (job `deploy`) | Antes del login en Azure | 3 |
 | `PILOT_GATE_007_DECISION` / `PILOT_GATE_012_DECISION` sin una fila válida en `decision-log.md` | `env001_pilot_guards.py gate-decision` | Antes del login en Azure | 0.1 y 3 |
+| `PILOT_POSTGRES_SERVER_NAME` con un nombre inválido | `env001_pilot_guards.py postgres-server-name` | Antes del login en Azure | 3 y 7.7 |
+| `PILOT_POSTGRES_SERVER_NAME` con un servidor que no existe o que la plantilla no puede tomar | Paso "Check the PostgreSQL server to adopt" | Tras el login, antes de tocar nada | 7.7 |
 | Grupo de recursos inexistente o fuera de `mexicocentral` | Paso "Verify subscription, resource group and region" | Tras el login | 1 |
 | Rol custom `Paquetenvia Pilot Blob Tag Reader` inexistente | Paso "Prepare platform parameters" | Tras Stage 1 | 2.4 |
 | Faltan en Key Vault `authcenter-paquetenvia-client-secret`, `google-maps-api-key`, `public-tracking-link-key` o `paquetenvia-telemetry-pseudonym-key-1` | Paso de secretos de la ventana 2 | Tras Stage 2 (la bóveda ya existe) | 5 |
@@ -300,6 +302,7 @@ En la misma pantalla del environment → *Environment variables → Add variable
 | `PILOT_TRACKING_SUPPORT_URL` | No | URL `https://` de soporte en el tracking público. **Déjala vacía mientras siga abierto GATE-001** (por defecto no hay enlace y la compilación rechaza un enlace con la marca) | `^https://[A-Za-z0-9./_-]+$` |
 | `PILOT_GATE_012_DECISION` | Sí | `GATE-012-PILOT-SCOPE` | fila válida en `decision-log.md` |
 | `PILOT_GATE_007_DECISION` | Sí | `<ID_FILA_GATE-007>` (ver 0.1; hoy no existe) | fila válida en `decision-log.md`; `GATE-007-PRIVACY-DRAFT` se rechaza |
+| `PILOT_POSTGRES_SERVER_NAME` | No | **No la crees ahora.** Vacía (o sin crear) significa el primer servidor de la base. Solo se llena después de una restauración real, con el nombre que imprime el comando (paso 7.7) | vacía, o el nombre del primer servidor seguido de partes `-` en minúsculas y números (máximo 63 caracteres), y el servidor debe existir |
 
 Nota: `PILOT_TRACKING_SUPPORT_URL` se compila dentro de la imagen web como
 `NEXT_PUBLIC_TRACKING_SUPPORT_URL` (build-arg del workflow). Cambiarla requiere un nuevo run.
@@ -616,8 +619,10 @@ Las órdenes nuevas guardan la versión nueva; las anteriores conservan la que a
 Fuente: README §10.2 y §10.3; decisiones `SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14` y
 `SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20`.
 
-Además de las 5 alertas de OBS-002, al mismo correo llegan 6 alertas de la base de datos del piloto
-(`pg-pv-pilot-<suffix>`). Cada una manda un correo cuando se dispara y otro cuando se resuelve. Las 2 de
+Además de las 5 alertas de OBS-002, al mismo correo llegan 6 alertas de la base de datos del piloto (el servidor que
+nombra `PILOT_POSTGRES_SERVER_NAME`; mientras esté vacía, `pg-pv-pilot-<suffix>`; después de una restauración real las
+alertas se pasan solas al servidor restaurado, paso 7.7). Cada una manda un correo cuando se dispara y otro cuando se
+resuelve. Las 2 de
 conexiones (aviso en 28 y crítico en 33) se atienden con README §10.2. Las otras 4 tienen un solo nivel, de
 aviso, y Azure las revisa cada minuto. No las cambias en `observability.parameters.json`: están fijas en la
 plantilla y la guarda P21 las revisa.
@@ -778,33 +783,13 @@ marca de datos maestros (README §6.8). Hazlo **después del Run 3 y antes de tu
 >    uno o dos minutos después de que terminó ese run. Tiene que estar dentro de los últimos 14 días (README §6.4).
 >    Escríbelo en UTC con `Z` al final, por ejemplo `2026-10-05T13:10:00Z` (GitHub y tu navegador te muestran tu hora
 >    local).
-> 4. **Restaura la base** como dice README §6.4, *Real restore*, en Cloud Shell (bash) y desde una copia del repo:
->    1. Detén la API y el Worker:
->
->       ```bash
->       RG=rg-pv-pilot
->       az containerapp update -n ca-pv-pilot-api -g "$RG" --min-replicas 0 --max-replicas 0
->       az containerapp update -n ca-pv-pilot-worker -g "$RG" --min-replicas 0 --max-replicas 0
->       ```
->
->    2. Restaura a ese momento y conserva el servidor restaurado (`--keep`):
->
->       ```bash
->       ./deploy/azure/pilot/restore-drill.sh --resource-group "$RG" --restore-time <momento en UTC> --keep
->       ```
->
->       Restaura en un **servidor nuevo** (`pg-pv-pilot-<sufijo>-drill-<fecha>`; su host sale en la línea
->       `restore_completed=...`), lo verifica y termina con una línea `EVIDENCE ... verify_status=Succeeded`. Las apps
->       todavía apuntan al servidor anterior.
->    3. Pasa las apps al servidor restaurado con una de las dos opciones de README §6.4 paso 3: **cambiar nombres** (la
->       preferida: borras el servidor anterior y restauras otra vez con el nombre original `pg-pv-pilot-<sufijo>`, así
->       ningún secreto de conexión cambia) o **apuntar los secretos al host nuevo** (actualizas los cuatro secretos de
->       conexión, `pg-migrate-connection`, `pg-api-runtime-connection`, `pg-worker-runtime-connection` y
->       `pg-realtime-runtime-connection`, y reinicias las revisiones de la API y el Worker).
->    4. Corre otra vez **Deploy Azure PILOT** con el mismo `<HEAD_SHA>` y `<FOUNDATION_RUN_ID>` y
->       `custom_domain_phase=bind` (paso 7.4). Ese run regresa las réplicas y vuelve a aplicar los logins.
+> 4. **Restaura la base a ese momento** con los pasos 1 a 5 de la sección 7.7 (*Restaurar la base del piloto*). Del
+>    paso 6 de 7.7 haz solo la parte del resumen del run: **todavía no inicies sesión**. Al terminar, el piloto ya usa
+>    el servidor restaurado y el anterior sigue intacto.
 > 5. **Corre otra vez el comando** (pasos 2 y 3 de esta sección). Ahora debe decir `TEN003_PLATFORM_BOOTSTRAP_OK`.
 > 6. **Solo entonces inicia sesión** (paso 7.6).
+> 7. **Más tarde, borra el servidor anterior** (sección 7.7, paso 7). Solo guarda tu primer inicio de sesión, pero
+>    mientras exista cuesta lo mismo que el del piloto.
 
 > Los argumentos de esta ejecución (tu `sub` y los dos nombres) quedan en el historial del job, visibles para quien
 > pueda leer el grupo de recursos. Ninguno es secreto. La salida del comando no muestra tu `sub`, los nombres ni
@@ -852,6 +837,87 @@ Si algo falla: README §6.7 (logs en Log Analytics:
 > en el primer run puede deberse a eso y no a tu configuración. Los adaptadores ADP-001
 > (`AzureKeyVaultPiiKeyWrapClient`, `AzureBlobProofObjectStorage`, `DefenderForStorageThreatScanner`) ya
 > están fusionados, pero nunca se han ejecutado contra Azure real (README §9).
+
+
+### 7.7 Restaurar la base del piloto (restauración real)
+
+Fuente: README §6.4 *Real restore*; decisión `OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20` ("Que el despliegue lo siga").
+
+Úsala si se perdieron o se dañaron datos y quieres regresar la base a un momento de los últimos 14 días, o en el caso
+del recuadro *Si ya iniciaste sesión antes de correr el comando* (7.5). Lo que hay que saber antes:
+
+- Azure **nunca** sobrescribe el servidor al restaurar: siempre crea un servidor nuevo, con otro nombre.
+- El piloto pasa al servidor nuevo con una sola variable, `PILOT_POSTGRES_SERVER_NAME`. Cambias ese valor y corres
+  otra vez el despliegue; las migraciones, la API, el Worker, las alertas y los ensayos pasan al servidor restaurado.
+- El servidor anterior queda intacto, con sus 14 días de respaldos, hasta que tú lo borres.
+- Todo lo que se escribió después del momento que elijas no está en el servidor restaurado.
+
+Hazlo en Cloud Shell (bash), desde una copia del repo:
+
+1. **Detén la API y el Worker** para que nadie escriba en el servidor anterior mientras tanto:
+
+   ```bash
+   RG=rg-pv-pilot
+   for app in ca-pv-pilot-api ca-pv-pilot-worker; do
+     revision="$(az containerapp show -n "$app" -g "$RG" --query properties.latestRevisionName -o tsv)"
+     az containerapp revision set-mode -n "$app" -g "$RG" --mode multiple
+     az containerapp revision deactivate -n "$app" -g "$RG" --revision "$revision"
+   done
+   ```
+
+   Cada app pasa al modo de varias revisiones (así Azure deja apagar la revisión que corre) y se apaga. La página
+   sigue abriendo, pero nadie puede entrar ni hacer nada hasta el paso 5, que las vuelve a encender y las regresa al
+   modo de una revisión.
+2. **Restaura a un servidor nuevo.** Escribe el momento en UTC con `Z` al final, por ejemplo `2026-10-05T13:10:00Z`:
+
+   ```bash
+   ./deploy/azure/pilot/restore-drill.sh --resource-group "$RG" --restore-time <momento en UTC> --real
+   ```
+
+   El comando restaura el servidor que usa el piloto en uno nuevo que se llama como el primero más `-r` y la fecha y
+   hora en que lo corres (UTC), en la misma red privada. Después lo revisa (solo lee) y al final imprime
+   `restored_server_kept=<nombre>`. Si algo falla, borra el servidor nuevo y no toca el anterior; puedes repetirlo
+   (si lo repites dentro del mismo minuto, te pide esperar un minuto).
+3. **Revisa el resultado.** La línea `EVIDENCE ...` debe decir `verify_status=Succeeded`. Guárdala.
+4. **Cambia la variable.** En GitHub → *Settings → Environments → azure-pilot → Environment variables*, crea o edita
+   `PILOT_POSTGRES_SERVER_NAME` con el nombre exacto del paso 2. O con el GitHub CLI:
+
+   ```bash
+   gh variable set PILOT_POSTGRES_SERVER_NAME --env azure-pilot --repo Eduard0corona/Paquetenvia --body <nombre>
+   ```
+
+   Va en la variable y no en el formulario del run para que todos los despliegues siguientes sigan usando el
+   servidor restaurado.
+5. **Corre otra vez *Deploy Azure PILOT*** con tu `<HEAD_SHA>` y `<FOUNDATION_RUN_ID>` certificados y
+   `custom_domain_phase=bind` (paso 7.4). Antes de cambiar nada, el run revisa que el servidor exista y que la
+   plantilla pueda tomarlo tal como está; si escribiste mal el nombre, se detiene y no crea otro servidor. Después
+   vuelve a poner los ajustes del servidor (la restauración no los copia), crea credenciales nuevas para la API y el
+   Worker en el servidor restaurado, corre las migraciones y la verificación, vuelve a encender la API y el Worker y
+   pasa las 6 alertas de la base al servidor nuevo.
+6. **Comprueba.** El resumen del run dice `PostgreSQL server: <nombre del paso 2>`. Entra a `https://paquetenvia.com`
+   y revisa que estén los datos que esperabas.
+7. **Más tarde, borra el servidor anterior, cuando estés seguro.** Mientras exista, sus respaldos son la única forma
+   de regresar a un momento antes del que restauraste. Pero cuesta unos 17.70 USD al mes (lo mismo que el del
+   piloto, README §5), encima de un piloto que ya está en el límite de los 100 USD. Al borrarlo se borran también
+   todos sus respaldos y ya no se pueden recuperar:
+
+   ```bash
+   az postgres flexible-server delete -g "$RG" -n <nombre del servidor anterior> --yes
+   ```
+
+   Nunca borres el servidor que dice `PILOT_POSTGRES_SERVER_NAME`. Si antes de borrarlo quieres regresar al anterior,
+   vacía la variable (o pon el nombre anterior) y corre otra vez el despliegue; lo escrito en el restaurado se queda
+   ahí.
+
+**Servidores de ensayo que sobran.** Un ensayo (`restore-drill.sh` sin `--real`) borra su servidor al terminar,
+salvo con `--keep`. Si el borrado falla, imprime `WARNING drill_server_not_deleted=<nombre>`. Cada uno es una copia
+completa de los datos del piloto y cuesta lo mismo que el servidor del piloto. Revisa la lista y borra los que tengan
+`-drill-` en el nombre y ya no necesites:
+
+```bash
+az postgres flexible-server list -g "$RG" --query "[].name" -o tsv
+az postgres flexible-server delete -g "$RG" -n <nombre con -drill-> --yes
+```
 
 ---
 
