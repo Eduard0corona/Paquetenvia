@@ -5,7 +5,8 @@
 > está aprobado. El borrador no resuelve GATE-007 y no autoriza datos personales reales en el piloto.
 >
 > La columna "Estado hoy" describe el código de la rama `development` y la configuración del piloto
-> (`deploy/azure/pilot`) al 2026-10-19.
+> (`deploy/azure/pilot`) al 2026-10-19; el borrado temporal de las fotografías se actualizó el 2026-10-20
+> (ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20).
 
 Complementa el [aviso de privacidad integral](aviso-de-privacidad-integral-borrador.md).
 
@@ -58,7 +59,9 @@ Qué significa "borrado criptográfico" con este diseño:
 
 Las fotografías **no** usan este sobre. Viven en Azure Blob Storage, cifradas en reposo con llaves administradas por
 Microsoft (`keySource: Microsoft.Storage`). Borrarlas es borrar el objeto. El almacenamiento del piloto guarda los
-objetos borrados durante 7 días (borrado temporal).
+objetos borrados, y el estado anterior de uno sobrescrito, durante 30 días (borrado temporal,
+ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20); en ese plazo se pueden recuperar. Una foto borrada por fin de plazo o por
+una solicitud de la persona desaparece del todo 30 días después.
 
 ### 2.2 Purgas ya implementadas
 
@@ -78,7 +81,7 @@ objetos borrados durante 7 días (borrado temporal).
 | Application Insights (trazas y métricas) | La del mismo workspace de Log Analytics. Exportación apagada. Enmascaramiento de IP activo | `platform.bicep` (`DisableIpMasking: false`), OBS-003-EXPORT-AFTER-PILOT-WEEK-2026-10-14. **[PENDIENTE: confirmar que ninguna tabla tenga retención propia.]** |
 | Respaldos de PostgreSQL | 14 días, sin copia en otra región | `platform.bicep` (`backupRetentionDays: 14`), GATE-012-PILOT-SCOPE |
 | Servidores de prueba de restauración | Se borran al terminar, salvo que se use `--keep` | `deploy/azure/pilot/restore-drill.sh` |
-| Fotografías borradas (Blob) | 7 días de borrado temporal. Sin versionado y sin política de ciclo de vida | `platform.bicep` |
+| Fotografías borradas o sobrescritas (Blob) | 30 días de borrado temporal, también si se borra el contenedor `proofs` (ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20). Sin versionado y sin política de ciclo de vida | `platform.bicep` |
 | Llaves y secretos de Key Vault | 90 días de borrado temporal, con protección contra purga | `deploy/azure/pilot/security.bicep` |
 
 ### 2.4 Lo que no existe
@@ -121,7 +124,7 @@ reclamación ni incidente abiertos. **[PENDIENTE: confirmar la definición.]**
 | Historial de la orden | `orders.order_events` (solo inserción) | Igual que la orden | Evidencia de cada cambio de estado | No se borra. No tiene datos de contacto; el motivo escrito pasa por el filtro automático. La persona que hizo el cambio queda seudonimizada con la regla de la sección 3.4 | Se conserva sin límite |
 | Aceptación de términos y aviso | `orders.order_acceptances` (solo inserción) | Igual que la orden | Evidencia legal de la aceptación | No se borra. Contiene versiones, fechas, canal, usuario que la registró y huella; no guarda IP ni datos del cliente | Se conserva sin límite |
 | Enlace de seguimiento | `orders.public_tracking_tokens` (solo la huella del token) | Igual que la orden | El enlace deja de funcionar 24 horas después del estado final | No requiere borrado: la huella no identifica a nadie | Implementado el fin del enlace |
-| Fotografías de recolección, entrega e intento fallido | Azure Blob `proofs/{organización}/{orden}/{sesión}` | **12 meses** después del fin del envío, o hasta resolver la reclamación o el incidente, lo que ocurra después | Evidencia ante reclamaciones. El plazo de prescripción comercial (10 años) es mucho mayor; el abogado decide si las fotos deben vivir tanto | Borrado del objeto (7 días de borrado temporal). La fila de `custody.proofs` se conserva (sección 4) | No implementado; sin política de ciclo de vida |
+| Fotografías de recolección, entrega e intento fallido | Azure Blob `proofs/{organización}/{orden}/{sesión}` | **12 meses** después del fin del envío, o hasta resolver la reclamación o el incidente, lo que ocurra después | Evidencia ante reclamaciones. El plazo de prescripción comercial (10 años) es mucho mayor; el abogado decide si las fotos deben vivir tanto | Borrado del objeto (30 días de borrado temporal). La fila de `custody.proofs` se conserva (sección 4) | No implementado; sin política de ciclo de vida |
 | Fotografías rechazadas o huérfanas en cuarentena | Azure Blob `quarantine/…` | **30 días** | No sirven como evidencia | Borrado del objeto | No implementado: se quedan sin límite (riesgo residual de ADP-001) |
 | Metadatos de las fotos | `custody.proofs` (solo inserción) y `custody.proof_upload_sessions` | Igual que la orden | Liga la evidencia con la orden | Ver sección 4 | Se conservan sin límite |
 | Cobros contra entrega | `finance.cod_transactions` | **10 años** | CFF, artículo 30; Código de Comercio, artículos 38 y 46 | Se conservan; no tienen datos de contacto | Se conservan sin límite |
