@@ -17,4 +17,5 @@ COPY --from=build /src/database/migrations/v0.6-baseline.json /app/database/migr
 COPY --from=build /src/docs/normative/v0.6/database/AI-06_SCHEMA.sql /app/docs/normative/v0.6/database/AI-06_SCHEMA.sql
 COPY --from=build /src/docs/normative/v0.6/database/AI-18_DATABASE_ROLE_MODEL.sql /app/docs/normative/v0.6/database/AI-18_DATABASE_ROLE_MODEL.sql
 COPY --from=build /src/src/Modules /app/src/Modules
+USER $APP_UID
 ENTRYPOINT ["dotnet", "/app/migrator/Paqueteria.DatabaseMigrator.dll"]

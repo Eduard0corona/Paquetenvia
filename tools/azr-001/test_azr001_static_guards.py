@@ -17,6 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import azr001_static_guards as guards  # noqa: E402
+import env001_pilot_guards as pilot_guards  # noqa: E402  (AZR-001-AC-064 Dockerfile reader shared with P24)
 
 TESTED_SHA = "a" * 40
 CONTROL_PLANE_SHA = "b" * 40
@@ -522,6 +523,70 @@ class DeployCoreProvenanceTests(unittest.TestCase):
         self.assertNotEqual(code, 0)
         self.assertIn("STOP_FOR_CONTRACT_REVIEW", text)
         self.assertFalse(self.marker.exists())
+
+
+class DevSyntheticNonRootImageTests(unittest.TestCase):
+    """AZR-001-AC-064: every DEV-SYNTHETIC image (`deploy/azure/Dockerfile*`) runs its final stage as a non-root USER.
+
+    AZR-001 v0.8 says "Non-root cuando soporte runtime. Root requiere waiver", and no waiver exists. The check is the
+    one pilot guard P24 applies (`env001_pilot_guards.dockerfile_non_root_failure`), so the same forms pass and fail.
+    """
+
+    REPO_ROOT = Path(__file__).resolve().parents[2]
+    DEV_SYNTHETIC_DOCKERFILES = (
+        "deploy/azure/Dockerfile.api",
+        "deploy/azure/Dockerfile.db-ops",
+        "deploy/azure/Dockerfile.web",
+        "deploy/azure/Dockerfile.worker",
+    )
+    # The USER line each image owes to AC-064: the official .NET `app` user, or `node` on the Node base.
+    USER_LINES = {
+        "deploy/azure/Dockerfile.api": "USER $APP_UID",
+        "deploy/azure/Dockerfile.db-ops": "USER $APP_UID",
+        "deploy/azure/Dockerfile.web": "USER node",
+        "deploy/azure/Dockerfile.worker": "USER $APP_UID",
+    }
+
+    def read(self, name: str) -> str:
+        return (self.REPO_ROOT / name).read_text(encoding="utf-8")
+
+    def test_every_dev_synthetic_dockerfile_runs_as_non_root(self) -> None:
+        found = sorted(p.relative_to(self.REPO_ROOT).as_posix() for p in (self.REPO_ROOT / "deploy" / "azure").glob("Dockerfile*") if p.is_file())
+        # The glob is what is checked, so a new DEV-SYNTHETIC image is covered too; the known four must be in it.
+        self.assertTrue(set(self.DEV_SYNTHETIC_DOCKERFILES) <= set(found), found)
+        for name in found:
+            with self.subTest(name=name):
+                self.assertIsNone(pilot_guards.dockerfile_non_root_failure(name, self.read(name)))
+
+    def test_each_image_switches_to_its_user_in_the_final_stage(self) -> None:
+        for name, user in self.USER_LINES.items():
+            with self.subTest(name=name):
+                instructions = pilot_guards.dockerfile_instructions(self.read(name))
+                final = instructions[max(i for i, (keyword, _) in enumerate(instructions) if keyword == "FROM"):]
+                self.assertEqual([user.split(None, 1)[1]], [arguments for keyword, arguments in final if keyword == "USER"])
+                self.assertIn(final[-1][0], ("CMD", "ENTRYPOINT"))
+
+    def test_web_and_db_ops_without_their_user_line_fail(self) -> None:
+        for name in ("deploy/azure/Dockerfile.web", "deploy/azure/Dockerfile.db-ops"):
+            with self.subTest(name=name):
+                text = self.read(name)
+                line = f"\n{self.USER_LINES[name]}\n"
+                self.assertEqual(1, text.count(line))
+                failure = pilot_guards.dockerfile_non_root_failure(name, text.replace(line, "\n"))
+                self.assertIn("final stage has no USER, so it runs as root", failure or "")
+
+    def test_web_and_db_ops_switched_back_to_root_fail(self) -> None:
+        for name in ("deploy/azure/Dockerfile.web", "deploy/azure/Dockerfile.db-ops"):
+            for root in ("USER root", "USER 0", "USER 0:0"):
+                with self.subTest(name=name, root=root):
+                    line = f"\n{self.USER_LINES[name]}\n"
+                    self.assertEqual(1, self.read(name).count(line))
+                    text = self.read(name).replace(line, f"{line}{root}\n")
+                    self.assertIn("switches back to root", pilot_guards.dockerfile_non_root_failure(name, text) or "")
+
+    def test_web_cannot_borrow_the_dotnet_app_uid(self) -> None:
+        text = self.read("deploy/azure/Dockerfile.web").replace("\nUSER node\n", "\nUSER $APP_UID\n")
+        self.assertIn("not an official .NET image", pilot_guards.dockerfile_non_root_failure("deploy/azure/Dockerfile.web", text) or "")
 
 
 if __name__ == "__main__":
