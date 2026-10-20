@@ -967,11 +967,11 @@ screen_contracts:
         wizard buttons) and re-enables itself; the draft stays and nothing is sent by itself; pressed again with the
         same shipment it sends the same Idempotency-Key, and a changed shipment gets a new one
     # NTF-RECIPIENT-NOTICES-2026-10-20 (project owner, E4 "Los 4 del plan (Recommended)": "se agrega como campo
-    # opcional en la nueva orden"; E4-P1 "Casilla en la orden (Recommended)"): decided, not built yet (AI-08 NTF-002
-    # builds the e-mail field, NTF-004 the consent box).
+    # opcional en la nueva orden"; E4-P1 "Casilla en la orden (Recommended)"): AI-08 NTF-002 built the e-mail field;
+    # NTF-004 builds the consent box.
     recipient_notices:
       decision: NTF-RECIPIENT-NOTICES-2026-10-20
-      status: DECIDED, not implemented (AI-08 NTF-002 and NTF-004)
+      status: DECIDED; email implemented (AI-08 NTF-002), consent not implemented (AI-08 NTF-004)
       email: step "Dónde", destination only - an optional field "Correo del destinatario (opcional)"; trimmed and
         checked like createQuote before "Siguiente", with one es-MX message next to the field that never repeats the
         value; sent as destination.email only when typed; never on the origin; kept in memory only like the rest of the

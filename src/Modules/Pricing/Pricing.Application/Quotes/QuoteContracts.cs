@@ -1,13 +1,22 @@
 using Paqueteria.Application.Contacts;
 namespace Pricing.Application.Quotes;
 
+/// <summary>
+/// One address of a quote. NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002): <see cref="Email"/> is the optional
+/// recipient e-mail of the destination (AI-05 <c>DestinationAddressInput.email</c>); an origin never carries one.
+/// <see cref="ToString"/> never prints a personal value.
+/// </summary>
 public sealed record QuoteAddressInput(
     string AddressText,
     string ContactName,
     string Phone,
     double? Lat,
     double? Lng,
-    string? References);
+    string? References,
+    string? Email = null)
+{
+    public override string ToString() => "QuoteAddressInput { [redacted] }";
+}
 
 public sealed record QuotePackageInput(
     string Description,

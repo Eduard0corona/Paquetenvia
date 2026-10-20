@@ -5,8 +5,10 @@ citadas en `docs/normative/v0.6/decision-log.md`). ADR:
 [`docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md`](../adr/ADR-NTF-002-RECIPIENT-NOTICES.md). Contrato de ejecución:
 AI-24 `recipient_notices`. Ítems de backlog: AI-08 NTF-002 a NTF-008, más las extensiones de TRK-002 y REL-001.
 
-**Estado: solo contratos (PR-0). Nada está construido, configurado ni encendido.** GATE-004 y GATE-007 siguen
-abiertas; solo el cambio que registre sus filas de resolución enciende los avisos.
+**Estado: contratos (PR-0) y, con AI-08 NTF-002 (PR-1), el correo opcional del destinatario, las columnas de
+Locations y el sellado con la llave de avisos solo para envolver, apagado por omisión y en el piloto
+([`ntf-002-recipient-contact.md`](ntf-002-recipient-contact.md)). Nada se envía ni está encendido.** GATE-004 y
+GATE-007 siguen abiertas; solo el cambio que registre sus filas de resolución enciende los avisos.
 
 ## Arquitectura
 

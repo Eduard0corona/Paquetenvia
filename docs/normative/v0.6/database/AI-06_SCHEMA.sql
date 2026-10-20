@@ -226,19 +226,28 @@ CREATE TABLE locations.locations (
 CREATE INDEX locations_point_gix ON locations.locations USING gist(point);
 CREATE INDEX locations_owner_city_idx ON locations.locations(owner_org_id,city_id);
 -- NTF-RECIPIENT-NOTICES-2026-10-20 (project owner: E4 "Los 4 del plan (Recommended)"; E4-P2 "Llave propia para avisos
--- (Recommended)"; docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md; AI-24 recipient_notices.contact). Declared contract, not
--- installed yet: the Locations lane step of AI-08 NTF-002 adds these nullable columns to locations.locations, and this
--- baseline declares them as DDL for fresh installations in that same change, together with the baseline assertions
--- (OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13 precedent); until then the table above is unchanged.
+-- (Recommended)"; E4-P17 "Dos copias, como el teléfono (Recommended)"; docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md; AI-24
+-- recipient_notices.contact). Installed by AI-08 NTF-002: the Locations lane step 20261020000100_AddRecipientNoticeContact
+-- runs this same DDL on installations whose baseline predates it and adopts it here (OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13
+-- precedent); the baseline assertions check the four columns and the two checks.
 --   email_ciphertext bytea: the optional delivery recipient e-mail, sealed with the ADP-001 envelope under the PII key
 --     and the row pii_key_version (purpose locations.email).
 --   notice_phone_ciphertext bytea, notice_email_ciphertext bytea and notice_key_version text: copies of the destination
 --     phone and e-mail sealed with the same envelope format under the dedicated recipient-notice key (purposes
 --     locations.notice_phone and locations.notice_email, bound to owner organization, row and purpose); the only
---     contact values the Worker can open.
+--     contact values the Worker can open. The API only wraps with that key and never opens a copy.
 --   Checks: notice_key_version is present exactly when a notice copy is present; notice_email_ciphertext implies
 --     email_ciphertext. Only destination locations carry an e-mail or a notice copy; none is ever returned, logged,
 --     audited or published. Rows never change after the quote, so erasing a location erases every copy (GATE-007).
+ALTER TABLE locations.locations
+  ADD COLUMN email_ciphertext bytea,
+  ADD COLUMN notice_phone_ciphertext bytea,
+  ADD COLUMN notice_email_ciphertext bytea,
+  ADD COLUMN notice_key_version text,
+  ADD CONSTRAINT locations_notice_key_version_check
+    CHECK ((notice_key_version IS NULL) = (notice_phone_ciphertext IS NULL AND notice_email_ciphertext IS NULL)),
+  ADD CONSTRAINT locations_notice_email_check
+    CHECK (notice_email_ciphertext IS NULL OR email_ciphertext IS NOT NULL);
 
 -- Clients and allies ------------------------------------------------------------
 CREATE TABLE clients.client_accounts (

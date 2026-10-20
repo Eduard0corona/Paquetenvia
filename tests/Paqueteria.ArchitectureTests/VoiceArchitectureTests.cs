@@ -1,3 +1,4 @@
+using System.Text.RegularExpressions;
 using Paqueteria.ArchitectureTests.Architecture;
 
 namespace Paqueteria.ArchitectureTests;
@@ -8,7 +9,7 @@ namespace Paqueteria.ArchitectureTests;
 /// nothing is recorded, Twilio Proxy is not used, and only the signed webhooks (the status callback, the inbound call and
 /// the three key-press steps of VOICE-001-VOICEMAIL-KEYPRESS-2026-10-11) are anonymous.
 /// </summary>
-public sealed class VoiceArchitectureTests
+public sealed partial class VoiceArchitectureTests
 {
     private const string VoiceDirectory = "src/BuildingBlocks/Paqueteria.Infrastructure/Voice/";
     private const string DriversVoiceDirectory = "src/Modules/Drivers/Drivers.Infrastructure/Voice/";
@@ -120,8 +121,9 @@ public sealed class VoiceArchitectureTests
     public void Only_the_voice_code_and_its_migration_touch_the_driver_phone()
     {
         var users = SourceFiles("src")
+            // NTF-RECIPIENT-NOTICES-2026-10-20: locations.notice_phone_ciphertext is another column, not the driver phone.
             .Where(file => file.Text.Contains("driver_profiles", StringComparison.Ordinal) &&
-                           file.Text.Contains("phone_ciphertext", StringComparison.Ordinal))
+                           DriverPhoneColumnPattern().IsMatch(file.Text))
             .Select(file => file.Path)
             .Order(StringComparer.Ordinal)
             .ToArray();
@@ -138,4 +140,8 @@ public sealed class VoiceArchitectureTests
             .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
                            !path.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal))
             .Select(path => (Path.GetRelativePath(TestRepository.GetPath("."), path).Replace('\\', '/'), File.ReadAllText(path)));
+
+    /// <summary><c>phone_ciphertext</c> as its own identifier, not the tail of another column name.</summary>
+    [GeneratedRegex("(?<![A-Za-z0-9_])phone_ciphertext", RegexOptions.CultureInvariant)]
+    private static partial Regex DriverPhoneColumnPattern();
 }

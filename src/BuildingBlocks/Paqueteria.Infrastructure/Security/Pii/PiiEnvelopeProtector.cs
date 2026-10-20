@@ -1,8 +1,3 @@
-using System.Buffers.Binary;
-using System.Security.Cryptography;
-using System.Text;
-using System.Text.RegularExpressions;
-
 namespace Paqueteria.Infrastructure.Security.Pii;
 
 /// <summary>One value to protect and the column it belongs to (for example <c>locations.phone</c>).</summary>
@@ -45,6 +40,18 @@ public interface IPiiEnvelopeProtector
 }
 
 /// <summary>
+/// The wrapping half of a key-encryption key: the server-side choice of version and the wrap of one data key under
+/// that exact version. NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P2): the API seals the recipient-notice copies through
+/// this contract only, so it holds no way to unwrap them.
+/// </summary>
+public interface IPiiKeyWrapper
+{
+    Task<string> GetCurrentKeyVersionAsync(CancellationToken cancellationToken);
+
+    Task<byte[]> WrapKeyAsync(string keyVersion, byte[] dataKey, CancellationToken cancellationToken);
+}
+
+/// <summary>
 /// The key-encryption key. <see cref="GetCurrentKeyVersionAsync"/> is the server-side choice of
 /// version; wrap and unwrap always name the exact version, so data protected under an earlier
 /// version stays readable after rotation.
@@ -69,61 +76,13 @@ public sealed class PiiProtectionUnavailableException(Exception? innerException 
 public sealed class PiiCiphertextRejectedException()
     : Exception("The protected PII value was rejected.");
 
-public sealed partial class PiiEnvelopeProtector(IPiiKeyWrapClient keyWrapClient) : IPiiEnvelopeProtector
+public sealed class PiiEnvelopeProtector(IPiiKeyWrapClient keyWrapClient) : IPiiEnvelopeProtector
 {
-    /// <summary>Envelope format v1 marker: <c>PQE</c> followed by the format byte.</summary>
-    private static readonly byte[] Magic = [0x50, 0x51, 0x45, 0x01];
-
-    private const int DataKeyBytes = 32;
-    private const int NonceBytes = 12;
-    private const int TagBytes = 16;
-    private const int MaximumWrappedKeyBytes = 1024;
-    private const int MaximumKeyVersionLength = 200;
-
-    public async Task<PiiProtectedBatch> ProtectAsync(
+    public Task<PiiProtectedBatch> ProtectAsync(
         PiiBinding binding,
         IReadOnlyList<PiiPlaintext> values,
-        CancellationToken cancellationToken)
-    {
-        ArgumentNullException.ThrowIfNull(values);
-        if (!binding.IsValid)
-        {
-            throw new ArgumentException("The owning organization and row are required.", nameof(binding));
-        }
-
-        if (values.Count == 0)
-        {
-            throw new ArgumentException("At least one value is required.", nameof(values));
-        }
-
-        foreach (var value in values)
-        {
-            ArgumentNullException.ThrowIfNull(value);
-            ValidatePurpose(value.Purpose);
-            ArgumentException.ThrowIfNullOrEmpty(value.Value);
-        }
-
-        try
-        {
-            var keyVersion = await keyWrapClient.GetCurrentKeyVersionAsync(cancellationToken).ConfigureAwait(false);
-            ValidateKeyVersion(keyVersion);
-            var ciphertexts = await Task.WhenAll(values.Select(value =>
-                ProtectOneAsync(binding, value, keyVersion, cancellationToken))).ConfigureAwait(false);
-            return new PiiProtectedBatch(keyVersion, ciphertexts);
-        }
-        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        {
-            throw;
-        }
-        catch (PiiProtectionUnavailableException)
-        {
-            throw;
-        }
-        catch (Exception exception)
-        {
-            throw new PiiProtectionUnavailableException(exception);
-        }
-    }
+        CancellationToken cancellationToken) =>
+        PiiEnvelopeFormat.SealAsync(new WrapperView(keyWrapClient), binding, values, cancellationToken);
 
     public async Task<string> UnprotectAsync(
         PiiBinding binding,
@@ -132,14 +91,15 @@ public sealed partial class PiiEnvelopeProtector(IPiiKeyWrapClient keyWrapClient
         string keyVersion,
         CancellationToken cancellationToken)
     {
-        ValidatePurpose(purpose);
+        PiiEnvelopeFormat.ValidatePurpose(purpose);
         if (!binding.IsValid)
         {
             throw new PiiCiphertextRejectedException();
         }
 
         ArgumentNullException.ThrowIfNull(ciphertext);
-        if (!IsValidKeyVersion(keyVersion) || !TryParse(ciphertext, out var envelope))
+        if (!PiiEnvelopeFormat.IsValidKeyVersion(keyVersion) ||
+            !PiiEnvelopeFormat.TryParse(ciphertext, out var envelope))
         {
             throw new PiiCiphertextRejectedException();
         }
@@ -159,149 +119,16 @@ public sealed partial class PiiEnvelopeProtector(IPiiKeyWrapClient keyWrapClient
             throw new PiiProtectionUnavailableException(exception);
         }
 
-        var plaintext = new byte[envelope.Ciphertext.Length];
-        try
-        {
-            if (dataKey.Length != DataKeyBytes)
-            {
-                throw new PiiCiphertextRejectedException();
-            }
-
-            using var aes = new AesGcm(dataKey, TagBytes);
-            aes.Decrypt(
-                envelope.Nonce,
-                envelope.Ciphertext,
-                envelope.Tag,
-                plaintext,
-                AssociatedData(binding, purpose, keyVersion));
-            return Encoding.UTF8.GetString(plaintext);
-        }
-        catch (CryptographicException)
-        {
-            throw new PiiCiphertextRejectedException();
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(dataKey);
-            CryptographicOperations.ZeroMemory(plaintext);
-        }
+        return PiiEnvelopeFormat.Open(binding, purpose, keyVersion, envelope, dataKey);
     }
 
-    private async Task<byte[]> ProtectOneAsync(
-        PiiBinding binding,
-        PiiPlaintext value,
-        string keyVersion,
-        CancellationToken cancellationToken)
+    /// <summary>The wrapping half of the full client, so sealing never sees the unwrap operation.</summary>
+    private sealed class WrapperView(IPiiKeyWrapClient client) : IPiiKeyWrapper
     {
-        var dataKey = RandomNumberGenerator.GetBytes(DataKeyBytes);
-        var plaintext = Encoding.UTF8.GetBytes(value.Value);
-        try
-        {
-            var wrappedKey = await keyWrapClient.WrapKeyAsync(keyVersion, dataKey, cancellationToken)
-                .ConfigureAwait(false);
-            if (wrappedKey is not { Length: > 0 and <= MaximumWrappedKeyBytes })
-            {
-                throw new PiiProtectionUnavailableException();
-            }
+        public Task<string> GetCurrentKeyVersionAsync(CancellationToken cancellationToken) =>
+            client.GetCurrentKeyVersionAsync(cancellationToken);
 
-            var envelope = new byte[Magic.Length + sizeof(ushort) + wrappedKey.Length + NonceBytes + TagBytes + plaintext.Length];
-            var span = envelope.AsSpan();
-            Magic.CopyTo(span);
-            BinaryPrimitives.WriteUInt16BigEndian(span[Magic.Length..], (ushort)wrappedKey.Length);
-            var offset = Magic.Length + sizeof(ushort);
-            wrappedKey.CopyTo(span[offset..]);
-            offset += wrappedKey.Length;
-            var nonce = span.Slice(offset, NonceBytes);
-            RandomNumberGenerator.Fill(nonce);
-            offset += NonceBytes;
-            var tag = span.Slice(offset, TagBytes);
-            offset += TagBytes;
-            using var aes = new AesGcm(dataKey, TagBytes);
-            aes.Encrypt(nonce, plaintext, span[offset..], tag, AssociatedData(binding, value.Purpose, keyVersion));
-            return envelope;
-        }
-        finally
-        {
-            CryptographicOperations.ZeroMemory(dataKey);
-            CryptographicOperations.ZeroMemory(plaintext);
-        }
+        public Task<byte[]> WrapKeyAsync(string keyVersion, byte[] dataKey, CancellationToken cancellationToken) =>
+            client.WrapKeyAsync(keyVersion, dataKey, cancellationToken);
     }
-
-    /// <summary>
-    /// Binds each ciphertext to its owning organization, its row, its column and its key version,
-    /// so a value cannot be moved to another tenant, row or column, or relabelled with another
-    /// version, without failing authentication.
-    /// </summary>
-    private static byte[] AssociatedData(PiiBinding binding, string purpose, string keyVersion)
-    {
-        var purposeBytes = Encoding.UTF8.GetBytes(purpose);
-        var versionBytes = Encoding.UTF8.GetBytes(keyVersion);
-        var data = new byte[Magic.Length + 32 + (2 * sizeof(ushort)) + purposeBytes.Length + versionBytes.Length];
-        var span = data.AsSpan();
-        Magic.CopyTo(span);
-        var offset = Magic.Length;
-        _ = binding.OwnerOrganizationId.TryWriteBytes(span.Slice(offset, 16), bigEndian: true, out _);
-        offset += 16;
-        _ = binding.EntityId.TryWriteBytes(span.Slice(offset, 16), bigEndian: true, out _);
-        offset += 16;
-        BinaryPrimitives.WriteUInt16BigEndian(span[offset..], (ushort)purposeBytes.Length);
-        offset += sizeof(ushort);
-        purposeBytes.CopyTo(span[offset..]);
-        offset += purposeBytes.Length;
-        BinaryPrimitives.WriteUInt16BigEndian(span[offset..], (ushort)versionBytes.Length);
-        offset += sizeof(ushort);
-        versionBytes.CopyTo(span[offset..]);
-        return data;
-    }
-
-    private static bool TryParse(byte[] ciphertext, out Envelope envelope)
-    {
-        envelope = default;
-        var span = ciphertext.AsSpan();
-        if (span.Length < Magic.Length + sizeof(ushort) || !span[..Magic.Length].SequenceEqual(Magic))
-        {
-            return false;
-        }
-
-        var wrappedLength = BinaryPrimitives.ReadUInt16BigEndian(span[Magic.Length..]);
-        var offset = Magic.Length + sizeof(ushort);
-        if (wrappedLength is 0 or > MaximumWrappedKeyBytes ||
-            span.Length < offset + wrappedLength + NonceBytes + TagBytes + 1)
-        {
-            return false;
-        }
-
-        envelope = new Envelope(
-            span.Slice(offset, wrappedLength).ToArray(),
-            span.Slice(offset + wrappedLength, NonceBytes).ToArray(),
-            span.Slice(offset + wrappedLength + NonceBytes, TagBytes).ToArray(),
-            span[(offset + wrappedLength + NonceBytes + TagBytes)..].ToArray());
-        return true;
-    }
-
-    private static void ValidatePurpose(string purpose)
-    {
-        if (purpose is null || !PurposePattern().IsMatch(purpose))
-        {
-            throw new ArgumentException("The PII purpose must be a lower-case column identifier.", nameof(purpose));
-        }
-    }
-
-    private static void ValidateKeyVersion(string keyVersion)
-    {
-        if (!IsValidKeyVersion(keyVersion))
-        {
-            throw new PiiProtectionUnavailableException();
-        }
-    }
-
-    private static bool IsValidKeyVersion(string? keyVersion) =>
-        !string.IsNullOrWhiteSpace(keyVersion) &&
-        keyVersion.Length <= MaximumKeyVersionLength &&
-        keyVersion.All(character => character is > ' ' and < (char)0x7F);
-
-    [GeneratedRegex("^[a-z][a-z0-9_]*(\\.[a-z][a-z0-9_]*)+$", RegexOptions.CultureInvariant)]
-    private static partial Regex PurposePattern();
-
-    private readonly record struct Envelope(byte[] WrappedKey, byte[] Nonce, byte[] Tag, byte[] Ciphertext);
 }
