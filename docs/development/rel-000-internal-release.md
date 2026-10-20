@@ -612,6 +612,47 @@ activo en todo el repositorio. Dos casos fallan cerrados:
 
 Esos casos necesitan una regla nueva del owner.
 
+### Segunda remediación NuGet: Microsoft.OpenApi.YamlReader (SEC-2026-13)
+
+`SEC-2026-13-OPENAPI-YAMLREADER` (Issue #280, rama `fix/security-2026-13-openapi-yamlreader`,
+base `13765fb`) remedia `GHSA-7pxr-59rr-hqj2` (CVE-2026-72923, alta): denegación de servicio por
+expansión de alias YAML en `Microsoft.OpenApi.YamlReader` `>=2.0.0-preview.11 <2.12.0`. Sólo
+ContractTests usa ese paquete, para leer el AI-05 del propio repositorio. `Microsoft.OpenApi`
+(núcleo) no tiene aviso, pero YamlReader 2.12.0 exige `Microsoft.OpenApi` 2.12.0. El owner
+decidió "Remediar con la tabla" (2026-10-19), por la misma ruta que SEC-2026-12. La fila del
+decision-log y su entrada del CHANGELOG entran con el PR de retiro hacia `development`. El cambio
+es exactamente la tabla del owner:
+
+- `Microsoft.OpenApi` pasa de 2.7.5 a 2.12.0 en los locks de la API y de ContractTests (`Direct`) y en
+  los de ArchitectureTests e IntegrationTests (`CentralTransitive`), sin cambiar de tipo;
+- en esos dos últimos locks, el nodo `Project` `paqueteria.api` pide `Microsoft.OpenApi`
+  `[2.12.0, )` en vez de `[2.7.5, )`: es la referencia directa de la API;
+- `Microsoft.OpenApi.YamlReader` pasa de 2.7.5 a 2.12.0 sólo en el lock de ContractTests, con su
+  arista a `Microsoft.OpenApi`;
+- `SharpYaml` sigue en 2.1.4, byte a byte. No se agrega ningún `PackageVersion` y el fijado
+  transitivo sigue como lo dejó SEC-2026-12.
+
+`validate_openapi_yamlreader_remediation_diff` usa el mismo validador de grafo exacto que
+SEC-2026-12 (`validate_nuget_security_remediation_diff`): el manifiesto igual a la base más las dos
+ediciones en su lugar, cada uno de los cuatro locks igual al grafo base más los dos movimientos
+declarados, y el SHA-256 de cada lock generado. Para este grafo, las funciones compartidas aceptan
+dos casos que SEC-2026-12 no tenía, ambos exactos y simétricos al deshacer:
+
+- un nodo que ya era `CentralTransitive` con `requested` igual a `[from, )` se mueve a `[to, )` y
+  conserva su tipo;
+- la petición de un nodo `Project` por un paquete movido sigue al movimiento sólo si es exactamente
+  `[from, )`.
+
+`nuget_remediation_expected_props` sólo exige una base sin fijado transitivo cuando la remediación lo
+activa (`central_package_transitive_pinning_required`, `true` en SEC-2026-12 y `false` aquí). Los
+campos del grafo sólo pueden aparecer en la autorización exacta de SEC-2026-12 o de SEC-2026-13
+(`NUGET_REMEDIATION_GRAPHS`), activa o retirada, cada una con exactamente su grafo. El grafo
+permanente (`test_k`) deshace ambos; sin el de SEC-2026-13 el checkout falla con
+`BASELINE_CENTRAL_PACKAGES_CHANGED`. La evidencia de liberación sigue sin pasar `nuget_remediations`.
+
+El documento OpenAPI que genera la API (`/openapi/v1.json`, sólo en `Development`) es idéntico byte
+a byte con 2.7.5 y con 2.12.0.
+
 ## Rollback REL-000
 
 El rollback de este bloque es no destructivo:
