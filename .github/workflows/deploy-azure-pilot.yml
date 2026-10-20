@@ -176,6 +176,9 @@ jobs:
       PILOT_TRACKING_SUPPORT_URL: ${{ vars.PILOT_TRACKING_SUPPORT_URL }}
       PILOT_GATE_007_DECISION: ${{ vars.PILOT_GATE_007_DECISION }}
       PILOT_GATE_012_DECISION: ${{ vars.PILOT_GATE_012_DECISION }}
+      # OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20: the PostgreSQL server the pilot uses. Empty = the first server (the
+      # platform.bicep default); after a real restore the owner sets the restored server (README §6.4).
+      PILOT_POSTGRES_SERVER_NAME: ${{ vars.PILOT_POSTGRES_SERVER_NAME }}
     steps:
       - name: Validate inputs and environment variables
         shell: bash
@@ -216,6 +219,12 @@ jobs:
           python3 ./tools/azr-001/env001_pilot_guards.py gate-decision --gate 007 --decision-id "${PILOT_GATE_007_DECISION:-}"
           python3 ./tools/azr-001/env001_pilot_guards.py gate-decision --gate 012 --decision-id "${PILOT_GATE_012_DECISION:-}"
 
+      # OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20: empty, or a pilot server name (the first server's name, optionally
+      # followed by '-' parts, README §6.4); anything else stops here, before Azure.
+      - name: Validate the PostgreSQL server setting (PILOT_POSTGRES_SERVER_NAME)
+        shell: bash
+        run: python3 ./tools/azr-001/env001_pilot_guards.py postgres-server-name --value "${PILOT_POSTGRES_SERVER_NAME:-}"
+
       - name: Install pinned Bicep CLI
         shell: bash
         run: |
@@ -245,6 +254,27 @@ jobs:
           location="$(az group show --name "${PILOT_RESOURCE_GROUP}" --query location -o tsv)"
           [[ "${location}" == "${PILOT_REGION}" ]] || { echo "::error::resource group must exist in ${PILOT_REGION} (bootstrap.md step 2)"; exit 1; }
           az extension add --name containerapp --upgrade --yes --only-show-errors
+
+      # OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20: a named server must already exist (a point-in-time restore made it),
+      # so a mistyped name can never create a second, empty server; and it must already have every value platform.bicep
+      # sets that an existing server cannot change, so stage 2 updates it in place. Empty: the first server, unchanged.
+      - name: Check the PostgreSQL server to adopt (PILOT_POSTGRES_SERVER_NAME)
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ -z "${PILOT_POSTGRES_SERVER_NAME:-}" ]]; then
+            echo "PILOT_POSTGRES_SERVER_NAME is empty: the pilot keeps its first PostgreSQL server."
+            exit 0
+          fi
+          if ! az resource show --resource-group "${PILOT_RESOURCE_GROUP}" --name "${PILOT_POSTGRES_SERVER_NAME}" \
+              --resource-type Microsoft.DBforPostgreSQL/flexibleServers --api-version 2024-08-01 \
+              --only-show-errors --output json > "${RUNNER_TEMP}/postgres-server.json"; then
+            echo "::error::PostgreSQL server ${PILOT_POSTGRES_SERVER_NAME} cannot be read in ${PILOT_RESOURCE_GROUP}. Restore it first (README §6.4) or empty PILOT_POSTGRES_SERVER_NAME."
+            exit 1
+          fi
+          python3 ./tools/azr-001/env001_pilot_guards.py postgres-adoption-check --name "${PILOT_POSTGRES_SERVER_NAME}" \
+            --server-json "${RUNNER_TEMP}/postgres-server.json" --platform-arm "${RUNNER_TEMP}/arm/platform.json" \
+            --subscription-id "${AZURE_SUBSCRIPTION_ID}" --resource-group "${PILOT_RESOURCE_GROUP}" --region "${PILOT_REGION}"
 
       - name: Stage 1 - identities, VNet, Key Vault (deny by default) and keys (security.bicep)
         id: security
@@ -305,13 +335,16 @@ jobs:
           echo "::add-mask::${admin}"
           ADMIN="${admin}" TAG_READER="${tag_reader}" EMAILS="${emails}" python3 - > "${RUNNER_TEMP}/platform.parameters.json" <<'PY'
           import json, os
+          parameters = {"postgresAdministratorPassword": {"value": os.environ["ADMIN"]},
+                        "budgetStartDate": {"value": os.environ["PILOT_BUDGET_START_DATE"]},
+                        "budgetContactEmails": {"value": json.loads(os.environ["EMAILS"])},
+                        "blobTagReaderRoleDefinitionId": {"value": os.environ["TAG_READER"]},
+                        "publicOrigin": {"value": "https://" + os.environ["PILOT_HOST"]}}
+          # OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20: only a validated, adoptable name; empty keeps the template default.
+          if os.environ.get("PILOT_POSTGRES_SERVER_NAME"):
+              parameters["postgresServerName"] = {"value": os.environ["PILOT_POSTGRES_SERVER_NAME"]}
           print(json.dumps({"$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
-                            "contentVersion": "1.0.0.0",
-                            "parameters": {"postgresAdministratorPassword": {"value": os.environ["ADMIN"]},
-                                           "budgetStartDate": {"value": os.environ["PILOT_BUDGET_START_DATE"]},
-                                           "budgetContactEmails": {"value": json.loads(os.environ["EMAILS"])},
-                                           "blobTagReaderRoleDefinitionId": {"value": os.environ["TAG_READER"]},
-                                           "publicOrigin": {"value": "https://" + os.environ["PILOT_HOST"]}}}))
+                            "contentVersion": "1.0.0.0", "parameters": parameters}))
           PY
           unset admin
 
@@ -332,9 +365,17 @@ jobs:
             --template-file "${RUNNER_TEMP}/arm/platform.json" --parameters "@${RUNNER_TEMP}/platform.parameters.json" \
             --only-show-errors --output none
           outputs="$(az deployment group show --resource-group "${PILOT_RESOURCE_GROUP}" --name env001-platform --query properties.outputs -o json)"
-          for key in registryName registryServer blobServiceUri postgresHost postgresAdministratorLogin containerEnvironmentName containerEnvironmentStaticIp customDomainVerificationId containerAppsSubnetPrefix; do
+          for key in registryName registryServer blobServiceUri postgresName postgresHost postgresAdministratorLogin containerEnvironmentName containerEnvironmentStaticIp customDomainVerificationId containerAppsSubnetPrefix; do
             echo "${key}=$(jq -r ".${key}.value" <<<"${outputs}")" >> "${GITHUB_OUTPUT}"
           done
+          # OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20: every later consumer reads these two outputs.
+          name="$(jq -r .postgresName.value <<<"${outputs}")"
+          host="$(jq -r .postgresHost.value <<<"${outputs}")"
+          if [[ -n "${PILOT_POSTGRES_SERVER_NAME:-}" && "${name}" != "${PILOT_POSTGRES_SERVER_NAME}" ]]; then
+            echo "::error::platform.bicep deployed PostgreSQL server ${name}, not PILOT_POSTGRES_SERVER_NAME"; exit 1
+          fi
+          [[ "${host}" == "${name}.postgres.database.azure.com" ]] || { echo "::error::postgresHost does not belong to postgresName ${name}"; exit 1; }
+          echo "PostgreSQL server in service: ${name}"
 
       # PILOT-KEYVAULT-PRIVATE-APP-READ: the vault denies public traffic; open a temporary /32 rule for this
       # runner only around its secret reads and writes (window 2), and always close it.
@@ -345,6 +386,7 @@ jobs:
         run: bash deploy/azure/pilot/kv-firewall.sh open "${VAULT}"
 
       - name: Ensure database connection secrets and runtime login verifiers; never printed
+        id: connections
         shell: bash
         env:
           VAULT: ${{ steps.security.outputs.vaultName }}
@@ -368,8 +410,22 @@ jobs:
           # Runtime LOGIN passwords are generated once; the job receives only their SCRAM verifiers.
           # RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: "realtime" is the API's in-process realtime dispatcher login
           # (pv_pilot_realtime, member of paqueteria_realtime only); the API never reads the Worker credential.
+          # OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20: a kept credential stays only while it names the server in service.
+          # After a restore its host is the old server's, so a new one is generated, as rotate_runtime_logins does, and
+          # the logins job applies it on the new server. The kept value and its password are masked and never printed.
+          changed=false
           for role in api worker realtime; do
-            if [[ "${ROTATE_RUNTIME_LOGINS}" != "true" ]] && has_secret "pg-${role}-runtime-connection" && has_secret "pg-${role}-login-verifier"; then continue; fi
+            if [[ "${ROTATE_RUNTIME_LOGINS}" != "true" ]] && has_secret "pg-${role}-runtime-connection" && has_secret "pg-${role}-login-verifier"; then
+              kept="$(az keyvault secret show --vault-name "${VAULT}" --name "pg-${role}-runtime-connection" --query value -o tsv)"
+              echo "::add-mask::${kept}"
+              kept_password="${kept#*Password=}"
+              echo "::add-mask::${kept_password%%;*}"
+              kept_host="$(printf '%s' "${kept}" | python3 ./tools/azr-001/env001_pilot_guards.py connection-host)"
+              unset kept kept_password
+              if [[ "${kept_host}" == "${PGHOST_FQDN}" ]]; then continue; fi
+              echo "The runtime login credential for ${role} names another PostgreSQL server; generating one for ${PGHOST_FQDN}."
+            fi
+            changed=true
             password="$(openssl rand -hex 32)"
             echo "::add-mask::${password}"
             printf 'Host=%s;Database=paqueteria;Username=pv_pilot_%s;Password=%s;Maximum Pool Size=5;Minimum Pool Size=0;%s' \
@@ -380,6 +436,7 @@ jobs:
             unset password
             echo "Generated runtime login credential for ${role}."
           done
+          echo "runtime_logins_changed=${changed}" >> "${GITHUB_OUTPUT}"
           if ! has_secret authcenter-paquetenvia-client-secret; then
             echo "::error::Key Vault ${VAULT} lacks authcenter-paquetenvia-client-secret. Store the AuthCenter client secret (README 'Secrets the owner writes') and re-run."
             exit 1
@@ -467,6 +524,32 @@ jobs:
           run_job job-pv-pilot-logins
           run_job job-pv-pilot-verify
 
+      # The apps read their Key Vault secrets once at start. After stage 3 has applied the logins: restart a running
+      # revision whose database credential changed (rotate_runtime_logins, or a new PostgreSQL server:
+      # OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20), and start a revision the real restore stopped (README §6.4 step 1),
+      # which then reads the current credential. Before the first stage 4 the apps do not exist yet.
+      - name: Start or restart the API and Worker on the current database credentials
+        shell: bash
+        env:
+          RUNTIME_LOGINS_CHANGED: ${{ steps.connections.outputs.runtime_logins_changed }}
+        run: |
+          set -euo pipefail
+          for app in ca-pv-pilot-api ca-pv-pilot-worker; do
+            if [[ -z "$(az containerapp list --resource-group "${PILOT_RESOURCE_GROUP}" --query "[?name=='${app}'].name" -o tsv)" ]]; then
+              echo "${app} is not deployed yet; stage 4 creates it with the current credentials."
+              continue
+            fi
+            revision="$(az containerapp show --name "${app}" --resource-group "${PILOT_RESOURCE_GROUP}" --query properties.latestRevisionName -o tsv)"
+            active="$(az containerapp revision show --name "${app}" --resource-group "${PILOT_RESOURCE_GROUP}" --revision "${revision}" --query properties.active -o tsv)"
+            if [[ "${active}" != "true" ]]; then
+              az containerapp revision activate --name "${app}" --resource-group "${PILOT_RESOURCE_GROUP}" --revision "${revision}" --only-show-errors --output none
+              echo "Started ${app} revision ${revision}."
+            elif [[ "${RUNTIME_LOGINS_CHANGED}" == "true" ]]; then
+              az containerapp revision restart --name "${app}" --resource-group "${PILOT_RESOURCE_GROUP}" --revision "${revision}" --only-show-errors --output none
+              echo "Restarted ${app} revision ${revision}."
+            fi
+          done
+
       - name: Stage 4 - Web, API, Worker and same-origin route (apps.bicep)
         id: apps
         shell: bash
@@ -493,24 +576,21 @@ jobs:
               "trustedProxyNetwork=${PROXY_NETWORK}" "businessSettings=@deploy/azure/pilot/apps.settings.json" \
               "@deploy/azure/pilot/web.parameters.json" \
             --only-show-errors --output none
-          if [[ "${ROTATE_RUNTIME_LOGINS}" == "true" ]]; then
-            # The apps read Key Vault secrets once at startup; restart so the re-keyed logins take effect now.
-            for app in ca-pv-pilot-api ca-pv-pilot-worker; do
-              revision="$(az containerapp show --name "${app}" --resource-group "${PILOT_RESOURCE_GROUP}" --query properties.latestRevisionName -o tsv)"
-              az containerapp revision restart --name "${app}" --resource-group "${PILOT_RESOURCE_GROUP}" --revision "${revision}" --only-show-errors --output none
-            done
-          fi
           fqdn="$(az deployment group show --resource-group "${PILOT_RESOURCE_GROUP}" --name env001-apps --query properties.outputs.routeFqdn.value -o tsv)"
           echo "routeFqdn=${fqdn}" >> "${GITHUB_OUTPUT}"
 
+      # OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20: the SCL-007 alerts watch the server stage 2 deployed.
       - name: Stage 5 - OBS-002 alerts, e-mail action group and workbook (observability.bicep)
         shell: bash
+        env:
+          POSTGRES_NAME: ${{ steps.platform.outputs.postgresName }}
         run: |
           set -euo pipefail
           python3 ./tools/azr-001/env001_pilot_guards.py observability-check --file deploy/azure/pilot/observability.parameters.json
+          [[ -n "${POSTGRES_NAME}" ]] || { echo "::error::stage 2 gave no postgresName"; exit 1; }
           az deployment group create --resource-group "${PILOT_RESOURCE_GROUP}" --name env001-observability \
             --template-file "${RUNNER_TEMP}/arm/observability.json" \
-            --parameters "@deploy/azure/pilot/observability.parameters.json" \
+            --parameters "@deploy/azure/pilot/observability.parameters.json" "postgresServerName=${POSTGRES_NAME}" \
             --only-show-errors --output none
 
       - name: Smoke test same-origin routing
@@ -541,10 +621,12 @@ jobs:
           STATIC_IP: ${{ steps.platform.outputs.containerEnvironmentStaticIp }}
           VERIFICATION_ID: ${{ steps.platform.outputs.customDomainVerificationId }}
           ROUTE_FQDN: ${{ steps.apps.outputs.routeFqdn }}
+          POSTGRES_NAME: ${{ steps.platform.outputs.postgresName }}
         run: |
           {
             echo "## ENV-001 pilot deployment"
             echo "- deployed_git_sha: \`${TESTED_GIT_SHA}\`"
+            echo "- PostgreSQL server: \`${POSTGRES_NAME:-not deployed}\`"
             echo "- route FQDN: \`${ROUTE_FQDN:-not deployed}\`"
             echo "- custom domain phase: \`${CUSTOM_DOMAIN_PHASE}\`"
             echo ""

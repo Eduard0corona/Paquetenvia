@@ -32,6 +32,13 @@ param http5xxPercentThreshold int = 5
 @minValue(1)
 param readinessEventThreshold int = 3
 
+// OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20: the server the SCL-007 alerts watch. The workflow passes the postgresName
+// output of platform.bicep, so the alerts follow PILOT_POSTGRES_SERVER_NAME; the default is the same as platform.bicep's.
+@description('PostgreSQL flexible server the SCL-007 alerts watch (the postgresName output of platform.bicep).')
+@minLength(3)
+@maxLength(63)
+param postgresServerName string = 'pg-pv-pilot-${uniqueString(subscription().id, resourceGroup().id)}'
+
 var suffix = uniqueString(subscription().id, resourceGroup().id)
 var tags = {
   project: 'Paquetenvia'
@@ -57,9 +64,9 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2025-02-01' exis
   name: 'law-pv-pilot-${suffix}'
 }
 
-// platform.bicep (stage 2) creates the server; the SCL-007 connection and resource alerts watch it.
+// platform.bicep (stage 2) creates or adopts the server; the SCL-007 connection and resource alerts watch it.
 resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' existing = {
-  name: 'pg-pv-pilot-${suffix}'
+  name: postgresServerName
 }
 
 resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {

@@ -8,12 +8,15 @@ guards; they check the pilot's own owner decisions against the compiled ARM outp
 (`bicep build`) and the workflow. They never contact Azure.
 
 Commands:
-  check            evaluate every pilot guard (P00..P24)
+  check            evaluate every pilot guard (P00..P25)
   settings-check   validate deploy/azure/pilot/apps.settings.json (fails while an owner value is missing)
   observability-check  validate deploy/azure/pilot/observability.parameters.json (OBS-002 alert e-mail)
   web-check        validate deploy/azure/pilot/web.parameters.json (UI-001 accepted terms/privacy versions)
   scram-verifier   read a password on stdin, print its PostgreSQL SCRAM-SHA-256 verifier
   gate-decision    require a decision-log row that resolves or scopes GATE-007 / GATE-012
+  postgres-server-name     validate PILOT_POSTGRES_SERVER_NAME (OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20)
+  connection-host          read a connection string on stdin, print only its PostgreSQL host
+  postgres-adoption-check  refuse a named PostgreSQL server that platform.bicep cannot update in place
 """
 
 from __future__ import annotations
@@ -921,6 +924,121 @@ def guard_18_bff_web_image(ctx: Context) -> GuardResult:
     return _result(18, "AUTH-001 BFF web image (same origin)", failures, "API base URL unset, auth mode bff, manifest complete")
 
 
+# ---------------------------------------------------------------------------------------------- OPS-002 server name
+# OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20 (owner J1: "Que el despliegue lo siga (Recommended)"): the PostgreSQL server
+# is one setting, the azure-pilot variable PILOT_POSTGRES_SERVER_NAME (empty = the default server). The workflow passes
+# it to platform.bicep, whose postgresName and postgresHost outputs feed every other consumer: the migration connection,
+# the runtime credentials, the jobs, the SCL-007 alerts and restore-drill.sh. This prefix is the only place in the
+# guards that spells the server name; the two template defaults and the drill script's format check are the others.
+POSTGRES_SERVER_PREFIX = "pg-pv-pilot-"
+POSTGRES_SERVER_VARIABLE = "PILOT_POSTGRES_SERVER_NAME"
+POSTGRES_SERVER_PARAMETER = "postgresServerName"
+POSTGRES_SERVER_TYPE = "Microsoft.DBforPostgreSQL/flexibleServers"
+# The prefix, the 13-character uniqueString(subscription().id, resourceGroup().id) suffix (the default server), then
+# optional '-' parts of lowercase letters and digits (restore-drill.sh names `-r<UTC minute>` and `-drill-<UTC minute>`),
+# at most 63 characters in all (the flexible server name rule). Group 1 is the base name, the default server's.
+POSTGRES_SERVER_NAME_PATTERN = rf"^({POSTGRES_SERVER_PREFIX}[a-z0-9]{{13}})(-[a-z0-9]+)*$"
+POSTGRES_SERVER_NAME = re.compile(POSTGRES_SERVER_NAME_PATTERN)
+POSTGRES_SERVER_NAME_MAX = 63
+POSTGRES_SERVER_DEFAULT = f"[format('{POSTGRES_SERVER_PREFIX}{{0}}', uniqueString(subscription().id, resourceGroup().id))]"
+POSTGRES_SERVER_NAME_EXPRESSION = f"[parameters('{POSTGRES_SERVER_PARAMETER}')]"
+POSTGRES_SERVER_ID = f"[resourceId('{POSTGRES_SERVER_TYPE}', parameters('{POSTGRES_SERVER_PARAMETER}'))]"
+POSTGRES_HOST_OUTPUT = (f"[reference(resourceId('{POSTGRES_SERVER_TYPE}', parameters('{POSTGRES_SERVER_PARAMETER}')), "
+                        "'2024-08-01').fullyQualifiedDomainName]")
+POSTGRES_HOST = re.compile(r"^[a-z0-9-]+\.postgres\.database\.azure\.com$")
+
+
+def validate_postgres_server_name(value: Any) -> list[str]:
+    """PILOT_POSTGRES_SERVER_NAME: empty (the default server) or a pilot server name. A malformed value is never echoed."""
+    if value == "":
+        return []
+    if not isinstance(value, str) or len(value) > POSTGRES_SERVER_NAME_MAX or not POSTGRES_SERVER_NAME.fullmatch(value):
+        return [f"{POSTGRES_SERVER_VARIABLE} must be empty (the default server) or a pilot PostgreSQL server name: "
+                f"{POSTGRES_SERVER_PREFIX}, the 13-character resource-group suffix, then optional '-' parts of lowercase "
+                f"letters and digits, at most {POSTGRES_SERVER_NAME_MAX} characters (README section 6.4, real restore)"]
+    return []
+
+
+def connection_host(text: str) -> str:
+    """The single Host (or its Npgsql alias Server) of a connection string, which must be a PostgreSQL flexible server
+    FQDN. Raises GuardError without ever quoting the input, which holds a password."""
+    hosts = []
+    for part in text.strip().split(";"):
+        key, separator, value = part.partition("=")
+        if separator and key.strip().lower() in ("host", "server"):
+            hosts.append(value.strip())
+    if len(hosts) != 1 or not POSTGRES_HOST.fullmatch(hosts[0]):
+        raise GuardError("the connection string has no single PostgreSQL flexible server Host (value not shown)")
+    return hosts[0]
+
+
+def _arm_resource_id(expression: Any, subscription_id: str, resource_group: str) -> str | None:
+    """Resolve a compiled `[resourceId('<namespace>/<type>[/<child>]', '<name>'[, '<child name>'])]` literal."""
+    match = re.fullmatch(r"\[resourceId\('([^']+)'((?:, '[^']+')+)\)\]", str(expression))
+    if not match:
+        return None
+    namespace, *types = match.group(1).split("/")
+    names = re.findall(r"'([^']+)'", match.group(2))
+    if len(types) != len(names):
+        return None
+    path = "/".join(f"{kind}/{name}" for kind, name in zip(types, names))
+    return f"/subscriptions/{subscription_id}/resourceGroups/{resource_group}/providers/{namespace}/{path}"
+
+
+def postgres_adoption_failures(name: str, server: Any, platform: Any, *, subscription_id: str, resource_group: str,
+                               region: str) -> list[str]:
+    """Before stage 2 adopts PILOT_POSTGRES_SERVER_NAME: the server exists (the ARM GET of `az resource show`), is
+    Ready and standalone, and already has every value platform.bicep sets that an existing server cannot change
+    (administrator login, major version, region, private network with the template's delegated subnet and private DNS
+    zone, geo-redundant backup) and a disk no larger than the template's (a disk never shrinks), so the deployment
+    updates it in place and never creates a second server."""
+    if not isinstance(server, dict) or not isinstance(server.get("properties"), dict):
+        return [f"{name}: the server description is not an ARM resource"]
+    resources = platform.get("resources", []) if isinstance(platform, dict) else []
+    template = [r for r in (resources.values() if isinstance(resources, dict) else resources)
+                if isinstance(r, dict) and r.get("type") == POSTGRES_SERVER_TYPE and not r.get("existing")]
+    if len(template) != 1:
+        return ["platform.json must declare exactly one PostgreSQL server"]
+    expected, found = template[0].get("properties", {}) or {}, server["properties"]
+    variables = platform.get("variables", {}) or {}
+    failures = []
+    if str(server.get("name", "")) != name or str(server.get("type", "")).lower() != POSTGRES_SERVER_TYPE.lower():
+        failures.append(f"{name}: the description is of {server.get('type')} {server.get('name')}")
+    if "".join(str(server.get("location", "")).split()).lower() != region:
+        failures.append(f"{name} is in {server.get('location')}, not {region}")
+    if found.get("state") != "Ready":
+        failures.append(f"{name} is {found.get('state')}, not Ready; start it or wait for the restore to finish")
+    if found.get("replicationRole") in ("AsyncReplica", "GeoAsyncReplica"):
+        failures.append(f"{name} is a read replica, not a restored standalone server")
+    login = expected.get("administratorLogin")
+    login_variable = re.fullmatch(r"\[variables\('([A-Za-z0-9_]+)'\)\]", str(login))
+    login = variables.get(login_variable.group(1)) if login_variable else login
+    if found.get("administratorLogin") != login:
+        failures.append(f"{name} has another administrator login; it can never change, so the template cannot adopt it")
+    if str(found.get("version")) != str(expected.get("version")):
+        failures.append(f"{name} runs PostgreSQL {found.get('version')}, the template {expected.get('version')}")
+    network, expected_network = found.get("network", {}) or {}, expected.get("network", {}) or {}
+    if network.get("publicNetworkAccess") != expected_network.get("publicNetworkAccess"):
+        failures.append(f"{name} must use private access like the template (publicNetworkAccess "
+                        f"{expected_network.get('publicNetworkAccess')})")
+    for key, label in (("delegatedSubnetResourceId", "delegated subnet"), ("privateDnsZoneArmResourceId", "private DNS zone")):
+        wanted = _arm_resource_id(expected_network.get(key), subscription_id, resource_group)
+        if wanted is None:
+            failures.append(f"platform.json {key} is not a literal resourceId")
+        elif str(network.get(key, "")).lower() != wanted.lower():
+            failures.append(f"{name} is not in the template's {label}; restore it without --vnet, --subnet or "
+                            "--private-dns-zone (README section 6.4)")
+    geo = (found.get("backup", {}) or {}).get("geoRedundantBackup")
+    if geo != (expected.get("backup", {}) or {}).get("geoRedundantBackup"):
+        failures.append(f"{name} has geo-redundant backup {geo}; it is fixed at creation and the template sets "
+                        f"{(expected.get('backup', {}) or {}).get('geoRedundantBackup')}")
+    size, template_size = (found.get("storage", {}) or {}).get("storageSizeGB"), (expected.get("storage", {}) or {}).get("storageSizeGB")
+    if not isinstance(size, int) or not isinstance(template_size, int) or size > template_size:
+        failures.append(f"{name} has a {size} GiB disk and the template {template_size} GiB; a disk never shrinks, so "
+                        "raising storageSizeGB (and the SCL-007 storage alert base) needs its own owner decision")
+    return failures
+
+
 # ---------------------------------------------------------------------------------------------- OBS-002
 # Log search alert price per rule and month by evaluation frequency (Azure Retail Prices API,
 # mexicocentral, 2026-09-28). Frequencies outside 5-15 minutes are not allowed for the pilot.
@@ -966,7 +1084,6 @@ METRIC_ALERT_TYPE = "Microsoft.Insights/metricAlerts"
 METRIC_ALERT_SERIES_MONTHLY_USD = 0.10
 POSTGRES_SKU = "Standard_B1ms"
 POSTGRES_USER_CONNECTIONS = 35
-POSTGRES_SERVER_ID = "[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', format('pg-pv-pilot-{0}', variables('suffix')))]"
 PILOT_ACTION_GROUP_ID = "[resourceId('Microsoft.Insights/actionGroups', 'ag-pv-pilot-ops')]"
 # name -> (severity, threshold): 28 = 80 % and 33 = 95 % (rounded down) of the 35 user connections.
 REQUIRED_CONNECTION_ALERTS = {
@@ -1058,7 +1175,8 @@ def _metric_alert_failures(ctx: Context) -> tuple[list[str], int]:
         if properties.get("evaluationFrequency") != "PT1M" or properties.get("windowSize") != window:
             failures.append(f"{name} must be evaluated every minute (PT1M) over {_iso_minutes(window)} minutes ({window})")
         if properties.get("scopes") != [POSTGRES_SERVER_ID]:
-            failures.append(f"{name} must watch only the pilot PostgreSQL server pg-pv-pilot-<suffix>, found {properties.get('scopes')}")
+            failures.append(f"{name} must watch only the pilot PostgreSQL server (parameter {POSTGRES_SERVER_PARAMETER}), "
+                            f"found {properties.get('scopes')}")
         criteria = properties.get("criteria", {}) or {}
         found = criteria.get("allOf")
         if (criteria.get("odata.type") != "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria" or set(criteria) != {"odata.type", "allOf"}
@@ -1082,7 +1200,7 @@ def _metric_alert_failures(ctx: Context) -> tuple[list[str], int]:
                         f"with the disk size, found {storage}")
     suffix = ctx.templates.get("observability", {}).get("variables", {}).get("suffix")
     if suffix is None or suffix != ctx.templates.get("platform", {}).get("variables", {}).get("suffix"):
-        failures.append("observability.bicep must name the PostgreSQL server and the workspace with the same suffix as platform.bicep")
+        failures.append("observability.bicep must name the workspace with the same suffix as platform.bicep")
     return failures, len(alerts)
 
 
@@ -1431,6 +1549,105 @@ def guard_24_non_root_images(ctx: Context) -> GuardResult:
                    "the final stage of each pilot image runs as a non-root USER")
 
 
+# ---------------------------------------------------------------------------------------------- OPS-002 (P25)
+RESTORE_DRILL_SCRIPT = PILOT_DIR / "restore-drill.sh"
+POSTGRES_SERVER_VARIABLE_ENV = f"${{{{ vars.{POSTGRES_SERVER_VARIABLE} }}}}"
+POSTGRES_NAME_OUTPUT_ENV = "${{ steps.platform.outputs.postgresName }}"
+POSTGRES_HOST_OUTPUT_ENV = "${{ steps.platform.outputs.postgresHost }}"
+RUNTIME_LOGINS_CHANGED_ENV = "${{ steps.connections.outputs.runtime_logins_changed }}"
+
+
+def _step_index(steps: list[dict[str, Any]], predicate: Callable[[dict[str, Any]], bool]) -> list[int]:
+    return [i for i, step in enumerate(steps) if predicate(step)]
+
+
+def guard_25_postgres_server_setting(ctx: Context) -> GuardResult:
+    """OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20: one setting names the PostgreSQL server and everything follows it. Both
+    templates take `postgresServerName` with exactly the first server's name as default; platform.bicep names its only
+    server and its outputs from it; observability.bicep watches it; no template spells the name elsewhere. The deploy job
+    reads PILOT_POSTGRES_SERVER_NAME once, validates it before Azure, refuses a named server that does not exist or
+    cannot be adopted before stage 2, passes it to platform.bicep and the platform output to observability.bicep,
+    regenerates a kept runtime credential whose host is not the current one, and restarts the apps on a changed
+    credential. restore-drill.sh restores the server in service and checks its name with the same pattern."""
+    failures: list[str] = []
+    for name in ("platform", "observability"):
+        template = ctx.templates.get(name, {})
+        parameter = (template.get("parameters", {}) or {}).get(POSTGRES_SERVER_PARAMETER)
+        if not isinstance(parameter, dict) or parameter.get("type") != "string" or parameter.get("defaultValue") != POSTGRES_SERVER_DEFAULT \
+                or parameter.get("minLength") != 3 or parameter.get("maxLength") != POSTGRES_SERVER_NAME_MAX:
+            failures.append(f"{name}.bicep must take {POSTGRES_SERVER_PARAMETER} as a 3-63 character string whose default is "
+                            f"exactly the first server, {POSTGRES_SERVER_DEFAULT}")
+    # The compiled ARM keeps only declared resources; observability.bicep's `existing` server shows up in the scopes of
+    # its metric alerts, which P21 pins to POSTGRES_SERVER_ID.
+    servers = [r for _, r in ctx.resources(POSTGRES_SERVER_TYPE)]
+    if len(servers) != 1 or servers[0].get("name") != POSTGRES_SERVER_NAME_EXPRESSION \
+            or [t for t, _ in ctx.resources(POSTGRES_SERVER_TYPE)] != ["platform"]:
+        failures.append(f"platform.bicep must declare the only PostgreSQL server, named {POSTGRES_SERVER_NAME_EXPRESSION}")
+    for name, template in sorted(ctx.templates.items()):
+        count = json.dumps(template).count(POSTGRES_SERVER_PREFIX)
+        if count != (1 if name in ("platform", "observability") else 0):
+            failures.append(f"{name}.bicep spells {POSTGRES_SERVER_PREFIX}... {count} time(s); only the "
+                            f"{POSTGRES_SERVER_PARAMETER} default of platform.bicep and observability.bicep may")
+    outputs = ctx.templates.get("platform", {}).get("outputs", {}) or {}
+    if (outputs.get("postgresName", {}) or {}).get("value") != POSTGRES_SERVER_NAME_EXPRESSION \
+            or (outputs.get("postgresHost", {}) or {}).get("value") != POSTGRES_HOST_OUTPUT:
+        failures.append(f"platform.bicep must output postgresName and postgresHost of the server {POSTGRES_SERVER_NAME_EXPRESSION}")
+
+    deploy = (ctx.workflow.get("jobs", {}) or {}).get("deploy", {}) or {}
+    steps = [s for s in deploy.get("steps", []) or [] if isinstance(s, dict)]
+    run = lambda step: str(step.get("run", ""))  # noqa: E731
+    env = lambda step: step.get("env", {}) or {}  # noqa: E731
+    if (deploy.get("env", {}) or {}).get(POSTGRES_SERVER_VARIABLE) != POSTGRES_SERVER_VARIABLE_ENV \
+            or ctx.workflow_text.count(f"vars.{POSTGRES_SERVER_VARIABLE}") != 1:
+        failures.append(f"the deploy job must read {POSTGRES_SERVER_VARIABLE} once, into its env, from {POSTGRES_SERVER_VARIABLE_ENV}")
+    login = _step_index(steps, lambda s: "azure/login" in str(s.get("uses", "")))
+    validate = _step_index(steps, lambda s: f'postgres-server-name --value "${{{POSTGRES_SERVER_VARIABLE}:-}}"' in run(s))
+    adopt = _step_index(steps, lambda s: "postgres-adoption-check" in run(s) and "az resource show" in run(s))
+    platform = _step_index(steps, lambda s: '"${RUNNER_TEMP}/arm/platform.json"' in run(s) and "az deployment group create" in run(s))
+    prepare = _step_index(steps, lambda s: "platform.parameters.json" in run(s) and "postgresAdministratorPassword" in run(s))
+    if len(validate) != 1 or not login or validate[0] > login[0]:
+        failures.append(f"the deploy job must validate {POSTGRES_SERVER_VARIABLE} with postgres-server-name before azure/login")
+    if len(platform) != 1 or len(adopt) != 1 or adopt[0] > platform[0]:
+        failures.append("the deploy job must check the named server with az resource show and postgres-adoption-check before stage 2")
+    else:
+        server = next((r for r in ctx.templates.get("platform", {}).get("resources", []) or []
+                       if isinstance(r, dict) and r.get("type") == POSTGRES_SERVER_TYPE), {})
+        if f"--api-version {server.get('apiVersion')}" not in run(steps[adopt[0]]):
+            failures.append(f"the adoption check must read the server with the template's API version {server.get('apiVersion')}")
+        if f'"{POSTGRES_SERVER_PARAMETER}"' not in (run(steps[prepare[0]]) if len(prepare) == 1 else "") \
+                or POSTGRES_SERVER_VARIABLE not in (run(steps[prepare[0]]) if len(prepare) == 1 else ""):
+            failures.append(f"the platform parameters must carry {POSTGRES_SERVER_PARAMETER} from {POSTGRES_SERVER_VARIABLE}")
+        if 'postgresName' not in run(steps[platform[0]]) or '"${name}.postgres.database.azure.com"' not in run(steps[platform[0]]):
+            failures.append("stage 2 must export postgresName and check that postgresHost belongs to it")
+    observability = _step_index(steps, lambda s: '"${RUNNER_TEMP}/arm/observability.json"' in run(s))
+    if len(observability) != 1 or env(steps[observability[0]]).get("POSTGRES_NAME") != POSTGRES_NAME_OUTPUT_ENV \
+            or f'"{POSTGRES_SERVER_PARAMETER}=${{POSTGRES_NAME}}"' not in run(steps[observability[0]]):
+        failures.append(f"stage 5 must pass {POSTGRES_SERVER_PARAMETER}=<platform postgresName output> to observability.bicep")
+    connections = [s for s in steps if s.get("id") == "connections"]
+    if len(connections) != 1 or env(connections[0]).get("PGHOST_FQDN") != POSTGRES_HOST_OUTPUT_ENV \
+            or "connection-host" not in run(connections[0]) or 'runtime_logins_changed=' not in run(connections[0]) \
+            or '"${kept_host}" == "${PGHOST_FQDN}"' not in run(connections[0]):
+        failures.append("the connections step (id connections) must keep a runtime credential only while its host is "
+                        "the platform postgresHost output, and report runtime_logins_changed")
+    restart = _step_index(steps, lambda s: "az containerapp revision restart" in run(s))
+    jobs = _step_index(steps, lambda s: "job-pv-pilot-logins" in run(s) and '"${RUNNER_TEMP}/arm/jobs.json"' in run(s))
+    apps = _step_index(steps, lambda s: '"${RUNNER_TEMP}/arm/apps.json"' in run(s))
+    if len(restart) != 1 or env(steps[restart[0]]).get("RUNTIME_LOGINS_CHANGED") != RUNTIME_LOGINS_CHANGED_ENV \
+            or "az containerapp revision activate" not in run(steps[restart[0]]):
+        failures.append("one step must start a stopped API or Worker revision and restart a running one when "
+                        "runtime_logins_changed")
+    elif len(jobs) != 1 or len(apps) != 1 or not jobs[0] < restart[0] < apps[0]:
+        failures.append("the start-or-restart step must run after the logins job (stage 3) and before stage 4")
+    try:
+        drill = (ctx.repo_root / RESTORE_DRILL_SCRIPT).read_text(encoding="utf-8")
+    except OSError:
+        drill = ""
+    if 'SOURCE="$(jq -r .postgresName.value <<<"${platform}")"' not in drill or POSTGRES_SERVER_NAME_PATTERN not in drill:
+        failures.append(f"{RESTORE_DRILL_SCRIPT} must restore the platform postgresName output and check it with {POSTGRES_SERVER_NAME_PATTERN}")
+    return _result(25, f"PostgreSQL server follows {POSTGRES_SERVER_VARIABLE} (OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20)", failures,
+                   "one parameter with the first server as default; outputs, alerts, credentials, jobs and drills follow it")
+
+
 def guard_20_guard_tool_dependencies(ctx: Context) -> GuardResult:
     """Every job that runs a guard tool (both import PyYAML at module scope) installs the pinned PyYAML
     with actions/setup-python first, in the same job."""
@@ -1485,6 +1702,7 @@ GUARDS: tuple[Callable[[Context], GuardResult], ...] = (
     guard_22_web_acceptance_versions,
     guard_23_realtime_dispatcher_credential,
     guard_24_non_root_images,
+    guard_25_postgres_server_setting,
 )
 
 
@@ -1962,6 +2180,43 @@ def command_gate_decision(args: argparse.Namespace) -> int:
     return 1 if failures else 0
 
 
+def command_postgres_server_name(args: argparse.Namespace) -> int:
+    failures = validate_postgres_server_name(args.value)
+    for failure in failures:
+        print(f"STOP_FOR_OWNER_DECISION: {failure}")
+    if failures:
+        print("ENV001_POSTGRES_SERVER=FAIL")
+        return 1
+    print("ENV001_POSTGRES_SERVER=" + (f"PASS {args.value}" if args.value else "PASS default (platform.bicep postgresServerName)"))
+    return 0
+
+
+def command_connection_host(_: argparse.Namespace) -> int:
+    """Connection string on stdin -> its host on stdout. The input holds a password and is never printed."""
+    try:
+        print(connection_host(sys.stdin.read()))
+    except GuardError as error:
+        print(f"::error::{error}", file=sys.stderr)
+        return 2
+    return 0
+
+
+def command_postgres_adoption_check(args: argparse.Namespace) -> int:
+    failures = validate_postgres_server_name(args.name) or ([] if args.name else [f"{POSTGRES_SERVER_VARIABLE} is empty"])
+    if not failures:
+        try:
+            server = json.loads(Path(args.server_json).read_text(encoding="utf-8"))
+            platform = json.loads(Path(args.platform_arm).read_text(encoding="utf-8"))
+            failures = postgres_adoption_failures(args.name, server, platform, subscription_id=args.subscription_id,
+                                                  resource_group=args.resource_group, region=args.region)
+        except (OSError, ValueError) as error:
+            failures = [f"cannot read the server or template description: {error}"]
+    for failure in failures:
+        print(f"STOP_FOR_OWNER_DECISION: {failure}")
+    print("ENV001_POSTGRES_ADOPTION=" + ("FAIL" if failures else f"PASS {args.name}"))
+    return 1 if failures else 0
+
+
 def command_scram_verifier(_: argparse.Namespace) -> int:
     password = sys.stdin.read().rstrip("\n")
     if len(password) < 32:
@@ -1997,6 +2252,19 @@ def build_parser() -> argparse.ArgumentParser:
     gate.set_defaults(func=command_gate_decision)
     scram = sub.add_parser("scram-verifier", help="password on stdin -> SCRAM-SHA-256 verifier on stdout")
     scram.set_defaults(func=command_scram_verifier)
+    server_name = sub.add_parser("postgres-server-name", help=f"validate {POSTGRES_SERVER_VARIABLE} (empty = the default server)")
+    server_name.add_argument("--value", default="", help="the environment variable's value")
+    server_name.set_defaults(func=command_postgres_server_name)
+    host = sub.add_parser("connection-host", help="connection string on stdin -> its PostgreSQL host on stdout (never echoed)")
+    host.set_defaults(func=command_connection_host)
+    adoption = sub.add_parser("postgres-adoption-check", help="refuse a named server platform.bicep cannot update in place")
+    adoption.add_argument("--name", required=True)
+    adoption.add_argument("--server-json", required=True, help="az resource show output (ARM GET) of the server")
+    adoption.add_argument("--platform-arm", required=True, help="compiled platform.json")
+    adoption.add_argument("--subscription-id", required=True)
+    adoption.add_argument("--resource-group", required=True)
+    adoption.add_argument("--region", default=PILOT_REGION)
+    adoption.set_defaults(func=command_postgres_adoption_check)
     return parser
 
 

@@ -1,5 +1,34 @@
 # Changelog
 
+## La restauración real sigue al servidor restaurado (OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20) — 2026-10-20
+
+- Respuesta literal del project owner (2026-10-20, ronda J, pregunta J1), registrada en `decision-log.md` con su
+  contexto y las opciones no elegidas: "Restauración real de la base del piloto: ¿cómo queda en servicio el servidor restaurado?" Respuesta: "Que el despliegue lo siga (Recommended)" ("Tarea de código, un PR: el nombre del servidor pasa a ser un parámetro. Tras restaurar cambias ese valor y vuelves a correr el despliegue; migraciones, API, Worker, alertas y ensayos apuntan al restaurado. El original queda intacto, con sus 14 días de respaldos, hasta que lo borres.").
+- El servidor PostgreSQL del piloto es un solo ajuste: la variable `PILOT_POSTGRES_SERVER_NAME` del environment
+  `azure-pilot` (vacía = el primer servidor). `platform.bicep` y `observability.bicep` reciben el parámetro
+  `postgresServerName`, cuyo valor por defecto es exactamente el nombre de hoy, así que un despliegue sin la variable no
+  cambia nada. Siguen al ajuste las salidas `postgresName` y `postgresHost`, `pg-migrate-connection`, los jobs de
+  migración, logins y verificación, las seis alertas SCL-007 y `restore-drill.sh`.
+- El workflow valida el formato antes de entrar a Azure (`postgres-server-name`); con la variable llena, antes de la
+  etapa 2 exige que el servidor exista y que la plantilla pueda tomarlo tal como está (`postgres-adoption-check`: listo,
+  no réplica, misma región, mismo login de administrador y versión, red privada en la subred y la zona DNS de la
+  plantilla, sin respaldo geográfico y disco no mayor de 32 GiB), así que un nombre mal escrito nunca crea otro servidor
+  vacío. Una credencial de runtime guardada se conserva solo mientras su host sea el servidor en servicio; si no, se
+  genera otra (como `rotate_runtime_logins`), el job de logins la aplica en el servidor nuevo y la API y el Worker se
+  reinician justo después; ese mismo paso, entre los logins y la etapa 4, enciende la API o el Worker si su revisión
+  está detenida. Nada imprime un secreto.
+- Procedimiento (README §6.4 y guía §7.7): detener la API y el Worker (`az containerapp revision set-mode --mode
+  multiple` y `az containerapp revision deactivate`; el texto anterior usaba `--max-replicas 0`, por debajo del mínimo
+  documentado de 1), `restore-drill.sh --real` (servidor nuevo `<base>-r<minuto UTC>` en la misma red privada,
+  verificado con `assert`, conservado solo si todo sale bien y nunca sobre un nombre que ya existe), revisar la línea
+  `EVIDENCE`, poner la variable, volver a correr el despliegue, comprobar y, más tarde, borrar el servidor anterior
+  (sus respaldos se borran con él; cuesta unos 17.70 USD al mes mientras exista). Reemplaza las opciones «cambiar
+  nombres» y «apuntar los secretos», también en la recuperación E1b de TEN-003.
+- Guarda P25 y pruebas: parámetro y valor por defecto, una sola escritura del nombre en `deploy/`, `.github/`, `tools/`
+  y la documentación de operación y desarrollo, el cableado del workflow y del script; el paso de credenciales, el de
+  reinicio y `restore-drill.sh` se ejecutan con un `az` simulado. Sin cambios en AI-04, AI-05, AI-06, AI-18 ni AI-24,
+  sin migraciones, roles ni paquetes.
+
 ## Índices de lectura de órdenes y despacho (DP-INDEXES-ORDERS-DISPATCH-2026-10-20) — 2026-10-20
 
 - Respuesta literal del project owner (2026-10-20, pregunta G3), registrada en `decision-log.md` con su contexto y la

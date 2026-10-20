@@ -14,8 +14,8 @@ files (`deploy/azure/*.bicep`, `deploy-core.ps1`, `deploy-azure-dev.yml`) or gua
 | OBS-002 alert e-mail (owner) | `deploy/azure/pilot/observability.parameters.json` |
 | Accepted terms and privacy versions for the web (owner, UI-001) | `deploy/azure/pilot/web.parameters.json` |
 | Deployment workflow | `.github/workflows/deploy-azure-pilot.yml` (`workflow_dispatch`, GitHub Environment `azure-pilot`) |
-| Static guards | `tools/azr-001/env001_pilot_guards.py` (25 guards) and `test_env001_pilot_guards.py` |
-| Restore drill | `deploy/azure/pilot/restore-drill.sh` |
+| Static guards | `tools/azr-001/env001_pilot_guards.py` (26 guards) and `test_env001_pilot_guards.py` |
+| Restore drill and real restore | `deploy/azure/pilot/restore-drill.sh` (§6.4) |
 | One-time bootstrap (owner) | [`bootstrap.md`](bootstrap.md) |
 
 Nothing in this directory has been deployed yet. There was no Azure access while writing it. Section 9
@@ -33,6 +33,7 @@ lists what could only be checked statically.
 | PILOT-SAME-ORIGIN-ROUTING | Container Apps rule-based routing (§3) |
 | ADP-001-POD-BLOB-DEFENDER | Storage account (Entra-only, no anonymous or shared-key access), private container `proofs`, Defender for Storage on-upload malware scanning, RBAC from the ADP-001 table |
 | ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20 | Blob and container soft delete 30 days on the proof storage, versioning off: a deleted or overwritten photo can be recovered for 30 days (§6.4, guard P12) |
+| OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20 | The PostgreSQL server is one setting, the `azure-pilot` variable `PILOT_POSTGRES_SERVER_NAME` (empty = the first server). After a real restore the owner sets it to the restored server and re-runs the workflow; migrations, API, Worker, alerts and drills follow it, and the original server stays untouched with its backups until the owner deletes it (§6.4, guard P25) |
 | GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20 | The driver eligibility rules per vehicle type (per-order capacity and required documents) in `apps.settings.json` (§4 "Driver eligibility rules"); GATE-010 stays open |
 | ADP-001-PII-KEYVAULT-ENVELOPE | Key Vault RSA-3072 `pii-kek` (wrap/unwrap only). The API alone has *Key Vault Crypto Service Encryption User* on it. |
 | SCL-001 / ENV-001 Data Protection KEK | Key Vault RSA-3072 `dataprotection-kek`. API and Worker have *Crypto Service Encryption User*, and the workloads get `DataProtection__KeyEncryption__*`. |
@@ -83,12 +84,12 @@ Otherwise the deploy job stops before logging in to Azure.
 | Log Analytics | `law-pv-pilot-<suffix>`: 30 days, 0.3 GB/day cap |
 | Registry | `pvpilot<suffix>`: Basic, admin disabled, pulls by managed identity only |
 | Storage | `stpvpilot<suffix13>` / container `proofs`: Standard LRS, versioning off, blob and container soft delete 30 days (§6.4) |
-| PostgreSQL | `pg-pv-pilot-<suffix>`: 18, Burstable B1ms, 32 GB with auto-grow, 14-day PITR backups, `require_secure_transport=ON`, `azure.extensions=POSTGIS,PGCRYPTO`, `password_encryption=SCRAM-SHA-256` |
+| PostgreSQL | the server named by `PILOT_POSTGRES_SERVER_NAME`, by default `pg-pv-pilot-<suffix>` (§6.4): 18, Burstable B1ms, 32 GB with auto-grow, 14-day PITR backups, `require_secure_transport=ON`, `azure.extensions=POSTGIS,PGCRYPTO`, `password_encryption=SCRAM-SHA-256` |
 | Container Apps environment | `cae-pv-pilot-<suffix>` |
 | Apps / jobs | `ca-pv-pilot-{api,worker,web}`, `job-pv-pilot-{migrate,logins,verify}` |
 | Alerts (OBS-002, §10) | `sqr-pv-pilot-{outbox-lag,outbox-dead,job-failure,readiness,api-5xx}`, action group `ag-pv-pilot-ops` (e-mail only), workbook *Paquetenvia pilot operations (OBS-002)* |
-| PostgreSQL connection alerts (SCL-007, §10.2) | `mar-pv-pilot-pg-connections-{warning,critical}` (metric alerts on `pg-pv-pilot-<suffix>`, same action group) |
-| PostgreSQL resource alerts (SCL-007, §10.3) | `mar-pv-pilot-pg-{cpu,memory,storage,cpu-credits}-warning` (metric alerts on `pg-pv-pilot-<suffix>`, same action group) |
+| PostgreSQL connection alerts (SCL-007, §10.2) | `mar-pv-pilot-pg-connections-{warning,critical}` (metric alerts on the server named by `PILOT_POSTGRES_SERVER_NAME`, by default `pg-pv-pilot-<suffix>`, same action group) |
+| PostgreSQL resource alerts (SCL-007, §10.3) | `mar-pv-pilot-pg-{cpu,memory,storage,cpu-credits}-warning` (metric alerts on the same server, `PILOT_POSTGRES_SERVER_NAME`, same action group) |
 
 ### Database roles
 
@@ -212,13 +213,14 @@ it. There are two windows:
 - the database connection secrets.
 
 Every redeploy of `security.bicep` also resets `ipRules` to empty. A secret rotation takes effect when
-the app restarts or starts a new revision; the workflow restarts the API and Worker after a rotation.
+the app restarts or starts a new revision; the workflow restarts the API and Worker after a rotation, and after a
+new PostgreSQL server (OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20), and starts either one if its revision is stopped.
 
 | Key Vault secret | Written by | Read by |
 |---|---|---|
 | `pg-admin-password` | workflow (generated once, never printed) | workflow only |
-| `pg-migrate-connection` | workflow (every run, derived from the admin password) | migrate, logins and verify jobs |
-| `pg-api-runtime-connection` / `pg-worker-runtime-connection` / `pg-realtime-runtime-connection` | workflow (generated once, 64 hex chars) | API / Worker / API realtime dispatchers |
+| `pg-migrate-connection` | workflow (every run, derived from the admin password and the server in service, `postgresHost`) | migrate, logins and verify jobs |
+| `pg-api-runtime-connection` / `pg-worker-runtime-connection` / `pg-realtime-runtime-connection` | workflow (generated once, 64 hex chars; again with `rotate_runtime_logins` or when its host is not the server in service) | API / Worker / API realtime dispatchers |
 | `pg-api-login-verifier` / `pg-worker-login-verifier` / `pg-realtime-login-verifier` | workflow (SCRAM of the above) | logins job (its own identity) |
 | `paquetenvia-email-lookup-key-1` | workflow (generated once: 32 random bytes, base64) | API (`EmailLookup__Keys__1`) |
 | `authcenter-paquetenvia-client-secret` | **owner** (AuthCenter hands it over once) | API (`AuthCenter__ClientSecret`) |
@@ -614,8 +616,9 @@ Promote, wait for 13/13 on `main`, then dispatch with the new SHA and run id. Ke
 `custom_domain_phase=bind` once the domain is bound: `none` would unbind the apex. On every run the
 workflow:
 
-- redeploys the five templates idempotently (stage 5 is the OBS-002 alerts, §10);
-- keeps every generated secret;
+- redeploys the five templates idempotently (stage 5 is the OBS-002 alerts, §10) on the PostgreSQL server named by
+  `PILOT_POSTGRES_SERVER_NAME` (empty: the first server);
+- keeps every generated secret (a runtime credential only while its host is that server);
 - rebuilds the images from `tested_git_sha` and deploys them by digest;
 - runs pending migrations, re-applies the runtime logins and runs `assert`;
 - smoke-tests the route.
@@ -635,27 +638,109 @@ workflow:
 
 The recovery target is any point in the last 14 days (PITR, locally redundant, no geo backup).
 
+What Microsoft documents ([backup and restore](https://learn.microsoft.com/en-us/azure/postgresql/backup-restore/concepts-backup-restore)),
+and why the pilot moves to the restored server instead of replacing the original
+(OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20, owner: "Que el despliegue lo siga (Recommended)"):
+
+- "A restore operation in your Azure Database for PostgreSQL flexible server instance always creates a new database
+  server with the name that you provide. It doesn't overwrite the existing database server."
+- It is created with the source's pricing tier, compute, storage size, backup retention period and backup redundancy.
+  "The values of all parameters on the original server aren't automatically applied to the new server", and firewall
+  rules, private endpoints and virtual network rules "aren't copied from the original server".
+- A private-access server can be restored into the same virtual network or another one, never to public access.
+  `restore-drill.sh` passes no `--vnet`, `--subnet` or `--private-dns-zone`, so the Azure CLI gives the new server the
+  source's delegated subnet and private DNS zone (`az postgres flexible-server restore`, Azure CLI source).
+- "If you delete a server, all backups that belong to the server are also deleted and can't be recovered."
+
+So the PostgreSQL server is one setting, the `azure-pilot` environment variable `PILOT_POSTGRES_SERVER_NAME`.
+Empty `PILOT_POSTGRES_SERVER_NAME` (the default) means the first server, `pg-pv-pilot-<suffix>` (its "base" name). Any
+other value must be the base name followed by `-` parts of lowercase letters and digits (at most 63 characters); the
+workflow refuses anything else before it touches Azure. Every consumer follows it: `platform.bicep` (parameter
+`postgresServerName`) and its `postgresName` and `postgresHost` outputs, `pg-migrate-connection`, the three runtime
+credentials and their logins, the migrate, logins and verify jobs, the SCL-007 alerts and `restore-drill.sh`.
+
 - **Drill:** does not touch the pilot database.
 
   ```bash
   ./deploy/azure/pilot/restore-drill.sh --resource-group <rg> --restore-time 2026-10-05T13:10:00Z
   ```
 
-  It restores into a new private server, re-points `job-pv-pilot-verify` to it, runs `assert`
-  (baseline plus every module lane) and puts the job back. It deletes the drill server unless you pass
-  `--keep`, and prints an `EVIDENCE ...` line. Keep that line for the pilot readiness report.
-- **Real restore:**
-  1. Stop the writers:
-     `az containerapp update -n ca-pv-pilot-api -g <rg> --min-replicas 0 --max-replicas 0`, and the
-     same for the Worker.
-  2. Run the drill with `--keep`, so the restored server stays after verification.
-  3. Put the restored server in place. There are two options.
-     - **Swap names (preferred):** delete the old server, then restore again under the original
-       name `pg-pv-pilot-<suffix>`. This keeps every connection secret valid.
-     - **Point secrets at the new host:** update the four connection secrets (`pg-migrate-connection`, `pg-api-runtime-connection`, `pg-worker-runtime-connection`, `pg-realtime-runtime-connection`) to the restored
-       host, then restart the API and Worker revisions.
-  4. Re-run the workflow for the current SHA. This restores the replica counts and re-applies the
-     runtime logins.
+  It restores the server in service (the `postgresName` output of the last deployment, which follows
+  `PILOT_POSTGRES_SERVER_NAME`) into a new private server `<base>-drill-<UTC minute>`, where `<base>` is the first
+  server's name, re-points `job-pv-pilot-verify` to it, runs `assert` (baseline plus every module lane) and puts the
+  job back. It deletes the drill server unless you pass `--keep`, and prints an `EVIDENCE ...` line. Keep that line
+  for the pilot readiness report.
+- **Real restore** (in Cloud Shell, bash, from a copy of the repository):
+  1. **Stop the writers.** Put the API and the Worker in multiple revision mode, where Microsoft documents that
+     revisions can be activated or deactivated ("Changing the revision mode doesn't create a new revision"), and
+     deactivate the running revision, which "stops all running replicas of a revision" (*Manage revisions* and
+     *Revisions* on Microsoft Learn). Scaling cannot stop them: the maximum replica count is at least 1.
+
+     ```bash
+     RG=rg-pv-pilot
+     for app in ca-pv-pilot-api ca-pv-pilot-worker; do
+       revision="$(az containerapp show -n "$app" -g "$RG" --query properties.latestRevisionName -o tsv)"
+       az containerapp revision set-mode -n "$app" -g "$RG" --mode multiple
+       az containerapp revision deactivate -n "$app" -g "$RG" --revision "$revision"
+     done
+     ```
+
+     The web keeps answering, but sign-in and every API call fail until step 5, whose run starts both revisions
+     again once the logins job has run and then puts the apps back in single revision mode (`apps.bicep`).
+  2. **Restore into a new server.**
+
+     ```bash
+     ./deploy/azure/pilot/restore-drill.sh --resource-group "$RG" --restore-time <YYYY-MM-DDTHH:MM:SSZ> --real
+     ```
+
+     `--real` restores the server in service into `<base>-r<UTC minute>` (for example `<base>-r202610201310`; the
+     minute is when the command starts), in the same subnet and private DNS zone, and runs the read-only `assert` on
+     it. It refuses to start if a server with that name already exists. It keeps the new server only if everything
+     succeeds (a failed run deletes it; the original is never touched) and then prints `restored_server_kept=<name>` and
+     `next_step=set the azure-pilot variable PILOT_POSTGRES_SERVER_NAME to <name> ...`.
+  3. **Check the restore.** The `EVIDENCE` line must say `verify_status=Succeeded`. Keep it.
+  4. **Set the variable.** GitHub → *Settings → Environments → azure-pilot → Environment variables*:
+     `PILOT_POSTGRES_SERVER_NAME` = the name of step 2 (or
+     `gh variable set PILOT_POSTGRES_SERVER_NAME --env azure-pilot --repo Eduard0corona/Paquetenvia --body <name>`).
+     Do not use a dispatch input for it: the variable persists, so every later run keeps the restored server.
+  5. **Re-run *Deploy Azure PILOT*** with the current certified SHA and its Foundation run id, and the same
+     `custom_domain_phase` as before (`bind` once the domain is bound). The run:
+     - checks that the named server exists and already has the values a server cannot change later
+       (`postgres-adoption-check`: Ready, standalone, same region, administrator login and PostgreSQL version, private
+       access in the template's subnet and private DNS zone, geo-redundant backup off, a disk no larger than the
+       template's), so a mistyped name stops the run instead of creating a second, empty server;
+     - lets `platform.bicep` update the restored server in place and set its server parameters again
+       (`require_secure_transport`, `azure.extensions`, `password_encryption`), which a restore does not copy;
+     - rewrites `pg-migrate-connection` for the new host, and writes new runtime credentials and verifiers for the API,
+       the Worker and the realtime dispatchers because the kept ones name the old host (as `rotate_runtime_logins`
+       does); the migrate, logins and verify jobs then run on the restored server and the logins job applies the new
+       verifiers there;
+     - after the logins job, starts the stopped API and Worker revisions, which read the new credentials as they
+       start; `apps.bicep` puts them back in single revision mode, and stage 5 moves the six SCL-007 alerts to the
+       restored server.
+  6. **Check.** The run summary shows `PostgreSQL server: <name>`. Sign in at `https://paquetenvia.com` and look at
+     the restored data. `az monitor metrics alert show -g "$RG" -n mar-pv-pilot-pg-connections-warning --query scopes`
+     names the restored server.
+  7. **Later, delete the old server, when you are sure.** Until then it is untouched, keeps running and keeps its own
+     14 days of backups, the only way back to a moment before the restore point. It also costs about 17.70 USD a month
+     (§5: B1ms compute 13.65 plus 32 GB of storage 4.05), on top of a pilot that already sits at the 100 USD budget.
+     Deleting it deletes all its backups for good:
+
+     ```bash
+     az postgres flexible-server delete -g "$RG" -n <old server> --yes
+     ```
+
+     Never delete the server named in `PILOT_POSTGRES_SERVER_NAME`. To go back to the old server before deleting it,
+     empty the variable (or set it to the old name) and re-run the workflow: everything follows it the same way, and
+     whatever was written on the restored server stays there.
+- **Extra drill servers.** A drill deletes its server unless `--keep`; if the delete fails it prints
+  `WARNING drill_server_not_deleted=<name>`. Each drill server is a full copy of the pilot data and costs the same as
+  the pilot server. List the servers and delete every `-drill-` one you no longer need, never the one in service:
+
+  ```bash
+  az postgres flexible-server list -g "$RG" --query "[].name" -o tsv
+  az postgres flexible-server delete -g "$RG" -n <base>-drill-<UTC minute> --yes
+  ```
 
 #### Proof photos (Blob Storage)
 
@@ -935,7 +1020,8 @@ Details, format and error codes: `docs/development/mdm-001-master-data-loader.md
 
 ## 8. Static guards (`tools/azr-001/env001_pilot_guards.py`)
 
-The 25 guards (P00–P24) run on the compiled ARM output, the workflow and the pilot Dockerfiles:
+The 26 guards (P00–P25) run on the compiled ARM output, the workflow, the pilot Dockerfiles and the restore drill
+script:
 
 - **Resources:** only authorized resource types and exactly six workloads. Redis, Azure SignalR,
   Front Door and PostgreSQL firewall rules are rejected.
@@ -979,7 +1065,8 @@ The 25 guards (P00–P24) run on the compiled ARM output, the workflow and the p
     `mar-pv-pilot-pg-cpu-warning`, `mar-pv-pilot-pg-memory-warning`, `mar-pv-pilot-pg-storage-warning` and
     `mar-pv-pilot-pg-cpu-credits-warning`; any other metric alert is refused, a second level for a resource alert and
     one on Application Insights included;
-  - each watches only `pg-pv-pilot-<suffix>` (same suffix as `platform.bicep`): the Maximum of `active_connections`
+  - each watches only the server in service, `[resourceId(..., parameters('postgresServerName'))]` (P25 pins the
+    parameter to `PILOT_POSTGRES_SERVER_NAME`): the Maximum of `active_connections`
     over 5 minutes (`PT5M`), every minute (`PT1M`), `GreaterThanOrEqual` 28 with severity 2 and 33 with severity 1,
     one static criterion with no dimension, enabled and stateful;
   - the resource alerts watch the same server, every minute (`PT1M`), severity 2, one static criterion with no
@@ -1018,6 +1105,23 @@ The 25 guards (P00–P24) run on the compiled ARM output, the workflow and the p
   `deploy/azure/Dockerfile.db-ops` (`USER $APP_UID`), so P24 does not read them. They also run as non-root.
   `DevSyntheticNonRootImageTests` in `tools/azr-001/test_azr001_static_guards.py` applies the same check to every
   `deploy/azure/Dockerfile*`.
+- **PostgreSQL server setting (P25, OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20):**
+  - `platform.bicep` and `observability.bicep` take `postgresServerName` (3 to 63 characters) whose default is exactly
+    the first server's name; `platform.bicep` declares the only server with that name and outputs `postgresName` and
+    `postgresHost` from it; no template spells the name anywhere else;
+  - the deploy job reads `PILOT_POSTGRES_SERVER_NAME` once, validates it (`postgres-server-name`) before
+    `azure/login`, and before stage 2 refuses a named server that cannot be read or adopted (`az resource show` with
+    the template's API version, then `postgres-adoption-check`); it passes the value to `platform.bicep` and the
+    `postgresName` output to `observability.bicep`, and checks that `postgresHost` belongs to `postgresName`;
+  - the connections step keeps a runtime credential only while its host (`connection-host`) is the `postgresHost`
+    output and reports `runtime_logins_changed`; one step then starts a stopped API or Worker revision and restarts a
+    running one when that output is `true`;
+  - `restore-drill.sh` restores the `postgresName` output and checks it with the same name pattern.
+
+  The unit tests also run the connections step and the start-or-restart step with a stand-in `az`, and scan
+  `deploy/`, `.github/`, `tools/` and the operations and development docs: the name prefix appears only in the two
+  defaults, the guards' prefix constant and the drill script's check, and every docs line that names the server also
+  names `PILOT_POSTGRES_SERVER_NAME`.
 
 The unit tests compile the real templates whenever the pinned Bicep CLI is present (the azr-static CI
 job installs it). They mutate the ARM output to prove that each guard fails closed.
@@ -1030,7 +1134,7 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
 **Verified without Azure:**
 
 - `bicep build` and `bicep lint` pass with the pinned v0.47.16, with no warnings.
-- 25/25 pilot guards (P00–P24) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
+- 26/26 pilot guards (P00–P25) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
   tooling tests. The gitleaks scan was not re-run for OBS-002.
 - The SCL-007 PostgreSQL connection and resource alerts build and lint with no diagnostic, and P21 pins them.
 - The OBS-002 alert and workbook queries parse and type-check offline (Kusto language service).
@@ -1072,6 +1176,17 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
   source.
 - Proof photo soft delete (ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20): ARM acceptance of the 30-day blob and
   container retention and the restore steps of §6.4 were not run against real Azure.
+- OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20 (§6.4 real restore), checked against Microsoft Learn, the ARM reference
+  and the Azure CLI source, never against Azure:
+  - that ARM updates a point-in-time restored server in place when `platform.bicep` names it (every property the
+    template sets was compared with what an existing restored server accepts; `postgres-adoption-check` refuses the
+    cases that differ);
+  - the ARM GET shape `az resource show --api-version 2024-08-01` returns (location as a display name, `state`,
+    `storage.storageSizeGB`);
+  - moving the six SCL-007 metric alerts to another server by redeploying their scope (the ARM reference forbids a
+    scope change only for metric rules based on logs);
+  - `az containerapp revision set-mode`, `deactivate` and `activate` on the API and Worker, and `apps.bicep` putting
+    them back in single revision mode.
 - OBS-003:
   - ARM acceptance of the workspace-based component;
   - that the exporter reaches the Mexico Central ingestion endpoint from inside the VNet, and the real volume
@@ -1259,5 +1374,6 @@ Decision SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20 (owner: "CPU, memoria y dis
     it should approach 288, and record the value. If it is different, 72 is no longer 25 % and the threshold needs a new
     owner decision.
   - The storage percentages assume the 32 GiB disk of `platform.bicep`; P21 refuses another `storageSizeGB` in the
-    template. Check the real size (`az postgres flexible-server show -n pg-pv-pilot-<suffix> -g <rg> --query storage`).
+    template. Check the real size (`az postgres flexible-server show -n <server> -g <rg> --query storage`, where
+    `<server>` is `PILOT_POSTGRES_SERVER_NAME` or, while it is empty, `pg-pv-pilot-<suffix>`).
     After an autogrow the disk is 64 GiB, so 70 % means 44.8 GiB; the threshold then needs a new owner decision.
