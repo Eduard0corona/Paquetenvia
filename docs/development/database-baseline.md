@@ -105,6 +105,12 @@ plaintext password. On failure it
 reports only the stage and SQLSTATE (exit code 7). See
 `docs/operations/env-001-pilot/README.md`.
 
+TEN-003-PLATFORM-BOOTSTRAP-2026-10-19 adds `platform-bootstrap --connection-env NAME --identity-subject SUB
+--legal-name TEXT --display-name TEXT`. The owner runs it once, before the first sign-in, to create the PLATFORM
+organization and its PLATFORM_ADMIN through the TEN-003 provisioner. It writes as `paqueteria_migrator` under FORCE
+RLS, and refuses (exit 11, nothing written) once any PLATFORM organization or PLATFORM_ADMIN exists. See
+`docs/development/ten-003-platform-bootstrap.md`.
+
 AI-18 roles are NOLOGIN. Runtime cannot assume migrator, bootstrap, executor or
 maintenance, does not own objects, and cannot create in `public`. Bootstrap
 owns only approved identity/tracking functions. Executor owns

@@ -143,6 +143,15 @@ internal static partial class DatabaseMigratorProgram
                     PrintModulePlan(await moduleMigrations.AssertAsync(connectionString, cancellation.Token));
                     return 0;
 
+                case "platform-bootstrap":
+                    // TEN-003-PLATFORM-BOOTSTRAP-2026-10-19: once, before the owner's first sign-in, on the migration
+                    // connection of a fully migrated database (baseline and every module lane).
+                    await deployer.AssertAsync(baseline, connectionString, cancellation.Token).ConfigureAwait(false);
+                    await moduleMigrations.AssertAsync(connectionString, cancellation.Token).ConfigureAwait(false);
+                    await PlatformBootstrap.RunAsync(
+                        connectionString, options.PlatformBootstrap!, Console.Out, cancellation.Token).ConfigureAwait(false);
+                    return 0;
+
                 case "assert":
                     var report = await deployer.AssertAsync(baseline, connectionString, cancellation.Token).ConfigureAwait(false);
                     await AssertE002SemanticAsync(connectionString, cancellation.Token).ConfigureAwait(false);
@@ -180,6 +189,11 @@ internal static partial class DatabaseMigratorProgram
         {
             Console.Error.WriteLine(exception.Message);
             return 7;
+        }
+        catch (PlatformBootstrapException exception)
+        {
+            Console.Error.WriteLine(exception.Message);
+            return exception.ExitCode;
         }
         catch (AzureRolePreflightException exception)
         {
@@ -362,7 +376,9 @@ internal static partial class DatabaseMigratorProgram
         Environment.NewLine +
         "       Paqueteria.DatabaseMigrator master-data-load --connection-env NAME --file PATH --organization-id UUID [--dry-run] [--allow-real-driver-profiles]" +
         Environment.NewLine +
-        "       Paqueteria.DatabaseMigrator master-data-gate --connection-env NAME --deployment-class SYNTHETIC|REAL --platform-organization-id UUID [--gate-007-closed]");
+        "       Paqueteria.DatabaseMigrator master-data-gate --connection-env NAME --deployment-class SYNTHETIC|REAL --platform-organization-id UUID [--gate-007-closed]" +
+        Environment.NewLine +
+        "       Paqueteria.DatabaseMigrator platform-bootstrap --connection-env NAME --identity-subject AUTHCENTER_SUB --legal-name TEXT --display-name TEXT");
 
     [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant)]
     private static partial Regex EnvironmentVariableName();
@@ -370,7 +386,7 @@ internal static partial class DatabaseMigratorProgram
 
 internal sealed record CommandOptions(string Command, string? ConnectionEnvironment,
     bool ConfirmInitialBaseline, bool AzureOwnershipBridge, MasterDataLoadOptions? MasterData = null,
-    MasterDataGateOptions? MasterDataGate = null)
+    MasterDataGateOptions? MasterDataGate = null, PlatformBootstrapOptions? PlatformBootstrap = null)
 {
     internal static CommandOptions Parse(IReadOnlyList<string> arguments)
     {
@@ -381,7 +397,7 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
 
         var command = arguments[0].ToLowerInvariant();
         if (command is not ("verify" or "preflight" or "ownership-diagnostic" or "plan" or "apply" or "assert" or "runtime-logins"
-            or "master-data-load" or "master-data-gate"))
+            or "master-data-load" or "master-data-gate" or "platform-bootstrap"))
         {
             throw new CommandLineException($"Unknown command '{arguments[0]}'.");
         }
@@ -396,6 +412,9 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
         string? deploymentClass = null;
         var gate007Closed = false;
         string? platformOrganization = null;
+        string? identitySubject = null;
+        string? legalName = null;
+        string? displayName = null;
         for (var index = 1; index < arguments.Count; index++)
         {
             switch (arguments[index])
@@ -430,8 +449,20 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
                 case "--platform-organization-id" when command == "master-data-gate" && index + 1 < arguments.Count:
                     platformOrganization = arguments[++index];
                     break;
+                case "--identity-subject" when command == "platform-bootstrap" && identitySubject is null && index + 1 < arguments.Count:
+                    identitySubject = arguments[++index];
+                    break;
+                case "--legal-name" when command == "platform-bootstrap" && legalName is null && index + 1 < arguments.Count:
+                    legalName = arguments[++index];
+                    break;
+                case "--display-name" when command == "platform-bootstrap" && displayName is null && index + 1 < arguments.Count:
+                    displayName = arguments[++index];
+                    break;
+                // A token that is not an option may be a value (an AuthCenter subject, a name): never echo it.
+                case var token when !token.StartsWith("--", StringComparison.Ordinal):
+                    throw new CommandLineException($"Unexpected argument at position {index}; its value is not shown.");
                 default:
-                    throw new CommandLineException($"Unknown or incomplete option '{arguments[index]}'.");
+                    throw new CommandLineException($"Unknown, repeated or incomplete option '{arguments[index]}'.");
             }
         }
 
@@ -474,6 +505,12 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
                 MasterDataGate: new MasterDataGateOptions(deploymentClass, gate007Closed, platformOrganizationId));
         }
 
+        if (command == "platform-bootstrap")
+        {
+            return new CommandOptions(command, connectionEnvironment, confirm, azureOwnershipBridge,
+                PlatformBootstrap: ParsePlatformBootstrap(identitySubject, legalName, displayName));
+        }
+
         if (command != "master-data-load")
         {
             return new CommandOptions(command, connectionEnvironment, confirm, azureOwnershipBridge);
@@ -494,6 +531,41 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
 
         return new CommandOptions(command, connectionEnvironment, confirm, azureOwnershipBridge,
             new MasterDataLoadOptions(file, organizationId, dryRun, allowRealDriverProfiles));
+    }
+
+    /// <summary>
+    /// TEN-003-PLATFORM-BOOTSTRAP-2026-10-19: the subject is the AuthCenter <c>sub</c>, the lowercase UUID of the
+    /// AuthCenter user (its id in the AuthCenter console); anything else (an e-mail, a URL, an uppercase copy) is
+    /// refused, because a wrong subject would bind the only PLATFORM_ADMIN to an account nobody signs in with. The
+    /// names follow the REG-001 onboarding limits (AI-05): trimmed, no control characters, at most 200 (legal) and
+    /// 80 (display) characters. No value is ever echoed.
+    /// </summary>
+    private static PlatformBootstrapOptions ParsePlatformBootstrap(string? identitySubject, string? legalName, string? displayName)
+    {
+        if (identitySubject is null ||
+            !Guid.TryParseExact(identitySubject, "D", out var subject) ||
+            subject == Guid.Empty ||
+            !string.Equals(identitySubject, subject.ToString("D"), StringComparison.Ordinal))
+        {
+            throw new CommandLineException(
+                "platform-bootstrap requires --identity-subject as the AuthCenter sub (a lowercase UUID).");
+        }
+
+        if (!Organizations.Infrastructure.Registration.PostgreSqlSelfServiceRegistrationService.IsValidName(
+                legalName, Organizations.Application.Registration.SelfServiceRegistrationLimits.LegalNameMaxLength))
+        {
+            throw new CommandLineException(
+                "platform-bootstrap requires --legal-name: 1 to 200 characters, trimmed, no control characters.");
+        }
+
+        if (!Organizations.Infrastructure.Registration.PostgreSqlSelfServiceRegistrationService.IsValidName(
+                displayName, Organizations.Application.Registration.SelfServiceRegistrationLimits.DisplayNameMaxLength))
+        {
+            throw new CommandLineException(
+                "platform-bootstrap requires --display-name: 1 to 80 characters, trimmed, no control characters.");
+        }
+
+        return new PlatformBootstrapOptions(identitySubject, legalName!, displayName!);
     }
 }
 
