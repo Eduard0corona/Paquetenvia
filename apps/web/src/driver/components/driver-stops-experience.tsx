@@ -1,8 +1,12 @@
 "use client";
 
-/* eslint-disable @next/next/no-html-link-for-pages -- document navigation lets the Service Worker resolve offline shells */
-
 import { useEffect, useMemo, useRef, useState } from "react";
+import { isBffAuthenticationEnabled } from "../../auth/auth-mode";
+import { buildSignInPromptHref } from "../../auth/bff-session";
+import {
+  isSessionBootstrapSettled,
+  sessionBootstrapSettledEvent,
+} from "../../auth/bootstrap-state";
 import { resolveDriverApiBaseUrl } from "../api/api-base-url";
 import {
   createDriverStopsApi,
@@ -51,16 +55,24 @@ import {
 import { driverRejectionMessage } from "../offline/rejection-codes";
 import { defaultDriverStopsRealtimeFactory } from "../realtime/driver-stops-realtime";
 import {
+  driverStopsRouteChangedEvent,
+  isInAppNavigationClick,
+  navigateWithinDriverStops,
   parseDriverStopsPathname,
   type DriverStopsRoute,
 } from "../routing/driver-stops-route";
 import {
   driverLogoutStartedEvent,
   driverSessionChangedEvent,
+  driverSessionCheckRequestedEvent,
   readBrowserDriverSession,
   sessionIdentity,
   type DriverSession,
 } from "../session/driver-session";
+import {
+  forgetDriverSessionMarker,
+  readDriverSessionMarker,
+} from "../session/driver-session-marker";
 import {
   DriverDispatchContactController,
   type DriverDispatchContactState,
@@ -120,6 +132,14 @@ const unavailableExternalOffersState: ExternalOffersState = Object.freeze({
   pendingOfferId: null,
   message: null,
 });
+// DRV-SESSION-EXPIRY-OFFLINE-2026-10-19: external offers are online only, so
+// a remembered session shows none and asks for none.
+const noExternalOffersState: ExternalOffersState = Object.freeze({
+  offers: [],
+  loading: false,
+  pendingOfferId: null,
+  message: null,
+});
 // ORG-MY-ROLES-2026-10-12: until the roles controller answers, the roles are
 // loading: the report is not offered and nothing is said about the role.
 const loadingRolesState: DriverOrganizationRolesState = Object.freeze({
@@ -131,6 +151,8 @@ const loadingRolesState: DriverOrganizationRolesState = Object.freeze({
 const noDispatchContact: DriverDispatchContactState = Object.freeze({
   phoneE164: null,
 });
+/** The "Mis paradas" title, focused after an in-app move back to the list. */
+const driverStopsTitleId = "driver-stops-title";
 const stopUnavailableForReport: DriverFailedDeliveryEnqueueResult =
   Object.freeze({
     stored: false,
@@ -139,6 +161,10 @@ const stopUnavailableForReport: DriverFailedDeliveryEnqueueResult =
 
 export function DriverStopsExperience() {
   const [session, setSession] = useState<DriverSession | null>(null);
+  // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (E2): the page's session check found
+  // no session while the phone still remembers its driver, so that session
+  // ended (401) and the same driver is asked to sign in again.
+  const [signInAgain, setSignInAgain] = useState(false);
   const [state, setState] = useState<DriverStopsViewState>(unavailableState);
   const [operationsState, setOperationsState] = useState<DriverOperationsState>(
     unavailableOperationsState,
@@ -167,11 +193,15 @@ export function DriverStopsExperience() {
   const dispatchContactControllerRef =
     useRef<DriverDispatchContactController | null>(null);
   const headingRef = useRef<HTMLHeadingElement>(null);
+  const listFocusPendingRef = useRef(false);
   const identity = sessionIdentity(session);
+  // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (E3): a session the phone remembered
+  // while the server could not be asked; read and queue locally only.
+  const remembered = session?.remembered === true;
   // VOICE-001: online-only calls; never part of the offline queue.
   const voiceApi = useMemo<DriverVoiceApi | null>(
     () =>
-      session
+      session && session.remembered !== true
         ? createDriverVoiceApi(
             resolveDriverApiBaseUrl(
               window.location.origin,
@@ -185,11 +215,23 @@ export function DriverStopsExperience() {
   );
 
   useEffect(() => {
-    const refreshSession = () => setSession(readBrowserDriverSession());
+    const refreshSession = () => {
+      const current = readBrowserDriverSession();
+      setSession(current);
+      setSignInAgain(
+        current === null &&
+          isBffAuthenticationEnabled(process.env.NEXT_PUBLIC_AUTH_MODE) &&
+          isSessionBootstrapSettled() &&
+          readDriverSessionMarker(window) !== null,
+      );
+    };
     refreshSession();
     window.addEventListener(driverSessionChangedEvent, refreshSession);
-    return () =>
+    window.addEventListener(sessionBootstrapSettledEvent, refreshSession);
+    return () => {
       window.removeEventListener(driverSessionChangedEvent, refreshSession);
+      window.removeEventListener(sessionBootstrapSettledEvent, refreshSession);
+    };
   }, []);
 
   useEffect(() => {
@@ -208,11 +250,24 @@ export function DriverStopsExperience() {
   }, []);
 
   useEffect(() => {
-    const refreshRoute = () =>
+    const readRoute = () =>
       setRoute(parseDriverStopsPathname(window.location.pathname));
-    refreshRoute();
+    // DRV-PWA-INAPP-NAVIGATION: an in-app move or the browser's back and
+    // forward. As a page load did, the move reads the stops again (offline the
+    // read falls back to the saved snapshot and says so) and the list takes
+    // the focus once.
+    const refreshRoute = () => {
+      listFocusPendingRef.current = true;
+      readRoute();
+      void controllerRef.current?.retry();
+    };
+    readRoute();
     window.addEventListener("popstate", refreshRoute);
-    return () => window.removeEventListener("popstate", refreshRoute);
+    window.addEventListener(driverStopsRouteChangedEvent, refreshRoute);
+    return () => {
+      window.removeEventListener("popstate", refreshRoute);
+      window.removeEventListener(driverStopsRouteChangedEvent, refreshRoute);
+    };
   }, []);
 
   useEffect(() => {
@@ -268,6 +323,7 @@ export function DriverStopsExperience() {
         } catch (error) {
           if (error instanceof DriverStopsApiError) {
             const category =
+              error.category === "session-ended" ||
               error.category === "unauthorized" ||
               error.category === "forbidden" ||
               error.category === "cancelled"
@@ -282,6 +338,10 @@ export function DriverStopsExperience() {
       },
       onAccessRevoked: (category) => void controller.revokeAccess(category),
       reportRole: () => driverReportRoleOf(rolesController.current),
+      // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (E3): nothing is sent until the
+      // server confirms this driver and organization; the confirmed session
+      // gets its own controller.
+      sync: session.remembered !== true,
     });
     controllerRef.current = controller;
     operationsControllerRef.current = operationsController;
@@ -290,6 +350,16 @@ export function DriverStopsExperience() {
     dispatchContactControllerRef.current = dispatchContactController;
     const unsubscribe = controller.subscribe((next) => {
       if (active) setState(next);
+      // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (E3): a 403 or a session without
+      // a usable credential wiped this session's partition, so the phone stops
+      // remembering it; a 401 ("session-ended") keeps it (E2).
+      if (next.phase === "forbidden" || next.phase === "unauthorized") {
+        forgetDriverSessionMarker(
+          window,
+          session.cacheNamespace,
+          session.organizationId,
+        );
+      }
     });
     const unsubscribeRoles = rolesController.subscribe((next) => {
       if (active) setRolesState(next);
@@ -309,7 +379,7 @@ export function DriverStopsExperience() {
     );
     void controller.start();
     void operationsController.start();
-    void externalOffersController.start();
+    if (session.remembered !== true) void externalOffersController.start();
     void rolesController.start();
     void dispatchContactController.start();
 
@@ -339,6 +409,12 @@ export function DriverStopsExperience() {
     }
   }, [route, state.phase]);
 
+  useEffect(() => {
+    if (route?.kind !== "list" || !listFocusPendingRef.current) return;
+    listFocusPendingRef.current = false;
+    document.getElementById(driverStopsTitleId)?.focus({ preventScroll: true });
+  }, [route]);
+
   const projection = useMemo(
     () => projectDriverOperations(state.stops, operationsState.operations),
     [state.stops, operationsState.operations],
@@ -350,7 +426,32 @@ export function DriverStopsExperience() {
     );
   }, [projection.stops, route]);
 
-  const retry = () => void controllerRef.current?.retry();
+  // E3: while the session is only remembered, "Reintentar" and "Sincronizar
+  // ahora" also ask the server to confirm it now.
+  const requestSessionCheck = () => {
+    if (remembered) window.dispatchEvent(new Event(driverSessionCheckRequestedEvent));
+  };
+  const retry = () => {
+    requestSessionCheck();
+    void controllerRef.current?.retry();
+  };
+
+  if (
+    route &&
+    ((!session && signInAgain) || (session && state.phase === "session-ended"))
+  ) {
+    // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (owner answer E2 "Conservar y
+    // pedir entrar (Recommended)"): nothing was wiped.
+    return (
+      <DriverShell>
+        <StatusPanel title="Tu sesión venció, entra de nuevo">
+          Lo que tengas pendiente sigue guardado en este teléfono y se enviará
+          cuando vuelvas a entrar con tu cuenta.
+          <SignInAction route={route} />
+        </StatusPanel>
+      </DriverShell>
+    );
+  }
 
   if (!route || !session || state.phase === "session-unavailable") {
     return (
@@ -358,6 +459,7 @@ export function DriverStopsExperience() {
         <StatusPanel title="Sesión no disponible">
           Inicia una sesión válida y selecciona una organización para consultar
           tus paradas.
+          <SignInAction route={route} />
         </StatusPanel>
       </DriverShell>
     );
@@ -391,6 +493,7 @@ export function DriverStopsExperience() {
           {state.phase === "unauthorized"
             ? "Tu sesión ya no permite consultar paradas. Vuelve a autenticarte."
             : "No tienes acceso a las paradas de repartidor en esta organización."}
+          {state.phase === "unauthorized" ? <SignInAction route={route} /> : null}
         </StatusPanel>
       </DriverShell>
     );
@@ -427,12 +530,24 @@ export function DriverStopsExperience() {
         state={state}
         offline={dataIsOffline || state.realtime === "offline"}
       />
+      {remembered ? (
+        <aside className={styles.offlineBanner} role="status">
+          <strong>Sesión sin confirmar</strong>
+          <span>
+            Lo que registres queda guardado en este teléfono y se enviará
+            cuando haya conexión y se confirme tu sesión.
+          </span>
+        </aside>
+      ) : null}
       <QueueSummary
         operations={projection.operations}
         mutating={operationsState.mutating}
         message={operationsState.message}
         dispatchPhone={dispatchContactState.phoneE164}
-        onSync={() => void operationsControllerRef.current?.syncNow()}
+        onSync={() => {
+          requestSessionCheck();
+          void operationsControllerRef.current?.syncNow();
+        }}
       />
       {route.kind === "detail" ? (
         <StopDetail
@@ -508,7 +623,7 @@ export function DriverStopsExperience() {
       ) : route.kind === "list" ? (
         <>
           <ExternalOffersPanel
-            state={externalOffersState}
+            state={remembered ? noExternalOffersState : externalOffersState}
             onAccept={(offerId) =>
               void externalOffersControllerRef.current?.accept(offerId)
             }
@@ -630,7 +745,9 @@ function DriverShell({
           <p className={styles.eyebrow}>Paquetenvia Repartidor</p>
           <DriverAccount />
         </div>
-        <h1>Mis paradas</h1>
+        <h1 id={driverStopsTitleId} tabIndex={-1}>
+          Mis paradas
+        </h1>
         <p className={styles.intro}>
           Consulta y registra las acciones de tus recolecciones y entregas.
         </p>
@@ -775,12 +892,12 @@ function StopList({
                 </dd>
               </div>
             </dl>
-            <a
+            <DriverStopsLink
               className={styles.primaryLink}
               href={`/driver/stops/${stop.order_id}`}
             >
               Ver detalle
-            </a>
+            </DriverStopsLink>
           </li>
         ))}
       </ul>
@@ -851,9 +968,9 @@ function StopDetail({
         <p>
           La parada no existe o ya no está visible en tu organización actual.
         </p>
-        <a className={styles.secondaryLink} href="/driver/stops">
+        <DriverStopsLink className={styles.secondaryLink} href="/driver/stops">
           Volver a mis paradas
-        </a>
+        </DriverStopsLink>
       </section>
     );
   }
@@ -942,9 +1059,9 @@ function StopDetail({
           onRetrySame={onRetrySame}
           onRebuild={onRebuild}
         />
-        <a className={styles.secondaryLink} href="/driver/stops">
+        <DriverStopsLink className={styles.secondaryLink} href="/driver/stops">
           Volver a mis paradas
-        </a>
+        </DriverStopsLink>
       </article>
     </>
   );
@@ -1297,6 +1414,93 @@ function StatusPanel({
       <div>{children}</div>
     </section>
   );
+}
+
+/**
+ * DRV-PWA-INAPP-NAVIGATION: "Ver detalle" and "Volver a mis paradas". A real
+ * anchor (a modified click still opens a new tab, and the Service Worker
+ * shell still answers a page load); a plain click moves inside the app
+ * without loading a page, so the session, the controllers and the open
+ * partition stay as they are, also offline.
+ */
+function DriverStopsLink({
+  href,
+  className,
+  children,
+}: Readonly<{ href: string; className: string; children: React.ReactNode }>) {
+  return (
+    <a
+      className={className}
+      href={href}
+      onClick={(event) => {
+        if (isInAppNavigationClick(event) && navigateWithinDriverStops(href)) {
+          event.preventDefault();
+        }
+      }}
+    >
+      {children}
+    </a>
+  );
+}
+
+/**
+ * DRV-PWA-INAPP-NAVIGATION: the installed app has no address bar, so a
+ * screen without a usable session offers "Iniciar sesión": /login with this
+ * stops path as its validated return_url (buildSignInPromptHref). It appears
+ * once the page's session check is over, never while it is still running.
+ * Signing in needs the network, so offline the button is disabled and says
+ * why, like "Cerrar sesión".
+ */
+function SignInAction({ route }: Readonly<{ route: DriverStopsRoute | null }>) {
+  const online = useBrowserOnline();
+  const settled = useSessionBootstrapSettled();
+  if (!settled) return null;
+  const returnPath =
+    route?.kind === "detail" ? `/driver/stops/${route.orderId}` : "/driver/stops";
+  if (!online) {
+    return (
+      <>
+        <button className={styles.signInAction} type="button" disabled>
+          Iniciar sesión
+        </button>
+        <span className={styles.signInHint}>
+          Conéctate a internet para iniciar sesión.
+        </span>
+      </>
+    );
+  }
+  return (
+    <a className={styles.signInAction} href={buildSignInPromptHref(returnPath)}>
+      Iniciar sesión
+    </a>
+  );
+}
+
+function useBrowserOnline(): boolean {
+  const [online, setOnline] = useState(true);
+  useEffect(() => {
+    const refresh = () => setOnline(navigator.onLine);
+    refresh();
+    window.addEventListener("online", refresh);
+    window.addEventListener("offline", refresh);
+    return () => {
+      window.removeEventListener("online", refresh);
+      window.removeEventListener("offline", refresh);
+    };
+  }, []);
+  return online;
+}
+
+function useSessionBootstrapSettled(): boolean {
+  const [settled, setSettled] = useState(false);
+  useEffect(() => {
+    const refresh = () => setSettled(isSessionBootstrapSettled());
+    refresh();
+    window.addEventListener(sessionBootstrapSettledEvent, refresh);
+    return () =>
+      window.removeEventListener(sessionBootstrapSettledEvent, refresh);
+  }, []);
+  return settled;
 }
 
 function RetryButton({ onClick }: Readonly<{ onClick: () => void }>) {

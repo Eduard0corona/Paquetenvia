@@ -165,8 +165,43 @@ UUID canónico, con slash final opcional. Segmentos adicionales, UUID no
 canónico, encoded slash, traversal, query/hash como parte del ID y otras rutas
 producen el mismo not-found sin consultar otra partición.
 
-“Ver detalle” y “Volver a mis paradas” son anchors de documento completo. No
-dependen de `next/link`, prefetch, estado en memoria del router ni RSC remoto.
+“Ver detalle” y “Volver a mis paradas” son anchors reales sin `next/link`,
+prefetch ni RSC remoto. Desde `DRV-PWA-INAPP-NAVIGATION` (2026-10-19; es el nombre
+de este arreglo, no una decisión del decision-log: no cambia ningún contrato
+normativo) un clic simple (o Enter) no carga página: `navigateWithinDriverStops`
+(`src/driver/routing/driver-stops-route.ts`) hace `history.pushState`, avisa a
+la pantalla con `paquetenvia:driver-stops-route-changed`, que vuelve a leer
+`window.location.pathname` con el mismo parser, y empieza arriba; atrás y
+adelante del navegador se leen con `popstate`. Es la integración con History
+API que documenta el App Router de Next.js: no pide nada al servidor, así que
+funciona igual sin conexión, y la sesión en memoria, los controladores y la
+partición IndexedDB abierta siguen como estaban. Como cada carga de página
+antes, cada movimiento vuelve a leer las paradas por REST; sin conexión esa
+lectura cae al snapshot guardado y la pantalla dice «Mostrando última
+información disponible». Un `<Link>` de Next no sirve
+aquí: sin conexión falla la carga del RSC y Next recurre a una navegación de
+documento completo. Un clic con modificador o un clic secundario mantienen el
+comportamiento del navegador (nueva pestaña), y cualquier ruta que no sea la
+lista o un detalle canónico se deja al navegador. Al volver a la lista el foco
+pasa al título «Mis paradas», como en una carga de página; en el detalle sigue
+yendo a su encabezado.
+
+En modo BFF (`NEXT_PUBLIC_AUTH_MODE=bff`, el del piloto) la sesión del
+repartidor vive sólo en memoria y `BffSessionBootstrap` la reconstruye con
+`GET /auth/session` en cada carga de página, que es network-only. Antes de este
+cambio cada “Ver detalle” sin conexión era una carga de página: el shell salía
+del Service Worker, `/auth/session` fallaba y la pantalla mostraba «Sesión no
+disponible». Ahora moverse entre lista y detalle nunca recarga. Recargar o
+reabrir la app sin conexión sigue mostrando «Sesión no disponible»; lo atiende
+el PR de `DRV-SESSION-EXPIRY-OFFLINE-2026-10-19`.
+
+Los paneles «Sesión no disponible» y «Sesión no válida» ofrecen «Iniciar
+sesión» (la app instalada no tiene barra de direcciones): va a `/login` con la
+ruta de paradas actual como `return_url`, validada por `buildSignInPromptHref`
+(sólo una ruta local distinta de `/login`) y otra vez por `/login` y por
+`/auth/login`. Aparece cuando terminó la consulta de sesión de la página, nunca
+mientras sigue en curso; sin conexión el botón queda deshabilitado con
+«Conéctate a internet para iniciar sesión.», como «Cerrar sesión».
 
 El cache propio versionado es `paquetenvia-driver-shell-v2` y su key canónica
 es `/driver/stops`.
@@ -228,8 +263,10 @@ seguras y buckets `0`, `1`, `2-5`, `6-20`, `21+`.
 Vitest cubre parser, DTO/OpenAPI, cliente REST, URL pública, sesión, partición,
 cache, controlador, realtime, etiquetas, telemetría y reglas estructurales del
 Service Worker. También cubre el parser de path, selección exclusivamente
-dentro de los stops actuales, anchors de documento y que ambas páginas usan el
-mismo shell sin prop server-side.
+dentro de los stops actuales, la navegación dentro de la app (sólo un clic
+simple, sólo rutas canónicas, un `pushState`, el aviso a la pantalla y el scroll
+arriba), el `return_url` de «Iniciar sesión» y que ambas páginas usan el mismo
+shell sin prop server-side.
 
 La categoría .NET `DriverStopsPwa` ejecuta Chromium real contra un servidor
 Next real. Cubre la matriz móvil, teclado, detalle, vacío, cambio de
@@ -243,6 +280,21 @@ visitó y no tiene entrada exacta, pone el browser context offline y prueba:
 - historial del navegador y enlace de regreso todavía offline;
 - not-found para un UUID ausente;
 - snapshots A y B aislados y una nueva sesión/organización sin datos.
+
+`DriverStopsBffPwaPlaywrightTests` (misma categoría) corre el artefacto en modo
+BFF, como la imagen del piloto: `DriverStopsNextServer.StartProductionBffAsync`
+compila con `NEXT_PUBLIC_AUTH_MODE=bff` y sin `NEXT_PUBLIC_API_BASE_URL` (el
+marcador de compilación lo distingue de la compilación Mock, así que cada una
+reemplaza a la otra) y `DriverStopsBffNextServerFixture` lo sirve por
+`LoopbackTlsTunnel`, porque el código productivo del repartidor sólo acepta un
+mismo origen HTTPS. El navegador responde `/auth/session`, `/me/organization-contexts`
+y la API en el mismo origen (`DriverBffSession`), igual que las suites Mock
+responden la API; la mitad servidor del contrato (cookie, CSRF, OIDC con
+`FakeAuthCenterServer`) la cubren las suites de AUTH-001, que corren en proceso
+sin navegador. Prueba lista → detalle → lista, atrás y adelante sin conexión
+sin ninguna carga de documento ni lectura de sesión (con el snapshot guardado a
+la vista), y «Iniciar sesión» con su
+`return_url` hasta `/auth/login`, deshabilitado sin conexión.
 
 Un caso adicional usa PostgreSQL, API Kestrel, outbox y DriverHub reales para
 probar señal, debounce y segunda lectura REST.
@@ -305,3 +357,11 @@ Next y sus recursos Docker con el job .NET general.
 10. No eliminar almacenamiento ajeno.
 
 El rollback del frontend no requiere migraciones ni cambios backend.
+
+### Rollback de DRV-PWA-INAPP-NAVIGATION
+
+Revertir el commit de `fix/driver-pwa-inapp-navigation`: “Ver detalle” y
+“Volver a mis paradas” vuelven a ser cargas de documento y los paneles de sesión
+pierden «Iniciar sesión». No toca el Service Worker (su cache sigue en
+`paquetenvia-driver-shell-v8`), IndexedDB, la cola offline, la API ni datos; no
+hay migración. Las suites BFF se van con el mismo revert.

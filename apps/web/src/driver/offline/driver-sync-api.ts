@@ -18,6 +18,13 @@ import {
 } from "./operation-contract";
 
 export type DriverSyncApiFailure =
+  /**
+   * DRV-SESSION-EXPIRY-OFFLINE-2026-10-19: a 401, the session ended (expired,
+   * ended by AuthCenter or replaced). The queue keeps everything and waits for
+   * the same driver to sign in again.
+   */
+  | "session-ended"
+  /** The session has no usable credential (no CSRF token): nothing was sent. */
   | "unauthorized"
   | "forbidden"
   | "not-found"
@@ -28,6 +35,7 @@ export type DriverSyncApiFailure =
    * request is sent again, with the same keys, once the server's wait ends.
    */
   | "rate-limited"
+  /** The signed photo upload (its upload session) was refused: a new upload session is offered. */
   | "session-expired"
   | "invalid-contract"
   | "cancelled";
@@ -372,6 +380,12 @@ async function requestJson<T>(
   );
   try {
     if (signal?.aborted) throw new DriverSyncApiError("cancelled");
+    // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19: a remembered session is not
+    // confirmed by the server, so nothing is ever sent with it; the action
+    // stays as it is (its scheduler never starts in the first place).
+    if (options.session.remembered === true) {
+      throw new DriverSyncApiError("cancelled");
+    }
     let authorization: RequestAuthorization;
     try {
       authorization = await resolveRequestAuthorization(options.session, "POST");
@@ -419,7 +433,7 @@ async function requestJson<T>(
 async function classifyResponse(
   response: Response,
 ): Promise<DriverSyncApiError> {
-  if (response.status === 401) return new DriverSyncApiError("unauthorized");
+  if (response.status === 401) return new DriverSyncApiError("session-ended");
   if (response.status === 403) return new DriverSyncApiError("forbidden");
   if (response.status === 404) return new DriverSyncApiError("not-found");
   if (response.status === 429) {

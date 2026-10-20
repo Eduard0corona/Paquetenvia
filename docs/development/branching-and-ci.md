@@ -110,5 +110,6 @@ Anything unregistered still fails closed: an extra transitive package, another v
 ## Workflow conventions
 
 - Every job declares `timeout-minutes`.
+- Every job pins `runs-on: ubuntu-24.04`, never `ubuntu-latest`. The pin is on purpose: GitHub moves `ubuntu-latest` to Ubuntu 26 from 2026-10-19, and the runner image must not change underneath a gate. `tools/ci/test_foundation_invariants.py` (`GITHUB_HOSTED_LINUX_RUNNER`) checks every job of every workflow. Moving to 26.04 is a later, deliberate PR that changes all jobs and that constant together, with a full run as evidence.
 - Third-party actions outside `actions/*` are pinned by commit SHA with the tag in a comment (`uses: owner/action@<sha> # vX`). To update one, resolve the tag with `git ls-remote https://github.com/<owner>/<action> 'refs/tags/<tag>*'` and use the `^{}` value if the tag is annotated.
 - Dispatch inputs and event text are never interpolated with `${{ }}` inside `run:`. They go through `env:` and are validated first.

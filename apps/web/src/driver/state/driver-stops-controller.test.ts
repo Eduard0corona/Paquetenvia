@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  createDriverStopsApi,
   DriverStopsApiError,
   type DriverStopsApi,
   type DriverStopsListOptions,
@@ -121,6 +122,93 @@ describe("DriverStopsController", () => {
       expect(cache.clears).toBe(1);
     },
   );
+
+  it("session-ended (401) stops reading but keeps the partition for the same driver (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19)", async () => {
+    const cache = new MemoryCache();
+    const harness = createHarness(cache, [
+      [firstStop],
+      new DriverStopsApiError("session-ended"),
+    ]);
+    await harness.controller.start();
+    await harness.controller.retry();
+    expect(harness.controller.current.phase).toBe("session-ended");
+    expect(harness.controller.current.stops).toEqual([]);
+    expect(cache.clears).toBe(0);
+    expect(cache.onlySnapshot()?.stops).toEqual([firstStop]);
+    expect(harness.realtime.stops).toBe(1);
+  });
+
+  describe("a remembered session (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19, owner answer E3)", () => {
+    const remembered: DriverSession = {
+      organizationId: session.organizationId,
+      cacheNamespace: "remembered-namespace-0001",
+      credentialMode: "cookie",
+      getCsrfToken: () => {
+        throw new Error("a remembered session has no CSRF token");
+      },
+      remembered: true,
+    };
+
+    async function seed(cache: MemoryCache, owner: DriverSession) {
+      await cache.replaceSnapshot(await createDriverCachePartition(owner), {
+        schemaVersion: 2,
+        synchronizedAt: "2026-07-26T11:00:00.000Z",
+        stops: [firstStop, secondStop],
+        completedToday: 1,
+      });
+    }
+
+    function controllerFor(cache: MemoryCache, owner: DriverSession, fetch: typeof globalThis.fetch) {
+      const realtime = new RealtimeHarness(false);
+      return {
+        realtime,
+        controller: new DriverStopsController({
+          baseUrl: "https://api.synthetic.test",
+          session: owner,
+          api: createDriverStopsApi({ baseUrl: "https://api.synthetic.test", session: owner, fetch }),
+          cache,
+          realtimeFactory: realtime,
+          telemetry,
+          now: () => new Date("2026-07-26T12:00:00.000Z"),
+        }),
+      };
+    }
+
+    it("opens the saved snapshot after an offline reload without any request", async () => {
+      const cache = new MemoryCache();
+      await seed(cache, remembered);
+      const fetch = vi.fn<typeof globalThis.fetch>();
+      const { controller, realtime } = controllerFor(cache, remembered, fetch);
+
+      await controller.start();
+      await controller.retry();
+
+      expect(controller.current).toMatchObject({
+        phase: "offline",
+        stops: [firstStop, secondStop],
+        synchronizedAt: "2026-07-26T11:00:00.000Z",
+        completedToday: 1,
+      });
+      expect(fetch).not.toHaveBeenCalled();
+      expect(realtime.starts).toBe(0);
+      expect(cache.replacements).toBe(1);
+    });
+
+    it("never opens another driver's partition", async () => {
+      const cache = new MemoryCache();
+      await seed(cache, remembered);
+      const otherDriver: DriverSession = { ...remembered, cacheNamespace: "another-driver-namespace-01" };
+      const { controller } = controllerFor(cache, otherDriver, vi.fn<typeof globalThis.fetch>());
+
+      await controller.start();
+
+      expect(controller.current.phase).toBe("offline-empty");
+      expect(controller.current.stops).toEqual([]);
+      expect((await createDriverCachePartition(otherDriver)).key).not.toBe(
+        (await createDriverCachePartition(remembered)).key,
+      );
+    });
+  });
 
   it("invalid contract never overwrites or renders a prior snapshot", async () => {
     const cache = new MemoryCache();

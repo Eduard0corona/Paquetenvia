@@ -1463,10 +1463,12 @@ items:
   - protector or scanner unavailability fails closed with 503 and no partial effects
   - key rotation keeps previously protected data readable
   - no plaintext PII in logs, outbox, audit or snapshots
+  - 'DECIDED ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20 (project owner, "Borrado suave más largo (Recommended)"): in the pilot proof storage a deleted or overwritten photo stays recoverable for 30 days - blob soft delete 30 days with blob versioning off (an overwrite keeps the prior state as a soft-deleted snapshot) and container soft delete 30 days, no permanent delete; deleting the storage account is not covered'
   required_tests:
   - protector unavailable returns 503 without effects
   - key rotation round-trip
   - infected upload stays quarantined
+  - pilot static guard - blob versioning off and blob and container soft delete exactly 30 days with no permanent delete, failing closed on every drift
   approval_gate: GATE-007
 - id: UI-001
   decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)
