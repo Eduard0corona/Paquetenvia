@@ -462,6 +462,7 @@ transaction_coordinator_allowlist:
 - proof_custody_to_order_transition
 - cod_reconciliation_to_close
 - external_offer_acceptance_to_assignment
+- route_stop_to_assignment_route_id
 privacy_invariants:
 - request_snapshot_redacted contains no plaintext address/contact/phone/access notes
 - driver location is worker personal data and is included in GATE-007 retention/ARCO

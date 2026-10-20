@@ -80,6 +80,14 @@ Flujos atómicos permitidos inicialmente:
 3. POD/custody -> order transition;
 4. COD reconciliation -> close;
 5. external offer acceptance -> assignment.
+6. route stop ↔ assignment.route_id (RTE-001; RTE-001-ROUTING-ASSIGNMENT-FLOW6-2026-10-20,
+   `docs/adr/ADR-RTE-001-ROUTE-ASSIGNMENT-FLOW6.md`). Lo coordina Routes (`PostgreSqlRouteService`). En una sola
+   transacción, `addRouteStop` inserta la parada en `routes.route_stops` y fija `dispatch.assignments.route_id` en la
+   asignación `OWN` `ACCEPTED`/`ACTIVE` de la orden, y `removeRouteStop` borra la parada, compacta la secuencia de
+   `routes.route_stops` y limpia ese `route_id`; ambas incrementan `routes.routes.version` y escriben auditoría,
+   outbox `routes.route-changed` e idempotencia en `platform`. Su única escritura en otro módulo es
+   `dispatch.assignments.route_id`. Pruebas: `RoutingPostgreSqlContractTests` (atomicidad, aislamiento tenant y
+   concurrencia en PostgreSQL real) y `CrossSchemaWriteCatalogTests`.
 
 ## 5. API
 
@@ -287,7 +295,9 @@ El repositorio debe exponer un comando raíz equivalente y generar evidencia rep
 ## 15. Pruebas de arquitectura adicionales
 
 - catálogo de esquemas/FKs contra matriz permitida;
-- lista blanca de los cinco coordinadores transaccionales;
+- lista blanca de los seis coordinadores transaccionales: `CrossSchemaWriteCatalogTests` cataloga cada escritura SQL
+  de runtime en el esquema de otro módulo con su flujo de §4 o su ADR y falla ante cualquiera nueva, retirada o sin
+  flujo (RTE-001-ROUTING-ASSIGNMENT-FLOW6-2026-10-20);
 - grants por columna y mutabilidad append-only;
 - retry/pooling sin fuga tenant;
 - API stateless y POD sin multipart/disco local.

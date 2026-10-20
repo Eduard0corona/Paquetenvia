@@ -641,7 +641,7 @@ La PWA envía lotes de 1–20 posiciones. Todas las posiciones válidas se persi
 
 ### 25.9 Coordinación cross-module
 
-Solo cinco flujos pueden compartir transacción cross-module: quote→order, assignment→order event, proof/custody→transition, COD reconciliation→close y offer acceptance→assignment. Una prueba de arquitectura usa lista blanca y falla ante cualquier flujo adicional.
+Solo seis flujos pueden compartir transacción cross-module: quote→order, assignment→order event, proof/custody→transition, COD reconciliation→close, offer acceptance→assignment y route stop↔assignment.route_id (RTE-001-ROUTING-ASSIGNMENT-FLOW6-2026-10-20). Una prueba de arquitectura usa lista blanca y falla ante cualquier flujo adicional: `CrossSchemaWriteCatalogTests` cataloga cada escritura SQL de runtime en el esquema de otro módulo con su flujo o su ADR y falla ante cualquiera nueva, retirada o sin flujo.
 
 
 ## 26. Endurecimiento normativo v0.6
