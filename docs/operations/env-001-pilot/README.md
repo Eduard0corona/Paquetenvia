@@ -494,7 +494,9 @@ Two further caveats:
     - Exit 11, `TEN003_PLATFORM_BOOTSTRAP_ALREADY_DONE`: a PLATFORM organization or a PLATFORM_ADMIN already exists.
       Nothing was written and nothing is left to do; the command runs only once.
     - Exit 11, `TEN003_PLATFORM_BOOTSTRAP_SUBJECT_ALREADY_SIGNED_IN`: that account already signed in to Paquetenvia.
-      Nothing was written. The command never takes over an existing user: stop and ask, do not write SQL by hand.
+      Nothing was written. The command never takes over an existing user, and you must not write SQL by hand.
+      Restore the database to a point before that sign-in (§6.4) and run the command again, as the box *Si ya
+      iniciaste sesión antes de correr el comando* in the guide §7.5 explains step by step (decision E1b).
     - Exit 2: the `sub` is not a lowercase UUID, or a name is empty, has leading or trailing spaces or control
       characters, or is longer than 200 (legal) or 80 (display) characters. The value is never echoed.
     - Exit 5 naming a migration or an assertion: the database is not fully migrated; run the deployment again

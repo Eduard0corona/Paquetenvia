@@ -4,6 +4,12 @@
 
 - Respuesta literal del project owner (2026-10-19, decisión E1), registrada en `decision-log.md` con su contexto y la
   opción no elegida: "Comando único auditado (Recommended)" ("Un comando del migrador que corres una sola vez, antes de tu primer inicio de sesión: crea la organización de plataforma y te hace administrador con tu cuenta de AuthCenter, deja registro en auditoría y se niega a correr una segunda vez."). No elegida: "SQL manual con runbook" ("Un procedimiento paso a paso que ejecutas tú como administrador de PostgreSQL. Sin código nuevo, pero sin auditoría automática y con más riesgo de error.").
+- Seguimiento E1b del project owner (2026-10-20, en el PR #283), registrado en `decision-log.md` con su contexto y
+  la opción no elegida: "Restaurar y repetir (Recommended)" ("Se mantiene la negativa, sin código nuevo. Si pasa, se restaura la base a un punto antes de tu inicio de sesión (la base del piloto aún está vacía) y corres el comando. La guía lo explica paso a paso. Coincide con E1: 'antes de tu primer inicio de sesión'."). No elegida: "Tomar ese usuario si está solo" ("El comando acepta tu usuario ya creado solo si es el único de la base y no tiene ninguna membresía. Evita la restauración, pero agrega código y pruebas al PR y una ruta más que revisar.").
+  Sin código nuevo: el comando sigue negándose (`SUBJECT_ALREADY_SIGNED_IN`, código 11, sin escribir nada). La salida
+  es restaurar la base del piloto a un punto anterior a ese primer inicio de sesión (README de ENV-001 §6.4) y correr
+  el comando otra vez. Solo sirve mientras nadie haya usado el piloto, y pierde lo escrito después de ese punto, que
+  entonces es solo el usuario del owner y su sesión. La guía del owner §7.5 lo explica paso a paso.
 - Nuevo comando del migrador `platform-bootstrap --connection-env NAME --identity-subject <sub de AuthCenter>
   --legal-name TEXT --display-name TEXT`. El owner lo corre una sola vez, antes de su primer inicio de sesión, en una
   ejecución del job de migración que solo cambia los argumentos (README de ENV-001 §6.1 paso 10; guía del owner

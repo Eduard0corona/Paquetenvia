@@ -653,12 +653,55 @@ marca de datos maestros (README §6.8). Hazlo **después del Run 3 y antes de tu
    - `TEN003_PLATFORM_BOOTSTRAP_ALREADY_DONE` (código 11): ya existe una organización de plataforma o un
      administrador. No se escribió nada y no hay nada más que hacer.
    - `TEN003_PLATFORM_BOOTSTRAP_SUBJECT_ALREADY_SIGNED_IN` (código 11): esa cuenta ya entró a Paquetenvia. No se
-     escribió nada. Detente y avísame; no corras SQL a mano.
+     escribió nada. No corras SQL a mano: sigue el recuadro *Si ya iniciaste sesión antes de correr el comando*, abajo.
    - Código 2: el `sub` no es un UUID en minúsculas o un nombre no cumple las reglas. El valor no se muestra.
    - Código 5 que nombra una migración o una verificación: la base no está migrada; repite el despliegue.
 4. **Después de entrar** (paso 7.6): `https://paquetenvia.com/api/v1/me/organization-contexts` muestra el
    `organization_id` de la organización de plataforma, que pide `master-data-gate` (README §6.8). Las operaciones
    de administrador de plataforma te piden la verificación MFA de AuthCenter.
+
+> **Si ya iniciaste sesión antes de correr el comando** (decisión E1b, "Restaurar y repetir")
+>
+> El comando nunca toma un usuario que ya existe, y eso no cambia. La salida es regresar la base a un momento antes de
+> ese inicio de sesión y correr el comando otra vez. Solo sirve mientras nadie haya usado el piloto: se pierde todo lo
+> escrito después de ese momento, que a estas alturas, si solo entraste tú, es solo tu usuario y tu sesión.
+>
+> 1. **Cómo lo sabes.** En el paso 3 aparece `TEN003_PLATFORM_BOOTSTRAP_SUBJECT_ALREADY_SIGNED_IN` y la ejecución
+>    termina con código 11. No se escribió nada.
+> 2. **No vuelvas a entrar** a `https://paquetenvia.com` hasta el final de esta lista.
+> 3. **Busca la hora de tu primer inicio de sesión.** En el historial de tu navegador, busca tu primera visita a
+>    `https://paquetenvia.com`: abrir el sitio no inicia sesión, así que entraste en ese momento o después. Elige un
+>    momento antes de esa visita y después de que terminó tu último run de *Deploy Azure PILOT* anterior a ella (la
+>    hora de fin sale en GitHub Actions), para que la base restaurada ya tenga todas sus migraciones. Si dudas, usa
+>    uno o dos minutos después de que terminó ese run. Escríbelo en UTC con `Z` al final, por ejemplo
+>    `2026-10-05T13:10:00Z` (GitHub y tu navegador te muestran tu hora local).
+> 4. **Restaura la base** como dice README §6.4, *Real restore*, en Cloud Shell (bash) y desde una copia del repo:
+>    1. Detén la API y el Worker:
+>
+>       ```bash
+>       RG=rg-pv-pilot
+>       az containerapp update -n ca-pv-pilot-api -g "$RG" --min-replicas 0 --max-replicas 0
+>       az containerapp update -n ca-pv-pilot-worker -g "$RG" --min-replicas 0 --max-replicas 0
+>       ```
+>
+>    2. Restaura a ese momento y conserva el servidor restaurado (`--keep`):
+>
+>       ```bash
+>       ./deploy/azure/pilot/restore-drill.sh --resource-group "$RG" --restore-time <momento en UTC> --keep
+>       ```
+>
+>       Restaura en un **servidor nuevo** (`pg-pv-pilot-<sufijo>-drill-<fecha>`; su host sale en la línea
+>       `restore_completed=...`), lo verifica y termina con una línea `EVIDENCE ... verify_status=Succeeded`. Las apps
+>       todavía apuntan al servidor anterior.
+>    3. Pasa las apps al servidor restaurado con una de las dos opciones de README §6.4 paso 3: **cambiar nombres** (la
+>       preferida: borras el servidor anterior y restauras otra vez con el nombre original `pg-pv-pilot-<sufijo>`, así
+>       ningún secreto de conexión cambia) o **apuntar los secretos al host nuevo** (actualizas los cuatro secretos de
+>       conexión, `pg-migrate-connection`, `pg-api-runtime-connection`, `pg-worker-runtime-connection` y
+>       `pg-realtime-runtime-connection`, y reinicias las revisiones de la API y el Worker).
+>    4. Corre otra vez **Deploy Azure PILOT** con el mismo `<HEAD_SHA>` y `<FOUNDATION_RUN_ID>` y
+>       `custom_domain_phase=bind` (paso 7.4). Ese run regresa las réplicas y vuelve a aplicar los logins.
+> 5. **Corre otra vez el comando** (pasos 2 y 3 de esta sección). Ahora debe decir `TEN003_PLATFORM_BOOTSTRAP_OK`.
+> 6. **Solo entonces inicia sesión** (paso 7.6).
 
 > Los argumentos de esta ejecución (tu `sub` y los dos nombres) quedan en el historial del job, visibles para quien
 > pueda leer el grupo de recursos. Ninguno es secreto. La salida del comando no muestra tu `sub`, los nombres ni

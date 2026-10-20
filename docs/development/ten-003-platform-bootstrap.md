@@ -1,8 +1,9 @@
 # TEN-003: platform bootstrap (first PLATFORM organization and PLATFORM_ADMIN)
 
 Decision: `TEN-003-PLATFORM-BOOTSTRAP-2026-10-19` in `docs/normative/v0.6/decision-log.md` (owner decision E1,
-"Comando único auditado (Recommended)"). The decision is the ADR for creating the pilot's root privileged identity
-(AI-01 §7).
+"Comando único auditado (Recommended)"; follow-up E1b in the same row, "Restaurar y repetir (Recommended)", for an
+owner who signed in first, see *Residual risks*). The decision is the ADR for creating the pilot's root privileged
+identity (AI-01 §7).
 
 ## Why it exists
 
@@ -150,9 +151,13 @@ organization id that `master-data-gate` needs.
 - **A wrong but well-formed UUID.** The command cannot tell a mistyped UUID from the right one. A typo binds the
   only PLATFORM_ADMIN to an account that does not exist, and every later run is refused. Copying the id from the
   AuthCenter address bar avoids typing it. Recovery is the rollback below.
-- **Signing in first.** If the owner signs in before running the command, it refuses
-  (`SUBJECT_ALREADY_SIGNED_IN`) and never takes over the existing user. No automatic path exists; that case needs
-  a separate owner decision.
+- **Signing in first.** If the owner signs in before running the command, it keeps refusing
+  (`SUBJECT_ALREADY_SIGNED_IN`, exit 11, nothing written) and never takes over the existing user. The recovery is
+  the one decided in E1b (decision-log row TEN-003-PLATFORM-BOOTSTRAP-2026-10-19, "Restaurar y repetir"), with no
+  new code: a point-in-time restore of the pilot database to a moment before that first sign-in (README §6.4), then
+  running the command again, and only then signing in. It is safe only while nobody has used the pilot yet. It loses
+  everything written after the restore point; at that stage, when only the owner signed in, that is the owner's own
+  user row and its session. Steps: owner guide §7.5, box *Si ya iniciaste sesión antes de correr el comando*.
 - **Execution history.** The job execution keeps its arguments (the subject and the two names) in its history,
   readable by whoever can read the resource group. None of them is a secret.
 - **The `az` override is unverified.** `az containerapp job start --yaml` with the job's own template and new
