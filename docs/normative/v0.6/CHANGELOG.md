@@ -1,5 +1,22 @@
 # Changelog
 
+## Rutas y asignaciones como flujo atómico 6, con catálogo de escrituras entre módulos (RTE-001-ROUTING-ASSIGNMENT-FLOW6-2026-10-20) — 2026-10-20
+
+- Respuesta literal del project owner (2026-10-20, pregunta G1), registrada en `decision-log.md` con su contexto y la
+  opción no elegida: "Rutas: al agregar o quitar una parada, el módulo de Rutas escribe directo en las asignaciones de Despacho, en la misma transacción. Lo exige RTE-001, pero no está entre los 5 flujos permitidos (AI-13 §4) y no hay prueba que detecte escrituras nuevas entre módulos. ¿Qué hacemos?" Respuesta: "Registrarlo como flujo 6 (Recommended)" ("Fila de decisión y ADR que lo agregan a la lista, más la prueba que cataloga cada escritura entre módulos y falla con cualquiera nueva. Sin cambio de comportamiento.").
+- AI-13 §4 agrega el flujo 6, route stop ↔ assignment.route_id (RTE-001): lo coordina Routes y, en una sola
+  transacción, `addRouteStop` fija y `removeRouteStop` limpia `dispatch.assignments.route_id` junto con la parada, la
+  versión de la ruta, la auditoría, el outbox `routes.route-changed` y la idempotencia. Los otros cinco flujos no
+  cambian. ADR: `docs/adr/ADR-RTE-001-ROUTE-ASSIGNMENT-FLOW6.md`.
+- La cuenta sube a seis en AI-13 §15, AI-03 §25.9 y `CLAUDE.md`; AI-04 `transaction_coordinator_allowlist` agrega
+  `route_stop_to_assignment_route_id`; AI-01 §4.18 y AI-11 prohíben ahora un séptimo flujo sin ADR y pruebas. AI-08
+  RTE-001: un criterio DECIDED y la prueba exigida.
+- Nueva prueba de arquitectura `CrossSchemaWriteCatalogTests`: cataloga cada escritura SQL de runtime en el esquema de
+  otro módulo (hoy ocho: flujos 1, 2, 5 y 6, y ADR-031 para el provisioning) y falla ante una nueva, una retirada o una
+  sin flujo, con un mensaje que pide el ADR. Nota: `docs/development/rte-001-routing-assignment-flow6.md`.
+- Sin cambios de código de `src/`, SQL, migraciones, roles, permisos, RLS, outbox ni paquetes; el comportamiento no
+  cambia.
+
 ## Avisos al destinatario: contratos (NTF-RECIPIENT-NOTICES-2026-10-20) — 2026-10-20
 
 - Respuestas literales del project owner (2026-10-19 y 2026-10-20), registradas en `decision-log.md` con su
