@@ -1379,6 +1379,7 @@ def validate_settings(entries: list[Any], *, allow_sentinel: bool) -> list[str]:
         if re.search(r"(?i)(password|secret|token|key)", name):
             failures.append(f"{label} looks like a secret; secrets belong in Key Vault")
     failures.extend(validate_dispatch_contacts(entries))
+    failures.extend(validate_driver_eligibility(entries, allow_missing=allow_sentinel))
     return failures
 
 
@@ -1442,6 +1443,130 @@ def validate_dispatch_contacts(entries: list[Any]) -> list[str]:
         if contact.get("PhoneE164") is None or not DISPATCH_PHONE_E164.match(contact["PhoneE164"]):
             failures.append(
                 f"Drivers__DispatchContacts__{index}__PhoneE164 must be +52 and ten digits, the first one 2-9")
+    return failures
+
+
+# Driver eligibility rules. apps.bicep runs the pilot API with Drivers__Provider=PostgreSql and
+# Routing__Provider=PostgreSql, so the API refuses to start unless Drivers:Eligibility gives every vehicle type at
+# least one required document type and a valid capacity (IsComplete in Drivers.Infrastructure and
+# Routing.Infrastructure DependencyInjection; PilotApiStartupConfigurationTests pins both failures while the file has
+# none). They are owner business rules with no default: settings-check stops while any is missing, naming the vehicle
+# type and each missing setting, and holds every entry present to the API's rules. The static guard (P17,
+# allow_missing) tolerates the missing ones, like OWNER_DECISION_REQUIRED, but not an invalid one.
+ELIGIBILITY_PREFIX = "Drivers__Eligibility"
+ELIGIBILITY_DOCUMENTS = "RequiredDocumentTypesByVehicleType"
+ELIGIBILITY_NON_EXPIRING = "NonExpiringDocumentTypes"
+ELIGIBILITY_CAPACITY = "VehicleCapacity"
+# The C# validators' VehicleTypes and DocumentTypes (test_env001_pilot_guards.py reads both validators to compare).
+ELIGIBILITY_VEHICLE_TYPES = ("MOTORCYCLE", "CAR", "VAN", "BICYCLE", "WALKER")
+ELIGIBILITY_DOCUMENT_TYPES = ("IDENTITY", "DRIVER_LICENSE", "VEHICLE_CARD", "INSURANCE", "BACKGROUND_CHECK", "OTHER")
+# VehicleCapacityOptions: each one required, above zero and within its .NET type (int or long); the single package
+# weight may not exceed the total weight.
+ELIGIBILITY_CAPACITY_FIELDS = {
+    "MaximumPackageCount": 2**31 - 1,
+    "MaximumTotalWeightGrams": 2**63 - 1,
+    "MaximumSinglePackageWeightGrams": 2**63 - 1,
+    "MaximumLengthMillimeters": 2**31 - 1,
+    "MaximumWidthMillimeters": 2**31 - 1,
+    "MaximumHeightMillimeters": 2**31 - 1,
+}
+# Optional bool (false when absent): refuse a package without dimensions for that vehicle type.
+ELIGIBILITY_REQUIRE_DIMENSIONS = "RequireDimensions"
+ELIGIBILITY_LIST_INDEX = re.compile(r"^(0|[1-9][0-9]{0,2})\Z")
+ELIGIBILITY_POSITIVE_INTEGER = re.compile(r"^[1-9][0-9]*\Z")
+
+
+def is_eligibility_name(name: str) -> bool:
+    """Whether .NET would bind the name under Drivers:Eligibility (configuration keys ignore case)."""
+    folded, prefix = name.casefold(), ELIGIBILITY_PREFIX.casefold()
+    return folded == prefix or folded.startswith(prefix + "__")
+
+
+def _member(segment: str, members: Any) -> str | None:
+    """The member a name segment binds to (.NET property names ignore case), or None."""
+    return next((member for member in members if member.casefold() == segment.casefold()), None)
+
+
+def validate_driver_eligibility(entries: list[Any], *, allow_missing: bool) -> list[str]:
+    """Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TYPE>__<n> and the optional
+    Drivers__Eligibility__NonExpiringDocumentTypes__<n> (each a document type), and
+    Drivers__Eligibility__VehicleCapacity__<TYPE>__<field>, spelled exactly so, for the five vehicle types only.
+    Unless allow_missing, every vehicle type needs at least one document type and the six capacity numbers. Numbers
+    are plain decimal digits. No failure echoes a value."""
+    failures: list[str] = []
+    removed = {name.casefold() for name in REMOVED_SETTINGS}
+    documents: dict[str, int] = {}
+    capacity: dict[str, dict[str, int | None]] = {}
+    segment_counts = {ELIGIBILITY_DOCUMENTS: 5, ELIGIBILITY_NON_EXPIRING: 4, ELIGIBILITY_CAPACITY: 5}
+    capacity_members = (*ELIGIBILITY_CAPACITY_FIELDS, ELIGIBILITY_REQUIRE_DIMENSIONS)
+    document_types = ", ".join(ELIGIBILITY_DOCUMENT_TYPES)
+    for position, entry in enumerate(entries):
+        if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
+            continue
+        name = entry["name"]
+        if not is_eligibility_name(name) or name.casefold() in removed:
+            continue
+        label = setting_label(position, entry)
+        segments = name.split("__")
+        section = _member(segments[2], segment_counts) if len(segments) > 2 else None
+        if len(segments) != segment_counts.get(section):
+            failures.append(
+                f"{label} is not a driver eligibility setting the API reads ({ELIGIBILITY_PREFIX}__{ELIGIBILITY_DOCUMENTS}"
+                f"__<TYPE>__<n>, {ELIGIBILITY_PREFIX}__{ELIGIBILITY_NON_EXPIRING}__<n> or "
+                f"{ELIGIBILITY_PREFIX}__{ELIGIBILITY_CAPACITY}__<TYPE>__<field>)")
+            continue
+        vehicle = None if section == ELIGIBILITY_NON_EXPIRING else segments[3]
+        if vehicle is not None and vehicle not in ELIGIBILITY_VEHICLE_TYPES:
+            # The API keeps the vehicle type as written and accepts only these five, compared exactly.
+            failures.append(f"{label} names no vehicle type the API knows ({', '.join(ELIGIBILITY_VEHICLE_TYPES)}, "
+                            "in capitals)")
+            continue
+        member = _member(segments[-1], capacity_members) if section == ELIGIBILITY_CAPACITY else segments[-1]
+        if member is None:
+            failures.append(f"{label} is not a capacity setting the API reads ({', '.join(capacity_members)})")
+            continue
+        if section != ELIGIBILITY_CAPACITY and not ELIGIBILITY_LIST_INDEX.match(member):
+            failures.append(f"{label} must end in a list index (0, 1, 2...)")
+            continue
+        canonical = "__".join(part for part in (ELIGIBILITY_PREFIX, section, vehicle, member) if part is not None)
+        if name != canonical:
+            failures.append(f"{label} must be spelled exactly {canonical} "
+                            "(configuration names ignore case, so another casing still reaches the API)")
+        value = entry.get("value")
+        # A value that is not a string is reported by the shape check and the sentinel by its own rule; either way
+        # this rule is still missing.
+        if not isinstance(value, str) or is_owner_sentinel(value):
+            continue
+        if section != ELIGIBILITY_CAPACITY:
+            if section == ELIGIBILITY_DOCUMENTS:
+                documents[vehicle] = documents.get(vehicle, 0) + 1
+            if value not in ELIGIBILITY_DOCUMENT_TYPES:
+                failures.append(f"{label} must be one of the document types {document_types}")
+        elif member == ELIGIBILITY_REQUIRE_DIMENSIONS:
+            if value not in ("true", "false"):
+                failures.append(f"{label} must be true or false")
+        else:
+            maximum = ELIGIBILITY_CAPACITY_FIELDS[member]
+            valid = ELIGIBILITY_POSITIVE_INTEGER.match(value) is not None and int(value) <= maximum
+            capacity.setdefault(vehicle, {})[member] = int(value) if valid else None
+            if not valid:
+                failures.append(f"{label} must be a whole number from 1 to {maximum}, in plain digits")
+    for vehicle in ELIGIBILITY_VEHICLE_TYPES:
+        limits = capacity.get(vehicle, {})
+        single, total = limits.get("MaximumSinglePackageWeightGrams"), limits.get("MaximumTotalWeightGrams")
+        if single is not None and total is not None and single > total:
+            failures.append(f"{ELIGIBILITY_PREFIX}__{ELIGIBILITY_CAPACITY}__{vehicle}__MaximumSinglePackageWeightGrams "
+                            "may not exceed MaximumTotalWeightGrams")
+        if allow_missing:
+            continue
+        missing = [] if documents.get(vehicle) else [
+            f"{ELIGIBILITY_PREFIX}__{ELIGIBILITY_DOCUMENTS}__{vehicle}__0 (at least one required document type)"]
+        missing += [f"{ELIGIBILITY_PREFIX}__{ELIGIBILITY_CAPACITY}__{vehicle}__{field}"
+                    for field in ELIGIBILITY_CAPACITY_FIELDS if field not in limits]
+        if missing:
+            failures.append(f"driver eligibility rules for vehicle type {vehicle} are missing: {', '.join(missing)}. "
+                            "The pilot API refuses to start without them (Drivers__Provider and Routing__Provider are "
+                            "PostgreSql); the owner chooses them (README section 4, \"Driver eligibility rules\")")
     return failures
 
 
