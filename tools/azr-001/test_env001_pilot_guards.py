@@ -660,6 +660,104 @@ class GateDecisionTests(unittest.TestCase):
         self.assertIn("STOP_FOR_OWNER_DECISION", bad.stdout)
 
 
+class NonRootImageTests(unittest.TestCase):
+    """P24 (AZR-001-AC-064): the final stage of each of the four pilot images runs as a non-root USER."""
+
+    DOTNET = "FROM mcr.microsoft.com/dotnet/sdk:10.0.101 AS build\nRUN dotnet publish -o /out\n\nFROM mcr.microsoft.com/dotnet/aspnet:10.0\nWORKDIR /app\nCOPY --from=build /out ./\n"
+    NODE = "FROM node:24-bookworm-slim AS build\nRUN pnpm build\n\nFROM node:24-bookworm-slim\nWORKDIR /app\n"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="env001-nonroot-")
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.workflow = (REPO_ROOT / guards.PILOT_WORKFLOW).read_text(encoding="utf-8")
+        for name in guards.PILOT_DOCKERFILES:
+            body = self.NODE + "USER node\n" if name.endswith("Dockerfile.web") else self.DOTNET + "USER $APP_UID\n"
+            self.write(name, body + 'ENTRYPOINT ["x"]\n')
+
+    def write(self, name: str, text: str) -> None:
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def failures(self) -> list[str]:
+        return guards.pilot_image_user_failures(self.root, self.workflow)
+
+    def test_repository_images_run_as_non_root(self):
+        self.assertEqual([], guards.pilot_image_user_failures(REPO_ROOT, self.workflow))
+        self.assertEqual(sorted(guards.PILOT_DOCKERFILES), sorted(guards.WORKFLOW_IMAGE_BUILD.findall(self.workflow)))
+
+    def test_api_and_worker_without_their_user_line_fail(self):
+        for name in ("deploy/azure/Dockerfile.api", "deploy/azure/Dockerfile.worker"):
+            with self.subTest(name=name):
+                text = (REPO_ROOT / name).read_text(encoding="utf-8")
+                self.assertEqual(1, text.count("\nUSER $APP_UID\n"))
+                failure = guards.dockerfile_non_root_failure(name, text.replace("\nUSER $APP_UID\n", "\n"))
+                self.assertIn("final stage has no USER", failure or "")
+
+    def test_conformant_fixture_passes(self):
+        self.assertEqual([], self.failures())
+
+    def test_root_users_fail(self):
+        cases = {
+            "no USER": self.DOTNET,
+            "USER root": self.DOTNET + "USER root\n",
+            "USER ROOT": self.DOTNET + "USER ROOT\n",
+            "USER 0": self.DOTNET + "USER 0\n",
+            "USER 0:0": self.DOTNET + "USER 0:0\n",
+            "USER root:app": self.DOTNET + "USER root:app\n",
+            "lowercase user root": self.DOTNET + "user root\n",
+            "back to root": self.DOTNET + "USER $APP_UID\nRUN true\nUSER root\n",
+            "USER only in the build stage": self.DOTNET.replace("RUN dotnet", "USER $APP_UID\nRUN dotnet"),
+            "commented USER": self.DOTNET + "# USER $APP_UID\n",
+            "unresolved variable": self.DOTNET + "USER $OTHER_UID\n",
+            "APP_UID redeclared by ARG": self.DOTNET + "ARG APP_UID=0\nUSER $APP_UID\n",
+            "APP_UID redeclared by ENV": self.DOTNET + "ENV A=1 APP_UID=0\nUSER ${APP_UID}\n",
+            "escape directive": "# escape=`\n" + self.DOTNET + "USER $APP_UID\n",
+        }
+        for case, text in cases.items():
+            with self.subTest(case=case):
+                self.write("deploy/azure/Dockerfile.api", text + 'ENTRYPOINT ["x"]\n')
+                failures = self.failures()
+                self.assertEqual(1, len(failures), failures)
+                self.assertTrue(failures[0].startswith("deploy/azure/Dockerfile.api"), failures)
+
+    def test_app_uid_needs_an_official_dotnet_base(self):
+        self.write("deploy/azure/pilot/Dockerfile.web", self.NODE + "USER $APP_UID\n")
+        failures = self.failures()
+        self.assertEqual(1, len(failures), failures)
+        self.assertIn("not an official .NET image", failures[0])
+
+    def test_accepted_non_root_forms(self):
+        for user in ("$APP_UID", "${APP_UID}", "$APP_UID:$APP_UID", "app", "1654", "1654:1654", "app:app"):
+            with self.subTest(user=user):
+                self.write("deploy/azure/Dockerfile.worker", self.DOTNET + f"USER {user}\n")
+                self.assertEqual([], self.failures())
+
+    def test_continuations_and_comments_are_read_like_docker(self):
+        text = self.DOTNET.replace("COPY --from=build /out ./\n", "COPY --from=build \\\n  # a comment inside the continuation\n\n  /out ./\n")
+        self.write("deploy/azure/Dockerfile.api", text + "USER \\\n  $APP_UID\n")
+        self.assertEqual([], self.failures())
+        self.assertEqual(("COPY", "--from=build /out ./"), guards.dockerfile_instructions(text)[-1])
+
+    def test_missing_dockerfile_fails(self):
+        (self.root / "deploy/azure/pilot/Dockerfile.db-ops").unlink()
+        self.assertEqual(["deploy/azure/pilot/Dockerfile.db-ops is missing"], self.failures())
+
+    def test_workflow_must_build_exactly_the_checked_images(self):
+        extra = self.workflow.replace(
+            '          echo "api=$(build api deploy/azure/Dockerfile.api)" >> "${GITHUB_OUTPUT}"\n',
+            '          echo "api=$(build api deploy/azure/Dockerfile.api)" >> "${GITHUB_OUTPUT}"\n'
+            '          echo "tool=$(build tool deploy/azure/Dockerfile.tool)" >> "${GITHUB_OUTPUT}"\n', 1)
+        missing = self.workflow.replace('          echo "worker=$(build worker deploy/azure/Dockerfile.worker)" >> "${GITHUB_OUTPUT}"\n', "", 1)
+        for case, workflow in (("fifth image", extra), ("worker not built", missing)):
+            with self.subTest(case=case):
+                self.assertNotEqual(self.workflow, workflow)
+                failures = guards.pilot_image_user_failures(self.root, workflow)
+                self.assertEqual(1, len(failures), failures)
+                self.assertIn("the workflow must build exactly the images", failures[0])
+
+
 @unittest.skipUnless(_bicep(), "pinned Bicep CLI not available (set BICEP_BIN); the azr-static CI job installs it")
 class TemplateGuardTests(unittest.TestCase):
     @classmethod
@@ -881,6 +979,8 @@ class TemplateGuardTests(unittest.TestCase):
         self.assert_fails(3, self.context(workflow_text=text.replace("environment: azure-pilot", "environment: azure-dev", 1)), "azure-pilot")
         self.assert_fails(4, self.context(workflow_text=text.replace("azr001_static_guards.py deploy-gate", "true", 1)), "deploy-gate")
         self.assert_fails(18, self.context(workflow_text=text.replace("deploy/azure/pilot/Dockerfile.web", "deploy/azure/Dockerfile.web")), "pilot/Dockerfile.web")
+        # P24: the shared web image (no USER) is not one of the four checked images, so building it fails too.
+        self.assert_fails(24, self.context(workflow_text=text.replace("deploy/azure/pilot/Dockerfile.web", "deploy/azure/Dockerfile.web")), "must build exactly the images")
         without_yaml = text.replace("      - name: Install guard dependencies\n        run: python -m pip install PyYAML==6.0.3\n\n      # ENV-001 acceptance", "      # ENV-001 acceptance", 1)
         self.assertNotEqual(text, without_yaml)
         self.assert_fails(20, self.context(workflow_text=without_yaml), "job deploy step")
