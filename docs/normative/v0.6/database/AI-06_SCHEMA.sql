@@ -690,10 +690,11 @@ CREATE TABLE notifications.notifications (
 --     channel and the normalized phone or e-mail), channel WHATSAPP or EMAIL, key_version, source RECIPIENT_REPLY,
 --     EMAIL_LINK or DISPATCHER, recorded_at; one row per hash and channel; never a number, an address, a message body or
 --     an organization.
---   automatic replies (AI-08 NTF-006, E4-P9): a platform-wide store with the same row security and definer-only access,
---     holding per request only the sender contact hash, the sender number sealed under the recipient-notice key until
---     the one reply attempt (then erased), received_at, the reply status and its code; at most one automatic reply per
---     contact hash in 24 hours.
+--   automatic replies (AI-08 NTF-006, E4-P9 and E4-P15): a platform-wide store with the same row security and
+--     definer-only access, holding per request only its kind (automatic reply or opt-out confirmation), the sender
+--     contact hash, the sender number sealed under the recipient-notice key until the one reply attempt (then erased),
+--     received_at, the reply status and its code; at most one automatic reply per contact hash in 24 hours, and one
+--     opt-out confirmation only for the message that records the WhatsApp opt-out of its hash, outside that limit.
 -- The WhatsApp consent record (E4-P1, AI-08 NTF-004) belongs to the Orders lane: orders.recipient_notice_consents,
 -- append-only, row security by owner_org_id, with order_id, owner_org_id, channel WHATSAPP, consent_version,
 -- attested_by and attested_at; at most one row per order and channel, written in the transaction that creates the order.

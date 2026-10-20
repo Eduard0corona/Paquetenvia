@@ -1,6 +1,6 @@
 # Avisos al destinatario (WhatsApp y correo)
 
-Decisión: `NTF-RECIPIENT-NOTICES-2026-10-20` (E4 "Los 4 del plan (Recommended)" y las respuestas E4-P1 a E4-P13,
+Decisión: `NTF-RECIPIENT-NOTICES-2026-10-20` (E4 "Los 4 del plan (Recommended)" y las respuestas E4-P1 a E4-P16,
 citadas en `docs/normative/v0.6/decision-log.md`). ADR:
 [`docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md`](../adr/ADR-NTF-002-RECIPIENT-NOTICES.md). Contrato de ejecución:
 AI-24 `recipient_notices`. Ítems de backlog: AI-08 NTF-002 a NTF-008, más las extensiones de TRK-002 y REL-001.
@@ -70,10 +70,16 @@ el motivo (E4-P5). Cada mensaje lleva solo el número de guía y el enlace de se
 ### Bajas, respuesta automática y acuses
 
 - Bajas globales (E4-P8): responder BAJA, ALTO, STOP o CANCELAR, o tocar "No recibir avisos" en WhatsApp; el enlace de
-  cada correo (y `List-Unsubscribe` de un clic); "Detener avisos" en la orden. No se manda confirmación de la baja (no
-  se decidió) y no hay forma de volver a darse de alta (no se decidió).
+  cada correo (y `List-Unsubscribe` de un clic); "Detener avisos" en la orden.
+- Confirmación de la baja (E4-P15): una baja por WhatsApp recibe una sola vez "Listo. Ya no recibirás avisos en este
+  número.", por la misma vía que la respuesta automática (texto libre dentro de la ventana de atención, número sellado
+  que el Worker manda y borra, descarte a las 23 h), solo cuando ese mensaje registra la baja y fuera del límite de una
+  respuesta automática cada 24 h. La página de baja del correo la confirma en pantalla; "Detener avisos" no manda nada.
+- La baja es definitiva durante el piloto (E4-P16): ni una casilla, ni una orden, ni despacho, ni un mensaje del
+  destinatario la reactivan. Volver a darse de alta se revisa al terminar el piloto.
 - Respuesta automática (E4-P9): una vez por contacto cada 24 h, como texto libre dentro de la ventana de atención:
-  "Este número solo envía avisos. Para dudas sobre tu envío contacta a quien te lo envió." La manda el Worker.
+  "Este número solo envía avisos. Para dudas sobre tu envío contacta a quien te lo envió." La manda el Worker; la
+  confirmación de la baja no cuenta en ese límite.
 - Acuses: Meta (`X-Hub-Signature-256`) y Event Grid de ACS marcan `DELIVERED` o `FAILED` solo hacia adelante, con un rol
   nuevo `paqueteria_notification_receipt_executor`. Antes de los acuses, `SENT` solo significa aceptado por el
   proveedor.
@@ -139,7 +145,7 @@ Orden: PR-0 → (PR-1 ∥ PR-2) → PR-4 → PR-3 → PR-5 → PR-6 → PR-7 →
 5. §6.1 encargados: Meta (WhatsApp Cloud API, datos fuera de México, retención de metadatos de Meta) y Microsoft ACS
    (ubicación de datos del recurso); contratos, cláusulas y transferencia internacional.
 6. Bajas como mecanismo de oposición: BAJA, el enlace del correo y "Detener avisos"; la lista de bajas guarda un hash
-   con llave (registro seudónimo nuevo) y su retención.
+   con llave (registro seudónimo nuevo) y su retención; la baja es definitiva durante el piloto (E4-P16).
 7. `reglas-de-retencion-borrador.md`: notificaciones y eventos de estado, hashes de bajas, la tabla de permisos, las
    copias cifradas del contacto (un borrado criptográfico cubre todas) y los registros de Meta y ACS. La retención de
    las notificaciones debe cubrir el tiempo en que el enlace de baja del correo debe seguir funcionando.
@@ -148,14 +154,12 @@ Orden: PR-0 → (PR-1 ∥ PR-2) → PR-4 → PR-3 → PR-5 → PR-6 → PR-7 →
 
 ## Para revisión del owner en este PR
 
-- Los cuatro textos de WhatsApp y los asuntos de correo (AI-24 `recipient_notices.templates`), antes de mandarlos a
-  Meta. Dos puntos a mirar: "No se pudo entregar" empieza con "Hoy" y, con el horario de 8:00 a 21:00, puede llegar a
-  la mañana siguiente; y en el correo, que es texto sin botones, la frase "con el botón Ver seguimiento" va seguida
-  del enlace completo en su propia línea.
+- Los cuatro textos de WhatsApp y los cuatro cuerpos y asuntos de correo (AI-24 `recipient_notices.templates`), antes
+  de mandarlos a Meta. La ronda F (E4-P14) corrigió los dos puntos señalados: "No se pudo entregar" ya no empieza con
+  "Hoy", y el correo, que no tiene botones, dice "en el enlace de abajo" en lugar de "con el botón Ver seguimiento".
 - La casilla de la carga CSV usa el texto aprobado para todo el archivo; su redacción para varios destinatarios se
   revisa en PR-3.
 - La página de baja del correo y sus mensajes se revisan en PR-5.
-- No decidido y fuera de este trabajo: confirmar la baja con un mensaje, y volver a darse de alta.
 
 ## Costos (estimación del plan, 2026-10-19)
 
@@ -171,6 +175,7 @@ Con 20 entregas al día: unos 1,950 mensajes de WhatsApp al mes a USD 0.0085 (ut
 - Sin acuses (hasta PR-5) un fallo asíncrono de WhatsApp (131026) no se ve; un acuse que llega antes de liquidar el
   envío se ignora.
 - Órdenes confirmadas antes de encender no reciben el enlace; canceladas o devueltas no reciben aviso.
+- Una baja por error (BAJA, el enlace del correo o "Detener avisos") no se puede deshacer durante el piloto (E4-P16).
 
 ## Reversión
 

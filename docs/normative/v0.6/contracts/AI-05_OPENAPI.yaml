@@ -8322,7 +8322,8 @@ x-pilot-contract-deltas:
       change: tag Messaging, security none, application/json from Meta with the required X-Hub-Signature-256 header
         (sha256= and the HMAC-SHA256 of the raw body under the Meta app secret), checked in constant time before
         parsing; statuses become delivery receipts (AI-24 recipient_notices.receipts); an inbound opt-out keyword or the
-        quick reply No recibir avisos becomes a WHATSAPP opt-out of the sender hash (recipient_notices.opt_out); any other
+        quick reply No recibir avisos becomes a WHATSAPP opt-out of the sender hash (recipient_notices.opt_out) and, when
+        it records that opt-out, the one confirmation (recipient_notices.opt_out.confirmation, E4-P15); any other
         inbound message gets the one automatic reply (recipient_notices.auto_reply, E4-P9); 200 once recorded, fields it
         does not use ignored; the uniform 403 for a missing or invalid signature; 400 for a validly signed body that is
         not a JSON object; 404 while disabled; 429 under SEC-004; 503 when the store or a key is unavailable, so Meta

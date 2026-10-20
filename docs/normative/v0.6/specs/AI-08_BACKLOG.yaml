@@ -1894,16 +1894,17 @@ items:
   depends_on:
   - NTF-005
   expected_outputs:
-  - verifyMetaWhatsAppWebhook and receiveMetaWhatsAppWebhook (statuses, opt-out keywords, the quick reply and the automatic reply), receiveAcsEmailEvents and unsubscribeRecipientNotices (AI-05 x-pilot-contract-deltas NTF-RECIPIENT-NOTICES, part NTF-006)
+  - verifyMetaWhatsAppWebhook and receiveMetaWhatsAppWebhook (statuses, opt-out keywords, the quick reply, the opt-out confirmation and the automatic reply), receiveAcsEmailEvents and unsubscribeRecipientNotices (AI-05 x-pilot-contract-deltas NTF-RECIPIENT-NOTICES, part NTF-006)
   - security.record_messaging_receipt, security.record_recipient_opt_out and the automatic-reply store and functions, owned by the new paqueteria_notification_receipt_executor (AI-18 declared contract, with its DDL and baseline assertions in this change)
   - the contact lookup key in the API and the Worker; the public page /avisos/baja/:token (AI-07)
   - the exact grant set of the new executor in docs/normative/v0.6/tools/validate_contracts.py and DatabaseBaselineAssertions
   acceptance_criteria:
-  - 'DECIDED NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P8 "Las tres vías (Recommended)", E4-P9 "Respuesta automática (Recommended)")'
+  - 'DECIDED NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P8 "Las tres vías (Recommended)", E4-P9 "Respuesta automática (Recommended)", E4-P15 "Sí, una línea (Recommended)")'
   - every webhook checks its signature or authentication in constant time before parsing and is a uniform 404 while off
   - receipts only move forward and ignore unknown references; repeated receipts change nothing
   - an opt-out is global, kept as a keyed hash only, and honoured by the next send
   - one automatic reply per contact in 24 hours, inside the customer service window, sent by the Worker; the inbound text and the number are never stored in clear or logged
+  - a WhatsApp opt-out by message gets the one confirmation "Listo. Ya no recibirás avisos en este número." only when it records the opt-out, through the automatic-reply path and outside its 24-hour limit; the e-mail page and "Detener avisos" send no message
   - the ACS delivery authentication (Entra or a secret header) is chosen and recorded in this change, and the SEC-004 budgets of the four anonymous operations are asked to the owner before it merges
   required_tests:
   - signature vectors (valid, invalid, replayed, oversized) and the Event Grid handshake

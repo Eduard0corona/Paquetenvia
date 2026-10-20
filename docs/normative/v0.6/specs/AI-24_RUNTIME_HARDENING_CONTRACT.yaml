@@ -346,7 +346,7 @@ recipient_notices:
   - NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03
   - TRK-002-AUTO-LINK
   - GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10
-  status: DECIDED by the project owner on 2026-10-19 and 2026-10-20 (E4 and E4-P1 to E4-P13); nothing is implemented,
+  status: DECIDED by the project owner on 2026-10-19 and 2026-10-20 (E4 and E4-P1 to E4-P16); nothing is implemented,
     configured or enabled yet. AI-08 NTF-002 to NTF-008 deliver it, each item with its own code and tests; only a later
     change that records the GATE-004 and GATE-007 resolution rows turns it on. GATE-004 and GATE-007 stay open
   adr: docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md
@@ -514,10 +514,12 @@ recipient_notices:
           momento con el botón Ver seguimiento. Si no esperabas este envío, ignora este mensaje.'
         recipient.in-transit: 'Tu envío con número de guía {{1}} ya va en camino a la dirección de entrega. Síguelo con
           el botón Ver seguimiento.'
-        recipient.delivery-failed: 'Hoy intentamos entregar tu envío con número de guía {{1}} y no fue posible. Con el
+        recipient.delivery-failed: 'Intentamos entregar tu envío con número de guía {{1}} y no fue posible. Con el
           botón Ver seguimiento verás el siguiente paso.'
         recipient.delivered: 'Tu envío con número de guía {{1}} fue entregado. Puedes ver el detalle con el botón Ver
           seguimiento.'
+      corrected: E4-P14, "Corregir los dos (Recommended)" - recipient.delivery-failed no longer starts with "Hoy",
+        because a failed attempt after 21:00 is sent at 08:00 the next day (quiet_hours)
       privacy_line: a line with the link to the privacy notice is added only if the GATE-007 legal review asks for it
         (first contact, docs/legal); it changes the texts and needs a new Meta approval
       configuration: Messaging:WhatsApp:Templates:<key>:Name, LanguageCode and ParameterCount name the approved
@@ -532,9 +534,21 @@ recipient_notices:
         recipient.in-transit: 'Tu envío {{1}} va en camino'
         recipient.delivery-failed: 'No pudimos entregar tu envío {{1}}'
         recipient.delivered: 'Tu envío {{1}} fue entregado'
-      body: 'the WhatsApp body of the same notice, then the full tracking link ({{2}}) on a line of its own, the link to
-        the privacy notice (its wording and address come with the GATE-007 approval), the line "Para dejar de recibir
-        estos correos: {{3}}" with the unsubscribe link of that notification, and the line "Este correo se envía
+      bodies:
+        decision: E4-P14, "Corregir los dos (Recommended)" - a plain-text e-mail has no button, so each body is the
+          WhatsApp body of the same notice with "con el botón Ver seguimiento" replaced by "en el enlace de abajo"
+          (sentence-initial "Con el botón Ver seguimiento" by "En el enlace de abajo")
+        recipient.tracking-link: 'Hola. Hay un envío para ti con número de guía {{1}}. Puedes ver cómo va en cualquier
+          momento en el enlace de abajo. Si no esperabas este envío, ignora este mensaje.'
+        recipient.in-transit: 'Tu envío con número de guía {{1}} ya va en camino a la dirección de entrega. Síguelo en
+          el enlace de abajo.'
+        recipient.delivery-failed: 'Intentamos entregar tu envío con número de guía {{1}} y no fue posible. En el enlace
+          de abajo verás el siguiente paso.'
+        recipient.delivered: 'Tu envío con número de guía {{1}} fue entregado. Puedes ver el detalle en el enlace de
+          abajo.'
+      body: 'the e-mail body of the same notice (bodies), then the full tracking link ({{2}}) on a line of its own, the
+        link to the privacy notice (its wording and address come with the GATE-007 approval), the line "Para dejar de
+        recibir estos correos: {{3}}" with the unsubscribe link of that notification, and the line "Este correo se envía
         automáticamente; no lo respondas."'
       headers: List-Unsubscribe with the one-click URL of that notification and List-Unsubscribe-Post
         List-Unsubscribe=One-Click (RFC 8058)
@@ -546,7 +560,8 @@ recipient_notices:
       organization, because the WhatsApp number is only one
     whatsapp_reply: an inbound WhatsApp text that is exactly BAJA, ALTO, STOP or CANCELAR (trimmed, case and accents
       ignored), or a tap on the quick reply No recibir avisos (receiveMetaWhatsAppWebhook); source RECIPIENT_REPLY,
-      channel WHATSAPP; no confirmation message is sent (none was decided); the message body is never stored or logged
+      channel WHATSAPP; the sender gets the one confirmation below (confirmation); the message body is never stored or
+      logged
     email_link: the link in every e-mail and its List-Unsubscribe one-click (unsubscribeRecipientNotices); source
       EMAIL_LINK, channel EMAIL
     dispatcher: the button "Detener avisos" on the order (stopOrderRecipientNotices), for a recipient who asks by
@@ -558,14 +573,40 @@ recipient_notices:
       phone (a WhatsApp 521 mobile prefix is reduced to 52 first) or the trimmed lower-case e-mail address
     check: before every send the Worker hashes the decrypted contact under every configured key version and asks
       security.is_recipient_opted_out; an opted-out contact ends CANCELLED with RECIPIENT_OPTED_OUT and no provider call
-    permanence: a later consent box or order never undoes an opt-out; re-subscription is not offered (not decided)
+    confirmation:
+      decision: E4-P15, "Sí, una línea (Recommended)"
+      text: Listo. Ya no recibirás avisos en este número.
+      when: once, only for the inbound opt-out message (a keyword or the quick reply) that records the WhatsApp opt-out
+        of its contact hash; an opt-out message from a contact already opted out on WhatsApp (by an earlier message or
+        by "Detener avisos") gets neither a confirmation nor the automatic reply, so with permanent opt-outs
+        (permanence) a contact gets at most one confirmation and two automated senders cannot loop
+      how: the auto_reply path - a free-form text message inside the 24-hour customer service window that the inbound
+        message opens (a service message), never a template; the webhook seals the sender number under the
+        recipient-notice key and records the confirmation request with its keyed hash in the automatic-reply store, in
+        the same transaction as the opt-out, through the SECURITY DEFINER functions; the Worker sends it once and erases
+        the sealed number right after the attempt whatever its outcome; a request older than 23 hours is dropped
+        unsent; auto_reply.never applies to it
+      limit: it neither counts against nor waits for the one automatic reply per contact in 24 hours (auto_reply.limit),
+        because a recipient who got the automatic reply earlier that day would otherwise never get it; the
+        once-per-opt-out rule above is its only bound
+      other_paths: the e-mail unsubscribe page keeps its on-screen confirmation (AI-07 /avisos/baja/:token) and sends
+        no message; "Detener avisos" (dispatcher) sends nothing to the recipient
+    permanence:
+      decision: E4-P16, "No en el piloto (Recommended)"
+      rule: an opt-out is permanent during the pilot; no path reactivates it - not a later consent box or order, not
+        the dispatcher, not a message from the recipient (ALTA included, an ordinary message that gets the automatic
+        reply); the store stays append-only and no function removes or reverses a row
+      review: re-subscription is reviewed after the pilot, in a change of its own
+      residual_risk: an opt-out made by mistake (BAJA, the e-mail link or "Detener avisos") cannot be undone during
+        the pilot
   auto_reply:
     decision: E4-P9, "Respuesta automática (Recommended)"
     text: Este número solo envía avisos. Para dudas sobre tu envío contacta a quien te lo envió.
     when: an inbound WhatsApp message of any type that is not an opt-out keyword or the quick reply No recibir avisos
     how: a free-form text message inside the 24-hour customer service window that the inbound message opens (charged as
       a service message, as the chosen option said); never a template and never outside that window
-    limit: at most one automatic reply per contact (keyed hash) in 24 hours, so two automated senders cannot loop
+    limit: at most one automatic reply per contact (keyed hash) in 24 hours, so two automated senders cannot loop; the
+      opt-out confirmation (opt_out.confirmation) is outside this limit
     path: the webhook never calls the provider; it seals the sender number under the recipient-notice key and records
       the request with its keyed hash through a SECURITY DEFINER function; the Worker sends it, decrypting in memory,
       and erases the sealed number right after the attempt whatever its outcome; a request older than 23 hours is

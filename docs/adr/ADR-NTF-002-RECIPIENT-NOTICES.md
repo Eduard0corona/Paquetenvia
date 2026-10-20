@@ -30,6 +30,9 @@ correo. Preguntas y respuestas literales del project owner (textos copiados del 
 12. E4-P11 (2026-10-20): "Cuando el destinatario tiene correo, ¿se le avisa por WhatsApp y correo, o el correo solo como respaldo?" → "Por los dos siempre (Recommended)" (descripción: "Más simple y no depende de los avisos de entrega de Meta; el correo cuesta casi nada."). No elegidas: "Correo como respaldo" ("Correo solo si WhatsApp falla de forma definitiva (sin WhatsApp, bloqueado o dado de baja). Necesita los avisos de entrega de Meta y puede tardar minutos."); "Nunca correo si hubo WhatsApp" ("El correo solo sale cuando no hay WhatsApp que mandar.").
 13. E4-P12 (2026-10-20): "Correo de avisos: ¿desde qué dirección y con qué nombre?" → "avisos@paquetenvia.com (Recommended)" (descripción: "Nombre visible "Seguimiento de envío", sin buzón de respuestas. Coherente con la marca neutra; el dominio ya es el del enlace."). No elegidas: "Con buzón que alguien lea" ("seguimiento@paquetenvia.com con un buzón que alguien revise; más trabajo de operación."); "Nombre = razón social" ("La dirección de avisos con el nombre de la razón social, igual que en WhatsApp.").
 14. E4-P13 (2026-10-20): "¿La empresa que envía (el remitente) también recibe los avisos de sus envíos?" → "Fuera de este trabajo (Recommended)" (descripción: "El despachador ya ve los estados en la plataforma; se decide después, con el portal de negocios (BUS-001)."). No elegidas: "Incluirlos ahora" ("Las mismas 4 plantillas para el remitente; más permisos que registrar y más costo.").
+15. E4-P14 (2026-10-20, ronda F sobre los borradores de este cambio): "Textos de avisos (#288): el de «No se pudo entregar» dice «Hoy intentamos entregar…», pero un intento después de las 21:00 se manda a las 8:00 del día siguiente. Y el correo, que no tiene botón, repite «con el botón Ver seguimiento» antes del enlace. ¿Los corregimos?" → "Corregir los dos (Recommended)" (descripción: "WhatsApp: «Intentamos entregar tu envío con número de guía {{1}} y no fue posible. Con el botón Ver seguimiento verás el siguiente paso.» (como tu respuesta E4-P5). Correo: «con el botón Ver seguimiento» pasa a «en el enlace de abajo» en los 4 avisos."). No elegidas: "Dejar como están" ("Los textos quedan igual. Un aviso que se manda a la mañana siguiente diría «Hoy» aunque el intento fue ayer.").
+16. E4-P15 (2026-10-20, ronda F sobre los borradores de este cambio): "Cuando el destinatario escribe BAJA por WhatsApp, hoy no se le contesta nada. ¿Le confirmamos la baja?" → "Sí, una línea (Recommended)" (descripción: "«Listo. Ya no recibirás avisos en este número.» Una sola vez, por la misma vía que la respuesta automática (mensaje de servicio). En el correo la página de baja ya lo confirma en pantalla."). No elegidas: "No contestar" ("Se registra la baja sin mensaje. Más simple; la persona no sabe si funcionó.").
+17. E4-P16 (2026-10-20, ronda F sobre los borradores de este cambio): "Una baja aplica a todas las empresas y hoy es definitiva: ni una casilla nueva ni despacho la deshacen. ¿Cómo vuelve a recibir avisos quien se dio de baja?" → "No en el piloto (Recommended)" (descripción: "La baja es definitiva durante el piloto. Si alguien la pidió por error, no hay forma de reactivarla; se revisa al terminar el piloto. Sin trabajo extra."). No elegidas: "Escribir ALTA lo reactiva" ("El destinatario escribe ALTA al WhatsApp (o usa un enlace en el correo) y vuelve a recibir avisos. Solo él puede hacerlo, nunca despacho. Más trabajo en el PR de entrada de mensajes (NTF-006).").
 
 Es un cambio de alcance legal y de privacidad (AI-01 §7): nuevos encargados que reciben datos del destinatario
 (Meta y Microsoft), una llave nueva que abre el Worker, un almacén de bajas con hashes con llave y un rol de base de
@@ -63,17 +66,26 @@ GATE-007.
    "Ver seguimiento" con el token como sufijo y respuesta rápida "No recibir avisos". Los cuatro textos y los
    asuntos de correo son los borradores aprobados y quedan en AI-24 `recipient_notices.templates` para que el owner
    los revise antes de enviarlos a Meta. El correo sale de `avisos@paquetenvia.com` con el nombre "Seguimiento de
-   envío" y sin buzón de respuestas; el número de WhatsApp muestra la razón social (E4-P7).
+   envío" y sin buzón de respuestas; el número de WhatsApp muestra la razón social (E4-P7). Correcciones de E4-P14:
+   "No se pudo entregar" empieza con "Intentamos entregar" (sin "Hoy", porque un intento después de las 21:00 sale a
+   las 8:00 del día siguiente), y el correo, que no tiene botones, dice "en el enlace de abajo" donde WhatsApp dice
+   "con el botón Ver seguimiento"; los cuatro cuerpos de correo quedan escritos en AI-24.
 6. **Horario (E4-P10).** Solo de 8:00 a 21:00 hora de `America/Mazatlan`; lo que pase fuera espera a las 8:00 y se
    manda solo si sigue aplicando. Un aviso de más de 12 h (sin contar esa espera) no se manda, y hay topes de 8 por
    orden y canal y de 500 por canal al día.
 7. **Bajas globales (E4-P8).** Responder BAJA (o ALTO, STOP, CANCELAR) o tocar "No recibir avisos", el enlace de cada
    correo (con `List-Unsubscribe` de un clic) y "Detener avisos" en la orden. La baja aplica a todas las
-   organizaciones y se guarda solo como HMAC-SHA256 con llave del teléfono o correo normalizado.
+   organizaciones y se guarda solo como HMAC-SHA256 con llave del teléfono o correo normalizado. Una baja por WhatsApp
+   recibe una sola confirmación, "Listo. Ya no recibirás avisos en este número.", por la vía de la respuesta
+   automática, solo cuando ese mensaje registra la baja y fuera del límite de una respuesta automática cada 24 h
+   (E4-P15); la página de baja del correo la confirma en pantalla y "Detener avisos" no manda nada. La baja es
+   definitiva durante el piloto: ni una casilla, ni despacho, ni un mensaje del destinatario la reactivan; se revisa
+   al terminar el piloto (E4-P16).
 8. **Respuesta automática (E4-P9).** A cualquier otro mensaje entrante se responde una vez, como mensaje de texto
    libre dentro de la ventana de atención de 24 h: "Este número solo envía avisos. Para dudas sobre tu envío contacta
    a quien te lo envió." El webhook no llama al proveedor: guarda el número sellado con la llave de avisos y el
-   Worker lo manda y lo borra; como máximo una respuesta por contacto cada 24 h.
+   Worker lo manda y lo borra; como máximo una respuesta por contacto cada 24 h (la confirmación de la baja va
+   aparte).
 9. **Acuses y vista del despachador.** Webhooks firmados de Meta y de Event Grid (ACS) marcan `DELIVERED` o
    `FAILED` solo hacia adelante, mediante una función `SECURITY DEFINER` de un rol nuevo
    `paqueteria_notification_receipt_executor` (NOLOGIN, BYPASSRLS porque un webhook no trae tenant, solo EXECUTE para
@@ -116,8 +128,8 @@ Las opciones no elegidas de cada pregunta están citadas arriba. Además:
   USD 0.0085 por mensaje entregado; correo USD 0.00025).
 - Las órdenes confirmadas antes de encender los avisos no reciben el enlace; las canceladas o devueltas después de
   recibirlo no reciben aviso (fuera de los cuatro).
-- El texto de "No se pudo entregar" empieza con "Hoy"; con el horario de 8:00 a 21:00 puede llegar a la mañana
-  siguiente. El owner lo revisa antes de enviarlo a Meta.
+- Una baja por error (BAJA, el enlace del correo o "Detener avisos") no se puede deshacer durante el piloto (E4-P16);
+  volver a darse de alta se revisa al terminar el piloto.
 
 ## Reversión
 
