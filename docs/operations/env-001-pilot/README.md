@@ -87,6 +87,7 @@ Otherwise the deploy job stops before logging in to Azure.
 | Apps / jobs | `ca-pv-pilot-{api,worker,web}`, `job-pv-pilot-{migrate,logins,verify}` |
 | Alerts (OBS-002, §10) | `sqr-pv-pilot-{outbox-lag,outbox-dead,job-failure,readiness,api-5xx}`, action group `ag-pv-pilot-ops` (e-mail only), workbook *Paquetenvia pilot operations (OBS-002)* |
 | PostgreSQL connection alerts (SCL-007, §10.2) | `mar-pv-pilot-pg-connections-{warning,critical}` (metric alerts on `pg-pv-pilot-<suffix>`, same action group) |
+| PostgreSQL resource alerts (SCL-007, §10.3) | `mar-pv-pilot-pg-{cpu,memory,storage,cpu-credits}-warning` (metric alerts on `pg-pv-pilot-<suffix>`, same action group) |
 
 ### Database roles
 
@@ -408,7 +409,7 @@ hours a month. Sized for 50–100 real deliveries.
 | VNet, route, managed certificate, budget | free | 0.00 |
 | **Subtotal before OBS-002** | | **≈ 98 typical, ≈ 108 if the log cap is hit every day** |
 | Log search alerts (OBS-002, §10) | 5 rules at 15 min (0.55 each), Retail Prices API 2026-09-28; e-mails and workbook free; the extra ~0.3–0.45 GB/month of logs fits the 5 GB free tier | 2.75 |
-| PostgreSQL connection metric alerts (SCL-007, §10.2) | 2 time series, inside the 10 free per resource, otherwise about 0.10 USD per series per month, whatever the frequency ([pricing](https://azure.microsoft.com/en-us/pricing/details/monitor/)) | 0 – 0.20 |
+| PostgreSQL metric alerts (SCL-007, §10.2 and §10.3) | 6 time series on the server (2 connection alerts and 4 resource alerts), inside the 10 free per resource, otherwise about 0.10 USD per series per month, whatever the frequency ([pricing](https://azure.microsoft.com/en-us/pricing/details/monitor/)) | 0 – 0.60 |
 | Application Insights (OBS-003, §10) | workspace-based on the same workspace and inside the same 0.3 GB/day cap; component free; with the export on, about 1–2 GB/month of traces (10 %) and metrics; 0 while `TelemetryExport__Enabled='false'` | 0 – 5 (inside the Log Analytics row's worst case) |
 | **Total** | | **≈ 101 typical, ≈ 111 if the log cap is hit every day** |
 
@@ -416,9 +417,11 @@ hours a month. Sized for 50–100 real deliveries.
 sizing (PILOT-BUDGET-ACCEPT-98-108, 2026-09-28) without applying any lever. OBS-002 adds about
 2.75 USD per month on top of that accepted range, with every alert evaluated every 15 minutes; the
 owner accepted it on 2026-10-02 (OBS-002-ALERTS-15MIN-COST-2026-10-02, literal "Sí, revisar cada 15
-min"). The two SCL-007 PostgreSQL connection alerts add at most 0.20 USD per month and usually nothing
-(SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14, literal "Sí, 80 % y 95 % (Recommended)"), so the totals stay the
-same. The largest item is the
+min"). The six SCL-007 PostgreSQL metric alerts are 6 of the 10 time series free per resource, so they usually add
+nothing and at most 0.60 USD per month: the two connection alerts (SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14,
+literal "Sí, 80 % y 95 % (Recommended)") and the four resource alerts (SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20,
+literal "CPU, memoria y disco (Recommended)" and "Sí, agregarla (Recommended)"; the D2 option counted "5 de las 10"
+for three rules, and the fourth, for CPU credits, is still free). The totals stay the same. The largest item is the
 always-on API at 0.5 vCPU. For the record, the levers in order of impact:
 
 1. API at 0.25 vCPU / 0.5 GiB saves about 21 USD, at the risk of memory pressure in a 15-module .NET
@@ -791,6 +794,8 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
   `DatabasePools__*` on both apps, identically, or moving to B2s (+≈41 USD/month, over budget).
 - **A PostgreSQL connection alert fired** (`mar-pv-pilot-pg-connections-warning` at 28,
   `mar-pv-pilot-pg-connections-critical` at 33): follow §10.2.
+- **A PostgreSQL resource alert fired** (`mar-pv-pilot-pg-cpu-warning`, `-memory-warning`, `-storage-warning` or
+  `-cpu-credits-warning`): follow §10.3.
 - **Realtime dispatcher not ready:** `/health/ready` reports `realtime_outbox_dispatcher` unhealthy when
   `pg-realtime-runtime-connection` is missing or its login is not `pv_pilot_realtime` (member of
   `paqueteria_realtime` only), when the Notifications lane step `20261012000100_AddRealtimeDispatcherRole` has not
@@ -930,16 +935,23 @@ The 25 guards (P00–P24) run on the compiled ARM output, the workflow and the p
   - one action group, e-mail only, bound to a parameter without a default;
   - queries read only the Container Apps log tables and the allowlisted event properties;
   - the workflow checks the parameters file.
-- **PostgreSQL connection alerts (P01 and P21, SCL-007):**
-  - `Microsoft.Insights/metricAlerts` only in `observability.bicep` (P01), and there exactly
-    `mar-pv-pilot-pg-connections-warning` and `mar-pv-pilot-pg-connections-critical`, each one literal global
-    resource; any other metric alert is refused, one on Application Insights included;
+- **PostgreSQL connection and resource alerts (P01 and P21, SCL-007):**
+  - `Microsoft.Insights/metricAlerts` only in `observability.bicep` (P01), and there exactly six, each one literal
+    global resource: `mar-pv-pilot-pg-connections-warning`, `mar-pv-pilot-pg-connections-critical`,
+    `mar-pv-pilot-pg-cpu-warning`, `mar-pv-pilot-pg-memory-warning`, `mar-pv-pilot-pg-storage-warning` and
+    `mar-pv-pilot-pg-cpu-credits-warning`; any other metric alert is refused, a second level for a resource alert and
+    one on Application Insights included;
   - each watches only `pg-pv-pilot-<suffix>` (same suffix as `platform.bicep`): the Maximum of `active_connections`
     over 5 minutes (`PT5M`), every minute (`PT1M`), `GreaterThanOrEqual` 28 with severity 2 and 33 with severity 1,
     one static criterion with no dimension, enabled and stateful;
+  - the resource alerts watch the same server, every minute (`PT1M`), severity 2, one static criterion with no
+    dimension, enabled and stateful: `cpu_percent` Average over 30 minutes (`PT30M`) `GreaterThanOrEqual` 70,
+    `memory_percent` Maximum over 5 minutes `GreaterThanOrEqual` 80, `storage_percent` Maximum over 5 minutes
+    `GreaterThanOrEqual` 70 and `cpu_credits_remaining` Minimum over 5 minutes `LessThanOrEqual` 72;
   - the only action is the pilot action group, with no webhook, and the observability template contains no e-mail
     address;
-  - the server SKU stays `Standard_B1ms`, whose 35 user connections the thresholds belong to;
+  - the server SKU stays `Standard_B1ms`, whose 35 user connections and 288 CPU credits the thresholds belong to, and
+    its template disk stays 32 GiB (`storageSizeGB`), the base of the storage percentage;
   - each rule counts as one time series at 0.10 USD in the 5 USD alert bound.
 - **Application Insights (P21, OBS-003):**
   - exactly one `Microsoft.Insights/components`, in `platform.bicep`, in the pilot region, workspace-based on the
@@ -978,7 +990,7 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
 - `bicep build` and `bicep lint` pass with the pinned v0.47.16, with no warnings.
 - 25/25 pilot guards (P00–P24) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
   tooling tests. The gitleaks scan was not re-run for OBS-002.
-- The SCL-007 PostgreSQL connection alerts build and lint with no diagnostic, and P21 pins them.
+- The SCL-007 PostgreSQL connection and resource alerts build and lint with no diagnostic, and P21 pins them.
 - The OBS-002 alert and workbook queries parse and type-check offline (Kusto language service).
 - The migrator changes pass contract tests on real PostgreSQL 18/PostGIS 3.6.
 - The BFF web build and `next start` with the CSP connect source work.
@@ -1006,6 +1018,12 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
 - SCL-007 PostgreSQL connection alerts:
   - ARM acceptance of the two metric alerts on the private server;
   - whether `active_connections` counts Azure's own `azure_superuser` connections (§10.2).
+- SCL-007 PostgreSQL resource alerts (§10.3, first-deploy checks):
+  - ARM acceptance of the four metric alerts, `cpu_credits_remaining` with its `LogicalServerName` dimension included;
+  - the B1ms CPU credit numbers (288 at most, 12 per hour) on the real server: they come from the Bv1-series VM page,
+    and the PostgreSQL pages do not restate them;
+  - the disk is still 32 GiB, the base of the storage percentages; after an autogrow the same 70 % is of the larger
+    disk.
 - TEN-003-PLATFORM-BOOTSTRAP-2026-10-19: `az containerapp job start --yaml` with the migrate job's own template and
   new arguments (§6.1 step 10). The command itself passes contract tests on real PostgreSQL as a NOSUPERUSER
   BYPASSRLS deployment login without `paqueteria_app`; the `az` override was checked only against the Azure CLI
@@ -1128,3 +1146,76 @@ cada minuto (Recommended)"). Pools and budget: `docs/development/scl-007-pool-pe
     the difference.
   - The metric is sampled once a minute. A burst between two samples can be missed, and *Failed Connections* is
     where it would show.
+
+### 10.3 PostgreSQL resources (SCL-007)
+
+Decision SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20 (owner: "CPU, memoria y disco (Recommended)", "Un nivel, de aviso
+(Recommended)", "CPU 70, memoria 80, disco 70 (Recommended)", "Sí, agregarla (Recommended)" and "Menos de 72 (25 %)
+(Recommended)").
+
+- **Rules:** four metric alerts in `observability.bicep`, deployed by stage 5 with the connection alerts (§10.2). Each
+  has one level, the warning (severity 2), is evaluated every minute and is stateful: one e-mail when it fires and one
+  when it resolves, to the same action group and address as OBS-002.
+
+  | Rule | Fires when | Over |
+  |---|---|---|
+  | `mar-pv-pilot-pg-cpu-warning` | `cpu_percent` Average ≥ 70 % | 30 minutes |
+  | `mar-pv-pilot-pg-memory-warning` | `memory_percent` Maximum ≥ 80 % | 5 minutes |
+  | `mar-pv-pilot-pg-storage-warning` | `storage_percent` Maximum ≥ 70 % (22.4 of the 32 GiB) | 5 minutes |
+  | `mar-pv-pilot-pg-cpu-credits-warning` | `cpu_credits_remaining` Minimum ≤ 72 (25 % of the 288 a B1ms banks) | 5 minutes |
+
+  CPU takes AI-15 `db_cpu_utilization` (warning 0.7, window 30m, `docs/normative/v0.6/specs/AI-15_SCALABILITY_CONTRACT.yaml`
+  lines 113-116), so a short peak does not fire it. The answer gives no window for the disk; it takes the Maximum over
+  5 minutes every minute, as the connection alerts. The credits option was labeled "Menos de 72" and its text reads
+  "Avisa con 72 créditos o menos", so the rule fires at 72 or fewer. The thresholds are literal in the template and guard
+  P21 pins them, so `observability.parameters.json` cannot change them.
+- **Metrics** of `Microsoft.DBforPostgreSQL/flexibleServers`, each sampled every minute with Average, Maximum and Minimum
+  ([supported metrics](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/supported-metrics/microsoft-dbforpostgresql-flexibleservers-metrics)):
+  `cpu_percent`, `memory_percent` and `storage_percent` are percentages (dimension `ServerName`); `cpu_credits_remaining`
+  is a count, "Total number of credits available to burst" (dimension `LogicalServerName`). No rule filters a dimension:
+  one server, one time series per rule.
+- **Cost:** with the two connection alerts, 6 time series, inside the 10 free per resource, otherwise about 0.10 USD per
+  series per month (§5).
+- **What each one means and what to do first:**
+  - **CPU** (`mar-pv-pilot-pg-cpu-warning`): the server averaged 70 % CPU or more for half an hour. On a Burstable B1ms
+    that also spends CPU credits. First, find the load: the server → *Metrics* → *CPU percent* (Avg) next to *CPU
+    Credits Remaining* (Min) and *Active Connections* (Max); whether a pilot workflow run, a `job-pv-pilot-*` execution
+    or the restore drill was running; and the slow or long sessions, from an administration session:
+    `SELECT usename, state, wait_event_type, now() - query_start AS running_for FROM pg_stat_activity WHERE state <> 'idle' ORDER BY running_for DESC NULLS LAST`.
+    The workbook (§10) shows whether API traffic or the outbox lanes grew at the same time. If it is the pilot's real
+    load, a larger size needs an owner decision (B2s +≈41 USD/month, over the budget).
+  - **CPU credits** (`mar-pv-pilot-pg-cpu-credits-warning`): 72 credits or fewer are left. A B1ms banks at most 288 and
+    up to 12 per hour: it gains credits while its CPU stays below the 20 % baseline and spends them above it. At full
+    CPU it loses about 0.8 per minute, so 72 leave about an hour and a half. With none left the server is held at 20 %
+    CPU, and Microsoft warns of "severe performance degradation, connection timeouts, and delays or transient failures
+    in management operations until credits rebuild"
+    ([compute](https://learn.microsoft.com/en-us/azure/postgresql/compute-storage/concepts-compute)). First, the same
+    load check as for CPU. Microsoft advises not to restart or scale the server while credits are near zero; if they
+    run low often, a larger Burstable size or another tier needs an owner decision. Expect this alert right after the
+    first deploy: the Bv1-series page gives a B1ms 30 initial credits, under the 72 threshold, so it can fire at once and
+    resolves by itself once the server banks more than 72 (about 3.5 hours at 12 per hour under light load). It may
+    do the same after the server is stopped and started; note what happens at the first deploy (§9).
+  - **Memory** (`mar-pv-pilot-pg-memory-warning`): some minute of the last 5 reached 80 % of the 2 GiB. First, *Memory
+    percent* with Max and Avg, to tell a peak from a steady level, next to *Active Connections* (each connection takes
+    memory) and *CPU percent*, and the long sessions as for CPU. If it stays high under normal load, a larger size
+    needs an owner decision.
+  - **Storage** (`mar-pv-pilot-pg-storage-warning`): 70 % of the disk is used, 22.4 of the 32 GiB. Autogrow is on: when
+    less than 20 % is free (80 % used) Azure doubles the disk to 64 GiB, and "that doubling also doubles the storage
+    cost" (about 4.05 to 8.10 USD per month, §5); storage only scales up, never down. The server turns read-only "when
+    the storage usage reaches 95 percent, or when the available capacity is less than 5 GiB", about 84 % of 32 GiB, and
+    autogrow does not trigger when the space goes to write-ahead log
+    ([storage](https://learn.microsoft.com/en-us/azure/postgresql/compute-storage/concepts-storage),
+    [autogrow](https://learn.microsoft.com/en-us/azure/postgresql/scale/how-to-auto-grow-storage)). First, see what
+    grows: *Storage percent*, *Storage used* and *Transaction Log Storage Used* over the last days, and the database size
+    from an administration session (`SELECT pg_size_pretty(pg_database_size('paqueteria'))`); then check that the
+    OPS-004 retention runs (the workbook and `sqr-pv-pilot-job-failure`). Autogrow then happens on its own at 80 %;
+    whether to clean up first or accept the larger disk, which doubles its cost for good, is an owner decision.
+- **First-deploy checks:**
+  - The credit numbers (288 at most, 12 per hour, 20 % baseline) are those of the Bv1-series VM page
+    ([Bv1-series](https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/general-purpose/bv1-series)); the
+    PostgreSQL pages do not restate them. On the real server, read *CPU Credits Remaining* (Max) after a quiet day, when
+    it should approach 288, and record the value. If it is different, 72 is no longer 25 % and the threshold needs a new
+    owner decision.
+  - The storage percentages assume the 32 GiB disk of `platform.bicep`; P21 refuses another `storageSizeGB` in the
+    template. Check the real size (`az postgres flexible-server show -n pg-pv-pilot-<suffix> -g <rg> --query storage`).
+    After an autogrow the disk is 64 GiB, so 70 % means 44.8 GiB; the threshold then needs a new owner decision.
