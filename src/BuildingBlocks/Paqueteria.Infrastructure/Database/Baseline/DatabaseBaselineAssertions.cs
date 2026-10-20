@@ -740,6 +740,29 @@ public sealed class DatabaseBaselineAssertions
                 violations.Add($"{unprotectedTables} tenant tables are missing ENABLE/FORCE RLS.");
             }
 
+            // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-06 and AI-18 declared contract): once the Notifications lane step
+            // installs the platform-wide opt-out store, it has no policy and no runtime role holds any privilege on it,
+            // so only the SECURITY DEFINER functions reach it.
+            await AddRowsAsync(
+                violations,
+                connection,
+                activeTransaction,
+                """
+                SELECT 'notifications.recipient_opt_outs has a row security policy'
+                WHERE pg_catalog.to_regclass('notifications.recipient_opt_outs') IS NOT NULL
+                  AND EXISTS (SELECT 1 FROM pg_catalog.pg_policy
+                              WHERE polrelid=pg_catalog.to_regclass('notifications.recipient_opt_outs'))
+                UNION ALL
+                SELECT 'runtime role ' || role.name || ' holds a privilege on notifications.recipient_opt_outs'
+                FROM unnest(ARRAY['paqueteria_app','paqueteria_worker','paqueteria_realtime','paqueteria_bootstrap']) role(name)
+                CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) privilege(name)
+                WHERE pg_catalog.to_regclass('notifications.recipient_opt_outs') IS NOT NULL
+                  AND pg_catalog.to_regrole(role.name) IS NOT NULL
+                  AND pg_catalog.has_table_privilege(role.name,'notifications.recipient_opt_outs',privilege.name)
+                """,
+                cancellationToken).ConfigureAwait(false);
+            checks++;
+
             await ProbeDefaultPrivilegesAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 
@@ -804,9 +827,27 @@ public sealed class DatabaseBaselineAssertions
               ('security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,timestamp with time zone,timestamp with time zone)','paqueteria_outbox_executor',true),
               ('security.finalize_notification_max_attempts(uuid,uuid,uuid,integer,timestamp with time zone)','paqueteria_outbox_executor',true),
               ('notifications.provision_default_templates()','paqueteria_outbox_executor',true)),
+            -- NTF-RECIPIENT-NOTICES-2026-10-20: the Notifications lane step 20261020000100_AddRecipientNoticeLane drops the
+            -- published 8-argument settle and installs v2 with three more routines; any one of them marks the step, so a
+            -- partial installation is reported.
+            recipient_lane(installed) AS (
+              SELECT to_regprocedure('security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,text,timestamp with time zone,timestamp with time zone)') IS NOT NULL
+                OR to_regprocedure('security.expand_recipient_notice_request(uuid,uuid,boolean,interval,time without time zone,time without time zone,text,text[])') IS NOT NULL
+                OR to_regprocedure('security.cancel_notification(uuid,uuid,uuid,integer,text,timestamp with time zone)') IS NOT NULL
+                OR to_regprocedure('security.is_recipient_opted_out(text,bytea[])') IS NOT NULL),
             expected(signature,owner) AS (
               SELECT signature,owner FROM expected_all
-              WHERE NOT ntf OR to_regprocedure('security.resolve_outbox_consumer(text)') IS NOT NULL
+              WHERE (NOT ntf OR to_regprocedure('security.resolve_outbox_consumer(text)') IS NOT NULL)
+                AND NOT (signature='security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,timestamp with time zone,timestamp with time zone)'
+                  AND (SELECT installed FROM recipient_lane))
+              UNION ALL
+              SELECT signature,'paqueteria_outbox_executor'
+              FROM (VALUES
+                ('security.expand_recipient_notice_request(uuid,uuid,boolean,interval,time without time zone,time without time zone,text,text[])'),
+                ('security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,text,timestamp with time zone,timestamp with time zone)'),
+                ('security.cancel_notification(uuid,uuid,uuid,integer,text,timestamp with time zone)'),
+                ('security.is_recipient_opted_out(text,bytea[])')) recipient(signature)
+              WHERE (SELECT installed FROM recipient_lane)
               UNION ALL
               -- ADR-034: installed by the Orders LIF-001 lane after the baseline.
               SELECT 'security.finalize_expired_orders(integer)','paqueteria_lifecycle_executor'
@@ -2588,6 +2629,30 @@ public sealed class DatabaseBaselineAssertions
                 OR to_regprocedure('security.requeue_stale_dispatch_outbox(interval,integer,integer)') IS NOT NULL
             """,
             cancellationToken).ConfigureAwait(false);
+        var recipientLaneInstalled = ntfInstalled && await ScalarAsync<bool>(
+            connection,
+            transaction,
+            """
+            SELECT to_regprocedure('security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,text,timestamp with time zone,timestamp with time zone)') IS NOT NULL
+                OR to_regprocedure('security.expand_recipient_notice_request(uuid,uuid,boolean,interval,time without time zone,time without time zone,text,text[])') IS NOT NULL
+                OR to_regprocedure('security.cancel_notification(uuid,uuid,uuid,integer,text,timestamp with time zone)') IS NOT NULL
+                OR to_regprocedure('security.is_recipient_opted_out(text,bytea[])') IS NOT NULL
+            """,
+            cancellationToken).ConfigureAwait(false);
+        if (recipientLaneInstalled)
+        {
+            // NTF-RECIPIENT-NOTICES-2026-10-20: v2 replaces the published settle; EXECUTE for paqueteria_worker only.
+            workerFunctions =
+            [
+                .. workerFunctions.Where(signature => signature !=
+                    "security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,timestamp with time zone,timestamp with time zone)"),
+                "security.expand_recipient_notice_request(uuid,uuid,boolean,interval,time without time zone,time without time zone,text,text[])",
+                "security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,text,timestamp with time zone,timestamp with time zone)",
+                "security.cancel_notification(uuid,uuid,uuid,integer,text,timestamp with time zone)",
+                "security.is_recipient_opted_out(text,bytea[])",
+            ];
+        }
+
         if (dispatchLaneInstalled)
         {
             // D8-OUTBOX-LANE-DISPATCH: EXECUTE for paqueteria_worker only.
