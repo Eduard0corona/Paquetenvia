@@ -140,6 +140,10 @@ exactly and treats an absent tag as "not scanned yet".
 Storage account requirements:
 
 - StorageV2, **no hierarchical namespace** (blob index tags are required), blob versioning off;
+- blob and container soft delete on for 30 days (ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20): with versioning off, a
+  deleted photo or the state of an overwritten one stays recoverable for 30 days (pilot runbook
+  `docs/operations/env-001-pilot/README.md` §6.4). `AzureBlobProofGateway.ListAsync` lists active blobs only
+  (`BlobStates.None`, and it skips any item marked deleted), so the Worker never sees soft-deleted blobs;
 - `allowBlobPublicAccess=false`, container access level `private`, HTTPS only, minimum TLS 1.2;
 - `allowSharedKeyAccess=false` is supported (the adapters use only Microsoft Entra ID and
   user-delegation SAS);
