@@ -650,9 +650,10 @@ y legible) y confidencialidad.]**
   forma original exige una garantía confiable de integridad (artículo 93 bis). La huella SHA-256 del registro ayuda a
   probar que el registro no cambió, pero no cubre el texto de los términos, que no se guarda con la orden.
 - El comerciante conserva al menos diez años los mensajes de datos en que consten contratos, íntegros e inalterados, y
-  la Secretaría de Economía fija los requisitos en una norma oficial mexicana (artículo 49). Esa norma es la
-  NOM-151-SCFI-2016. **[PENDIENTE: si hace falta una constancia de conservación conforme a esa norma para la evidencia
-  de aceptación y para el texto de cada versión.]**
+  la Secretaría de Economía fija los requisitos en una norma oficial mexicana (artículo 49). La norma vigente sobre
+  conservación de mensajes de datos es la NOM-151-SCFI-2016. **[PENDIENTE: confirmar que es la que aplica y si hace
+  falta una constancia de conservación conforme a ella para la evidencia de aceptación y para el texto de cada
+  versión.]**
 
 ### C. Contrato de transporte terrestre (Código de Comercio, artículos 576 a 604)
 

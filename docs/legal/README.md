@@ -132,8 +132,9 @@ Cada paso tiene su propio PR y sus propias decisiones. Este cambio no agrega fil
 
 El borrador **no resuelve nada**: no fija precios, límites, seguros ni datos de la empresa, y no está vigente. Hoy el
 asistente de nueva orden registra que el cliente "aceptó los términos", pero el sistema no tiene ningún texto de
-términos; cada orden guarda solo la versión configurada en `webTermsVersion`
-(`deploy/azure/pilot/web.parameters.json`), que vale `OWNER_DECISION_REQUIRED`.
+términos. Cada orden guarda solo un identificador de versión: en el asistente, el configurado en `webTermsVersion`
+(`deploy/azure/pilot/web.parameters.json`), que vale `OWNER_DECISION_REQUIRED`; en la carga por CSV, el que trae el
+archivo.
 
 Lo principal que deben decidir el owner y el abogado (la lista completa está en las marcas **[PENDIENTE: …]** del
 borrador):
