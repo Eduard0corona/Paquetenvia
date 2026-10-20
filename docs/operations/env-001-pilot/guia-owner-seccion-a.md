@@ -579,6 +579,48 @@ python3 tools/azr-001/env001_pilot_guards.py web-check --file deploy/azure/pilot
 Para cambiar una versión más adelante (nuevo aviso o nuevos términos): otro PR a este archivo y un redeploy.
 Las órdenes nuevas guardan la versión nueva; las anteriores conservan la que aceptaron.
 
+### 6.2 Alertas de la base de datos que llegan a ese correo (SCL-007)
+
+Fuente: README §10.2 y §10.3; decisiones `SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14` y
+`SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20`.
+
+Además de las 5 alertas de OBS-002, al mismo correo llegan 6 alertas de la base de datos del piloto
+(`pg-pv-pilot-<suffix>`). Cada una manda un correo cuando se dispara y otro cuando se resuelve. Las 2 de
+conexiones (aviso en 28 y crítico en 33) se atienden con README §10.2. Las otras 4 tienen un solo nivel, de
+aviso, y Azure las revisa cada minuto. No las cambias en `observability.parameters.json`: están fijas en la
+plantilla y la guarda P21 las revisa.
+
+- **CPU** (`mar-pv-pilot-pg-cpu-warning`): la base usó en promedio 70 % de CPU o más durante media hora. Un pico
+  corto no la dispara. **Primero:** busca qué la está cargando. En el portal: el servidor → *Metrics* → *CPU
+  percent*, junto con *CPU Credits Remaining* y *Active Connections*. Revisa si en ese momento corría el workflow
+  del piloto, un job `job-pv-pilot-*` o el simulacro de restauración, y busca consultas lentas o sesiones largas con
+  la consulta de README §10.3. Si es el uso real del piloto, toca pensar en un servidor más grande (B2s, unos 41 USD
+  más al mes, fuera del presupuesto); eso lo decides tú.
+- **Créditos de CPU** (`mar-pv-pilot-pg-cpu-credits-warning`): le quedan 72 créditos o menos. El servidor del piloto
+  es de tipo económico (Burstable B1ms): guarda hasta 288 créditos y gana hasta 12 por hora mientras trabaja poco;
+  cuando trabaja mucho, los gasta. Con la CPU llena, 72 créditos duran cerca de hora y media. Sin créditos se frena al
+  20 % de su CPU, y entonces llegan la lentitud y los tiempos de espera. **Primero:** lo mismo que con la CPU (qué la
+  está cargando). No reinicies ni cambies el tamaño del servidor mientras tenga casi 0 créditos (Microsoft lo
+  desaconseja). Si pasa seguido, toca un tamaño mayor; también es decisión tuya. Es normal que llegue justo después
+  del primer despliegue: según la página de Microsoft, un B1ms arranca con 30 créditos, menos de 72, y la alerta se
+  resuelve sola cuando junta más de 72 (unas 3 horas y media con poca carga). Puede pasar igual después de apagar y
+  encender el servidor; anota lo que veas en el primer despliegue.
+- **Memoria** (`mar-pv-pilot-pg-memory-warning`): en algún minuto de los últimos 5 la base usó 80 % o más de sus
+  2 GB de memoria. **Primero:** en *Metrics*, mira *Memory percent* con máximo y con promedio, para saber si fue un
+  pico o si se queda alta, junto con *Active Connections* (cada conexión ocupa memoria). Si se queda alta con la carga
+  normal, toca un tamaño mayor (decisión tuya).
+- **Disco** (`mar-pv-pilot-pg-storage-warning`): el disco está al 70 % o más, unos 22 de sus 32 GB. Avisa antes de
+  dos cosas. Al 80 %, Azure duplica el disco solo (a 64 GB); eso duplica su costo (de unos 4 a unos 8 USD al mes) y
+  después no se puede reducir. Y con menos de 5 GB libres (84 %) o al 95 %, la base se pone en solo lectura y la
+  aplicación ya no puede guardar nada. El crecimiento automático suele llegar antes, salvo cuando lo que llena el
+  disco es el registro de transacciones de PostgreSQL. **Primero:** mira qué está creciendo (*Storage percent*,
+  *Storage used* y *Transaction Log Storage Used* de los últimos días) y que la limpieza automática (la retención
+  de OPS-004) esté corriendo; si falla, también llega la alerta `sqr-pv-pilot-job-failure`. Después decides si
+  limpiar antes o dejar que el disco crezca.
+
+Costo: con las 2 de conexiones son 6 series, dentro de las 10 gratis por recurso; si no, unos 0.10 USD por serie
+al mes (README §5).
+
 ---
 
 ## 7. Primer despliegue y verificación
@@ -756,6 +798,16 @@ Pruebas manuales en el navegador sobre `https://paquetenvia.com` (README §6.1 p
 - Subir una foto de prueba y comprobar que el blob tiene el index tag del escaneo de Defender.
 - `http://paquetenvia.com` redirige a HTTPS o se rechaza (no verificado aún, README §9).
 
+Alertas de la base de datos (README §10.3), en el primer despliegue:
+- Las cifras de créditos de CPU del B1ms (máximo 288, 12 por hora) vienen de la página de las máquinas virtuales B
+  de Microsoft; la de PostgreSQL no las repite. Confírmalas en el servidor real: después de un día tranquilo,
+  *Metrics* → *CPU Credits Remaining* (máximo) debería acercarse a 288. Anota el valor. Si es otro, 72 ya no es el
+  25 % y hay que decidir de nuevo el umbral. Anota también si la alerta de créditos llegó al desplegar y cuánto tardó
+  en resolverse.
+- Los porcentajes del disco suponen 32 GB. Comprueba el tamaño real
+  (`az postgres flexible-server show -n <SERVIDOR> -g rg-pv-pilot --query storage`). Si el disco ya creció solo
+  (a 64 GB), el 70 % ya no son 22 GB sino 45 GB, y el umbral se revisa.
+
 Después (fuera de la Sección A): restore drill (README §6.4) y guardar su línea `EVIDENCE`.
 
 Si algo falla: README §6.7 (logs en Log Analytics:
@@ -763,7 +815,8 @@ Si algo falla: README §6.7 (logs en Log Analytics:
 
 > **Riesgo conocido (README §9):** varias piezas nunca se han probado contra Azure real: propiedades ARM
 > de Defender `2025-01-01`, `customDomains` con `bindingType: Auto` en la ruta, PostgreSQL 18 con acceso
-> privado en `mexicocentral`, `SSL Mode=VerifyFull` y la aceptación ARM de las alertas OBS-002. Un fallo
+> privado en `mexicocentral`, `SSL Mode=VerifyFull` y la aceptación ARM de las alertas OBS-002 y de las 6 alertas
+> de métrica de la base. Un fallo
 > en el primer run puede deberse a eso y no a tu configuración. Los adaptadores ADP-001
 > (`AzureKeyVaultPiiKeyWrapClient`, `AzureBlobProofObjectStorage`, `DefenderForStorageThreatScanner`) ya
 > están fusionados, pero nunca se han ejecutado contra Azure real (README §9).

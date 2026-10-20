@@ -137,8 +137,9 @@ AUTHORIZED_RESOURCE_TYPES = frozenset(
         "Microsoft.Insights/workbooks",
         # OBS-003 (platform.bicep): one workspace-based Application Insights on the pilot workspace (checked by P21).
         "Microsoft.Insights/components",
-        # SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14 (observability.bicep only, RESOURCE_TYPE_TEMPLATES): the two
-        # PostgreSQL connection alerts, pinned by P21; every other metric alert is refused.
+        # SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14 and SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20
+        # (observability.bicep only, RESOURCE_TYPE_TEMPLATES): the two PostgreSQL connection alerts and the four
+        # PostgreSQL resource alerts, pinned by P21; every other metric alert is refused.
         "Microsoft.Insights/metricAlerts",
     }
 )
@@ -955,7 +956,8 @@ def _iso_minutes(value: Any) -> int | None:
     return int(match.group(1) or 0) * 60 + int(match.group(2) or 0)
 
 
-# SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14: the only metric alerts of the pilot. Owner answers: "Sí, 80 % y 95 %
+# SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14: the connection alerts, with the four resource alerts below the only
+# metric alerts of the pilot. Owner answers: "Sí, 80 % y 95 %
 # (Recommended)" (28 and 33 of the 35 B1ms user connections, AI-15 connection_pool_utilization 0.8 and 0.95) and
 # "Máximo en 5 min, cada minuto (Recommended)". Each watches one time series (one server, no dimension); metric alerts
 # are billed per series whatever the frequency, 10 free and then about 0.10 USD per series and month
@@ -971,7 +973,7 @@ REQUIRED_CONNECTION_ALERTS = {
     "mar-pv-pilot-pg-connections-warning": (2, 28),
     "mar-pv-pilot-pg-connections-critical": (1, 33),
 }
-CONNECTION_ALERT_PROPERTIES = {
+METRIC_ALERT_PROPERTIES = {
     "description", "severity", "enabled", "scopes", "evaluationFrequency", "windowSize", "autoMitigate", "criteria", "actions",
 }
 CONNECTION_CRITERION = {
@@ -982,52 +984,102 @@ CONNECTION_CRITERION = {
     "timeAggregation": "Maximum",
     "operator": "GreaterThanOrEqual",
 }
+# SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20: four more metric alerts on the same server, one level each (the
+# warning, severity 2), every minute, through the same action group. Owner answers: "CPU, memoria y disco
+# (Recommended)", "Un nivel, de aviso (Recommended)", "CPU 70, memoria 80, disco 70 (Recommended)", "Sí, agregarla
+# (Recommended)" (CPU credits) and "Menos de 72 (25 %) (Recommended)", whose option text reads "Avisa con 72 créditos o
+# menos (mínimo en 5 min, cada minuto)", so the credits rule is LessThanOrEqual 72. CPU takes the AI-15
+# db_cpu_utilization warning (0.7, window 30m); storage has no window in the answer and takes the connection alerts'
+# Maximum over 5 minutes. Metrics, units, aggregations and dimensions: learn.microsoft.com/en-us/azure/azure-monitor/
+# reference/supported-metrics/microsoft-dbforpostgresql-flexibleservers-metrics (each Average/Maximum/Minimum, PT1M;
+# cpu_credits_remaining is a Count with the dimension LogicalServerName, the other three are Percent with ServerName).
+# No dimension filter: one server, one time series per rule, so the pilot has 6 series, inside the 10 free.
+RESOURCE_ALERT_SEVERITY = 2
+POSTGRES_STORAGE_GB = 32
+POSTGRES_MAX_CPU_CREDITS = 288  # B1ms (Bv1-series VM page: 288 banked at most, 12 per hour); 72 = 25 %.
+# name -> (criterion name, metric, aggregation, operator, threshold, window).
+REQUIRED_RESOURCE_ALERTS = {
+    "mar-pv-pilot-pg-cpu-warning": ("cpu-percent", "cpu_percent", "Average", "GreaterThanOrEqual", 70, "PT30M"),
+    "mar-pv-pilot-pg-memory-warning": ("memory-percent", "memory_percent", "Maximum", "GreaterThanOrEqual", 80, "PT5M"),
+    "mar-pv-pilot-pg-storage-warning": ("storage-percent", "storage_percent", "Maximum", "GreaterThanOrEqual", 70, "PT5M"),
+    "mar-pv-pilot-pg-cpu-credits-warning": (
+        "cpu-credits-remaining", "cpu_credits_remaining", "Minimum", "LessThanOrEqual", 72, "PT5M"),
+}
+METRIC_ALERT_OPERATOR_SYMBOLS = {"GreaterThanOrEqual": ">=", "LessThanOrEqual": "<="}
 EMAIL_LITERAL = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+")
 
 
-def _connection_alert_failures(ctx: Context) -> tuple[list[str], int]:
-    """SCL-007: exactly the two PostgreSQL connection alerts, on the pilot server's active_connections, through the
-    pilot action group; returns the failures and the number of monitored time series."""
+def _required_metric_alerts() -> dict[str, tuple[int, str, dict[str, Any]]]:
+    """name -> (severity, windowSize, criterion) for the six PostgreSQL metric alerts; all are evaluated every minute."""
+    required: dict[str, tuple[int, str, dict[str, Any]]] = {
+        name: (severity, "PT5M", dict(CONNECTION_CRITERION, threshold=threshold))
+        for name, (severity, threshold) in REQUIRED_CONNECTION_ALERTS.items()
+    }
+    for name, (criterion_name, metric, aggregation, operator, threshold, window) in REQUIRED_RESOURCE_ALERTS.items():
+        required[name] = (RESOURCE_ALERT_SEVERITY, window, {
+            "criterionType": "StaticThresholdCriterion",
+            "name": criterion_name,
+            "metricNamespace": "Microsoft.DBforPostgreSQL/flexibleServers",
+            "metricName": metric,
+            "timeAggregation": aggregation,
+            "operator": operator,
+            "threshold": threshold,
+        })
+    return required
+
+
+REQUIRED_METRIC_ALERTS = _required_metric_alerts()
+
+
+def _metric_alert_failures(ctx: Context) -> tuple[list[str], int]:
+    """SCL-007: exactly the six PostgreSQL metric alerts (the two connection alerts and the four resource alerts), on
+    the pilot server, through the pilot action group; returns the failures and the number of monitored time series."""
     failures: list[str] = []
     alerts = ctx.resources(METRIC_ALERT_TYPE)
     names = sorted(str(resource.get("name")) for _, resource in alerts)
-    if names != sorted(REQUIRED_CONNECTION_ALERTS):
-        failures.append(f"metric alerts must be exactly {sorted(REQUIRED_CONNECTION_ALERTS)}, found {names}")
+    if names != sorted(REQUIRED_METRIC_ALERTS):
+        failures.append(f"metric alerts must be exactly {sorted(REQUIRED_METRIC_ALERTS)}, found {names}")
     for template, resource in alerts:
         name = str(resource.get("name"))
-        expected = REQUIRED_CONNECTION_ALERTS.get(name)
+        expected = REQUIRED_METRIC_ALERTS.get(name)
         if expected is None:
             continue
-        severity, threshold = expected
+        severity, window, criterion = expected
         properties = resource.get("properties", {}) or {}
         if template != "observability" or resource.get("copy") or resource.get("location") != "global":
             failures.append(f"{name} must be one literal global resource of observability.bicep")
-        extra = sorted(set(properties) - CONNECTION_ALERT_PROPERTIES)
+        extra = sorted(set(properties) - METRIC_ALERT_PROPERTIES)
         if extra:
             failures.append(f"{name} sets unexpected properties {extra}")
         if properties.get("enabled") is not True or properties.get("autoMitigate") is not True:
             failures.append(f"{name} must be enabled and stateful (autoMitigate)")
         if properties.get("severity") != severity:
             failures.append(f"{name} must have severity {severity}, found {properties.get('severity')}")
-        if properties.get("evaluationFrequency") != "PT1M" or properties.get("windowSize") != "PT5M":
-            failures.append(f"{name} must be evaluated every minute (PT1M) over 5 minutes (PT5M)")
+        if properties.get("evaluationFrequency") != "PT1M" or properties.get("windowSize") != window:
+            failures.append(f"{name} must be evaluated every minute (PT1M) over {_iso_minutes(window)} minutes ({window})")
         if properties.get("scopes") != [POSTGRES_SERVER_ID]:
             failures.append(f"{name} must watch only the pilot PostgreSQL server pg-pv-pilot-<suffix>, found {properties.get('scopes')}")
         criteria = properties.get("criteria", {}) or {}
-        criterion = dict(CONNECTION_CRITERION, threshold=threshold)
         found = criteria.get("allOf")
         if (criteria.get("odata.type") != "Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria" or set(criteria) != {"odata.type", "allOf"}
                 or not isinstance(found, list) or len(found) != 1 or found[0] != criterion or type(found[0].get("threshold")) is not int):
-            failures.append(f"{name} must alert on the Maximum of active_connections >= {threshold}, with no dimension or other criterion")
+            failures.append(f"{name} must alert on the {criterion['timeAggregation']} of {criterion['metricName']} "
+                            f"{METRIC_ALERT_OPERATOR_SYMBOLS[criterion['operator']]} {criterion['threshold']}, with no dimension or other criterion")
         if properties.get("actions") != [{"actionGroupId": PILOT_ACTION_GROUP_ID}]:
             failures.append(f"{name} must notify only through the pilot action group ag-pv-pilot-ops")
         if EMAIL_LITERAL.search(json.dumps(resource)):
             failures.append(f"{name} must not contain an e-mail address")
     servers = ctx.resources("Microsoft.DBforPostgreSQL/flexibleServers")
-    sku = (servers[0][1].get("sku", {}) or {}).get("name") if len(servers) == 1 else None
+    server = servers[0][1] if len(servers) == 1 else {}
+    sku = (server.get("sku", {}) or {}).get("name")
     if sku != POSTGRES_SKU:
         failures.append(f"the PostgreSQL connection alerts (28 and 33) are 80 % and 95 % of the {POSTGRES_USER_CONNECTIONS} user "
-                        f"connections of {POSTGRES_SKU}; revisit them with the server SKU, found {sku}")
+                        f"connections of {POSTGRES_SKU} and the CPU credits alert (72) is 25 % of its {POSTGRES_MAX_CPU_CREDITS} "
+                        f"credits; revisit them with the server SKU, found {sku}")
+    storage = ((server.get("properties", {}) or {}).get("storage", {}) or {}).get("storageSizeGB")
+    if storage != POSTGRES_STORAGE_GB:
+        failures.append(f"the PostgreSQL storage alert (70 %, 22.4 GiB) is a share of the {POSTGRES_STORAGE_GB} GiB disk; revisit it "
+                        f"with the disk size, found {storage}")
     suffix = ctx.templates.get("observability", {}).get("variables", {}).get("suffix")
     if suffix is None or suffix != ctx.templates.get("platform", {}).get("variables", {}).get("suffix"):
         failures.append("observability.bicep must name the PostgreSQL server and the workspace with the same suffix as platform.bicep")
@@ -1126,8 +1178,10 @@ def guard_21_observability(ctx: Context) -> GuardResult:
     owner's e-mail (a parameter without default) and read only the PII-free structured events. OBS-003: one
     workspace-based Application Insights on the pilot workspace, the export switch of the API and the Worker is a
     reviewed literal, and no query reads Application Insights tables or the organization pseudonym. SCL-007: exactly
-    the two PostgreSQL connection metric alerts (28 and 33, Maximum over 5 minutes every minute) on the pilot server,
-    through the same action group, counted in the cost bound; no e-mail address in the template."""
+    the six PostgreSQL metric alerts on the pilot server, every minute, through the same action group, counted in the
+    cost bound: the two connection alerts (28 and 33, Maximum over 5 minutes) and the four resource alerts (CPU
+    Average over 30 minutes >= 70, memory Maximum over 5 minutes >= 80, storage Maximum over 5 minutes >= 70, CPU
+    credits Minimum over 5 minutes <= 72, severity 2); no e-mail address in the template."""
     failures: list[str] = _observability_obs003_failures(ctx)
     template = ctx.templates.get("observability", {})
     parameter = (template.get("parameters", {}) or {}).get("alertEmailAddress")
@@ -1166,8 +1220,8 @@ def guard_21_observability(ctx: Context) -> GuardResult:
     names = sorted(str(r.get("name")) for r in rules)
     if set(names) != REQUIRED_ALERTS or len(names) != len(REQUIRED_ALERTS):
         failures.append(f"alert rules must be exactly {sorted(REQUIRED_ALERTS)}, found {names}")
-    connection_failures, series = _connection_alert_failures(ctx)
-    failures.extend(connection_failures)
+    metric_failures, series = _metric_alert_failures(ctx)
+    failures.extend(metric_failures)
     if EMAIL_LITERAL.search(json.dumps(template)):
         failures.append("observability.bicep must not contain an e-mail address; the owner's goes in observability.parameters.json")
     monthly = series * METRIC_ALERT_SERIES_MONTHLY_USD
@@ -1192,9 +1246,10 @@ def guard_21_observability(ctx: Context) -> GuardResult:
         failures.append(f"queries read structured-log properties outside the OBS-002 allowlist: {sorted(properties_read - OBSERVABILITY_STATE_PROPERTIES)}")
     if "observability-check" not in ctx.workflow_text or "observability.parameters.json" not in ctx.workflow_text:
         failures.append("workflow must check and deploy observability.parameters.json")
-    return _result(21, "OBS-002 alerts, e-mail action group and cost bound; OBS-003 Application Insights; SCL-007 PostgreSQL connection alerts",
-                   failures, f"{len(rules)} log alert rules and {series} PostgreSQL connection alerts (28 Sev 2, 33 Sev 1) at most "
-                   f"{monthly:.2f} USD/month, e-mail only; workspace-based Application Insights")
+    return _result(21, "OBS-002 alerts, e-mail action group and cost bound; OBS-003 Application Insights; SCL-007 PostgreSQL metric alerts",
+                   failures, f"{len(rules)} log alert rules and {series} PostgreSQL metric alerts (connections 28 Sev 2 and 33 Sev 1; "
+                   f"CPU 70, memory 80, storage 70 and CPU credits 72, Sev 2) at most {monthly:.2f} USD/month, e-mail only; "
+                   "workspace-based Application Insights")
 
 
 # ---------------------------------------------------------------------------------------------- UI-001 web
