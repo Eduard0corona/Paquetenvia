@@ -701,8 +701,9 @@ marca de datos maestros (README §6.8). Hazlo **después del Run 3 y antes de tu
 >    `https://paquetenvia.com`: abrir el sitio no inicia sesión, así que entraste en ese momento o después. Elige un
 >    momento antes de esa visita y después de que terminó tu último run de *Deploy Azure PILOT* anterior a ella (la
 >    hora de fin sale en GitHub Actions), para que la base restaurada ya tenga todas sus migraciones. Si dudas, usa
->    uno o dos minutos después de que terminó ese run. Escríbelo en UTC con `Z` al final, por ejemplo
->    `2026-10-05T13:10:00Z` (GitHub y tu navegador te muestran tu hora local).
+>    uno o dos minutos después de que terminó ese run. Tiene que estar dentro de los últimos 14 días (README §6.4).
+>    Escríbelo en UTC con `Z` al final, por ejemplo `2026-10-05T13:10:00Z` (GitHub y tu navegador te muestran tu hora
+>    local).
 > 4. **Restaura la base** como dice README §6.4, *Real restore*, en Cloud Shell (bash) y desde una copia del repo:
 >    1. Detén la API y el Worker:
 >
