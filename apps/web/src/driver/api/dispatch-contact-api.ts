@@ -12,13 +12,16 @@ import {
 export const MyDispatchContactPath = "/api/v1/driver/me/dispatch-contact";
 
 /**
- * - `unauthorized` / `forbidden`: 401 or 403, the session is no longer a driver there;
+ * - `session-ended`: 401, the session ended; the saved answer stays (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19);
+ * - `unauthorized`: the session has no usable credential, so nothing was sent;
+ * - `forbidden`: 403, the session is no longer a driver there;
  * - `not-found`: 404, an API older than this app, without the operation;
  * - `recoverable`: no answer, a timeout or a 5xx;
  * - `invalid-contract`: any other answer, or one that breaks the contract;
  * - `cancelled`: the caller aborted.
  */
 export type DriverDispatchContactApiFailure =
+  | "session-ended"
   | "unauthorized"
   | "forbidden"
   | "not-found"
@@ -64,6 +67,13 @@ export function createDriverDispatchContactApi(
         if (signal?.aborted) {
           throw new DriverDispatchContactApiError("cancelled");
         }
+        // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19: a remembered session is not
+        // confirmed by the server, so it never reaches the network (the
+        // cookie may belong to someone else); the caller falls back to what
+        // the partition saved.
+        if (options.session.remembered === true) {
+          throw new DriverDispatchContactApiError("recoverable");
+        }
         let authorization: RequestAuthorization;
         try {
           authorization = await resolveRequestAuthorization(options.session, "GET");
@@ -83,7 +93,7 @@ export function createDriverDispatchContactApi(
           },
         });
 
-        if (response.status === 401) throw new DriverDispatchContactApiError("unauthorized");
+        if (response.status === 401) throw new DriverDispatchContactApiError("session-ended");
         if (response.status === 403) throw new DriverDispatchContactApiError("forbidden");
         if (response.status === 404) throw new DriverDispatchContactApiError("not-found");
         if (response.status >= 500) throw new DriverDispatchContactApiError("recoverable");
