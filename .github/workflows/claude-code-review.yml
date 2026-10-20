@@ -12,7 +12,7 @@ jobs:
   claude-review:
     # Secrets are not exposed to pull requests from forks; skip instead of failing.
     if: github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     permissions:
       contents: read

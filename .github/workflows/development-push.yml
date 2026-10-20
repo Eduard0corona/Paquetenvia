@@ -22,7 +22,7 @@ concurrency:
 jobs:
   normative:
     name: Validate normative baseline and CI tooling
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
       - name: Check out repository
@@ -69,7 +69,7 @@ jobs:
 
   dotnet:
     name: Build and test .NET (unit, architecture, contract)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       CI: "true"

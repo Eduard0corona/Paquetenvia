@@ -28,6 +28,24 @@ import env001_pilot_guards as guards  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# A complete, synthetic driver eligibility policy: the values OrderTransitionGuardsApiFactory.DriverEligibilitySettings
+# gives the API (PilotApiStartupConfigurationTests starts the pilot API with them). Never the owner's rules.
+SYNTHETIC_CAPACITY = {
+    "MaximumPackageCount": "4",
+    "MaximumTotalWeightGrams": "4000",
+    "MaximumSinglePackageWeightGrams": "2000",
+    "MaximumLengthMillimeters": "500",
+    "MaximumWidthMillimeters": "400",
+    "MaximumHeightMillimeters": "300",
+}
+SYNTHETIC_ELIGIBILITY = [{"name": "Drivers__Eligibility__NonExpiringDocumentTypes__0", "value": "IDENTITY"}] + [
+    entry
+    for vehicle in ("MOTORCYCLE", "CAR", "VAN", "BICYCLE", "WALKER")
+    for entry in [{"name": f"Drivers__Eligibility__RequiredDocumentTypesByVehicleType__{vehicle}__0", "value": "IDENTITY"}]
+    + [{"name": f"Drivers__Eligibility__VehicleCapacity__{vehicle}__{field}", "value": value}
+       for field, value in SYNTHETIC_CAPACITY.items()]
+]
+
 
 def _bicep() -> str | None:
     candidates = [os.environ.get("BICEP_BIN"), os.path.join(os.environ.get("RUNNER_TEMP", ""), "bicep"), shutil.which("bicep")]
@@ -68,12 +86,16 @@ class ScramVerifierTests(unittest.TestCase):
 
 
 class SettingsTests(unittest.TestCase):
-    def test_repository_settings_are_well_formed_and_await_no_owner_decision(self):
-        # POLICY-VERSIONS-PER-ORG-2026-10-02 removed the last two OWNER_DECISION_REQUIRED settings (the
-        # global assignment and eligibility policy versions); the sentinel itself is still refused below.
+    def test_repository_settings_are_well_formed_and_still_await_the_driver_eligibility_rules(self):
+        # POLICY-VERSIONS-PER-ORG-2026-10-02 removed the last two OWNER_DECISION_REQUIRED settings (the global
+        # assignment and eligibility policy versions), but the file still lacks the driver eligibility rules the pilot
+        # API needs to start: the static guard (P17) accepts the file, the deploy (settings-check) does not.
         entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
         self.assertEqual([], guards.validate_settings(entries, allow_sentinel=True))
-        self.assertEqual([], guards.validate_settings(entries, allow_sentinel=False))
+        failures = guards.validate_settings(entries, allow_sentinel=False)
+        self.assertEqual(len(guards.ELIGIBILITY_VEHICLE_TYPES), len(failures), failures)
+        self.assertTrue(all(failure.startswith("driver eligibility rules for vehicle type ") for failure in failures), failures)
+        self.assertEqual([], guards.validate_settings(entries + SYNTHETIC_ELIGIBILITY, allow_sentinel=False))
         self.assertTrue(guards.validate_settings([{"name": "Finance__OperationalTimeZone", "value": guards.OWNER_SENTINEL}], allow_sentinel=False))
 
     def test_platform_managed_mock_and_secret_settings_are_rejected(self):
@@ -92,7 +114,8 @@ class SettingsTests(unittest.TestCase):
                 self.assertTrue(guards.validate_settings([{"name": name, "value": value}], allow_sentinel=False))
         self.assertTrue(guards.validate_settings([{"name": "Finance__OperationalTimeZone", "value": "America/Mazatlan", "extra": 1}], allow_sentinel=False))
         self.assertTrue(guards.validate_settings([{"name": "A__B", "value": "1"}, {"name": "A__B", "value": "2"}], allow_sentinel=False))
-        self.assertEqual([], guards.validate_settings([{"name": "Finance__OperationalTimeZone", "value": "America/Mazatlan"}], allow_sentinel=False))
+        self.assertEqual([], guards.validate_settings(
+            [{"name": "Finance__OperationalTimeZone", "value": "America/Mazatlan"}] + SYNTHETIC_ELIGIBILITY, allow_sentinel=False))
         self.assertTrue(guards.validate_settings([{"name": "Finance__OperationalTimeZone", "value": "owner_decision_required"}], allow_sentinel=False))
 
     def test_the_telemetry_export_cannot_be_switched_or_redirected_from_the_settings_file(self):
@@ -136,7 +159,7 @@ class SettingsTests(unittest.TestCase):
         second = "22222222-2222-4222-8222-222222222222"
         number = "+522000000001"
         valid = contact(0, first, number) + contact(1, second, number)
-        self.assertEqual([], guards.validate_settings(valid, allow_sentinel=False))
+        self.assertEqual([], guards.validate_settings(valid + SYNTHETIC_ELIGIBILITY, allow_sentinel=False))
 
         invalid = {
             "uppercase id": contact(0, first.upper(), number),
@@ -160,7 +183,7 @@ class SettingsTests(unittest.TestCase):
         }
         for case, settings in invalid.items():
             with self.subTest(case=case):
-                failures = guards.validate_settings(settings, allow_sentinel=False)
+                failures = guards.validate_settings(settings + SYNTHETIC_ELIGIBILITY, allow_sentinel=False)
                 self.assertTrue(failures)
                 self.assertTrue(all("DispatchContacts" in failure for failure in failures), failures)
                 self.assert_no_value_echoed(settings, failures)
@@ -171,7 +194,7 @@ class SettingsTests(unittest.TestCase):
             {"name": "drivers__dispatchcontacts__0__organizationid", "value": first},
             {"name": "drivers__dispatchcontacts__0__phonee164", "value": number},
         ]
-        failures = guards.validate_settings(lowercase, allow_sentinel=False)
+        failures = guards.validate_settings(lowercase + SYNTHETIC_ELIGIBILITY, allow_sentinel=False)
         self.assertEqual(2, sum("must be spelled exactly Drivers__DispatchContacts__<n>__" in f for f in failures), failures)
         self.assertTrue(all(f.startswith(("setting #1 ", "setting #2 ")) for f in failures), failures)
         self.assert_no_value_echoed(lowercase, failures)
@@ -189,7 +212,7 @@ class SettingsTests(unittest.TestCase):
         }
         for case, settings in cased.items():
             with self.subTest(case=case):
-                failures = guards.validate_settings(settings, allow_sentinel=False)
+                failures = guards.validate_settings(settings + SYNTHETIC_ELIGIBILITY, allow_sentinel=False)
                 self.assertTrue(failures)
                 self.assert_no_value_echoed(settings, failures)
         bad_values = guards.validate_settings(cased["lowercase names with bad values"], allow_sentinel=False)
@@ -212,7 +235,7 @@ class SettingsTests(unittest.TestCase):
                 self.assertTrue(any(fragment in failure for failure in failures), failures)
         failures = guards.validate_settings(
             [{"name": "Finance__OperationalTimeZone", "value": "America/Mazatlan"},
-             {"name": "finance__operationaltimezone", "value": "America/Mexico_City"}],
+             {"name": "finance__operationaltimezone", "value": "America/Mexico_City"}] + SYNTHETIC_ELIGIBILITY,
             allow_sentinel=False)
         self.assertEqual(["setting finance__operationaltimezone declared twice (configuration names ignore case)"], failures)
 
@@ -242,6 +265,211 @@ class SettingsTests(unittest.TestCase):
                     failures = guards.validate_settings([{"name": name, "value": value}], allow_sentinel=True)
                     self.assertTrue(any("POLICY-VERSIONS-PER-ORG-2026-10-02" in failure for failure in failures))
             self.assertNotIn(name, {entry["name"] for entry in entries})
+
+
+class DriverEligibilitySettingsTests(unittest.TestCase):
+    """The pilot API (Drivers__Provider and Routing__Provider PostgreSql) refuses to start without a driver eligibility
+    policy for every vehicle type (PilotApiStartupConfigurationTests.OwnerPendingStartFailures). The rules are the
+    owner's: settings-check stops while any is missing and holds every entry present to the API's start validation."""
+
+    VEHICLES = ("MOTORCYCLE", "CAR", "VAN", "BICYCLE", "WALKER")
+    DOCUMENT = "Drivers__Eligibility__RequiredDocumentTypesByVehicleType__{}__{}"
+    CAPACITY = "Drivers__Eligibility__VehicleCapacity__{}__{}"
+
+    def required_names(self, vehicle):
+        return [self.DOCUMENT.format(vehicle, 0)] + [self.CAPACITY.format(vehicle, field) for field in SYNTHETIC_CAPACITY]
+
+    @staticmethod
+    def with_value(entries, name, value):
+        return [dict(entry, value=value) if entry["name"] == name else entry for entry in entries]
+
+    @staticmethod
+    def settings_check(path):
+        return subprocess.run([sys.executable, guards.__file__, "settings-check", "--file", str(path)],
+                              capture_output=True, text=True)
+
+    def test_the_repository_file_stops_the_deploy_naming_each_vehicle_type_and_setting(self):
+        result = self.settings_check(REPO_ROOT / guards.SETTINGS_FILE)
+        self.assertEqual(1, result.returncode, result.stdout)
+        lines = result.stdout.splitlines()
+        self.assertEqual("ENV001_SETTINGS=FAIL", lines[-1])
+        self.assertEqual(len(self.VEHICLES), len(lines) - 1, lines)
+        for vehicle, line in zip(self.VEHICLES, lines):
+            self.assertTrue(line.startswith(
+                f"STOP_FOR_OWNER_DECISION: driver eligibility rules for vehicle type {vehicle} are missing: "), line)
+            for name in self.required_names(vehicle):
+                self.assertIn(name, line)
+
+    def test_a_complete_policy_passes(self):
+        entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE) + SYNTHETIC_ELIGIBILITY
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "apps.settings.json"
+            path.write_text(json.dumps(entries), encoding="utf-8")
+            result = self.settings_check(path)
+        self.assertEqual(0, result.returncode, result.stdout)
+        self.assertEqual("ENV001_SETTINGS=PASS", result.stdout.strip())
+
+        # Several document types per vehicle, every document type, the optional members and the largest value each
+        # .NET type holds pass too.
+        richer = SYNTHETIC_ELIGIBILITY + [
+            {"name": self.DOCUMENT.format("CAR", index), "value": document}
+            for index, document in enumerate(guards.ELIGIBILITY_DOCUMENT_TYPES[1:], start=1)
+        ] + [
+            {"name": "Drivers__Eligibility__NonExpiringDocumentTypes__1", "value": "BACKGROUND_CHECK"},
+            {"name": self.CAPACITY.format("VAN", "RequireDimensions"), "value": "true"},
+            {"name": self.CAPACITY.format("WALKER", "RequireDimensions"), "value": "false"},
+        ]
+        for field in SYNTHETIC_CAPACITY:
+            richer = self.with_value(richer, self.CAPACITY.format("MOTORCYCLE", field),
+                                     str(guards.ELIGIBILITY_CAPACITY_FIELDS[field]))
+        self.assertEqual("9223372036854775807", next(
+            entry["value"] for entry in richer if entry["name"] == self.CAPACITY.format("MOTORCYCLE", "MaximumTotalWeightGrams")))
+        self.assertEqual([], guards.validate_settings(richer, allow_sentinel=False))
+
+    def test_each_missing_setting_is_named(self):
+        for vehicle in self.VEHICLES:
+            for name in self.required_names(vehicle):
+                with self.subTest(name=name):
+                    entries = [entry for entry in SYNTHETIC_ELIGIBILITY if entry["name"] != name]
+                    # The static guard (P17) waits for the owner like it does for OWNER_DECISION_REQUIRED.
+                    self.assertEqual([], guards.validate_settings(entries, allow_sentinel=True))
+                    failures = guards.validate_settings(entries, allow_sentinel=False)
+                    self.assertEqual(1, len(failures), failures)
+                    self.assertTrue(failures[0].startswith(
+                        f"driver eligibility rules for vehicle type {vehicle} are missing: {name}"), failures)
+                    for other in self.required_names(vehicle):
+                        if other != name:
+                            self.assertNotIn(other, failures[0])
+
+        # Every document type of a vehicle gone: the list may not be empty.
+        entries = [entry for entry in SYNTHETIC_ELIGIBILITY + [{"name": self.DOCUMENT.format("VAN", 1), "value": "OTHER"}]
+                   if not entry["name"].startswith("Drivers__Eligibility__RequiredDocumentTypesByVehicleType__VAN__")]
+        failures = guards.validate_settings(entries, allow_sentinel=False)
+        self.assertEqual(["driver eligibility rules for vehicle type VAN are missing: "
+                          f"{self.DOCUMENT.format('VAN', 0)} (at least one required document type)"], [f.split(". ")[0] for f in failures])
+
+        # OWNER_DECISION_REQUIRED in place of a value is the owner's placeholder: still missing.
+        name = self.CAPACITY.format("VAN", "MaximumWidthMillimeters")
+        entries = self.with_value(SYNTHETIC_ELIGIBILITY, name, guards.OWNER_SENTINEL)
+        self.assertEqual([], guards.validate_settings(entries, allow_sentinel=True))
+        failures = guards.validate_settings(entries, allow_sentinel=False)
+        self.assertIn(f"setting {name} still awaits an owner decision ({guards.OWNER_SENTINEL})", failures)
+        self.assertTrue(any(f.startswith(f"driver eligibility rules for vehicle type VAN are missing: {name}.") for f in failures),
+                        failures)
+
+    def test_present_settings_follow_the_api_start_validation(self):
+        car_document = self.DOCUMENT.format("CAR", 0)
+        non_expiring = "Drivers__Eligibility__NonExpiringDocumentTypes__0"
+
+        def car(field, value):
+            return self.with_value(SYNTHETIC_ELIGIBILITY, self.CAPACITY.format("CAR", field), value)
+
+        def extra(name, value):
+            return SYNTHETIC_ELIGIBILITY + [{"name": name, "value": value}]
+
+        # Each of these makes the API refuse to start (its validation, or binding a number that does not fit).
+        api_failures = {
+            "unknown document type": self.with_value(SYNTHETIC_ELIGIBILITY, car_document, "PASSPORT"),
+            "document type in lowercase": self.with_value(SYNTHETIC_ELIGIBILITY, car_document, "identity"),
+            "empty document type": self.with_value(SYNTHETIC_ELIGIBILITY, car_document, ""),
+            "unknown non-expiring document type": self.with_value(SYNTHETIC_ELIGIBILITY, non_expiring, "PASSPORT"),
+            "no packages": car("MaximumPackageCount", "0"),
+            "negative weight": car("MaximumTotalWeightGrams", "-1"),
+            "not a whole number": car("MaximumLengthMillimeters", "500.5"),
+            "package count beyond int": car("MaximumPackageCount", "2147483648"),
+            "weight beyond long": car("MaximumTotalWeightGrams", "9223372036854775808"),
+            "single package heavier than the total": car("MaximumSinglePackageWeightGrams", "4001"),
+            "RequireDimensions not a bool": extra(self.CAPACITY.format("CAR", "RequireDimensions"), "yes"),
+            "unknown vehicle type": extra(self.CAPACITY.format("TRUCK", "MaximumPackageCount"), "4"),
+            "vehicle type in lowercase": extra(self.DOCUMENT.format("car", 1), "IDENTITY"),
+        }
+        # The API would bind these, but the guard accepts one spelling only: plain digits, the exact names and numbered
+        # lists, so a typo never passes silently.
+        strict_spelling = {
+            "padded number": car("MaximumWidthMillimeters", " 400"),
+            "unknown capacity setting": extra(self.CAPACITY.format("CAR", "MaximumVolumeLiters"), "10"),
+            "list without an index": extra("Drivers__Eligibility__RequiredDocumentTypesByVehicleType__CAR", "IDENTITY"),
+            "index that is not a number": extra(self.DOCUMENT.format("CAR", "first"), "IDENTITY"),
+            "another member": extra("Drivers__Eligibility__MaximumDistanceKilometers", "10"),
+            "member name in another casing": [
+                dict(entry, name=entry["name"].lower().replace("__car__", "__CAR__"))
+                if entry["name"] == self.CAPACITY.format("CAR", "MaximumPackageCount") else entry
+                for entry in SYNTHETIC_ELIGIBILITY],
+        }
+        for case, entries in {**api_failures, **strict_spelling}.items():
+            for allow_sentinel in (True, False):
+                with self.subTest(case=case, allow_sentinel=allow_sentinel):
+                    failures = guards.validate_settings(entries, allow_sentinel=allow_sentinel)
+                    self.assertTrue(failures)
+                    self.assertTrue(all("Eligibility" in f or "eligibility" in f for f in failures), failures)
+
+        failures = guards.validate_settings(api_failures["single package heavier than the total"], allow_sentinel=True)
+        self.assertEqual(["Drivers__Eligibility__VehicleCapacity__CAR__MaximumSinglePackageWeightGrams may not exceed "
+                          "MaximumTotalWeightGrams"], failures)
+        failures = guards.validate_settings(strict_spelling["member name in another casing"], allow_sentinel=False)
+        self.assertEqual(["setting drivers__eligibility__vehiclecapacity__CAR__maximumpackagecount must be spelled exactly "
+                          "Drivers__Eligibility__VehicleCapacity__CAR__MaximumPackageCount (configuration names ignore "
+                          "case, so another casing still reaches the API)"], failures)
+        failures = guards.validate_settings(api_failures["vehicle type in lowercase"], allow_sentinel=False)
+        self.assertEqual(["setting Drivers__Eligibility__RequiredDocumentTypesByVehicleType__car__1 names no vehicle type "
+                          "the API knows (MOTORCYCLE, CAR, VAN, BICYCLE, WALKER, in capitals)"], failures)
+
+    def test_the_guard_mirrors_the_api_start_validation(self):
+        """Drift check: the vehicle types, document types and capacity members are the ones the C# validators and every
+        class bound to Drivers:Eligibility use, and the pilot API runs both providers that validate them."""
+        for path in ("src/Modules/Drivers/Drivers.Infrastructure/DependencyInjection.cs",
+                     "src/Modules/Routing/Routing.Infrastructure/DependencyInjection.cs"):
+            with self.subTest(path=path):
+                source = (REPO_ROOT / path).read_text(encoding="utf-8")
+                vehicles = re.search(r"\bVehicleTypes = \[([^\]]*)\]", source)
+                documents = re.search(r"\bDocumentTypes =\s*\[([^\]]*)\]", source)
+                self.assertIsNotNone(vehicles)
+                self.assertIsNotNone(documents)
+                self.assertEqual(guards.ELIGIBILITY_VEHICLE_TYPES, tuple(re.findall(r'"([A-Z_]+)"', vehicles.group(1))))
+                self.assertEqual(guards.ELIGIBILITY_DOCUMENT_TYPES, tuple(re.findall(r'"([A-Z_]+)"', documents.group(1))))
+                # An empty document list fails the API, so the guard requires one document type per vehicle.
+                self.assertRegex(source, r"\b[dD]ocument(Type)?s\.Count == 0")
+
+        expected = {field: "int" if maximum == 2**31 - 1 else "long"
+                    for field, maximum in guards.ELIGIBILITY_CAPACITY_FIELDS.items()}
+        expected[guards.ELIGIBILITY_REQUIRE_DIMENSIONS] = "bool"
+        for path, name in (
+            ("src/Modules/Drivers/Drivers.Infrastructure/DriversOptions.cs", "VehicleCapacityOptions"),
+            ("src/Modules/Routing/Routing.Infrastructure/RoutingOptions.cs", "RoutingVehicleCapacityOptions"),
+            ("src/Modules/Dispatch/Dispatch.Infrastructure/DispatchOptions.cs", "DispatchVehicleCapacityOptions"),
+            ("src/Modules/Orders/Orders.Infrastructure/Orders/PostgreSqlOrderTransitionEligibility.cs",
+             "OrderTransitionVehicleCapacityOptions"),
+        ):
+            with self.subTest(path=path):
+                source = (REPO_ROOT / path).read_text(encoding="utf-8")
+                body = re.search(r"public sealed class " + name + r"\n\{\n(.*?)\n\}", source, re.DOTALL)
+                self.assertIsNotNone(body)
+                properties = {member: kind for kind, member in
+                              re.findall(r"public (\w+) (\w+) \{ get; set; \}", body.group(1))}
+                self.assertEqual(expected, properties)
+
+        # The policy that passes settings-check here is the one PilotApiStartupConfigurationTests starts the pilot API
+        # with, so the guard and the API agree on a complete policy as well as on a missing one.
+        fixture = (REPO_ROOT / "tests/Paqueteria.IntegrationTests/Orders/OrderTransitionGuardsHttpFixture.cs").read_text(
+            encoding="utf-8")
+        body = re.search(r"Dictionary<string, string\?> CreateEligibility\(\)\n    \{\n(.*?)\n    \}\n", fixture, re.DOTALL)
+        self.assertIsNotNone(body)
+        vehicles = re.search(r"foreach \(var vehicle in new\[\] \{([^}]*)\}\)", body.group(1))
+        self.assertIsNotNone(vehicles)
+        vehicles = re.findall(r'"([A-Z]+)"', vehicles.group(1))
+        fixed = re.findall(r'\["(Drivers:Eligibility:[^"]+)"\] = "([^"]*)"', body.group(1))
+        templated = re.findall(r'settings\[\$"(Drivers:Eligibility:[^"]+)"\] = "([^"]*)"', body.group(1))
+        self.assertTrue(fixed and templated)
+        expected = {(key.replace(":", "__"), value) for key, value in fixed}
+        expected |= {(key.replace("{vehicle}", vehicle).replace(":", "__"), value)
+                     for key, value in templated for vehicle in vehicles}
+        self.assertEqual(expected, {(entry["name"], entry["value"]) for entry in SYNTHETIC_ELIGIBILITY})
+
+        bicep = (REPO_ROOT / guards.PILOT_DIR / "apps.bicep").read_text(encoding="utf-8")
+        api_env = re.search(r"^var apiEnv = concat\(.*?\n\], businessSettings\)", bicep, re.MULTILINE | re.DOTALL)
+        self.assertIsNotNone(api_env)
+        for provider in ("Drivers__Provider", "Routing__Provider"):
+            self.assertRegex(api_env.group(0), r"name: '" + provider + r"'\s*\n\s*value: 'PostgreSql'")
 
 
 class ObservabilityParametersTests(unittest.TestCase):
@@ -430,6 +658,104 @@ class GateDecisionTests(unittest.TestCase):
                               "--decision-log", str(REPO_ROOT / guards.DECISION_LOG)], capture_output=True, text=True)
         self.assertEqual(1, bad.returncode)
         self.assertIn("STOP_FOR_OWNER_DECISION", bad.stdout)
+
+
+class NonRootImageTests(unittest.TestCase):
+    """P24 (AZR-001-AC-064): the final stage of each of the four pilot images runs as a non-root USER."""
+
+    DOTNET = "FROM mcr.microsoft.com/dotnet/sdk:10.0.101 AS build\nRUN dotnet publish -o /out\n\nFROM mcr.microsoft.com/dotnet/aspnet:10.0\nWORKDIR /app\nCOPY --from=build /out ./\n"
+    NODE = "FROM node:24-bookworm-slim AS build\nRUN pnpm build\n\nFROM node:24-bookworm-slim\nWORKDIR /app\n"
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="env001-nonroot-")
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.workflow = (REPO_ROOT / guards.PILOT_WORKFLOW).read_text(encoding="utf-8")
+        for name in guards.PILOT_DOCKERFILES:
+            body = self.NODE + "USER node\n" if name.endswith("Dockerfile.web") else self.DOTNET + "USER $APP_UID\n"
+            self.write(name, body + 'ENTRYPOINT ["x"]\n')
+
+    def write(self, name: str, text: str) -> None:
+        path = self.root / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")
+
+    def failures(self) -> list[str]:
+        return guards.pilot_image_user_failures(self.root, self.workflow)
+
+    def test_repository_images_run_as_non_root(self):
+        self.assertEqual([], guards.pilot_image_user_failures(REPO_ROOT, self.workflow))
+        self.assertEqual(sorted(guards.PILOT_DOCKERFILES), sorted(guards.WORKFLOW_IMAGE_BUILD.findall(self.workflow)))
+
+    def test_api_and_worker_without_their_user_line_fail(self):
+        for name in ("deploy/azure/Dockerfile.api", "deploy/azure/Dockerfile.worker"):
+            with self.subTest(name=name):
+                text = (REPO_ROOT / name).read_text(encoding="utf-8")
+                self.assertEqual(1, text.count("\nUSER $APP_UID\n"))
+                failure = guards.dockerfile_non_root_failure(name, text.replace("\nUSER $APP_UID\n", "\n"))
+                self.assertIn("final stage has no USER", failure or "")
+
+    def test_conformant_fixture_passes(self):
+        self.assertEqual([], self.failures())
+
+    def test_root_users_fail(self):
+        cases = {
+            "no USER": self.DOTNET,
+            "USER root": self.DOTNET + "USER root\n",
+            "USER ROOT": self.DOTNET + "USER ROOT\n",
+            "USER 0": self.DOTNET + "USER 0\n",
+            "USER 0:0": self.DOTNET + "USER 0:0\n",
+            "USER root:app": self.DOTNET + "USER root:app\n",
+            "lowercase user root": self.DOTNET + "user root\n",
+            "back to root": self.DOTNET + "USER $APP_UID\nRUN true\nUSER root\n",
+            "USER only in the build stage": self.DOTNET.replace("RUN dotnet", "USER $APP_UID\nRUN dotnet"),
+            "commented USER": self.DOTNET + "# USER $APP_UID\n",
+            "unresolved variable": self.DOTNET + "USER $OTHER_UID\n",
+            "APP_UID redeclared by ARG": self.DOTNET + "ARG APP_UID=0\nUSER $APP_UID\n",
+            "APP_UID redeclared by ENV": self.DOTNET + "ENV A=1 APP_UID=0\nUSER ${APP_UID}\n",
+            "escape directive": "# escape=`\n" + self.DOTNET + "USER $APP_UID\n",
+        }
+        for case, text in cases.items():
+            with self.subTest(case=case):
+                self.write("deploy/azure/Dockerfile.api", text + 'ENTRYPOINT ["x"]\n')
+                failures = self.failures()
+                self.assertEqual(1, len(failures), failures)
+                self.assertTrue(failures[0].startswith("deploy/azure/Dockerfile.api"), failures)
+
+    def test_app_uid_needs_an_official_dotnet_base(self):
+        self.write("deploy/azure/pilot/Dockerfile.web", self.NODE + "USER $APP_UID\n")
+        failures = self.failures()
+        self.assertEqual(1, len(failures), failures)
+        self.assertIn("not an official .NET image", failures[0])
+
+    def test_accepted_non_root_forms(self):
+        for user in ("$APP_UID", "${APP_UID}", "$APP_UID:$APP_UID", "app", "1654", "1654:1654", "app:app"):
+            with self.subTest(user=user):
+                self.write("deploy/azure/Dockerfile.worker", self.DOTNET + f"USER {user}\n")
+                self.assertEqual([], self.failures())
+
+    def test_continuations_and_comments_are_read_like_docker(self):
+        text = self.DOTNET.replace("COPY --from=build /out ./\n", "COPY --from=build \\\n  # a comment inside the continuation\n\n  /out ./\n")
+        self.write("deploy/azure/Dockerfile.api", text + "USER \\\n  $APP_UID\n")
+        self.assertEqual([], self.failures())
+        self.assertEqual(("COPY", "--from=build /out ./"), guards.dockerfile_instructions(text)[-1])
+
+    def test_missing_dockerfile_fails(self):
+        (self.root / "deploy/azure/pilot/Dockerfile.db-ops").unlink()
+        self.assertEqual(["deploy/azure/pilot/Dockerfile.db-ops is missing"], self.failures())
+
+    def test_workflow_must_build_exactly_the_checked_images(self):
+        extra = self.workflow.replace(
+            '          echo "api=$(build api deploy/azure/Dockerfile.api)" >> "${GITHUB_OUTPUT}"\n',
+            '          echo "api=$(build api deploy/azure/Dockerfile.api)" >> "${GITHUB_OUTPUT}"\n'
+            '          echo "tool=$(build tool deploy/azure/Dockerfile.tool)" >> "${GITHUB_OUTPUT}"\n', 1)
+        missing = self.workflow.replace('          echo "worker=$(build worker deploy/azure/Dockerfile.worker)" >> "${GITHUB_OUTPUT}"\n', "", 1)
+        for case, workflow in (("fifth image", extra), ("worker not built", missing)):
+            with self.subTest(case=case):
+                self.assertNotEqual(self.workflow, workflow)
+                failures = guards.pilot_image_user_failures(self.root, workflow)
+                self.assertEqual(1, len(failures), failures)
+                self.assertIn("the workflow must build exactly the images", failures[0])
 
 
 @unittest.skipUnless(_bicep(), "pinned Bicep CLI not available (set BICEP_BIN); the azr-static CI job installs it")
@@ -653,6 +979,8 @@ class TemplateGuardTests(unittest.TestCase):
         self.assert_fails(3, self.context(workflow_text=text.replace("environment: azure-pilot", "environment: azure-dev", 1)), "azure-pilot")
         self.assert_fails(4, self.context(workflow_text=text.replace("azr001_static_guards.py deploy-gate", "true", 1)), "deploy-gate")
         self.assert_fails(18, self.context(workflow_text=text.replace("deploy/azure/pilot/Dockerfile.web", "deploy/azure/Dockerfile.web")), "pilot/Dockerfile.web")
+        # P24: the shared web image (no USER) is not one of the four checked images, so building it fails too.
+        self.assert_fails(24, self.context(workflow_text=text.replace("deploy/azure/pilot/Dockerfile.web", "deploy/azure/Dockerfile.web")), "must build exactly the images")
         without_yaml = text.replace("      - name: Install guard dependencies\n        run: python -m pip install PyYAML==6.0.3\n\n      # ENV-001 acceptance", "      # ENV-001 acceptance", 1)
         self.assertNotEqual(text, without_yaml)
         self.assert_fails(20, self.context(workflow_text=without_yaml), "job deploy step")

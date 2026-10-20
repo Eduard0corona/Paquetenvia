@@ -285,8 +285,12 @@ Pooling, retry y cancelación no dejan contexto ni efectos parciales.
 
 Las métricas son `dispatch.assignment.created`, `.conflict`, `.ineligible`,
 `.replay` y `dispatch.driver_stops.count`, sin dimensiones de IDs. Logs solo
-incluyen IDs técnicos, versiones de política, resultado y duración; nunca
-address summary, documentos, hashes, object keys, teléfonos o bodies.
+incluyen los IDs técnicos de orden y asignación, versiones de política,
+resultado y duración; nunca address summary, documentos, hashes, object keys,
+teléfonos o bodies. La organización y el actor no son placeholders del log: van
+como el seudónimo HMAC y el tipo de rol que agrega
+`TraceCorrelatedLoggerFactory`, nunca como id
+(OBS-003-TENANT-PSEUDONYM-2026-10-12; `LogTemplateIdentifierArchitectureTests`).
 Los 403/404 no agregan métrica ni log informativo de causa; no distinguen
 estado idempotente, orden, driver, missing o cross-tenant. No se registra key,
 hash ni estado de replay para un actor denegado.

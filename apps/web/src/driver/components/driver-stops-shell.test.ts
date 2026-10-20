@@ -23,14 +23,45 @@ describe("driver stops generic shell", () => {
     expect(component).not.toContain("detailOrderId");
   });
 
-  it("uses document anchors without Next prefetch navigation", () => {
+  it("moves between list and detail inside the app, without Next prefetch or RSC", () => {
+    // DRV-PWA-INAPP-NAVIGATION: real anchors whose plain click uses the
+    // History API (navigateWithinDriverStops), so no page loads and nothing
+    // is fetched, online or offline.
     expect(component).not.toContain('from "next/link"');
-    expect(component).toContain("<a");
     expect(component).not.toContain("<Link");
+    expect(component).not.toContain("useRouter");
+    expect(component).toContain("<a");
+    expect(component).toContain(
+      "isInAppNavigationClick(event) && navigateWithinDriverStops(href)",
+    );
+    expect(component).toContain("event.preventDefault()");
     expect(component).toContain(
       'href={`/driver/stops/${stop.order_id}`}',
     );
-    expect(component).toContain('href="/driver/stops"');
+    expect(component.match(/<DriverStopsLink className=\{styles\.secondaryLink\} href="\/driver\/stops">/g)).toHaveLength(2);
+    expect(component).toContain(
+      "window.addEventListener(driverStopsRouteChangedEvent, refreshRoute)",
+    );
+    expect(component).toContain('window.addEventListener("popstate", refreshRoute)');
+    // As a page load did, each move reads the stops again (offline: the snapshot).
+    const refreshRoute = component.slice(
+      component.indexOf("const refreshRoute = () => {"),
+      component.indexOf("readRoute();\n    window.addEventListener"),
+    );
+    expect(refreshRoute).toContain("void controllerRef.current?.retry();");
+  });
+
+  it('offers "Iniciar sesión" on the session panels with a validated return url', () => {
+    // DRV-PWA-INAPP-NAVIGATION: the installed app has no address bar.
+    const unavailable = component.indexOf('title="Sesión no disponible"');
+    const unauthorized = component.indexOf(
+      '{state.phase === "unauthorized" ? <SignInAction route={route} /> : null}',
+    );
+    expect(unavailable).toBeGreaterThan(0);
+    expect(component.indexOf("<SignInAction route={route} />", unavailable)).toBeGreaterThan(unavailable);
+    expect(unauthorized).toBeGreaterThan(0);
+    expect(component).toContain("href={buildSignInPromptHref(returnPath)}");
+    expect(component).toContain("Conéctate a internet para iniciar sesión.");
   });
 
   it("renders the same prop-free experience from list and detail pages", () => {

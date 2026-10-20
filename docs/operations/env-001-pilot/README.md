@@ -9,12 +9,12 @@ files (`deploy/azure/*.bicep`, `deploy-core.ps1`, `deploy-azure-dev.yml`) or gua
 |---|---|
 | Templates | `deploy/azure/pilot/{security,platform,jobs,apps,observability}.bicep` |
 | Pilot-only images | `deploy/azure/pilot/Dockerfile.db-ops` (migrator only), `deploy/azure/pilot/Dockerfile.web` (AUTH-001 BFF build) |
-| API and Worker images | `deploy/azure/Dockerfile.api`, `deploy/azure/Dockerfile.worker` (shared, unchanged) |
+| API and Worker images | `deploy/azure/Dockerfile.api`, `deploy/azure/Dockerfile.worker` (shared; run as the non-root `app` user, `USER $APP_UID`) |
 | Business settings reviewed by the owner | `deploy/azure/pilot/apps.settings.json` |
 | OBS-002 alert e-mail (owner) | `deploy/azure/pilot/observability.parameters.json` |
 | Accepted terms and privacy versions for the web (owner, UI-001) | `deploy/azure/pilot/web.parameters.json` |
 | Deployment workflow | `.github/workflows/deploy-azure-pilot.yml` (`workflow_dispatch`, GitHub Environment `azure-pilot`) |
-| Static guards | `tools/azr-001/env001_pilot_guards.py` (24 guards) and `test_env001_pilot_guards.py` |
+| Static guards | `tools/azr-001/env001_pilot_guards.py` (25 guards) and `test_env001_pilot_guards.py` |
 | Restore drill | `deploy/azure/pilot/restore-drill.sh` |
 | One-time bootstrap (owner) | [`bootstrap.md`](bootstrap.md) |
 
@@ -287,8 +287,9 @@ App settings wired by `apps.bicep`:
 `apps.settings.json` holds the business and policy values the owner must choose. It is appended to the
 API and Worker settings. It cannot override any platform-managed prefix, and it cannot carry a
 mock/synthetic value or a secret-looking name (guard P17). The workflow refuses to deploy while any
-value is still `OWNER_DECISION_REQUIRED`; today no value in the file awaits the owner (it only carries
-`Finance__OperationalTimeZone=America/Mazatlan`).
+value is still `OWNER_DECISION_REQUIRED` or while the driver eligibility rules are missing (below). Today the
+file only carries `Finance__OperationalTimeZone=America/Mazatlan`, so the owner still has to supply the driver
+eligibility rules before the first deploy.
 
 There is no assignment or driver eligibility policy version setting (POLICY-VERSIONS-PER-ORG-2026-10-02,
 owner 2026-10-02: "Por empresa, piloto-2026-10-v1"). Each organization carries its own versions in
@@ -305,8 +306,28 @@ organization versions its own pricing policy in `pricing.tariff_rules.policy_ver
 tariffs (MDM-001), and every quote freezes the version of the rule it selected. The API refuses to
 start if `Pricing__PricingPolicyVersion` is still set.
 
-Driver eligibility maps (`Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TYPE>__0`,
-`Drivers__Eligibility__VehicleCapacity__<TYPE>__MaximumPackageCount`, …) go in the same file.
+**Driver eligibility rules (owner decision pending, blocks the deploy).** The API runs with
+`Drivers__Provider=PostgreSql` and `Routing__Provider=PostgreSql`, so it refuses to start until the same file gives
+every vehicle type (`MOTORCYCLE`, `CAR`, `VAN`, `BICYCLE`, `WALKER`) its rules:
+
+- `Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TYPE>__<n>`, numbered from `0`: the documents a driver
+  with that vehicle type needs, at least one, each one of `IDENTITY`, `DRIVER_LICENSE`, `VEHICLE_CARD`, `INSURANCE`,
+  `BACKGROUND_CHECK` or `OTHER`;
+- `Drivers__Eligibility__VehicleCapacity__<TYPE>__MaximumPackageCount`, `__MaximumTotalWeightGrams`,
+  `__MaximumSinglePackageWeightGrams` (not above the total), `__MaximumLengthMillimeters`, `__MaximumWidthMillimeters`
+  and `__MaximumHeightMillimeters`: whole numbers above zero, in plain digits;
+- optionally `Drivers__Eligibility__VehicleCapacity__<TYPE>__RequireDimensions` (`true` refuses a package without
+  dimensions; `false` when absent) and `Drivers__Eligibility__NonExpiringDocumentTypes__<n>` (document types that need
+  no expiry date; every other required document needs one that has not passed).
+
+The file has none today and there is no default: they are business rules the owner chooses.
+`env001_pilot_guards.py settings-check` (provenance job and Stage 4) stops with
+`STOP_FOR_OWNER_DECISION: driver eligibility rules for vehicle type <TYPE> are missing: ...`, naming each missing
+setting, so **the pilot deploy stops before touching Azure** until all five vehicle types are complete. It applies the
+API's rules to every entry present and accepts only the exact names above. Guard P17 (`check`) refuses an invalid entry
+but not a missing one. Without this stop, a first deploy would fail only at the smoke test (`/auth/session is not
+served by the API`), and a later one would leave the earlier revision serving. `PilotApiStartupConfigurationTests`
+pins the two start failures (`OwnerPendingStartFailures`) until the owner supplies the rules.
 
 **Dispatch number for the driver app (DRV-DISPATCH-CONTACT-2026-10-12, owner 2026-10-12: "Sí, configurable
 (Recommended)").** The driver app shows "Llamar a despacho" (a `tel:` link) next to its texts that ask the driver to
@@ -421,13 +442,17 @@ Two further caveats:
 2. The owner records the GATE-007 and GATE-012 decisions (or explicit scopes) in `decision-log.md`,
    then sets `PILOT_GATE_007_DECISION` / `PILOT_GATE_012_DECISION` to those row ids.
    `PILOT_GATE_012_DECISION=GATE-012-PILOT-SCOPE` is already approved (owner, 2026-09-28).
-3. The owner replaces every `OWNER_DECISION_REQUIRED` (PR → `development` → `main`):
-   - `deploy/azure/pilot/apps.settings.json` (none remains since POLICY-VERSIONS-PER-ORG-2026-10-02);
+3. The owner replaces every `OWNER_DECISION_REQUIRED` and supplies the missing owner values (PR → `development` →
+   `main`):
+   - `deploy/azure/pilot/apps.settings.json`: no placeholder remains since POLICY-VERSIONS-PER-ORG-2026-10-02, but
+     the driver eligibility rules (documents and capacity per vehicle type, §4 "Driver eligibility rules") are
+     missing;
    - the alert e-mail in `deploy/azure/pilot/observability.parameters.json`;
    - `webTermsVersion` and `webPrivacyVersion` in `deploy/azure/pilot/web.parameters.json`, the accepted
      terms and privacy notice versions that come with the approved notice (§4).
 
-   Each file blocks the workflow while a placeholder remains.
+   Each file blocks the workflow while a placeholder remains or, in `apps.settings.json`, a driver eligibility rule
+   is missing.
 4. Promote to `main` and wait for the Foundation CI push run on `main` (13/13 green). Note its run id
    and head SHA.
 5. Actions → *Deploy Azure PILOT* → Run workflow on `main`: `tested_git_sha=<head SHA>`,
@@ -530,13 +555,15 @@ grants the role and `apps.bicep` gives the API identity *Key Vault Secrets User*
 the owner can confirm in Log Analytics that `ca-pv-pilot-api` logs `realtime_outbox_dispatcher_started` with
 `provider=postgresql` and no `realtime_outbox_message_failed`.
 
-**Still blocks the API start, separate owner decision (found by `PilotApiStartupConfigurationTests`):** with
+**Driver eligibility rules (step 3, found by `PilotApiStartupConfigurationTests`):** with
 `Drivers__Provider=PostgreSql` and `Routing__Provider=PostgreSql` the API refuses to start until
-`apps.settings.json` carries the driver eligibility maps for every vehicle type (MOTORCYCLE, CAR, VAN, BICYCLE,
+`apps.settings.json` carries the driver eligibility rules for every vehicle type (MOTORCYCLE, CAR, VAN, BICYCLE,
 WALKER): `Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TYPE>__<n>` and
 `Drivers__Eligibility__VehicleCapacity__<TYPE>__{MaximumPackageCount,MaximumTotalWeightGrams,MaximumSinglePackageWeightGrams,MaximumLengthMillimeters,MaximumWidthMillimeters,MaximumHeightMillimeters}`
-(optionally `Drivers__Eligibility__NonExpiringDocumentTypes__<n>`). The file has none today; the values are
-business rules the owner must choose.
+(optionally `Drivers__Eligibility__NonExpiringDocumentTypes__<n>` and
+`Drivers__Eligibility__VehicleCapacity__<TYPE>__RequireDimensions`; §4 "Driver eligibility rules"). The file has
+none today; the values are business rules the owner must choose. `settings-check` stops the deploy before touching
+Azure while any is missing.
 
 ### 6.2 Redeploy
 
@@ -801,7 +828,7 @@ Details, format and error codes: `docs/development/mdm-001-master-data-loader.md
 
 ## 8. Static guards (`tools/azr-001/env001_pilot_guards.py`)
 
-The 24 guards (P00–P23) run on the compiled ARM output and the workflow:
+The 25 guards (P00–P24) run on the compiled ARM output, the workflow and the pilot Dockerfiles:
 
 - **Resources:** only authorized resource types and exactly six workloads. Redis, Azure SignalR,
   Front Door and PostgreSQL firewall rules are rejected.
@@ -829,7 +856,8 @@ The 24 guards (P00–P23) run on the compiled ARM output and the workflow:
 - **ADP-001 and web:**
   - The ADP-001 configuration contract is wired.
   - Business settings cannot override platform settings (P17; `TelemetryExport__` and `TelemetryPseudonym__` are
-    platform-managed).
+    platform-managed). Driver eligibility entries follow the API's start rules (P17), and `settings-check` also
+    requires them for every vehicle type (§4).
   - The web image is a BFF build.
 - **Observability (P21, OBS-002):**
   - exactly the five alert rules, every 5–15 minutes, costing at most 5 USD per month;
@@ -865,6 +893,12 @@ The 24 guards (P00–P23) run on the compiled ARM output and the workflow:
   maps `ConnectionStrings:PaqueteriaWorker` or a Worker secret (the shared OBS-003 pseudonym key is not a Worker
   credential and is exempt); no other workload maps the realtime secret; and the workflow generates exactly the
   `api`, `worker` and `realtime` runtime logins.
+- **Non-root images (P24, AZR-001-AC-064):** AZR-001 v0.8 says "Non-root cuando soporte runtime. Root requiere
+  waiver", and no waiver exists. The workflow builds exactly the four images `deploy/azure/Dockerfile.api`,
+  `deploy/azure/Dockerfile.worker`, `deploy/azure/pilot/Dockerfile.db-ops` and `deploy/azure/pilot/Dockerfile.web`,
+  and the last `USER` of each final stage is non-root: `$APP_UID` (uid 1654, the `app` user) on an official
+  `mcr.microsoft.com/dotnet/` base whose `APP_UID` no `ARG` or `ENV` redefines, or a literal user other than
+  `root`/`0` (`node` for the web). A missing `USER`, a later `USER root` or an unresolvable variable fails.
 
 The unit tests compile the real templates whenever the pinned Bicep CLI is present (the azr-static CI
 job installs it). They mutate the ARM output to prove that each guard fails closed.
@@ -877,12 +911,15 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
 **Verified without Azure:**
 
 - `bicep build` and `bicep lint` pass with the pinned v0.47.16, with no warnings.
-- 24/24 pilot guards (P00–P23) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
+- 25/25 pilot guards (P00–P24) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
   tooling tests. The gitleaks scan was not re-run for OBS-002.
 - The SCL-007 PostgreSQL connection alerts build and lint with no diagnostic, and P21 pins them.
 - The OBS-002 alert and workbook queries parse and type-check offline (Kusto language service).
 - The migrator changes pass contract tests on real PostgreSQL 18/PostGIS 3.6.
 - The BFF web build and `next start` with the CSP connect source work.
+- The API and Worker images run as the non-root `app` user (uid 1654). With the final stage of each Dockerfile
+  copied verbatim over a local `dotnet publish`, both listen on `0.0.0.0:8080` and answer `/health/live` with 200, with
+  no permission error (Development configuration, so the PostgreSQL key ring and Key Vault were not exercised).
 
 **Unverified until the first real deployment:**
 

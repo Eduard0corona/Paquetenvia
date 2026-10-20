@@ -26,7 +26,7 @@ Convenciones:
 
 | Bloqueo | Quién lo revisa | En qué momento | Paso de esta guía |
 |---|---|---|---|
-| `apps.settings.json` con `OWNER_DECISION_REQUIRED` | `env001_pilot_guards.py settings-check` (job `provenance`) | Antes de tocar Azure | 0.2 |
+| `apps.settings.json` con `OWNER_DECISION_REQUIRED` o sin las reglas de elegibilidad de repartidores (documentos y capacidad por tipo de vehículo) | `env001_pilot_guards.py settings-check` (job `provenance`) | Antes de tocar Azure | 0.2 |
 | `observability.parameters.json` con `OWNER_DECISION_REQUIRED` o correo inválido | `observability-check` (job `provenance` y Stage 5) | Antes de tocar Azure | 6 |
 | `web.parameters.json` con `OWNER_DECISION_REQUIRED` o versión inválida (términos / aviso de privacidad) | `web-check` (job `provenance` y Stage 4) | Antes de tocar Azure | 6.1 |
 | SHA no certificado 13/13 por Foundation CI en `main`, o workflow no lanzado desde `main` | `azr001_static_guards.py deploy-gate` | Antes de tocar Azure | 7 |
@@ -34,7 +34,7 @@ Convenciones:
 | `PILOT_GATE_007_DECISION` / `PILOT_GATE_012_DECISION` sin una fila válida en `decision-log.md` | `env001_pilot_guards.py gate-decision` | Antes del login en Azure | 0.1 y 3 |
 | Grupo de recursos inexistente o fuera de `mexicocentral` | Paso "Verify subscription, resource group and region" | Tras el login | 1 |
 | Rol custom `Paquetenvia Pilot Blob Tag Reader` inexistente | Paso "Prepare platform parameters" | Tras Stage 1 | 2.4 |
-| Faltan en Key Vault `authcenter-paquetenvia-client-secret`, `google-maps-api-key` o `public-tracking-link-key` | Paso de secretos de la ventana 2 | Tras Stage 2 (la bóveda ya existe) | 5 |
+| Faltan en Key Vault `authcenter-paquetenvia-client-secret`, `google-maps-api-key`, `public-tracking-link-key` o `paquetenvia-telemetry-pseudonym-key-1` | Paso de secretos de la ventana 2 | Tras Stage 2 (la bóveda ya existe) | 5 |
 
 Consecuencia práctica: **el primer run siempre falla a propósito** al llegar a los secretos del owner,
 porque la bóveda la crea ese mismo run (README §6.1 paso 6). Es lo esperado.
@@ -62,12 +62,31 @@ con ID que empiece por `GATE-007-` / `GATE-012-` y columna Type exactamente `Gat
 
 ### 0.2 Valores de negocio en `deploy/azure/pilot/apps.settings.json`
 
-En `development` (commit `e52158f`) todavía hay dos `OWNER_DECISION_REQUIRED`:
-`Dispatch__AssignmentPolicyVersion` y `Drivers__Eligibility__PolicyVersion`. **Esto ya está resuelto
-en el PR #174**, que implementa tu decisión del 2 de octubre (versión por empresa, iniciando con
-`piloto-2026-10-v1`): elimina ambos valores del archivo, las versiones viven en cada organización y el
-guard rechaza esos nombres si reaparecen. No tienes que hacer nada aquí; queda resuelto al fusionar #174
-y promoverlo a `main`.
+Las versiones de política ya no bloquean: el PR #174 implementó tu decisión del 2 de octubre (versión por
+empresa, iniciando con `piloto-2026-10-v1`), quitó `Dispatch__AssignmentPolicyVersion` y
+`Drivers__Eligibility__PolicyVersion` del archivo, las versiones viven en cada organización y el guard
+rechaza esos nombres si reaparecen.
+
+**Lo que sí tienes que hacer aquí antes del primer deploy: las reglas de elegibilidad de repartidores.** La
+API corre con `Drivers__Provider=PostgreSql` y `Routing__Provider=PostgreSql` y no arranca sin ellas. Hoy el
+archivo solo tiene `Finance__OperationalTimeZone`, así que `settings-check` se detiene con
+`STOP_FOR_OWNER_DECISION: driver eligibility rules for vehicle type <TIPO> are missing: ...` y nombra cada
+valor que falta. Para cada tipo de vehículo (`MOTORCYCLE`, `CAR`, `VAN`, `BICYCLE`, `WALKER`) agrega:
+
+- **Documentos:** `Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TIPO>__0`, `__1`, …: al menos
+  uno, cada uno de `IDENTITY`, `DRIVER_LICENSE`, `VEHICLE_CARD`, `INSURANCE`, `BACKGROUND_CHECK` u `OTHER`.
+- **Capacidad:** `Drivers__Eligibility__VehicleCapacity__<TIPO>__MaximumPackageCount`,
+  `__MaximumTotalWeightGrams`, `__MaximumSinglePackageWeightGrams` (no mayor que el total),
+  `__MaximumLengthMillimeters`, `__MaximumWidthMillimeters` y `__MaximumHeightMillimeters`: enteros mayores
+  que cero, solo dígitos.
+- **Opcionales:** `Drivers__Eligibility__VehicleCapacity__<TIPO>__RequireDimensions` (`true` rechaza paquetes
+  sin medidas; `false` si no lo pones) y `Drivers__Eligibility__NonExpiringDocumentTypes__<n>` (documentos que
+  no vencen; los demás necesitan una fecha de vencimiento vigente).
+
+No hay valores por defecto: son reglas de negocio tuyas y el repo no las inventa. Van por PR → `development`
+→ `main` como cualquier cambio del archivo (README §4, "Driver eligibility rules"). Sin este alto, el primer
+deploy fallaría solo en el smoke test (`/auth/session is not served by the API`), y en los siguientes la
+revisión anterior seguiría sirviendo.
 
 > **Versiones de términos y aviso de privacidad (bloquea el deploy):** `PAQUETERIA_TERMS_VERSION` y
 > `PAQUETERIA_PRIVACY_VERSION` del contenedor web ya están cableados en `apps.bicep`. Sus valores van en
@@ -319,7 +338,7 @@ Registros, en tu proveedor DNS de `paquetenvia.com`:
 Fuente: README §4 (tabla de secretos), §6.6 y `bootstrap.md` §5 ("Owner access to the vault").
 
 El workflow genera solo `pg-admin-password`, `pg-*-connection`, `pg-*-login-verifier` y
-`paquetenvia-email-lookup-key-1`. **Los tres siguientes los escribes tú**, y el workflow se detiene
+`paquetenvia-email-lookup-key-1`. **Los cuatro siguientes los escribes tú**, y el workflow se detiene
 (`::error::Key Vault <kv> lacks ...`) mientras falte **cualquiera** de ellos, en este orden:
 
 | Secreto | Valor | Lo lee |
@@ -327,11 +346,12 @@ El workflow genera solo `pg-admin-password`, `pg-*-connection`, `pg-*-login-veri
 | `authcenter-paquetenvia-client-secret` | El client secret que AuthCenter te entrega una sola vez para el cliente `paquetenvia-web-prod` | API (`AuthCenter:ClientSecret`) |
 | `google-maps-api-key` | API key de Google Maps Platform, restringida (5.2) | API (`Locations:GoogleMaps:ApiKey`) |
 | `public-tracking-link-key` | 32 bytes aleatorios en base64, generados en el momento | API (`PublicTracking:LinkKeys:1`) |
+| `paquetenvia-telemetry-pseudonym-key-1` | 32 bytes aleatorios en base64, generados en el momento | API y Worker (`TelemetryPseudonym:Keys:1`) |
 
-Los tres deben existir **antes del segundo run**. La API lee `google-maps-api-key` al arrancar aunque
+Los cuatro deben existir **antes del segundo run**. La API lee `google-maps-api-key` al arrancar aunque
 `Locations__GeocodingProvider=Manual`, y un secreto mapeado que falte detiene el host (README §4 y §6.6).
 
-> Nota: el workflow exige los tres (README §6.1 paso 6) y solo reporta el primero que falta. Escríbelos
+> Nota: el workflow exige los cuatro (README §6.1 paso 6) y solo reporta el primero que falta. Escríbelos
 > todos de una vez para no gastar un run por cada uno.
 
 ### 5.1 Obtener los valores (fuera de Azure)
@@ -349,6 +369,7 @@ Los tres deben existir **antes del segundo run**. La API lee `google-maps-api-ke
 
 - **Google Maps (5.2).**
 - **Tracking:** se genera dentro del propio comando de 5.4; no hace falta obtenerlo antes.
+- **Seudónimo de telemetría:** igual, se genera dentro del comando de 5.4.
 
 ### 5.2 Google Cloud: key restringida, cuotas y presupuesto
 
@@ -423,7 +444,7 @@ az keyvault network-rule add    --name "$KV" --ip-address "${MYIP}/32" --output 
 az keyvault network-rule remove --name "$KV" --ip-address "${MYIP}/32" --output none   # close
 ```
 
-### 5.4 Escribir los tres secretos (README §6.6, literal)
+### 5.4 Escribir los cuatro secretos (README §6.6, literal)
 
 Cada valor se pega cuando el comando lo pide: no queda en el historial, se escribe a un archivo
 temporal y se borra con `shred`.
@@ -446,6 +467,11 @@ umask 077 && openssl rand -base64 32 | tr -d '\n' > /tmp/tl && \
 az keyvault secret set --vault-name "$KV" --name public-tracking-link-key --file /tmp/tl --encoding utf-8 --output none; \
 shred -u /tmp/tl
 
+# 4) paquetenvia-telemetry-pseudonym-key-1: 32 bytes aleatorios, base64, generados aquí y nunca mostrados
+umask 077 && openssl rand -base64 32 | tr -d '\n' > /tmp/tp && \
+az keyvault secret set --vault-name "$KV" --name paquetenvia-telemetry-pseudonym-key-1 --file /tmp/tp --encoding utf-8 --output none; \
+shred -u /tmp/tp
+
 # Comprobar que existen (solo nombres, nunca valores)
 az keyvault secret list --vault-name "$KV" --query "[].name" -o tsv | sort
 
@@ -456,6 +482,8 @@ Avisos importantes:
 - `public-tracking-link-key` **se escribe una vez y no se reemplaza**. Cambiar su valor bajo la misma
   versión hace que la API se niegue a mostrar las ligas existentes (falla cerrado). Para rotarla se usa
   un secreto nuevo (`LinkKeys:2`) mediante un cambio de plantilla revisado (README §6.6).
+- `paquetenvia-telemetry-pseudonym-key-1` también **se escribe una vez**: la API y el Worker no arrancan sin
+  ella, y rotarla es un cambio de plantilla revisado (README §6.6).
 - **Nunca borres** secretos de la bóveda: tiene purge protection y el nombre queda bloqueado 90 días.
 - Si no quieres acceso permanente, quita tu rol al terminar:
   ```bash
@@ -592,7 +620,7 @@ Del *Summary* del run copia la IP estática y el `asuid` (paso 4).
 
 ### 7.3 Entre runs
 
-1. Escribe los tres secretos (paso 5.3–5.4).
+1. Escribe los cuatro secretos (paso 5.3–5.4).
 2. Crea los registros DNS (paso 4) y espera a que propaguen.
 
 ### 7.4 Run 2 (`none`) y Run 3 (`bind`)
@@ -797,7 +825,9 @@ Después mándame los dos nombres (no son secretos) para el cambio que conecte e
 1. **GATE-007 (bloqueante):** no hay ninguna fila `GATE-007-*` con Type `Gate resolution`/`Gate scoping`
    en `decision-log.md`. Sin ella el deploy no inicia sesión en Azure. ¿Qué se registra y con qué ID?
    Implica tocar `docs/normative/**` con checksums y manifest sincronizados.
-2. ~~apps.settings.json~~: resuelto por el PR #174 (versión por empresa, `piloto-2026-10-v1`).
+2. **apps.settings.json (bloqueante):** las versiones de política quedaron resueltas por el PR #174 (versión
+   por empresa, `piloto-2026-10-v1`), pero faltan las reglas de elegibilidad de repartidores (documentos y
+   capacidad por tipo de vehículo, paso 0.2). Sin ellas `settings-check` detiene el deploy.
 3. **Términos y privacidad web** (`PAQUETERIA_TERMS_VERSION`/`PAQUETERIA_PRIVACY_VERSION`): ya están
    cableados (`web.parameters.json`, paso 6.1). **Bloquean el deploy** hasta que definas ambas versiones,
    que dependen del aviso de privacidad aprobado (GATE-007).
@@ -807,8 +837,9 @@ Después mándame los dos nombres (no son secretos) para el cambio que conecte e
 6. **Transferencia de direcciones a Google** depende de GATE-007.
 7. ~~Orden de AuthCenter~~: corregido; README §6.1 ahora registra las URIs de `paquetenvia-web-prod`
    (paso 9) antes de la prueba de login (paso 11).
-8. ~~README §6.1 paso 6~~: corregido; ahora nombra los tres secretos del owner
-   (`authcenter-paquetenvia-client-secret`, `google-maps-api-key`, `public-tracking-link-key`).
+8. ~~README §6.1 paso 6~~: corregido; ahora nombra los cuatro secretos del owner
+   (`authcenter-paquetenvia-client-secret`, `google-maps-api-key`, `public-tracking-link-key`,
+   `paquetenvia-telemetry-pseudonym-key-1`).
 9. **Prevent self-review** en el environment, con un único revisor.
 10. **CAA en el DNS** de `paquetenvia.com`: el repo no lo menciona; revisar antes del `bind`.
 11. **Clonar el repo en Cloud Shell** para usar `kv-firewall.sh` (repo privado). Hay alternativa manual
