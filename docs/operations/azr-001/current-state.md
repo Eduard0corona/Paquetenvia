@@ -111,3 +111,24 @@ update_2026_10_20:
   check: tools/azr-001/test_azr001_static_guards.py DevSyntheticNonRootImageTests (every deploy/azure/Dockerfile*)
   azure_clean_path: NOT_YET_EXERCISED_ON_AZURE
 ```
+
+## Update recorded on 2026-10-20 (db-ops image migrator sources)
+
+Before every command the DatabaseMigrator reads the baseline files and the source of every module lane from `/app`.
+Since SCL-001 (`d135e71`), three of those sources are under `src/BuildingBlocks/Paqueteria.Infrastructure`.
+`deploy/azure/Dockerfile.db-ops` copied only `src/Modules`, so the DEV-SYNTHETIC migration job
+(`migration-job.bicep`) would have exited 3 at start ("DataProtection adoption migration is missing"). The image now
+also copies the two directories that hold them. Built locally, it passes `verify` with every lane `VERIFIED` as
+uid 1654, and `assert` against a local PostGIS 18/3.6 database. The `--azure-ownership-bridge` path still has no
+Azure evidence.
+
+```yaml
+update_2026_10_20_db_ops_sources:
+  deploy/azure/Dockerfile.db-ops:
+    added_copies:
+      - src/BuildingBlocks/Paqueteria.Infrastructure/DataProtection/Migrations
+      - src/BuildingBlocks/Paqueteria.Infrastructure/Database/Evolution/Migrations
+    local_verify: {exit: 0, lanes_verified: 13, user: "app (uid 1654)"}
+  check: tests/Paqueteria.ArchitectureTests/DbOpsImageArchitectureTests.cs (every deploy/**/Dockerfile.db-ops*)
+  azure_clean_path: NOT_YET_EXERCISED_ON_AZURE
+```
