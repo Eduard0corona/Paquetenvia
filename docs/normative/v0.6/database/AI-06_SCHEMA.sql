@@ -686,26 +686,40 @@ CREATE TABLE notifications.notifications (
 );
 -- NTF-RECIPIENT-NOTICES-2026-10-20 (AI-24 recipient_notices). This table, notifications.notification_templates and
 -- notifications.notification_status_events evolve in the Notifications lane (NTF-001 step
--- 20260815000100_AddTenantSafeOutboxNotifications) and stay lane-owned. Declared contract, not installed yet: the
--- Notifications lane step of AI-08 NTF-003 changes them, with Up, Down and Up again tested on PostgreSQL and a Down that
--- refuses while external-channel rows or opt-outs exist:
---   notification_templates: channel IN_APP, WHATSAPP or EMAIL (today IN_APP only); body required for IN_APP only
---     (WhatsApp text lives in WhatsApp Manager, e-mail text in configuration); allowed_variables from a closed catalog
---     per template key (order_public_id only for recipient notices); one immutable row per organization, key, version
---     and channel for recipient.tracking-link, recipient.in-transit, recipient.delivery-failed and recipient.delivered,
---     provisioned like orders.created.operations.
---   notifications: recipient_user_id nullable and present exactly for IN_APP; recipient_kind OWNER_ORG_USER or
---     ORDER_DESTINATION; order_event_id; delivered_at; one ORDER_DESTINATION row per owner organization, order event,
---     channel and template key (partial unique index); provider_reference unique per channel when present. Recipient
---     notices keep recipient_ciphertext and pii_key_version NULL: the recipient is the destination location of
---     order_id, read when the notice is sent. The CHECKs above already admit WHATSAPP, EMAIL, DELIVERED and CANCELLED.
---   notification_status_events: status also DELIVERED and CANCELLED.
---   notifications.recipient_opt_outs: one platform-wide, append-only store of keyed hashes with ENABLE and FORCE ROW
---     LEVEL SECURITY and no policy, reached only through the SECURITY DEFINER functions AI-18 declares; columns
---     contact_hash bytea of exactly 32 bytes (HMAC-SHA256 under the contact lookup key over paquetenvia-contact-v1, the
---     channel and the normalized phone or e-mail), channel WHATSAPP or EMAIL, key_version, source RECIPIENT_REPLY,
---     EMAIL_LINK or DISPATCHER, recorded_at; one row per hash and channel; never a number, an address, a message body or
---     an organization.
+-- 20260815000100_AddTenantSafeOutboxNotifications) and stay lane-owned. Installed by the Notifications lane step
+-- 20261020000100_AddRecipientNoticeLane of AI-08 NTF-003, which holds the DDL (Up, Down and Up again tested on PostgreSQL;
+-- its Down refuses while an ORDER_DESTINATION Notification, a DELIVERED or CANCELLED status, a provider reference, an
+-- opt-out, an active orders.recipient-notice-requested row or an active v2 status-changed row exists, and otherwise
+-- restores the published shape):
+--   notification_templates: notification_templates_channel_check is channel IN_APP, WHATSAPP or EMAIL; body is nullable
+--     and notification_templates_catalog_check closes the catalog per template key - orders.created.operations on IN_APP
+--     with its body and the variables occurred_at, order_public_id and order_status; recipient.tracking-link,
+--     recipient.in-transit, recipient.delivery-failed and recipient.delivered on WHATSAPP or EMAIL with no body (WhatsApp
+--     text lives in WhatsApp Manager, e-mail text in configuration) and order_public_id as the only variable; one
+--     immutable row per organization, key, version 1 and channel, provisioned by notifications.provision_default_templates
+--     like orders.created.operations (the step adds them for every organization that holds that template).
+--   notifications: recipient_kind text NOT NULL DEFAULT 'OWNER_ORG_USER' (notifications_recipient_kind_check:
+--     OWNER_ORG_USER or ORDER_DESTINATION); order_event_id uuid; delivered_at timestamptz; recipient_user_id nullable.
+--     notifications_recipient_shape_check: an OWNER_ORG_USER row is IN_APP with its recipient_user_id and no
+--     order_event_id; an ORDER_DESTINATION row is WHATSAPP or EMAIL with order_id and order_event_id, no recipient_user_id
+--     and recipient_ciphertext and pii_key_version NULL (the recipient is the destination location of order_id, read when
+--     the notice is sent). notifications_owner_user_status_check keeps IN_APP at PENDING, SENT or FAILED;
+--     notifications_delivered_at_check ties delivered_at to DELIVERED; notifications_provider_reference_check admits a
+--     provider reference (1 to 256 of A-Z a-z 0-9 . _ : = + / -) only on a recipient notice. Unique indexes
+--     notifications_order_destination_uq (owner_org_id, order_event_id, channel, template_key WHERE recipient_kind is
+--     ORDER_DESTINATION) and notifications_provider_reference_uq (channel, provider_reference WHERE it is present). The
+--     CHECKs above already admit WHATSAPP, EMAIL, DELIVERED and CANCELLED.
+--   notification_status_events: notification_status_events_status_check is PENDING, SENT, DELIVERED, FAILED or
+--     CANCELLED.
+--   notifications.recipient_opt_outs: one platform-wide, append-only store of keyed hashes (trigger
+--     recipient_opt_outs_append_only) with ENABLE and FORCE ROW LEVEL SECURITY and no policy, reached only through the
+--     SECURITY DEFINER functions AI-18 declares (no privilege for paqueteria_app or paqueteria_worker; SELECT for
+--     paqueteria_outbox_executor); columns contact_hash bytea of exactly 32 bytes (HMAC-SHA256 under the contact lookup
+--     key over paquetenvia-contact-v1, the channel and the normalized phone or e-mail), channel WHATSAPP or EMAIL,
+--     key_version integer 1 to 32767 (as EmailLookup:Keys), source RECIPIENT_REPLY (WhatsApp only), EMAIL_LINK (e-mail
+--     only) or DISPATCHER, recorded_at; primary key (contact_hash, channel); never a number, an address, a message body
+--     or an organization. NTF-006 adds its writer functions.
+-- Declared contract, not installed yet (Notifications lane step of AI-08 NTF-006):
 --   automatic replies (AI-08 NTF-006, E4-P9 and E4-P15): a platform-wide store with the same row security and
 --     definer-only access, holding per request only its kind (automatic reply or opt-out confirmation), the sender
 --     contact hash, the sender number sealed under the recipient-notice key until the one reply attempt (then erased),

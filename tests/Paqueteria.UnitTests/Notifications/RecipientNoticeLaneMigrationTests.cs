@@ -266,6 +266,67 @@ public sealed partial class RecipientNoticeLaneMigrationTests
         Assert.DoesNotContain("Ver seguimiento", AddRecipientNoticeLane.UpSql, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void AI06_and_AI18_declare_exactly_what_the_step_installs()
+    {
+        // The Notifications tables stay lane-owned, so the step holds the DDL; AI-06 and AI-18 name the same objects.
+        var schema = File.ReadAllText(TestPath("docs/normative/v0.6/database/AI-06_SCHEMA.sql"));
+        var roles = File.ReadAllText(TestPath("docs/normative/v0.6/database/AI-18_DATABASE_ROLE_MODEL.sql"));
+        Assert.Contains(AddRecipientNoticeLane.MigrationId, schema, StringComparison.Ordinal);
+        Assert.Contains(AddRecipientNoticeLane.MigrationId, roles, StringComparison.Ordinal);
+        foreach (var name in new[]
+                 {
+                     "notification_templates_channel_check",
+                     "notification_templates_catalog_check",
+                     "notifications_recipient_kind_check",
+                     "notifications_recipient_shape_check",
+                     "notifications_owner_user_status_check",
+                     "notifications_delivered_at_check",
+                     "notifications_provider_reference_check",
+                     "notifications_order_destination_uq",
+                     "notifications_provider_reference_uq",
+                     "notification_status_events_status_check",
+                     "notifications.recipient_opt_outs",
+                     "recipient_opt_outs_append_only",
+                     "recipient_kind text NOT NULL DEFAULT 'OWNER_ORG_USER'",
+                     "order_event_id uuid",
+                     "delivered_at timestamptz",
+                 })
+        {
+            Assert.Contains(name, schema, StringComparison.Ordinal);
+            Assert.Contains(name, AddRecipientNoticeLane.UpSql, StringComparison.Ordinal);
+        }
+
+        foreach (var key in AddRecipientNoticeLane.RecipientTemplateKeys)
+        {
+            Assert.Contains(key, schema, StringComparison.Ordinal);
+        }
+
+        foreach (var signature in new[]
+                 {
+                     "security.expand_recipient_notice_request(uuid,uuid,boolean,interval,time,time,text,text[])",
+                     "security.read_notification_delivery(uuid,uuid)",
+                     "security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,text,timestamptz,timestamptz)",
+                     "security.cancel_notification(uuid,uuid,uuid,integer,text,timestamptz)",
+                     "security.is_recipient_opted_out(text,bytea[])",
+                 })
+        {
+            Assert.Contains(signature, roles, StringComparison.Ordinal);
+            Assert.Contains($"REVOKE ALL ON FUNCTION {signature} FROM PUBLIC;", AddRecipientNoticeLane.UpSql, StringComparison.Ordinal);
+        }
+
+        // AI-18 grants none of them: the lane step does (the RTM-API-REALTIME-DISPATCHER-ROLE precedent).
+        foreach (var name in new[] { "recipient_opt_outs", "expand_recipient_notice_request", "cancel_notification", "is_recipient_opted_out" })
+        {
+            Assert.DoesNotContain(name, RemoveComments(roles), StringComparison.Ordinal);
+        }
+
+        Assert.DoesNotContain("recipient_opt_outs", RemoveComments(schema), StringComparison.Ordinal);
+    }
+
+    private static string RemoveComments(string sql) =>
+        string.Join('\n', sql.Split('\n').Where(line => !line.TrimStart().StartsWith("--", StringComparison.Ordinal)));
+
     private static string Header(string definition) =>
         definition[..(definition.IndexOf("AS $fn$", StringComparison.Ordinal) + "AS $fn$".Length)];
 

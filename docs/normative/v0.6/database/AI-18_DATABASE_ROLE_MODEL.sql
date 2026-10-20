@@ -501,19 +501,31 @@ REVOKE paqueteria_realtime FROM paqueteria_app, paqueteria_worker, paqueteria_bo
 
 -- Recipient notices (NTF-RECIPIENT-NOTICES-2026-10-20, project owner: E4 "Los 4 del plan (Recommended)", E4-P2 "Llave
 -- propia para avisos (Recommended)", E4-P8 "Las tres vías (Recommended)" and E4-P9 "Respuesta automática
--- (Recommended)"; docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md; AI-24 recipient_notices). Declared contract, not installed
--- yet: nothing in this baseline changes until each named lane step lands together with its baseline assertions.
--- 1. Notifications lane step of AI-08 NTF-003. security.resolve_outbox_consumer(text) gains the branch
---    orders.recipient-notice-requested -> NOTIFICATIONS. New or replaced functions, each owned by
---    paqueteria_outbox_executor, SECURITY DEFINER with a pinned search_path that starts with pg_catalog and ends with
---    pg_temp, without dynamic SQL or RETURNING into runtime tables, EXECUTE revoked from PUBLIC and held only by
---    paqueteria_worker: security.expand_recipient_notice_request (one Notification per eligible channel, its status
---    event, its status-changed row and its send request, under the source lease_token), security.read_notification_delivery
---    v2, security.apply_notification_outcome v2 (adds the provider reference and the outcome CANCELLED; the published
---    8-argument signature loses its EXECUTE and is dropped in the same step), security.cancel_notification and
---    security.is_recipient_opted_out (reads only the opt-out store). The new tables of the step keep FORCE ROW LEVEL
---    SECURITY; the step removes the default module privileges paqueteria_app and paqueteria_worker would receive on the
---    opt-out store (the identity.bff_sessions precedent), so the runtime roles reach it only through these functions.
+-- (Recommended)"; docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md; AI-24 recipient_notices). Each named lane step changes
+-- nothing in this baseline: it lands together with its baseline assertions. Step 1 is installed; steps 2 and 3 are
+-- declared contract, not installed yet.
+-- 1. Notifications lane step 20261020000100_AddRecipientNoticeLane of AI-08 NTF-003 (installed).
+--    security.resolve_outbox_consumer(text) gains the branch orders.recipient-notice-requested -> NOTIFICATIONS. New or
+--    replaced functions, each owned by paqueteria_outbox_executor, SECURITY DEFINER with a pinned search_path that starts
+--    with pg_catalog and ends with pg_temp, without dynamic SQL or RETURNING, EXECUTE revoked from PUBLIC and held only by
+--    paqueteria_worker:
+--      security.expand_recipient_notice_request(uuid,uuid,boolean,interval,time,time,text,text[]) (source id, lease_token,
+--        enabled, maximum delay, quiet-hours start and end, public id, eligible channels: one Notification per eligible
+--        channel, its status event, its status-changed row and its send request, under the source lease_token; the
+--        order, its event, the notice and the time come from the leased row);
+--      security.read_notification_delivery(uuid,uuid) v2 (same arguments; adds recipient_kind, order_id, order_event_id
+--        and created_at, and the template body is NULL for WhatsApp and e-mail);
+--      security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,text,timestamptz,timestamptz) v2 (adds the
+--        provider reference and the outcome CANCELLED, with the closed code allowlist per channel; the published
+--        8-argument signature loses its EXECUTE and is dropped in the same step);
+--      security.cancel_notification(uuid,uuid,uuid,integer,text,timestamptz) (the CANCELLED outcome under the send
+--        request's lease_token, for NOTICE_SUPERSEDED, NOTICE_STALE, NOTICE_LIMIT_REACHED or RECIPIENT_OPTED_OUT);
+--      security.is_recipient_opted_out(text,bytea[]) (reads only the opt-out store and returns only a boolean).
+--    security.emit_notification_status_changed and notifications.provision_default_templates keep their signatures,
+--    owner and grants with new bodies (payload notification-status-changed-v2; the recipient notice templates). The new
+--    table of the step keeps FORCE ROW LEVEL SECURITY; the step removes the default module privileges paqueteria_app and
+--    paqueteria_worker would receive on the opt-out store (the identity.bff_sessions precedent), so the runtime roles
+--    reach it only through these functions, and grants paqueteria_outbox_executor SELECT on it.
 -- 2. Orders lane step of AI-08 NTF-004: orders.recipient_notice_consents keeps only INSERT and SELECT under row security
 --    for paqueteria_app and SELECT for paqueteria_worker, with UPDATE and DELETE removed and an append-only trigger. The
 --    producer row orders.recipient-notice-requested uses the existing INSERT on platform.outbox_events.
@@ -573,3 +585,4 @@ REVOKE paqueteria_realtime FROM paqueteria_app, paqueteria_worker, paqueteria_bo
 -- 35. paqueteria_realtime is NOLOGIN NOBYPASSRLS, inherits no role, is granted to no group role (only to the API's realtime LOGIN), owns nothing, has no default privilege and, until the Notifications lane step 20261012000100_AddRealtimeDispatcherRole is recorded (or after it is rolled back), holds no privilege at all. The role persists after that step is rolled back: AI-18 declares it, and without the grants it is inert.
 -- 36. once that step is recorded, paqueteria_realtime holds exactly USAGE on schemas security, orders, dispatch, drivers, identity, organizations and routes, EXECUTE on the six lease-token functions above and SELECT on the 53 columns above, none grantable: no table-wide grant, no INSERT, UPDATE or DELETE, no privilege on either outbox table, no USAGE on platform, no CREATE anywhere and no EXECUTE beyond PUBLIC on any other security, platform, notifications or extensions routine; every column it reads is also readable by paqueteria_app.
 -- 37. the role cannot bypass RLS: every table it reads has ENABLE and FORCE ROW LEVEL SECURITY, so, exactly like paqueteria_app, it reads only the rows the tenant policies admit for the context its own transaction sets: rows of the organizations in app.current_org_ids and, on identity.users and organizations.organization_memberships, also the rows of the user named in app.current_user_id (security.app_current_user(), a setting the session controls). With both settings empty it reads no row; the dispatchers set app.current_user_id empty and exactly one organization in app.current_org_ids, so they read only that organization's rows. Only its two claim functions return rows of every tenant, as described above.
+-- 38. once the Notifications lane step 20261020000100_AddRecipientNoticeLane (NTF-RECIPIENT-NOTICES-2026-10-20) is recorded, security.expand_recipient_notice_request(uuid,uuid,boolean,interval,time,time,text,text[]), security.read_notification_delivery(uuid,uuid), security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,text,timestamptz,timestamptz), security.cancel_notification(uuid,uuid,uuid,integer,text,timestamptz) and security.is_recipient_opted_out(text,bytea[]) are owned by paqueteria_outbox_executor, SECURITY DEFINER with a pinned search_path, and only paqueteria_worker may EXECUTE them; the published 8-argument security.apply_notification_outcome is absent; notifications.recipient_opt_outs has ENABLE and FORCE ROW LEVEL SECURITY with no policy, paqueteria_app, paqueteria_worker, paqueteria_realtime and paqueteria_bootstrap hold no privilege on it and paqueteria_outbox_executor holds SELECT only. Its rollback restores the published routines and grants exactly.

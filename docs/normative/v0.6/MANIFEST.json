@@ -4,7 +4,7 @@
   "bundle_revision": "v0.6-full-canonical-sync-7-fin001-mvp1",
   "date": "2026-07-31",
   "status": "NORMATIVE_BASELINE_CANONICAL_SYNC_FIN001_MVP1",
-  "canonical_sql_sha256": "0c565dd5361013f00a72dc44a9e901e7f07373ed16b67ab98b008fc567362686",
+  "canonical_sql_sha256": "228cebbe67877cf4ca6818dfb7fa000883e01c1f57d8080dd998c34edb2aae6f",
   "file_count": 74,
   "files": [
     {
@@ -25,7 +25,7 @@
     {
       "path": "CANONICAL_SOURCE_OF_TRUTH.md",
       "bytes": 4696,
-      "sha256": "602ee292f0c836ed031bfeaadcf4341622464e6c650c8cf3291a79da63d4cbd1"
+      "sha256": "0cb5444cf01fb3cae842cfd72e9b660806969b5d453293d2ea6ad2b939d290d9"
     },
     {
       "path": "CHANGED_FILES_SINCE_V0.5.md",
@@ -34,18 +34,18 @@
     },
     {
       "path": "CHANGELOG.md",
-      "bytes": 235871,
-      "sha256": "ea12d7d8771d09487fa7d2ad943035c687c627eeca1f01f6066a46dd8f1118e7"
+      "bytes": 240154,
+      "sha256": "d2d342b287ec28c7c209bec295548c4a784bc1062652de9d6f443d234ea2bffb"
     },
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "ed0c3e9b2d36808bff3a1b8ee1f0bdbd6e549486792b79515114809ed7c0e15a"
+      "sha256": "8d92c6bc07a5967de14f06dda642c7888867c119821da02ce2ba4fa4574e126d"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
       "bytes": 2634,
-      "sha256": "d303bd5e878513baafe1c89e5d92571e9c430cbb24808d01d09ca46b2862384d"
+      "sha256": "fd0bc1393e8495e473d702fe8b55aec71bb7ace52919948e78c30bc24bcacc1f"
     },
     {
       "path": "VALIDATION_RESULTS.txt",
@@ -59,18 +59,18 @@
     },
     {
       "path": "contracts/AI-12_SIGNALR_CONTRACT.yaml",
-      "bytes": 7874,
-      "sha256": "3674107551053ea2c8442577c5e664280c735967df914093da16d8c72cf55001"
+      "bytes": 8429,
+      "sha256": "762ecdd38f3fd5020e9470bb706003921656dee2c7c32095aaca8ce46fa62db5"
     },
     {
       "path": "database/AI-06_SCHEMA.sql",
-      "bytes": 77415,
-      "sha256": "0c565dd5361013f00a72dc44a9e901e7f07373ed16b67ab98b008fc567362686"
+      "bytes": 78992,
+      "sha256": "228cebbe67877cf4ca6818dfb7fa000883e01c1f57d8080dd998c34edb2aae6f"
     },
     {
       "path": "database/AI-18_DATABASE_ROLE_MODEL.sql",
-      "bytes": 59330,
-      "sha256": "22e80c467f1976b7b233423e250eb4a745c912b0791939008538a5fbcedc4c95"
+      "bytes": 61471,
+      "sha256": "793f9b54b56cd0f99eb9f3a732e48a77b1f50b4a15eb8564e64d4ca6fafb707e"
     },
     {
       "path": "decision-log.md",
