@@ -8,7 +8,7 @@ files (`deploy/azure/*.bicep`, `deploy-core.ps1`, `deploy-azure-dev.yml`) or gua
 | Piece | Location |
 |---|---|
 | Templates | `deploy/azure/pilot/{security,platform,jobs,apps,observability}.bicep` |
-| Pilot-only images | `deploy/azure/pilot/Dockerfile.db-ops` (migrator only), `deploy/azure/pilot/Dockerfile.web` (AUTH-001 BFF build) |
+| Pilot-only images | `deploy/azure/pilot/Dockerfile.db-ops` (migrator only, plus the repository files it reads before every command: `Paqueteria.sln`, the baseline manifest, AI-06, AI-18, `src/Modules` and the two migration directories under `src/BuildingBlocks/Paqueteria.Infrastructure`), `deploy/azure/pilot/Dockerfile.web` (AUTH-001 BFF build) |
 | API and Worker images | `deploy/azure/Dockerfile.api`, `deploy/azure/Dockerfile.worker` (shared; run as the non-root `app` user, `USER $APP_UID`) |
 | Business settings reviewed by the owner | `deploy/azure/pilot/apps.settings.json` |
 | OBS-002 alert e-mail (owner) | `deploy/azure/pilot/observability.parameters.json` |
@@ -1039,6 +1039,14 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
 - The API and Worker images run as the non-root `app` user (uid 1654). With the final stage of each Dockerfile
   copied verbatim over a local `dotnet publish`, both listen on `0.0.0.0:8080` and answer `/health/live` with 200, with
   no permission error (Development configuration, so the PostgreSQL key ring and Key Vault were not exercised).
+- Both db-ops images run the migrator. Before 2026-10-20 they did not copy the three lane sources under
+  `src/BuildingBlocks/Paqueteria.Infrastructure` (the SCL-001 key-ring lane and the two PlatformEvolution
+  migrations). Every migrator command therefore exited 3 at start ("DataProtection adoption migration is missing"),
+  as uid 1654 and as root. Now both images, built locally with their final stage verbatim (only the sandbox proxy CA
+  was added to the build stage), pass `verify` with all 13 lanes `VERIFIED`. The pilot image also runs `apply` and then `assert` as uid 1654 against the pinned PostGIS 18/3.6
+  image. That run used a local `postgres` superuser, so it did not use `--azure-ownership-bridge`.
+  `DbOpsImageArchitectureTests` fails if a file the migrator reads is not copied into every
+  `deploy/**/Dockerfile.db-ops*`.
 
 **Unverified until the first real deployment:**
 
