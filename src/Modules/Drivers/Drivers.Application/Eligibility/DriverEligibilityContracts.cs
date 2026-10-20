@@ -2,13 +2,37 @@ using System.Collections.Immutable;
 
 namespace Drivers.Application.Eligibility;
 
+/// <summary>
+/// The sides of one package in millimetres, as captured. They may be typed in any order: the policy sorts them, and
+/// the vehicle's limits, from largest to smallest before comparing (DRV-ELIGIBILITY-SORTED-DIMENSIONS-2026-10-20).
+/// <c>null</c> is a side that was not measured.
+/// </summary>
+public sealed record PackageSides(int? LengthMillimeters, int? WidthMillimeters, int? HeightMillimeters);
+
+/// <summary>
+/// What an order asks of a vehicle: how many packages, their total weight, the heaviest one, and the sides of each
+/// package (one entry per package, in package order). The sides stay per package because a package turns on its own:
+/// the largest length, width and height across packages would pair sides of different packages.
+/// </summary>
 public sealed record DriverCapacityRequirement(
     int PackageCount,
     long TotalWeightGrams,
     long MaximumSinglePackageWeightGrams,
-    int? MaximumLengthMillimeters,
-    int? MaximumWidthMillimeters,
-    int? MaximumHeightMillimeters);
+    IReadOnlyList<PackageSides> Packages)
+{
+    public IReadOnlyList<PackageSides> Packages { get; } =
+        Packages is null ? ImmutableArray<PackageSides>.Empty : Packages.ToImmutableArray();
+
+    public bool Equals(DriverCapacityRequirement? other) =>
+        other is not null &&
+        PackageCount == other.PackageCount &&
+        TotalWeightGrams == other.TotalWeightGrams &&
+        MaximumSinglePackageWeightGrams == other.MaximumSinglePackageWeightGrams &&
+        Packages.SequenceEqual(other.Packages);
+
+    public override int GetHashCode() =>
+        HashCode.Combine(PackageCount, TotalWeightGrams, MaximumSinglePackageWeightGrams, Packages.Count);
+}
 
 public sealed record EvaluateOwnDriverEligibilityCommand(
     Guid ActorId,

@@ -1,5 +1,26 @@
 # Changelog
 
+## Medidas del paquete ordenadas antes de compararlas con el vehículo (DRV-ELIGIBILITY-SORTED-DIMENSIONS-2026-10-20) — 2026-10-20
+
+- Respuesta literal del project owner (2026-10-20, pregunta H4 de la ronda H), registrada en `decision-log.md` con su
+  contexto y la opción no elegida: "El sistema compara largo con largo, ancho con ancho y alto con alto, sin girar el paquete; el formulario deja capturarlos en cualquier orden. Un paquete de 30×45 capturado al revés no pasaría para moto aunque quepa girado. ¿Cómo lo manejamos?" Respuesta: "Que el sistema las ordene" ("Tarea pequeña: antes de comparar, el sistema ordena las tres medidas de mayor a menor (paquete y límite). Evita rechazos por capturar al revés. Toca la regla que usan despacho, órdenes y rutas."). No elegida: "Convención de captura"
+  ("Sin código: «Largo» siempre es el lado más largo y «Alto» el más corto, y despacho lo aprende. Un error de captura rechaza un pedido que sí cabe."). La opción elegida no era la recomendada (la recomendada era la convención de captura).
+- `DriverEligibilityPolicy`, la regla que usan despacho (selector de repartidor, asignación y ofertas externas),
+  órdenes (`capacity_available` de ORD-002) y rutas (agregar parada), ordena de mayor a menor las tres medidas de
+  cada paquete y los tres límites del tipo de vehículo antes de comparar. Un paquete cabe si cada medida ordenada es
+  menor o igual que el límite en el mismo lugar, y la orden cabe si cabe cada paquete: un paquete de 300 × 450 × 200 mm
+  capturado así cabe en el límite de 450 × 400 × 300 mm de bici y a pie.
+- `DriverCapacityRequirement` lleva ahora las medidas de cada paquete en vez del máximo de largo, ancho y alto entre
+  paquetes, que juntaba lados de paquetes distintos. Los tres agregadores de los módulos solo reúnen las medidas; el
+  ordenamiento existe una sola vez, en la política. Ningún SQL agregaba medidas.
+- Una medida que falta no se revisa (las presentes, ordenadas, se comparan con los límites mayores). Una medida que
+  no cabe da el código de su lugar: la mayor `PACKAGE_LENGTH_EXCEEDED`, la de en medio `PACKAGE_WIDTH_EXCEEDED`, la
+  menor `PACKAGE_HEIGHT_EXCEEDED`. Con `RequireDimensions=true`, una medida en blanco falla con el código de su campo,
+  ahora en cada paquete de la orden. Mismos códigos, sin cambios de API, esquema, roles, migraciones, configuración,
+  paquetes ni textos de la interfaz; AI-04 no cambia.
+- AI-08 DSP-001: un criterio DECIDED y su prueba. Notas: `docs/development/dsp-001-own-driver-eligibility.md`,
+  `docs/operations/env-001-pilot/README.md` §4 y la guía del owner.
+
 ## Repartidor: fotos de evidencia reducidas y sin metadatos (DRV-PROOF-PHOTO-REDUCE-2026-10-20) — 2026-10-20
 
 - Respuesta literal del project owner (2026-10-20, pregunta G2), registrada en `decision-log.md` con su contexto y las
