@@ -1127,7 +1127,10 @@ Decision SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20 (owner: "CPU, memoria y dis
     in management operations until credits rebuild"
     ([compute](https://learn.microsoft.com/en-us/azure/postgresql/compute-storage/concepts-compute)). First, the same
     load check as for CPU. Microsoft advises not to restart or scale the server while credits are near zero; if they
-    run low often, a larger Burstable size or another tier needs an owner decision.
+    run low often, a larger Burstable size or another tier needs an owner decision. Expect this alert right after the
+    first deploy: the Bv1-series page gives a B1ms 30 initial credits, under the 72 threshold, so it can fire at once and
+    resolves by itself once the server banks more than 72 (about 3.5 hours at 12 per hour under light load). It may
+    do the same after the server is stopped and started; note what happens at the first deploy (§9).
   - **Memory** (`mar-pv-pilot-pg-memory-warning`): some minute of the last 5 reached 80 % of the 2 GiB. First, *Memory
     percent* with Max and Avg, to tell a peak from a steady level, next to *Active Connections* (each connection takes
     memory) and *CPU percent*, and the long sessions as for CPU. If it stays high under normal load, a larger size

@@ -601,7 +601,10 @@ plantilla y la guarda P21 las revisa.
   cuando trabaja mucho, los gasta. Con la CPU llena, 72 créditos duran cerca de hora y media. Sin créditos se frena al
   20 % de su CPU, y entonces llegan la lentitud y los tiempos de espera. **Primero:** lo mismo que con la CPU (qué la
   está cargando). No reinicies ni cambies el tamaño del servidor mientras tenga casi 0 créditos (Microsoft lo
-  desaconseja). Si pasa seguido, toca un tamaño mayor; también es decisión tuya.
+  desaconseja). Si pasa seguido, toca un tamaño mayor; también es decisión tuya. Es normal que llegue justo después
+  del primer despliegue: según la página de Microsoft, un B1ms arranca con 30 créditos, menos de 72, y la alerta se
+  resuelve sola cuando junta más de 72 (unas 3 horas y media con poca carga). Puede pasar igual después de apagar y
+  encender el servidor; anota lo que veas en el primer despliegue.
 - **Memoria** (`mar-pv-pilot-pg-memory-warning`): en algún minuto de los últimos 5 la base usó 80 % o más de sus
   2 GB de memoria. **Primero:** en *Metrics*, mira *Memory percent* con máximo y con promedio, para saber si fue un
   pico o si se queda alta, junto con *Active Connections* (cada conexión ocupa memoria). Si se queda alta con la carga
@@ -698,7 +701,8 @@ Alertas de la base de datos (README §10.3), en el primer despliegue:
 - Las cifras de créditos de CPU del B1ms (máximo 288, 12 por hora) vienen de la página de las máquinas virtuales B
   de Microsoft; la de PostgreSQL no las repite. Confírmalas en el servidor real: después de un día tranquilo,
   *Metrics* → *CPU Credits Remaining* (máximo) debería acercarse a 288. Anota el valor. Si es otro, 72 ya no es el
-  25 % y hay que decidir de nuevo el umbral.
+  25 % y hay que decidir de nuevo el umbral. Anota también si la alerta de créditos llegó al desplegar y cuánto tardó
+  en resolverse.
 - Los porcentajes del disco suponen 32 GB. Comprueba el tamaño real
   (`az postgres flexible-server show -n <SERVIDOR> -g rg-pv-pilot --query storage`). Si el disco ya creció solo
   (a 64 GB), el 70 % ya no son 22 GB sino 45 GB, y el umbral se revisa.
