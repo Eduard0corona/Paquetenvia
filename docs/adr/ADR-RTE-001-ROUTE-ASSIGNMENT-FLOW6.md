@@ -44,8 +44,8 @@ asignación después, por evento. Ya no sería atómico como pide RTE-001 (cambi
    seis flujos"; AI-01 §4.18 y AI-11 prohíben ahora un séptimo sin ADR y pruebas.
 3. **Catálogo ejecutable.** `tests/Paqueteria.ArchitectureTests/CrossSchemaWriteCatalogTests.cs` lee el SQL de
    runtime de `src/` (sin migraciones ni la línea base de base de datos) y encuentra cada `INSERT INTO`, `UPDATE`,
-   `DELETE FROM` o `MERGE INTO` con esquema calificado (con o sin comillas, con o sin `ONLY`) en un esquema de módulo
-   distinto del propio del archivo. El esquema propio sale del módulo de AI-03 §8 en `DatabaseSchemaCatalog` (Routing
+   `DELETE FROM` o `MERGE INTO` con esquema calificado (con o sin comillas, con o sin `ONLY`) en cualquier esquema que
+   no sea el propio del archivo ni uno compartido (otro módulo, `public` o uno desconocido). El esquema propio sale del módulo de AI-03 §8 en `DatabaseSchemaCatalog` (Routing
    es Routes; Realtime, la API, el Worker y los BuildingBlocks no tienen esquema propio); los esquemas compartidos
    `platform`, `security` y `extensions` no son de ningún módulo. Compara el conjunto (archivo, sentencia, tabla), una
    entrada por sentencia, con un catálogo en el que cada entrada nombra su flujo de AI-04 o su ADR. Falla ante un sitio
