@@ -155,6 +155,7 @@ routes:
     - proofs
     - incidents
     - price_audit
+    - recipient_notices
     # UI-PHASE2-DRIVER-PICKER-2026-10-05 (project owner, 2026-10-05): the dispatcher assigns an OWN driver from a
     # list, never by typing an id; the backend and RLS remain the barrier and REST is the source of truth.
     assignment_picker:
@@ -245,6 +246,29 @@ routes:
       - no description, evidence identifier, incident identifier or personal data
       recovery: refetched with the order; a failed read says the reason could not be read and never blocks
         "Siguiente paso"
+    # NTF-RECIPIENT-NOTICES-2026-10-20 (project owner, E4 "Los 4 del plan (Recommended)" and E4-P8 "Las tres vías
+    # (Recommended)"): decided, not built yet; AI-08 NTF-007 builds it. REST is the source of truth and the backend and
+    # RLS remain the barrier.
+    recipient_notices:
+      decision: NTF-RECIPIENT-NOTICES-2026-10-20
+      status: DECIDED, not implemented (AI-08 NTF-007)
+      title: Avisos al destinatario
+      sources:
+        list: GET /orders/{orderId}/recipient-notices (listOrderRecipientNotices)
+        stop: POST /orders/{orderId}/recipient-notices/stop (stopOrderRecipientNotices)
+      roles: [DISPATCHER, PLATFORM_ADMIN with MFA]
+      shown_when: the selected organization owns the order; an operator organization sees no panel
+      display:
+      - one row per notice and channel - the notice by its owner name ("Enlace de seguimiento", "Va en camino", "No se
+        pudo entregar" or "Entregado"), the channel (WhatsApp or correo), its status and, when it did not go out, why,
+        each in es-MX from one helper; times in America/Mazatlan
+      - whether WhatsApp is allowed for the order (the consent box was ticked) and whether the recipient has an e-mail
+      - never the phone, the e-mail, the link, a template parameter, an identifier or an internal code
+      stop: the button "Detener avisos" (E4-P8, for a recipient who asks by phone) asks for confirmation (ConfirmDialog)
+        saying that the recipient stops receiving notices from every organization, then calls stopOrderRecipientNotices
+        with one Idempotency-Key reused for a retry of the same press; the list is fetched again after the answer
+      realtime: a NotificationStatusChanged v2 notice for this order reloads the panel, gathered like the other order
+        notices of this screen
     # SEC-004 (owner answers Q9, Q11, Q14; panel_rate_limit holds the common rules): the order detail refreshes itself.
     rate_limit:
       decision: SEC-004-PANEL-SCREENS-2026-10-13
@@ -319,6 +343,21 @@ routes:
     - public
     release: MVP-0
     data_minimization: true
+  # NTF-RECIPIENT-NOTICES-2026-10-20 (project owner, E4-P8 "Las tres vías (Recommended)", "un enlace en cada correo"):
+  # the page the unsubscribe link of a recipient e-mail opens; decided, not built yet (AI-08 NTF-006).
+  /avisos/baja/:token:
+    roles:
+    - public
+    release: MVP-1
+    status: DECIDED, not implemented (AI-08 NTF-006)
+    data_minimization: true
+    rules:
+    - opens with the heading "Seguimiento de envío" and names no brand, like public_tracking.branding (GATE-001)
+    - opening the page changes nothing; one button sends unsubscribeRecipientNotices once with the token of the link,
+      so a link scanner never unsubscribes anyone
+    - it never reads or shows the e-mail, the order, the organization or anything else; success, an invalid link, a
+      wait (429) and a failure each show one es-MX message whose texts the owner approves in the NTF-006 change
+    - no session, no PWA manifest, no browser storage, not indexed
   /business/orders:
     roles:
     - business_admin
@@ -927,6 +966,21 @@ screen_contracts:
       rule: the common message counts down in step 3; "Calcular precio" is disabled (aria-disabled, like the other
         wizard buttons) and re-enables itself; the draft stays and nothing is sent by itself; pressed again with the
         same shipment it sends the same Idempotency-Key, and a changed shipment gets a new one
+    # NTF-RECIPIENT-NOTICES-2026-10-20 (project owner, E4 "Los 4 del plan (Recommended)": "se agrega como campo
+    # opcional en la nueva orden"; E4-P1 "Casilla en la orden (Recommended)"): decided, not built yet (AI-08 NTF-002
+    # builds the e-mail field, NTF-004 the consent box).
+    recipient_notices:
+      decision: NTF-RECIPIENT-NOTICES-2026-10-20
+      status: DECIDED, not implemented (AI-08 NTF-002 and NTF-004)
+      email: step "Dónde", destination only - an optional field "Correo del destinatario (opcional)"; trimmed and
+        checked like createQuote before "Siguiente", with one es-MX message next to the field that never repeats the
+        value; sent as destination.email only when typed; never on the origin; kept in memory only like the rest of the
+        draft, restated only by the wizard summary and never logged; no screen shows it once the order exists (the API
+        never returns it)
+      consent: step "Confirmar" - an optional checkbox "El destinatario aceptó recibir avisos de su envío por
+        WhatsApp", unticked by default and never required to confirm; ticked, createOrder carries recipient_notices with
+        whatsapp_consent_attested true and the consent version from configuration; unticked, nothing is sent and the
+        order gets no WhatsApp notice (e-mail still, when there is one)
   driver_stop:
     offline_cache:
     - assigned stop minimum data
@@ -1422,6 +1476,15 @@ screen_contracts:
       rule: the common message counts down; "Previsualizar" and "Confirmar" are both disabled and re-enable
         themselves; the file, the report and the prohibited-goods tick stay and nothing is sent by itself; a commit
         pressed again sends the same batch Idempotency-Key (the 429 came before the handler)
+    # NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P1 "Casilla en la orden (Recommended)"): decided, not built yet (AI-08
+    # NTF-004).
+    recipient_notices:
+      decision: NTF-RECIPIENT-NOTICES-2026-10-20
+      status: DECIDED, not implemented (AI-08 NTF-004)
+      consent: an optional checkbox before "Confirmar", unticked by default, that attests the approved consent text for
+        the recipient of every row of the file (its wording for a whole file is reviewed by the owner in the NTF-004
+        change); ticked, the commit sends recipient_whatsapp_consent_attested true and the consent version; unticked,
+        nothing is sent and those orders get no WhatsApp notice; a new file clears it
   incident_desk:
     release: MVP-1
     route: /ops/incidents

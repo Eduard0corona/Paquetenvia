@@ -225,6 +225,20 @@ CREATE TABLE locations.locations (
 );
 CREATE INDEX locations_point_gix ON locations.locations USING gist(point);
 CREATE INDEX locations_owner_city_idx ON locations.locations(owner_org_id,city_id);
+-- NTF-RECIPIENT-NOTICES-2026-10-20 (project owner: E4 "Los 4 del plan (Recommended)"; E4-P2 "Llave propia para avisos
+-- (Recommended)"; docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md; AI-24 recipient_notices.contact). Declared contract, not
+-- installed yet: the Locations lane step of AI-08 NTF-002 adds these nullable columns to locations.locations, and this
+-- baseline declares them as DDL for fresh installations in that same change, together with the baseline assertions
+-- (OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13 precedent); until then the table above is unchanged.
+--   email_ciphertext bytea: the optional delivery recipient e-mail, sealed with the ADP-001 envelope under the PII key
+--     and the row pii_key_version (purpose locations.email).
+--   notice_phone_ciphertext bytea, notice_email_ciphertext bytea and notice_key_version text: copies of the destination
+--     phone and e-mail sealed with the same envelope format under the dedicated recipient-notice key (purposes
+--     locations.notice_phone and locations.notice_email, bound to owner organization, row and purpose); the only
+--     contact values the Worker can open.
+--   Checks: notice_key_version is present exactly when a notice copy is present; notice_email_ciphertext implies
+--     email_ciphertext. Only destination locations carry an e-mail or a notice copy; none is ever returned, logged,
+--     audited or published. Rows never change after the quote, so erasing a location erases every copy (GATE-007).
 
 -- Clients and allies ------------------------------------------------------------
 CREATE TABLE clients.client_accounts (
@@ -654,6 +668,36 @@ CREATE TABLE notifications.notifications (
   created_at timestamptz NOT NULL DEFAULT now(),
   sent_at timestamptz
 );
+-- NTF-RECIPIENT-NOTICES-2026-10-20 (AI-24 recipient_notices). This table, notifications.notification_templates and
+-- notifications.notification_status_events evolve in the Notifications lane (NTF-001 step
+-- 20260815000100_AddTenantSafeOutboxNotifications) and stay lane-owned. Declared contract, not installed yet: the
+-- Notifications lane step of AI-08 NTF-003 changes them, with Up, Down and Up again tested on PostgreSQL and a Down that
+-- refuses while external-channel rows or opt-outs exist:
+--   notification_templates: channel IN_APP, WHATSAPP or EMAIL (today IN_APP only); body required for IN_APP only
+--     (WhatsApp text lives in WhatsApp Manager, e-mail text in configuration); allowed_variables from a closed catalog
+--     per template key (order_public_id only for recipient notices); one immutable row per organization, key, version
+--     and channel for recipient.tracking-link, recipient.in-transit, recipient.delivery-failed and recipient.delivered,
+--     provisioned like orders.created.operations.
+--   notifications: recipient_user_id nullable and present exactly for IN_APP; recipient_kind OWNER_ORG_USER or
+--     ORDER_DESTINATION; order_event_id; delivered_at; one ORDER_DESTINATION row per owner organization, order event,
+--     channel and template key (partial unique index); provider_reference unique per channel when present. Recipient
+--     notices keep recipient_ciphertext and pii_key_version NULL: the recipient is the destination location of
+--     order_id, read when the notice is sent. The CHECKs above already admit WHATSAPP, EMAIL, DELIVERED and CANCELLED.
+--   notification_status_events: status also DELIVERED and CANCELLED.
+--   notifications.recipient_opt_outs: one platform-wide, append-only store of keyed hashes with ENABLE and FORCE ROW
+--     LEVEL SECURITY and no policy, reached only through the SECURITY DEFINER functions AI-18 declares; columns
+--     contact_hash bytea of exactly 32 bytes (HMAC-SHA256 under the contact lookup key over paquetenvia-contact-v1, the
+--     channel and the normalized phone or e-mail), channel WHATSAPP or EMAIL, key_version, source RECIPIENT_REPLY,
+--     EMAIL_LINK or DISPATCHER, recorded_at; one row per hash and channel; never a number, an address, a message body or
+--     an organization.
+--   automatic replies (AI-08 NTF-006, E4-P9 and E4-P15): a platform-wide store with the same row security and
+--     definer-only access, holding per request only its kind (automatic reply or opt-out confirmation), the sender
+--     contact hash, the sender number sealed under the recipient-notice key until the one reply attempt (then erased),
+--     received_at, the reply status and its code; at most one automatic reply per contact hash in 24 hours, and one
+--     opt-out confirmation only for the message that records the WhatsApp opt-out of its hash, outside that limit.
+-- The WhatsApp consent record (E4-P1, AI-08 NTF-004) belongs to the Orders lane: orders.recipient_notice_consents,
+-- append-only, row security by owner_org_id, with order_id, owner_org_id, channel WHATSAPP, consent_version,
+-- attested_by and attested_at; at most one row per order and channel, written in the transaction that creates the order.
 
 CREATE TABLE reporting.report_exports (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

@@ -499,6 +499,41 @@ GRANT SELECT (owner_org_id,status) ON orders.orders TO paqueteria_auto_close_exe
 -- privileges; the role then stays, inert.
 REVOKE paqueteria_realtime FROM paqueteria_app, paqueteria_worker, paqueteria_bootstrap;
 
+-- Recipient notices (NTF-RECIPIENT-NOTICES-2026-10-20, project owner: E4 "Los 4 del plan (Recommended)", E4-P2 "Llave
+-- propia para avisos (Recommended)", E4-P8 "Las tres vías (Recommended)" and E4-P9 "Respuesta automática
+-- (Recommended)"; docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md; AI-24 recipient_notices). Declared contract, not installed
+-- yet: nothing in this baseline changes until each named lane step lands together with its baseline assertions.
+-- 1. Notifications lane step of AI-08 NTF-003. security.resolve_outbox_consumer(text) gains the branch
+--    orders.recipient-notice-requested -> NOTIFICATIONS. New or replaced functions, each owned by
+--    paqueteria_outbox_executor, SECURITY DEFINER with a pinned search_path that starts with pg_catalog and ends with
+--    pg_temp, without dynamic SQL or RETURNING into runtime tables, EXECUTE revoked from PUBLIC and held only by
+--    paqueteria_worker: security.expand_recipient_notice_request (one Notification per eligible channel, its status
+--    event, its status-changed row and its send request, under the source lease_token), security.read_notification_delivery
+--    v2, security.apply_notification_outcome v2 (adds the provider reference and the outcome CANCELLED; the published
+--    8-argument signature loses its EXECUTE and is dropped in the same step), security.cancel_notification and
+--    security.is_recipient_opted_out (reads only the opt-out store). The new tables of the step keep FORCE ROW LEVEL
+--    SECURITY; the step removes the default module privileges paqueteria_app and paqueteria_worker would receive on the
+--    opt-out store (the identity.bff_sessions precedent), so the runtime roles reach it only through these functions.
+-- 2. Orders lane step of AI-08 NTF-004: orders.recipient_notice_consents keeps only INSERT and SELECT under row security
+--    for paqueteria_app and SELECT for paqueteria_worker, with UPDATE and DELETE removed and an append-only trigger. The
+--    producer row orders.recipient-notice-requested uses the existing INSERT on platform.outbox_events.
+-- 3. AI-08 NTF-006 adds, as DDL of this baseline together with its baseline assertions and the role lists of the
+--    migrator guards, the role paqueteria_notification_receipt_executor, NOLOGIN and BYPASSRLS because a provider
+--    webhook carries no tenant, removed from paqueteria_app, paqueteria_worker and paqueteria_realtime and granted to
+--    no runtime role. It owns security.record_messaging_receipt, security.record_recipient_opt_out and the
+--    automatic-reply request functions, executable only by paqueteria_app, and the automatic-reply claim and settle
+--    functions, executable only by paqueteria_worker. Its privileges are column-limited: on notifications.notifications
+--    reading id, owner_org_id, channel, status, provider_reference, version and attempts and changing only status,
+--    delivered_at, version and updated_at; inserting status events and notifications.status-changed outbox rows;
+--    reading and inserting opt-outs; reading, inserting and changing only status, attempt and sealed-number columns of
+--    the automatic-reply store; no DELETE, no table-wide privilege, no other table. Receipts move a Notification only
+--    forward (SENT to DELIVERED or FAILED) and ignore an unknown provider reference.
+-- 4. The runtime roles gain no table privilege: paqueteria_worker already reads orders.orders, orders.order_events,
+--    orders.public_tracking_tokens and locations.locations under FORCE RLS through the runtime table privileges above,
+--    and it never reaches the PII key (the recipient-notice key is a Key Vault matter, not a database one).
+-- 5. Each step verifies its exact EXECUTE set, owners, SECURITY DEFINER, search_path and column privileges against the
+--    catalog; its Down drops only its functions and refuses while rows that need the new shape exist.
+
 -- Mandatory deployment assertions:
 -- 1. API login SET ROLE paqueteria_app; Worker login SET ROLE paqueteria_worker. The API's realtime dispatcher login
 --    (RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12) SET LOCAL ROLE paqueteria_realtime and is a member of nothing else.
