@@ -551,32 +551,25 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             }
         }
 
-        // owner_org_id arrives here absent or equal to the selected organization (any other owner is the empty page
-        // before the transaction); equal, it keeps the orders that organization owns and drops the ones it only
-        // operates, which RLS would otherwise list too.
-        await using var command = CreateCommand(
-            connection,
-            transaction,
-            $"""
-            SELECT id,public_id,owner_org_id,operator_org_id,status,subtotal_cents,discount_cents,currency,version,
-                   origin_location_id,destination_location_id,service_type,quote_id,city_id,service_area_id,
-                   pricing_tier,total_cents,claim_window_ends_at,finalized_at,created_at,
-                   service_window_from,service_window_to
-            FROM orders.orders
-            WHERE (@status IS NULL OR status=@status)
-              AND (@owner::uuid IS NULL OR owner_org_id=@owner)
-              AND (@public_id IS NULL OR public_id=@public_id)
-              AND (@cod_pending=false OR {OrderCodPendingReconciliationPredicate.Sql})
-              AND (@created_from::timestamptz IS NULL OR created_at>=@created_from)
-              AND (@created_to::timestamptz IS NULL OR created_at<=@created_to)
-              AND (@has_cursor=false OR created_at<@cursor_created_at OR (created_at=@cursor_created_at AND id<@cursor_id))
-            ORDER BY created_at DESC,id DESC
-            LIMIT @take
-            """);
+        // DP-INDEXES-ORDERS-DISPATCH-2026-10-20 (I1): without an owner, public_id or COD-pending filter the list is
+        // read in two parts, each from its own index (PartyListSql); with one of them it keeps the statement it always
+        // had (FilteredListSql). Both return the same rows, in the same order, with the same page and cursor.
+        var byParty = ListsByParty(ownerOrganizationId, codPendingReconciliation, publicId);
+        if (byParty)
+        {
+            await using var planner = CreateCommand(connection, transaction, PartyListPlannerSql);
+            await planner.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        await using var command = CreateCommand(connection, transaction, byParty ? PartyListSql : FilteredListSql);
         command.Parameters.Add(P("status", NpgsqlDbType.Text, status));
-        command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, ownerOrganizationId));
-        command.Parameters.Add(P("public_id", NpgsqlDbType.Text, publicId));
-        command.Parameters.Add(P("cod_pending", NpgsqlDbType.Boolean, codPendingReconciliation));
+        if (!byParty)
+        {
+            command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, ownerOrganizationId));
+            command.Parameters.Add(P("public_id", NpgsqlDbType.Text, publicId));
+            command.Parameters.Add(P("cod_pending", NpgsqlDbType.Boolean, codPendingReconciliation));
+        }
+
         command.Parameters.Add(P("created_from", NpgsqlDbType.TimestampTz, createdRange.From?.ToUniversalTime()));
         command.Parameters.Add(P("created_to", NpgsqlDbType.TimestampTz, createdRange.To?.ToUniversalTime()));
         command.Parameters.Add(P("has_cursor", NpgsqlDbType.Boolean, hasCursor));
@@ -602,6 +595,104 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             : null;
         return new OrderPageResult(rows.Select(value => value.Result).ToArray(), nextCursor);
     }
+
+    /// <summary>
+    /// DP-INDEXES-ORDERS-DISPATCH-2026-10-20 (I1): the list reads by party unless an owner_org_id, a public_id or the
+    /// COD-pending filter is given. With owner_org_id the statement below already walks
+    /// <c>orders_owner_created_idx</c> in list order, public_id is one unique lookup, and the COD-pending filter stays as
+    /// it is (owner decision I3).
+    /// </summary>
+    private static bool ListsByParty(Guid? ownerOrganizationId, bool codPendingReconciliation, string? publicId) =>
+        ownerOrganizationId is null && !codPendingReconciliation && publicId is null;
+
+    /// <summary>
+    /// The order list as it always was: RLS (AI-06 <c>orders_tenant</c>, owner OR operator) admits the rows and the
+    /// filters narrow them. owner_org_id arrives here absent or equal to the selected organization (any other owner is
+    /// the empty page before the transaction); equal, it keeps the orders that organization owns and drops the ones it
+    /// only operates, which RLS would otherwise list too.
+    /// </summary>
+    private const string FilteredListSql =
+        $"""
+        SELECT id,public_id,owner_org_id,operator_org_id,status,subtotal_cents,discount_cents,currency,version,
+               origin_location_id,destination_location_id,service_type,quote_id,city_id,service_area_id,
+               pricing_tier,total_cents,claim_window_ends_at,finalized_at,created_at,
+               service_window_from,service_window_to
+        FROM orders.orders
+        WHERE (@status IS NULL OR status=@status)
+          AND (@owner::uuid IS NULL OR owner_org_id=@owner)
+          AND (@public_id IS NULL OR public_id=@public_id)
+          AND (@cod_pending=false OR {OrderCodPendingReconciliationPredicate.Sql})
+          AND (@created_from::timestamptz IS NULL OR created_at>=@created_from)
+          AND (@created_to::timestamptz IS NULL OR created_at<=@created_to)
+          AND (@has_cursor=false OR created_at<@cursor_created_at OR (created_at=@cursor_created_at AND id<@cursor_id))
+        ORDER BY created_at DESC,id DESC
+        LIMIT @take
+        """;
+
+    /// <summary>
+    /// DP-INDEXES-ORDERS-DISPATCH-2026-10-20 (I1, project owner: "Reescribir la consulta (Recommended)"): the same list
+    /// as <see cref="FilteredListSql"/> without its owner, public_id and COD-pending terms, read in two parts per
+    /// organization of <c>app.current_org_ids</c> - the setting RLS reads, parsed exactly as AI-06
+    /// <c>security.app_allowed_org</c> parses it, and kept only where that function admits it. The owner part reads
+    /// <c>orders_owner_created_idx</c>; the operator part reads <c>orders_operator_created_idx</c> and keeps only the
+    /// orders whose owner <c>security.app_allowed_org</c> does not admit, so no order is in both parts. Each part is
+    /// ordered and limited like the list, then the parts are merged by <c>created_at DESC, id DESC</c> and limited
+    /// again: the same rows, order, page size and cursor. RLS still filters every row of both parts. The status, date
+    /// and cursor terms are the list's own text; <c>created_at&lt;=@cursor_created_at</c> is implied by the cursor term
+    /// and only lets the index start at the cursor.
+    /// </summary>
+    private const string PartyListSql =
+        """
+        SELECT id,public_id,owner_org_id,operator_org_id,status,subtotal_cents,discount_cents,currency,version,
+               origin_location_id,destination_location_id,service_type,quote_id,city_id,service_area_id,
+               pricing_tier,total_cents,claim_window_ends_at,finalized_at,created_at,
+               service_window_from,service_window_to
+        FROM (SELECT DISTINCT listed.org_id
+              FROM unnest(COALESCE(NULLIF(current_setting('app.current_org_ids', true),'')::uuid[], ARRAY[]::uuid[])) AS listed(org_id)
+              WHERE security.app_allowed_org(listed.org_id)) AS party
+        CROSS JOIN LATERAL (
+          (SELECT id,public_id,owner_org_id,operator_org_id,status,subtotal_cents,discount_cents,currency,version,
+                  origin_location_id,destination_location_id,service_type,quote_id,city_id,service_area_id,
+                  pricing_tier,total_cents,claim_window_ends_at,finalized_at,created_at,
+                  service_window_from,service_window_to
+           FROM orders.orders
+           WHERE owner_org_id=party.org_id
+             AND (@status IS NULL OR status=@status)
+             AND (@created_from::timestamptz IS NULL OR created_at>=@created_from)
+             AND (@created_to::timestamptz IS NULL OR created_at<=@created_to)
+             AND (@has_cursor=false OR created_at<@cursor_created_at OR (created_at=@cursor_created_at AND id<@cursor_id))
+             AND (@has_cursor=false OR created_at<=@cursor_created_at)
+           ORDER BY created_at DESC,id DESC
+           LIMIT @take)
+          UNION ALL
+          (SELECT id,public_id,owner_org_id,operator_org_id,status,subtotal_cents,discount_cents,currency,version,
+                  origin_location_id,destination_location_id,service_type,quote_id,city_id,service_area_id,
+                  pricing_tier,total_cents,claim_window_ends_at,finalized_at,created_at,
+                  service_window_from,service_window_to
+           FROM orders.orders
+           WHERE operator_org_id=party.org_id
+             AND NOT security.app_allowed_org(owner_org_id)
+             AND (@status IS NULL OR status=@status)
+             AND (@created_from::timestamptz IS NULL OR created_at>=@created_from)
+             AND (@created_to::timestamptz IS NULL OR created_at<=@created_to)
+             AND (@has_cursor=false OR created_at<@cursor_created_at OR (created_at=@cursor_created_at AND id<@cursor_id))
+             AND (@has_cursor=false OR created_at<=@cursor_created_at)
+           ORDER BY created_at DESC,id DESC
+           LIMIT @take)
+        ) AS page
+        ORDER BY created_at DESC,id DESC
+        LIMIT @take
+        """;
+
+    /// <summary>
+    /// DP-INDEXES-ORDERS-DISPATCH-2026-10-20 (I1): sent right before <see cref="PartyListSql"/>, the last statement of
+    /// its transaction. PostgreSQL estimates RLS (owner OR operator) and a part's own organization term as independent,
+    /// so for an organization with a small share of the table it expects a handful of rows and prefers a bitmap scan
+    /// plus a sort, which reads every order of that organization (slower than the previous statement for an ALLY of the
+    /// 150 000-order bench). With bitmap scans off for this transaction only (SET LOCAL ends with it) each part walks
+    /// its index in list order and stops at the page, for every organization of the bench. It changes no row.
+    /// </summary>
+    private const string PartyListPlannerSql = "SET LOCAL enable_bitmapscan = off";
 
     private async Task<OrderDetailResult> GetWithinTransactionAsync(
         OrdersDbContext dbContext,

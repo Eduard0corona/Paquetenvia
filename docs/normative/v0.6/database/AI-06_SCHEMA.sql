@@ -361,6 +361,11 @@ CREATE INDEX orders_updated_at_idx ON orders.orders(updated_at);
 -- and is below its minimum snapshot or carries an authorized financial override), newest change first. The predicate
 -- repeats the reader's text exactly, so the planner can prove it; the index holds only those orders, never history.
 CREATE INDEX orders_price_review_idx ON orders.orders(updated_at DESC,id DESC) WHERE status NOT IN ('DELIVERED','RETURNED','CLAIM_RESOLVED','CLOSED','CANCELLED') AND (COALESCE(total_cents < minimum_total_cents_snapshot,false) OR COALESCE(financial_override ?& ARRAY['actor_id','reason','valid_until'],false));
+-- DP-INDEXES-ORDERS-DISPATCH-2026-10-20 (I1): the order list without an owner, public_id or COD-pending filter is read
+-- in two parts, newest first: the orders an organization of app.current_org_ids owns, and the ones it only operates
+-- (their owner is not in app.current_org_ids). Each part walks its index in list order; RLS still filters every row.
+CREATE INDEX orders_owner_created_idx ON orders.orders(owner_org_id,created_at DESC,id DESC);
+CREATE INDEX orders_operator_created_idx ON orders.orders(operator_org_id,created_at DESC,id DESC) WHERE operator_org_id IS NOT NULL;
 
 CREATE TABLE orders.package_items (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

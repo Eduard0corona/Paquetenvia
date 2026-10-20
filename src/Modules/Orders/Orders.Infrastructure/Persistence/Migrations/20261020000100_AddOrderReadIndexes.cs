@@ -6,14 +6,18 @@ using Microsoft.EntityFrameworkCore.Migrations;
 namespace Orders.Infrastructure.Persistence.Migrations;
 
 /// <summary>
-/// DP-INDEXES-ORDERS-DISPATCH-2026-10-20 (project owner, G3: "Ahora, en un PR (Recommended)"). Two read indexes the
-/// AI-06 baseline declares for fresh installations, for installations provisioned before it:
+/// DP-INDEXES-ORDERS-DISPATCH-2026-10-20 (project owner, G3: "Ahora, en un PR (Recommended)", and I1: "Reescribir la
+/// consulta (Recommended)"). Four read indexes the AI-06 baseline declares for fresh installations, for installations
+/// provisioned before it:
 /// <list type="bullet">
 /// <item><c>orders.order_events_actor_status_time_idx</c>: one actor's ORDER_STATUS_CHANGED events in a time range, so
 /// the driver's completed_today count (listMyStops) reads one day of the driver's own changes.</item>
 /// <item><c>orders.orders_price_review_idx</c>: the orders the operations dashboard's price-review filter selects
 /// (not finished, below the minimum snapshot or with an authorized financial override), newest change first. Its
 /// predicate is the reader's text, so the planner can prove it.</item>
+/// <item><c>orders.orders_owner_created_idx</c> and <c>orders.orders_operator_created_idx</c>: the two parts of the order
+/// list without an owner, public_id or COD-pending filter (the orders an organization owns, and the ones it only
+/// operates), each walked in list order, newest first.</item>
 /// </list>
 /// The lane runs inside the migrator's transaction (EF Core, or the E-002 bridge transaction), so the indexes are built
 /// with a plain <c>CREATE INDEX</c>, never <c>CONCURRENTLY</c>. An index AI-06 already created is adopted; one with the
@@ -21,7 +25,7 @@ namespace Orders.Infrastructure.Persistence.Migrations;
 /// is added, changed or removed.
 /// </summary>
 /// <remarks>
-/// Rollback drops exactly these two indexes. No code depends on them: the previous release reads the same rows through
+/// Rollback drops exactly these four indexes. No code depends on them: the previous release reads the same rows through
 /// the previous plans, only slower.
 /// </remarks>
 [DbContext(typeof(OrdersDbContext))]
@@ -43,6 +47,12 @@ public sealed class AddOrderReadIndexes : Migration
         ("orders.orders_price_review_idx",
             "CREATE INDEX orders_price_review_idx ON orders.orders(updated_at DESC,id DESC) WHERE status NOT IN ('DELIVERED','RETURNED','CLAIM_RESOLVED','CLOSED','CANCELLED') AND (COALESCE(total_cents < minimum_total_cents_snapshot,false) OR COALESCE(financial_override ?& ARRAY['actor_id','reason','valid_until'],false));",
             "CREATE INDEX orders_price_review_idx ON orders.orders USING btree (updated_at DESC, id DESC) WHERE ((status <> ALL (ARRAY['DELIVERED'::text, 'RETURNED'::text, 'CLAIM_RESOLVED'::text, 'CLOSED'::text, 'CANCELLED'::text])) AND (COALESCE((total_cents < minimum_total_cents_snapshot), false) OR COALESCE((financial_override ?& ARRAY['actor_id'::text, 'reason'::text, 'valid_until'::text]), false)))"),
+        ("orders.orders_owner_created_idx",
+            "CREATE INDEX orders_owner_created_idx ON orders.orders(owner_org_id,created_at DESC,id DESC);",
+            "CREATE INDEX orders_owner_created_idx ON orders.orders USING btree (owner_org_id, created_at DESC, id DESC)"),
+        ("orders.orders_operator_created_idx",
+            "CREATE INDEX orders_operator_created_idx ON orders.orders(operator_org_id,created_at DESC,id DESC) WHERE operator_org_id IS NOT NULL;",
+            "CREATE INDEX orders_operator_created_idx ON orders.orders USING btree (operator_org_id, created_at DESC, id DESC) WHERE (operator_org_id IS NOT NULL)"),
     ];
 
     public const string UpSql =
@@ -59,7 +69,11 @@ public sealed class AddOrderReadIndexes : Migration
               ('order_events_actor_status_time_idx',
                'CREATE INDEX order_events_actor_status_time_idx ON orders.order_events USING btree (actor_id, occurred_at) WHERE ((actor_id IS NOT NULL) AND (event_type = ''ORDER_STATUS_CHANGED''::text))'),
               ('orders_price_review_idx',
-               'CREATE INDEX orders_price_review_idx ON orders.orders USING btree (updated_at DESC, id DESC) WHERE ((status <> ALL (ARRAY[''DELIVERED''::text, ''RETURNED''::text, ''CLAIM_RESOLVED''::text, ''CLOSED''::text, ''CANCELLED''::text])) AND (COALESCE((total_cents < minimum_total_cents_snapshot), false) OR COALESCE((financial_override ?& ARRAY[''actor_id''::text, ''reason''::text, ''valid_until''::text]), false)))')
+               'CREATE INDEX orders_price_review_idx ON orders.orders USING btree (updated_at DESC, id DESC) WHERE ((status <> ALL (ARRAY[''DELIVERED''::text, ''RETURNED''::text, ''CLAIM_RESOLVED''::text, ''CLOSED''::text, ''CANCELLED''::text])) AND (COALESCE((total_cents < minimum_total_cents_snapshot), false) OR COALESCE((financial_override ?& ARRAY[''actor_id''::text, ''reason''::text, ''valid_until''::text]), false)))'),
+              ('orders_owner_created_idx',
+               'CREATE INDEX orders_owner_created_idx ON orders.orders USING btree (owner_org_id, created_at DESC, id DESC)'),
+              ('orders_operator_created_idx',
+               'CREATE INDEX orders_operator_created_idx ON orders.orders USING btree (operator_org_id, created_at DESC, id DESC) WHERE (operator_org_id IS NOT NULL)')
             ) expected(name, definition)
             JOIN pg_class c ON c.relname = expected.name
             JOIN pg_namespace n ON n.oid = c.relnamespace AND n.nspname = 'orders'
@@ -72,6 +86,8 @@ public sealed class AddOrderReadIndexes : Migration
 
         CREATE INDEX IF NOT EXISTS order_events_actor_status_time_idx ON orders.order_events(actor_id,occurred_at) WHERE actor_id IS NOT NULL AND event_type='ORDER_STATUS_CHANGED';
         CREATE INDEX IF NOT EXISTS orders_price_review_idx ON orders.orders(updated_at DESC,id DESC) WHERE status NOT IN ('DELIVERED','RETURNED','CLAIM_RESOLVED','CLOSED','CANCELLED') AND (COALESCE(total_cents < minimum_total_cents_snapshot,false) OR COALESCE(financial_override ?& ARRAY['actor_id','reason','valid_until'],false));
+        CREATE INDEX IF NOT EXISTS orders_owner_created_idx ON orders.orders(owner_org_id,created_at DESC,id DESC);
+        CREATE INDEX IF NOT EXISTS orders_operator_created_idx ON orders.orders(operator_org_id,created_at DESC,id DESC) WHERE operator_org_id IS NOT NULL;
 
         DO $verify$
         BEGIN
@@ -80,12 +96,16 @@ public sealed class AddOrderReadIndexes : Migration
                 ('orders.order_events_actor_status_time_idx',
                  'CREATE INDEX order_events_actor_status_time_idx ON orders.order_events USING btree (actor_id, occurred_at) WHERE ((actor_id IS NOT NULL) AND (event_type = ''ORDER_STATUS_CHANGED''::text))'),
                 ('orders.orders_price_review_idx',
-                 'CREATE INDEX orders_price_review_idx ON orders.orders USING btree (updated_at DESC, id DESC) WHERE ((status <> ALL (ARRAY[''DELIVERED''::text, ''RETURNED''::text, ''CLAIM_RESOLVED''::text, ''CLOSED''::text, ''CANCELLED''::text])) AND (COALESCE((total_cents < minimum_total_cents_snapshot), false) OR COALESCE((financial_override ?& ARRAY[''actor_id''::text, ''reason''::text, ''valid_until''::text]), false)))')
+                 'CREATE INDEX orders_price_review_idx ON orders.orders USING btree (updated_at DESC, id DESC) WHERE ((status <> ALL (ARRAY[''DELIVERED''::text, ''RETURNED''::text, ''CLAIM_RESOLVED''::text, ''CLOSED''::text, ''CANCELLED''::text])) AND (COALESCE((total_cents < minimum_total_cents_snapshot), false) OR COALESCE((financial_override ?& ARRAY[''actor_id''::text, ''reason''::text, ''valid_until''::text]), false)))'),
+                ('orders.orders_owner_created_idx',
+                 'CREATE INDEX orders_owner_created_idx ON orders.orders USING btree (owner_org_id, created_at DESC, id DESC)'),
+                ('orders.orders_operator_created_idx',
+                 'CREATE INDEX orders_operator_created_idx ON orders.orders USING btree (operator_org_id, created_at DESC, id DESC) WHERE (operator_org_id IS NOT NULL)')
               ) expected(name, definition)
               JOIN pg_index i ON i.indexrelid = to_regclass(expected.name)
               WHERE i.indisvalid AND i.indisready
                 AND pg_get_indexdef(i.indexrelid) = expected.definition
-                AND pg_get_userbyid((SELECT relowner FROM pg_class WHERE oid = i.indexrelid)) = 'paqueteria_migrator') <> 2
+                AND pg_get_userbyid((SELECT relowner FROM pg_class WHERE oid = i.indexrelid)) = 'paqueteria_migrator') <> 4
           THEN
             RAISE EXCEPTION 'DP-INDEXES-ORDERS-DISPATCH orders index set differs from the canonical AI-06 contract';
           END IF;
@@ -93,11 +113,13 @@ public sealed class AddOrderReadIndexes : Migration
         $verify$;
         """;
 
-    /// <summary>Rollback: exactly the two indexes of this step; every row stays.</summary>
+    /// <summary>Rollback: exactly the four indexes of this step; every row stays.</summary>
     public const string DownSql =
         """
         DROP INDEX IF EXISTS orders.order_events_actor_status_time_idx;
         DROP INDEX IF EXISTS orders.orders_price_review_idx;
+        DROP INDEX IF EXISTS orders.orders_owner_created_idx;
+        DROP INDEX IF EXISTS orders.orders_operator_created_idx;
         """;
 
     protected override void Up(MigrationBuilder migrationBuilder) => migrationBuilder.Sql(UpSql);

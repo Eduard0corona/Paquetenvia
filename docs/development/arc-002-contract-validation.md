@@ -26,7 +26,7 @@ Current verified hashes (they must match `docs/normative/v0.6/MANIFEST.json`
 and `CHECKSUMS_SHA256.txt`):
 
 ```text
-AI-06  5f51376f5507780a645206b5c235b35f797627deb61d614e3030a43b94acf2ef
+AI-06  d45e30c68cca0f5afd676477a6b02702b074daeda661530b8dcdfea34e067bff
 AI-18  ef05f7ce5e11a5b1fc8fb71d3ae0bb9d3f10074d7eb8e438c3a72c9493435580
 ```
 

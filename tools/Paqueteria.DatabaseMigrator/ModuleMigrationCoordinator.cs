@@ -118,8 +118,8 @@ internal sealed class ModuleMigrationCoordinator
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
-                // DP-INDEXES-ORDERS-DISPATCH-2026-10-20: the lane's latest step only adds two read indexes (or adopts the
-                // AI-06 ones) and its rollback drops exactly those two. ORD-AUTO-CLOSE is verified below with its own
+                // DP-INDEXES-ORDERS-DISPATCH-2026-10-20: the lane's latest step only adds four read indexes (or adopts the
+                // AI-06 ones) and its rollback drops exactly those four. ORD-AUTO-CLOSE is verified below with its own
                 // rule; ORD-SERVICE-WINDOW-OPTIONAL, TRK-002-AUTO-LINK and LIF-001 with their fail-closed rollbacks.
                 "Orders" => IsOrderReadIndexesSource(source),
                 // OPS-003-CLEANUP-ROLE: the lane only adds the cleanup executor, its two functions and the
@@ -668,14 +668,17 @@ internal sealed class ModuleMigrationCoordinator
         }
     }
 
-    /// <summary>DP-INDEXES-ORDERS-DISPATCH-2026-10-20 (Orders lane): only the two read indexes, created with a plain
-    /// CREATE INDEX IF NOT EXISTS in the lane's transaction (never CONCURRENTLY); the rollback drops exactly those two
-    /// indexes. No table, column, constraint, policy, grant, function, role or row is added, dropped or rewritten.</summary>
+    /// <summary>DP-INDEXES-ORDERS-DISPATCH-2026-10-20 (Orders lane): only the four read indexes (G3, and the two order list
+    /// parts of I1), created with a plain CREATE INDEX IF NOT EXISTS in the lane's transaction (never CONCURRENTLY); the
+    /// rollback drops exactly those four indexes. No table, column, constraint, policy, grant, function, role or row is
+    /// added, dropped or rewritten.</summary>
     private static bool IsOrderReadIndexesSource(string source) =>
         source.Contains(AddOrderReadIndexes.DecisionId, StringComparison.Ordinal) &&
         source.Contains("DROP INDEX IF EXISTS orders.order_events_actor_status_time_idx;", StringComparison.Ordinal) &&
         source.Contains("DROP INDEX IF EXISTS orders.orders_price_review_idx;", StringComparison.Ordinal) &&
-        IsReadIndexesOnlySource(source);
+        source.Contains("DROP INDEX IF EXISTS orders.orders_owner_created_idx;", StringComparison.Ordinal) &&
+        source.Contains("DROP INDEX IF EXISTS orders.orders_operator_created_idx;", StringComparison.Ordinal) &&
+        IsReadIndexesOnlySource(source, indexes: 4);
 
     /// <summary>DP-INDEXES-ORDERS-DISPATCH-2026-10-20 (Dispatch lane): only the two read indexes, created with a plain
     /// CREATE INDEX IF NOT EXISTS in the lane's transaction (never CONCURRENTLY); the rollback drops exactly those two
@@ -684,13 +687,14 @@ internal sealed class ModuleMigrationCoordinator
         source.Contains(AddAssignmentReadIndexes.DecisionId, StringComparison.Ordinal) &&
         source.Contains("DROP INDEX IF EXISTS dispatch.assignments_driver_open_idx;", StringComparison.Ordinal) &&
         source.Contains("DROP INDEX IF EXISTS dispatch.assignments_order_driver_idx;", StringComparison.Ordinal) &&
-        IsReadIndexesOnlySource(source);
+        IsReadIndexesOnlySource(source, indexes: 2);
 
-    /// <summary>The shape both DP-INDEXES-ORDERS-DISPATCH steps share: two indexes created, two dropped, nothing else.</summary>
-    private static bool IsReadIndexesOnlySource(string source) =>
-        source.Split("CREATE INDEX IF NOT EXISTS", StringSplitOptions.None).Length - 1 == 2 &&
-        source.Split("DROP ", StringSplitOptions.None).Length - 1 == 2 &&
-        source.Split("DROP INDEX IF EXISTS", StringSplitOptions.None).Length - 1 == 2 &&
+    /// <summary>The shape both DP-INDEXES-ORDERS-DISPATCH steps share: its indexes created, the same number dropped,
+    /// nothing else.</summary>
+    private static bool IsReadIndexesOnlySource(string source, int indexes) =>
+        source.Split("CREATE INDEX IF NOT EXISTS", StringSplitOptions.None).Length - 1 == indexes &&
+        source.Split("DROP ", StringSplitOptions.None).Length - 1 == indexes &&
+        source.Split("DROP INDEX IF EXISTS", StringSplitOptions.None).Length - 1 == indexes &&
         !source.Contains("INDEX CONCURRENTLY", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("CREATE UNIQUE", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("ALTER ", StringComparison.Ordinal) &&
