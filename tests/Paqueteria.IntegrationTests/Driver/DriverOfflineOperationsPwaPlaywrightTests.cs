@@ -19,10 +19,18 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
     /// upload URLs, exactly as it does against real object storage.
     /// </summary>
     private const string SyntheticStorageOrigin = DriverStopsNextServerFixture.TestStorageOrigin;
-    private static readonly byte[] SyntheticPng =
+
+    /// <summary>
+    /// The PNG signature alone: no browser can decode it, so the phone cannot reduce it
+    /// (DRV-PROOF-PHOTO-REDUCE-2026-10-20).
+    /// </summary>
+    private static readonly byte[] UndecodablePng =
         [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
 
-    /// <summary>Decodable 1x1 PNGs (two colours) for the photo preview.</summary>
+    /// <summary>
+    /// Decodable 1x1 PNGs (two colours) for the photo preview. The phone reduces each to a 1x1 JPEG of the same
+    /// colour (DRV-PROOF-PHOTO-REDUCE-2026-10-20), so the colour tells which photo was stored and sent.
+    /// </summary>
     private static readonly byte[] FirstPreviewPng =
     [
         0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d,
@@ -42,6 +50,9 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         0x00, 0x03, 0x83, 0x01, 0x57, 0x51, 0xa6, 0x6c, 0xcb, 0x00, 0x00, 0x00,
         0x00, 0x49, 0x45, 0x4e, 0x44, 0xae, 0x42, 0x60, 0x82,
     ];
+
+    private static readonly int[] FirstPreviewColour = ProofPhotoEvidence.Teal;
+    private static readonly int[] SecondPreviewColour = [217, 119, 6];
 
     /// <summary>
     /// UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the upgrade from the DRV-002 layout keeps every queued DRV-002
@@ -834,6 +845,8 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         var session = Assert.Single(backend.SessionAttempts);
         Assert.Equal("DELIVERY_PHOTO", session.ProofType);
         Assert.Equal(1, backend.UploadCount);
+        // DRV-PROOF-PHOTO-REDUCE-2026-10-20: the "Foto del lugar" is reduced on the phone like the delivery photo.
+        await AssertSentReducedPhotoAsync(page, backend, FirstPreviewColour);
         var proof = Assert.Single(backend.FinalizedProofs);
         Assert.Equal("DELIVERY_PHOTO", proof.ProofType);
         var (incidentKey, incidentBody) = Assert.Single(backend.IncidentRequests);
@@ -1390,7 +1403,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         var backend = new SyntheticOfflineBackend();
         backend.SetOrderState("AT_PICKUP", 4);
         await backend.RouteAsync(page);
-        var secondSha256 = Convert.ToHexStringLower(SHA256.HashData(SecondPreviewPng));
+        string storedSha256;
 
         await page.GotoAsync(
             new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
@@ -1435,9 +1448,14 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             await WaitForProofCountAsync(page, 1);
             await ExpectTextAsync(page, "Iniciar traslado");
             Assert.True(await IsObjectUrlRevokedAsync(page, secondUrl));
-            Assert.Equal(
-                $"{SecondPreviewPng.Length}|{secondSha256}|{secondSha256}",
-                await ReadSingleProofAsync(page));
+            // DRV-PROOF-PHOTO-REDUCE-2026-10-20: the stored proof is the JPEG the phone reduced from the retaken
+            // photo; its recorded size, SHA-256 and type are those of the stored bytes, never of the picked PNG.
+            var stored = await ReadSingleProofAsync(page);
+            Assert.Equal(stored.Sha256, stored.BlobSha256);
+            Assert.Equal(stored.SizeBytes, stored.BlobSize);
+            Assert.Equal(("image/jpeg", "image/jpeg"), (stored.ContentType, stored.BlobType));
+            Assert.NotEqual(Convert.ToHexStringLower(SHA256.HashData(SecondPreviewPng)), stored.Sha256);
+            storedSha256 = stored.Sha256;
         }
         finally
         {
@@ -1447,10 +1465,156 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         await page.WaitForFunctionAsync("() => navigator.onLine === true");
         await WaitForOperationCountAsync(page, 0);
         await WaitForProofCountAsync(page, 0);
-        // Only the retaken photo travels: one upload, sessions for its hash only.
+        // Only the retaken photo travels, as the stored bytes: one upload, sessions for its hash only.
         Assert.Equal(1, backend.UploadCount);
-        Assert.Equal([secondSha256], backend.SessionSha256.Distinct());
+        Assert.Equal(storedSha256, await AssertSentReducedPhotoAsync(page, backend, SecondPreviewColour));
         Assert.Equal(["PICKED_UP"], backend.TransitionTargets);
+    }
+
+    /// <summary>
+    /// DRV-PROOF-PHOTO-REDUCE-2026-10-20 (project owner, "Reducir y quitar metadatos (Recommended)"): a camera JPEG
+    /// carrying EXIF GPS, an EXIF orientation, XMP, a comment and an ICC profile is decoded on the phone in its visual
+    /// orientation and re-encoded as a JPEG of at most 1600 px per side, quality 0.8, without metadata. The preview
+    /// shows that reduced photo, and its exact bytes are the ones hashed, stored, declared and uploaded as image/jpeg.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Proof_photo_is_reduced_on_the_phone_without_metadata_before_it_is_hashed_and_sent()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync();
+        var page = await context.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-proof-photo-reduce");
+        var backend = new SyntheticOfflineBackend();
+        backend.SetOrderState("AT_PICKUP", 4);
+        await backend.RouteAsync(page);
+        var picked = ProofPhotoEvidence.ExifGpsJpeg();
+        // The picked file carries the metadata: two APP1 (EXIF with GPS, XMP), a comment and an ICC profile.
+        var pickedHeader = ProofPhotoEvidence.ReadJpegHeader(picked);
+        Assert.Equal((2000, 1000), (pickedHeader.Width, pickedHeader.Height));
+        Assert.Equal(2, pickedHeader.Markers.Count(marker => marker == 0xe1));
+        Assert.Contains(0xfe, pickedHeader.Markers);
+        Assert.Contains(0xe2, pickedHeader.Markers);
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(page, "Confirmar recolección");
+        StoredProof stored;
+        await context.SetOfflineAsync(true);
+        try
+        {
+            await page.Locator("input[type=file]").SetInputFilesAsync(
+                new FilePayload
+                {
+                    Name = "camera-exif-gps.jpg",
+                    MimeType = "image/jpeg",
+                    Buffer = picked,
+                });
+            await WaitForDecodedPreviewAsync(page);
+            // The preview already shows the reduced photo, upright: 800x1600.
+            var shown = await page.EvaluateAsync<int[]>(
+                """
+                () => {
+                  const image = document.querySelector('img[alt="Foto de evidencia tomada"]');
+                  return [image.naturalWidth, image.naturalHeight];
+                }
+                """);
+            Assert.Equal((800, 1600), (shown[0], shown[1]));
+            Assert.Equal(0, await ReadStoreCountAsync(page, "proof_blobs"));
+
+            await page.GetByRole(AriaRole.Button, new() { Name = "Usar esta foto" })
+                .ClickAsync();
+            await WaitForOperationCountAsync(page, 1);
+            await WaitForProofCountAsync(page, 1);
+            stored = await ReadSingleProofAsync(page);
+        }
+        finally
+        {
+            await context.SetOfflineAsync(false);
+        }
+
+        await page.WaitForFunctionAsync("() => navigator.onLine === true");
+        await WaitForOperationCountAsync(page, 0);
+        await WaitForProofCountAsync(page, 0);
+        Assert.Equal(["PICKED_UP"], backend.TransitionTargets);
+        Assert.Equal("PICKUP_PHOTO", Assert.Single(backend.FinalizedProofs).ProofType);
+        Assert.Equal(1, backend.UploadCount);
+        int[] red = [207, 14, 15];
+        int[] blue = [14, 48, 207];
+        var sha256 = await AssertSentReducedPhotoAsync(page, backend, red);
+        var sent = backend.Uploads[0].Body;
+
+        // One photo end to end: the bytes stored on the phone are the bytes hashed, declared and uploaded.
+        Assert.Equal((sha256, sha256), (stored.Sha256, stored.BlobSha256));
+        Assert.Equal((sent.Length, sent.Length), (stored.SizeBytes, stored.BlobSize));
+        Assert.Equal(("image/jpeg", "image/jpeg"), (stored.ContentType, stored.BlobType));
+        var header = ProofPhotoEvidence.AssertReducedJpeg(sent);
+        Assert.Equal((800, 1600), (header.Width, header.Height));
+        Assert.True(sent.Length < picked.Length, $"{sent.Length} B reduced from {picked.Length} B");
+        // Upright as the camera recorded it (EXIF orientation 6 applied): red on top, blue below.
+        ProofPhotoEvidence.AssertColour(
+            red,
+            await ProofPhotoEvidence.ReadPixelAsync(page, sent, "image/jpeg", 400, 10));
+        ProofPhotoEvidence.AssertColour(
+            blue,
+            await ProofPhotoEvidence.ReadPixelAsync(page, sent, "image/jpeg", 400, 1589));
+    }
+
+    /// <summary>
+    /// DRV-PROOF-PHOTO-REDUCE-2026-10-20: a photo the phone cannot decode shows "No se pudo procesar la foto en el
+    /// teléfono. Tómala de nuevo." as the step's alert and keeps nothing - no preview, no operation, no stored photo,
+    /// no request - and the picked file is never used instead. A photo it can reduce then goes on as usual.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "DriverOfflineOperationsPwa")]
+    public async Task Proof_photo_the_phone_cannot_process_keeps_nothing()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(
+            new BrowserTypeLaunchOptions { Headless = true });
+        var page = await browser.NewPageAsync();
+        await InstallSessionAsync(page, "opaque-proof-photo-unprocessable");
+        var backend = new SyntheticOfflineBackend();
+        backend.SetOrderState("AT_PICKUP", 4);
+        await backend.RouteAsync(page);
+
+        await page.GotoAsync(
+            new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
+        await ExpectTextAsync(page, "Confirmar recolección");
+        var input = page.Locator("input[type=file]");
+        await input.SetInputFilesAsync(
+            new FilePayload
+            {
+                Name = "unreadable.png",
+                MimeType = "image/png",
+                Buffer = UndecodablePng,
+            });
+        var alert = page.GetByRole(AriaRole.Alert)
+            .Filter(new() { HasText = "No se pudo procesar la foto en el teléfono. Tómala de nuevo." });
+        await alert.WaitForAsync();
+        Assert.Equal(
+            0,
+            await page.GetByRole(AriaRole.Heading, new() { Name = "Vista previa de la foto" }).CountAsync());
+        Assert.Equal(0, await page.Locator("img[alt=\"Foto de evidencia tomada\"]").CountAsync());
+        Assert.Equal(0, await ReadStoreCountAsync(page, "operations"));
+        Assert.Equal(0, await ReadStoreCountAsync(page, "proof_blobs"));
+        Assert.True(await input.IsVisibleAsync());
+        Assert.Equal("true", await input.GetAttributeAsync("aria-invalid"));
+
+        await input.SetInputFilesAsync(
+            new FilePayload
+            {
+                Name = "readable.png",
+                MimeType = "image/png",
+                Buffer = FirstPreviewPng,
+            });
+        await WaitForDecodedPreviewAsync(page);
+        Assert.Equal(0, await alert.CountAsync());
+        Assert.Equal(0, await ReadStoreCountAsync(page, "proof_blobs"));
+        Assert.Empty(backend.SessionAttempts);
+        Assert.Equal(0, backend.UploadCount);
     }
 
     /// <summary>
@@ -1470,7 +1634,6 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         await InstallSessionAsync(page, "opaque-photo-selection-refresh");
         var backend = new SyntheticOfflineBackend { HoldReadsAfterTransition = true };
         await backend.RouteAsync(page);
-        var photoSha256 = Convert.ToHexStringLower(SHA256.HashData(FirstPreviewPng));
 
         await page.GotoAsync(
             new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
@@ -1512,7 +1675,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         await WaitForOperationCountAsync(page, 0);
         await WaitForProofCountAsync(page, 0);
         Assert.Equal(["AT_PICKUP", "PICKED_UP"], backend.TransitionTargets);
-        Assert.Equal([photoSha256], backend.SessionSha256.Distinct());
+        await AssertSentReducedPhotoAsync(page, backend, FirstPreviewColour);
         Assert.Equal(1, backend.UploadCount);
     }
 
@@ -1557,7 +1720,6 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         var page = await context.NewPageAsync();
         await InstallSessionAsync(page, cacheNamespace);
         await backend.RouteAsync(page);
-        var photoSha256 = Convert.ToHexStringLower(SHA256.HashData(FirstPreviewPng));
         await page.GotoAsync(
             new Uri(server.BaseAddress, $"/driver/stops/{OrderId}").AbsoluteUri);
         await backend.StaleFullReadArrived.WaitAsync(TimeSpan.FromSeconds(15));
@@ -1603,7 +1765,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         await WaitForOperationCountAsync(page, 0);
         await WaitForProofCountAsync(page, 0);
         Assert.Equal(["AT_PICKUP", "PICKED_UP"], backend.TransitionTargets);
-        Assert.Equal([photoSha256], backend.SessionSha256.Distinct());
+        await AssertSentReducedPhotoAsync(page, backend, FirstPreviewColour);
         Assert.Equal(1, backend.UploadCount);
     }
 
@@ -2124,7 +2286,7 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             {
                 Name = fileName,
                 MimeType = "image/png",
-                Buffer = SyntheticPng,
+                Buffer = FirstPreviewPng,
             });
         await page.GetByRole(
                 AriaRole.Heading,
@@ -2183,11 +2345,12 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             url);
 
     /// <summary>
-    /// The stored proof's recorded size and SHA-256, plus the SHA-256 of the
-    /// stored Blob bytes themselves.
+    /// The stored proof's recorded size, SHA-256 and content type, plus the SHA-256, size and type of the stored Blob
+    /// bytes themselves.
     /// </summary>
-    private static Task<string> ReadSingleProofAsync(IPage page) =>
-        page.EvaluateAsync<string>(
+    private static async Task<StoredProof> ReadSingleProofAsync(IPage page)
+    {
+        var fields = (await page.EvaluateAsync<string>(
             """
             () => new Promise((resolve, reject) => {
               const open = indexedDB.open("paquetenvia-driver-stops-v1", 5);
@@ -2213,11 +2376,61 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
                   const blobSha256 = [...digest]
                     .map(value => value.toString(16).padStart(2, "0"))
                     .join("");
-                  resolve(`${proof.sizeBytes}|${proof.sha256}|${blobSha256}`);
+                  resolve([
+                    proof.sizeBytes,
+                    proof.sha256,
+                    proof.contentType,
+                    blobSha256,
+                    proof.blob.size,
+                    proof.blob.type,
+                  ].join("|"));
                 };
               };
             })
-            """);
+            """)).Split('|');
+        return new StoredProof(
+            int.Parse(fields[0], System.Globalization.CultureInfo.InvariantCulture),
+            fields[1],
+            fields[2],
+            fields[3],
+            int.Parse(fields[4], System.Globalization.CultureInfo.InvariantCulture),
+            fields[5]);
+    }
+
+    private sealed record StoredProof(
+        int SizeBytes,
+        string Sha256,
+        string ContentType,
+        string BlobSha256,
+        int BlobSize,
+        string BlobType);
+
+    /// <summary>
+    /// DRV-PROOF-PHOTO-REDUCE-2026-10-20: every upload carried the same reduced JPEG, sent as image/jpeg, whose SHA-256
+    /// is the one every upload session declared with content_type image/jpeg, and the photo shows
+    /// <paramref name="colour"/>. Returns that SHA-256.
+    /// </summary>
+    private static async Task<string> AssertSentReducedPhotoAsync(
+        IPage page,
+        SyntheticOfflineBackend backend,
+        int[] colour)
+    {
+        Assert.NotEmpty(backend.Uploads);
+        var body = backend.Uploads[0].Body;
+        Assert.All(backend.Uploads, upload =>
+        {
+            Assert.Equal("image/jpeg", upload.ContentType);
+            Assert.Equal(body, upload.Body);
+        });
+        ProofPhotoEvidence.AssertReducedJpeg(body);
+        var sha256 = Convert.ToHexStringLower(SHA256.HashData(body));
+        Assert.Equal([sha256], backend.SessionSha256.Distinct());
+        Assert.Equal(["image/jpeg"], backend.SessionContentTypes.Distinct());
+        ProofPhotoEvidence.AssertColour(
+            colour,
+            await ProofPhotoEvidence.ReadPixelAsync(page, body, "image/jpeg", 0, 0));
+        return sha256;
+    }
 
     private static string NextLabel(string current) => current switch
     {
@@ -2633,6 +2846,12 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
         internal List<string?> TransitionClientOccurredAt { get; } = [];
         internal List<string?> SessionClientOccurredAt { get; } = [];
         internal List<string?> SessionSha256 { get; } = [];
+
+        /// <summary>DRV-PROOF-PHOTO-REDUCE-2026-10-20: the content_type of every upload session request.</summary>
+        internal List<string?> SessionContentTypes { get; } = [];
+
+        /// <summary>Every PUT to the signed storage URL: its Content-Type and its exact body.</summary>
+        internal List<(string? ContentType, byte[] Body)> Uploads { get; } = [];
         internal List<(string Key, string ProofType)> SessionAttempts { get; } = [];
         internal List<string> FinalizeKeys { get; } = [];
         internal List<(string ProofType, string CapturedAt)> FinalizedProofs { get; } = [];
@@ -2676,9 +2895,12 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
             await page.RouteAsync($"{SyntheticStorageOrigin}/**", async route =>
             {
                 bool abort;
+                var contentType = await route.Request.HeaderValueAsync("content-type");
+                var body = route.Request.PostDataBuffer ?? [];
                 lock (gate)
                 {
                     UploadCount += 1;
+                    Uploads.Add((contentType, body));
                     abort = AbortFirstUpload && firstUpload;
                     firstUpload = false;
                 }
@@ -2932,6 +3154,10 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
                     request.TryGetProperty("sha256", out var sha256)
                         ? sha256.GetString()
                         : null);
+                SessionContentTypes.Add(
+                    request.TryGetProperty("content_type", out var contentType)
+                        ? contentType.GetString()
+                        : null);
                 if (!sessionsByKey.TryGetValue(key, out var existingSessionId))
                 {
                     sessionSequence += 1;
@@ -2953,9 +3179,12 @@ public sealed class DriverOfflineOperationsPwaPlaywrightTests(
                         $"{SyntheticStorageOrigin}/quarantine/{sessionId}?X-Amz-Signature=synthetic",
                     object_key = $"quarantine/private/{sessionId}",
                     expires_at = "2099-01-01T00:00:00.000Z",
+                    // Like Custody, the grant asks for the content type the session declared.
                     required_headers = new Dictionary<string, string>
                     {
-                        ["Content-Type"] = "image/png",
+                        ["Content-Type"] = request.TryGetProperty("content_type", out var declared)
+                            ? declared.GetString() ?? "image/png"
+                            : "image/png",
                     },
                 },
                 201));

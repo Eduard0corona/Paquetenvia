@@ -1,5 +1,34 @@
 # Changelog
 
+## Repartidor: fotos de evidencia reducidas y sin metadatos (DRV-PROOF-PHOTO-REDUCE-2026-10-20) — 2026-10-20
+
+- Respuesta literal del project owner (2026-10-20, pregunta G2), registrada en `decision-log.md` con su contexto y las
+  opciones no elegidas: "Fotos de entrega: hoy se suben tal como las toma el teléfono (2 a 5 MB, con metadatos que pueden incluir GPS). Sin señal caben solo de 5 a 12 fotos en la cola. ¿Las procesamos en el teléfono antes de guardarlas?" Respuesta: "Reducir y quitar metadatos (Recommended)" ("JPEG de máximo 1600 px por lado y calidad 80 % (unos 300-500 KB), sin metadatos. La evidencia guardada es esa foto reducida (su huella se calcula después). Caben unas 50 fotos sin señal. Se ve menos detalle al hacer zoom.").
+- La app del repartidor reduce cada foto de evidencia en el teléfono antes de calcular su huella y guardarla en la
+  cola: la de recolección, la de entrega y la "Foto del lugar" de "No se pudo entregar". Decodifica la foto con su
+  orientación visual (`createImageBitmap` con `imageOrientation: "from-image"`, o un `<img>` donde falta esa opción) y
+  la vuelve a codificar en un canvas como JPEG de calidad 0.8 con el lado mayor de 1600 px como máximo, sin agrandarla
+  y sin cambiar su proporción. Un PNG también se guarda como JPEG; lo transparente queda blanco.
+- Sin metadatos: la foto guardada solo conserva el encabezado JFIF y los datos de la imagen. Se quitan EXIF (con GPS,
+  modelo del teléfono y hora), XMP, perfiles ICC, comentarios y todo lo que vaya después del fin de la imagen, también
+  lo que escribe el propio codificador del navegador (Chromium agrega un perfil ICC).
+- La evidencia guardada es esa foto reducida: la vista previa la muestra, y esos mismos bytes son los que se hashean
+  (SHA-256), se guardan en IndexedDB, se declaran (`image/jpeg`), se suben y valida el servidor (bytes mágicos y
+  SHA-256), sin cambios en el servidor. El archivo que eligió el repartidor no se guarda, no se muestra ni se envía.
+- Si el teléfono no puede procesar la foto (formato, archivo dañado o memoria), el paso dice «No se pudo procesar la
+  foto en el teléfono. Tómala de nuevo.», no guarda nada y nunca usa el archivo original en su lugar. Mientras la
+  reduce dice «Preparando la foto…».
+- Límites sin cambio: 10 MiB por foto, 25 MiB de fotos y 100 operaciones por partición. Tamaño típico: unos
+  300-500 KB por foto de una cámara de 12 MP (estimación del owner), unas 50 fotos sin señal. Medido en Chromium con
+  imágenes sintéticas: una de 4000x3000 y 3.78 MB queda en 1600x1200 y 258 KB; 12 MP de ruido puro (peor caso), de
+  10.5 MB a 661 KB.
+- Una foto que una versión anterior de la app ya había guardado en la cola se envía como se guardó.
+- AI-07 `driver_stop.proof_photo` (nuevo) y `failed_delivery.photo`; AI-08 DRV-002: criterio DECIDED y prueba
+  requerida. Pruebas: vitest con una foto sintética con EXIF y GPS inventados (coordenadas imposibles) y Playwright en
+  Chromium real (lo guardado, hasheado, declarado y subido es un solo JPEG de 800x1600, derecho y sin metadatos; una
+  foto que no se puede decodificar no deja nada). Notas: `docs/development/drv-002-offline-events-pod.md`; borradores
+  legales actualizados. Sin cambios de API, SQL, migraciones, roles, esquema de IndexedDB, Service Worker ni paquetes.
+
 ## Repartidor: sesión vencida y recarga sin señal (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19) — 2026-10-19
 
 - Respuestas literales del project owner (2026-10-19), registradas en `decision-log.md` con su contexto y las opciones

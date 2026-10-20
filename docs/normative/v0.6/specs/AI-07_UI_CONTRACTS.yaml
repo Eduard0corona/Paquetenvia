@@ -953,6 +953,35 @@ screen_contracts:
     - contact name only - the full name at a pickup or a return, the short name at a delivery
       (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11)
     completion: cannot complete without required POD unless supervisor override ID
+    # DRV-PROOF-PHOTO-REDUCE-2026-10-20 (project owner, 2026-10-20, G2 "Reducir y quitar metadatos (Recommended)": "JPEG
+    # de máximo 1600 px por lado y calidad 80 % (unos 300-500 KB), sin metadatos. La evidencia guardada es esa foto
+    # reducida (su huella se calcula después). Caben unas 50 fotos sin señal. Se ve menos detalle al hacer zoom."): every
+    # proof photo of the driver app - pickup, delivery and the "Foto del lugar" of failed_delivery - is reduced on the
+    # phone before it is hashed and queued.
+    proof_photo:
+      decision: DRV-PROOF-PHOTO-REDUCE-2026-10-20
+      input: exactly one JPEG or PNG of at most 10 MiB from the camera input (capture="environment"), checked before it
+        is read
+      reduction: the phone decodes the photo in its visual orientation (createImageBitmap with imageOrientation
+        "from-image", or an <img> element where that option is missing) and re-encodes it through a canvas
+        (OffscreenCanvas or <canvas>) as image/jpeg at quality 0.8 with its longest side at most 1600 px - never
+        enlarged, aspect ratio kept, a transparent area white
+      metadata: none - the reduced JPEG keeps only the JFIF header, its tables, frame and scan; every APP1 to APP15
+        segment (EXIF with GPS, device and capture time, XMP, ICC profiles, Photoshop/IPTC), every comment and anything
+        after EOI are left out, also those the browser's own encoder writes (Chromium adds an ICC profile)
+      evidence: the reduced JPEG is the stored evidence - "Vista previa de la foto" shows it, and its exact bytes are
+        the ones hashed (SHA-256), queued, declared (content_type image/jpeg), uploaded, validated by the server (magic
+        bytes and the SHA-256 of those bytes) and kept; the file the driver picked is never kept, shown, hashed or sent
+      preparing: the step says "Preparando la foto…" until the preview opens
+      failure: when the phone cannot decode or re-encode the photo (format, damaged file, memory) the step shows "No se
+        pudo procesar la foto en el teléfono. Tómala de nuevo." as its alert, keeps nothing and waits for a new photo;
+        it never falls back to the picked file
+      limits: unchanged - 10 MiB per photo, 25 MiB of photos and 100 operations per partition; a reduced photo of a
+        12 MP camera is about 300-500 KB (the owner's estimate), so about 50 photos fit the queue without signal
+      server: unchanged - Custody accepts image/jpeg for PICKUP_PHOTO, DELIVERY_PHOTO and RETURN_PHOTO (SIGNATURE stays
+        image/png only), and the API still receives no photo bytes
+      queued_before: a photo an earlier version of the app already queued is sent as it was stored, with the SHA-256
+        it was queued with
     # UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (project owner, 2026-10-11, "Sí, como el diseño (Recommended)": "Solo
     # de sus paradas asignadas. Se borra del teléfono cuando la parada deja de estar asignada o al cerrar sesión. Con
     # datos de prueba hasta cerrar GATE-007."): what the driver sees of each assigned stop and how long the phone
@@ -1155,9 +1184,10 @@ screen_contracts:
       - '"Otro…" reveals ACCESS_RESTRICTED "Acceso restringido", PACKAGE_DAMAGED "Paquete dañado" and SECURITY_RISK
         "Riesgo de seguridad"'
       free_text: none; the server builds the description from the reason and derives the severity from it
-      photo: '"Foto del lugar (obligatoria)": exactly one JPEG or PNG of at most 10 MiB, shown in "Vista previa de la
-        foto" with "Repetir" and "Usar esta foto" like the delivery photo; the object URL is revoked on "Repetir", on
-        "Usar esta foto" and when the step closes; nothing is stored before "Enviar reporte"'
+      photo: '"Foto del lugar (obligatoria)": exactly one JPEG or PNG of at most 10 MiB, reduced on the phone like the
+        delivery photo (proof_photo, DRV-PROOF-PHOTO-REDUCE-2026-10-20) and shown in "Vista previa de la foto" with
+        "Repetir" and "Usar esta foto" like it; the object URL is revoked on "Repetir", on "Usar esta foto" and when the
+        step closes; nothing is stored before "Enviar reporte"'
       submit: '"Enviar reporte" stays disabled until a reason and the photo are chosen; it asks no confirmation, like
         "Confirmar entrega"'
       requests:

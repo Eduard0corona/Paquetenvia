@@ -106,7 +106,9 @@ Otros:
 
 18. Si siguen aplicando el Reglamento de 2011 y los Lineamientos del Aviso de Privacidad de 2013 con la ley de 2025.
 19. Si las cookies técnicas requieren advertencia.
-20. Metadatos EXIF de las fotos (pueden llevar GPS): informarlos o eliminarlos.
+20. Metadatos EXIF de las fotos: resuelto por el owner (DRV-PROOF-PHOTO-REDUCE-2026-10-20). El teléfono reduce cada foto
+    y le quita los metadatos (GPS, modelo del teléfono, hora) antes de guardarla; la evidencia guardada es esa foto
+    reducida.
 21. Trato de "usted" o "tú".
 
 ## Lo que viene después de la aprobación (no lo hace este cambio)

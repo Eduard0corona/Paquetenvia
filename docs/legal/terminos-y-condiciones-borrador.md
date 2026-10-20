@@ -365,23 +365,26 @@ foto: la app no envía la ubicación del teléfono.
 enviar. **[PENDIENTE: si una fotografía basta como prueba de entrega frente al Cliente, y si el repartidor puede dejar
 el paquete sin entregarlo en mano (por ejemplo, en la puerta o con un vecino). El sistema no distingue esos casos.]**
 
-9.3. Cada foto se guarda en almacenamiento privado, con la hora y una huella SHA-256, y pasa un análisis de malware
-antes de aceptarse. Una foto usada para reportar un intento fallido nunca cuenta como prueba de entrega.
+9.3. Antes de guardarla, el teléfono reduce cada foto (máximo 1600 px por lado) y le quita los metadatos; la evidencia
+es esa foto reducida. Cada foto se guarda en almacenamiento privado, con la hora y una huella SHA-256 de la foto
+reducida, y pasa un análisis de malware antes de aceptarse. Una foto usada para reportar un intento fallido nunca cuenta como prueba de entrega.
 
 9.4. Hoy ninguna pantalla deja ver ni descargar las fotografías: el personal solo puede consultar que existen, su
 tipo, su huella y su hora. **[PENDIENTE: cómo y en qué plazo se entrega al Cliente una copia de la foto en una
 reclamación. Hace falta un cambio técnico o un procedimiento manual.]**
 
-9.5. Las fotos pueden mostrar a la persona que recibe, el domicilio o placas de vehículos, y pueden llevar la ubicación
-GPS del teléfono en sus metadatos. Se tratan conforme al aviso de privacidad (sección 13). **[PENDIENTE: plazo de
-conservación; las reglas de retención proponen 12 meses después del fin del envío y hoy no se borran.]**
+9.5. Las fotos pueden mostrar a la persona que recibe, el domicilio o placas de vehículos. No llevan metadatos: el
+teléfono quita la ubicación GPS, el modelo del teléfono y la hora que la cámara guarda en la imagen. Se tratan conforme
+al aviso de privacidad (sección 13). **[PENDIENTE: plazo de conservación; las reglas de retención proponen 12 meses
+después del fin del envío y hoy no se borran.]**
 
 > **Nota para revisión.** Fotos: POD-001 (`docs/development/pod-001-secure-proof-upload.md`): JPEG o PNG de hasta
 > 10 MiB ("Foto de evidencia", `apps/web/src/driver/components/driver-proof-capture.tsx`). `recipient_name` se
 > rechaza (`FinalizeProofRequest`, aviso integral, sección 3.1). Evidencia de incidente excluida de la entrega (AI-04
 > `prohibited`). Lectura: `listOrderProofs` devuelve id, tipo, `sha256` y `captured_at`, nunca bytes ni URL
-> (API-INC-LIST-PROOFS-2026-09-29); `IProofDownloadService` existe pero ningún endpoint lo usa. EXIF: la app sube el
-> archivo sin recodificar (`apps/web/src/driver/proofs/proof-file.ts`). Retención:
+> (API-INC-LIST-PROOFS-2026-09-29); `IProofDownloadService` existe pero ningún endpoint lo usa. EXIF: la app reduce
+> la foto a un JPEG de máximo 1600 px por lado y calidad 80 % sin metadatos antes de calcular la huella
+> (`apps/web/src/driver/proofs/proof-photo-reduce.ts`, DRV-PROOF-PHOTO-REDUCE-2026-10-20). Retención:
 > [reglas de retención](reglas-de-retencion-borrador.md), sección 3.2.
 
 ---

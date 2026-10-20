@@ -50,6 +50,8 @@ La frontera `apps/web/src/driver/` agrega:
 - `offline/driver-sync-scheduler.ts`: orden, reintento, confirmación REST y
   resolución segura de errores;
 - `proofs/proof-file.ts`: validación de tipo, tamaño y SHA-256;
+- `proofs/proof-photo-reduce.ts` y `proofs/jpeg-structure.ts`: reducción de la
+  foto en el teléfono, JPEG sin metadatos (DRV-PROOF-PHOTO-REDUCE-2026-10-20);
 - `state/driver-operations-controller.ts`: coordinación con la UI.
 
 Los componentes no abren IndexedDB ni construyen requests. REST continúa siendo
@@ -140,12 +142,92 @@ por lo que la UI nunca presenta una acción proyectada como confirmada.
 
 Vista previa (UI-001 fase 3): al tomar la foto la PWA la muestra en “Vista
 previa de la foto” desde un object URL en memoria, sin persistir nada nuevo;
-sólo se previsualiza una foto JPEG/PNG de hasta 10 MiB (mismas reglas, sin leer
-ni hashear el archivo). “Repetir” la descarta y reabre la cámara; sólo “Usar
-esta foto” encola la acción con ese mismo `Blob`, con la validación, el SHA-256,
-la escritura IndexedDB y la idempotencia de siempre. Si la cola no la guarda,
-la misma foto vuelve a la vista previa. El object URL se revoca al repetir, al
-usarla y al desmontar el paso.
+sólo se acepta una foto JPEG/PNG de hasta 10 MiB (mismas reglas, revisadas antes
+de leer el archivo). “Repetir” la descarta y reabre la cámara; sólo “Usar esta
+foto” encola la acción con el `Blob` de la vista previa, con la validación, el
+SHA-256, la escritura IndexedDB y la idempotencia de siempre. Si la cola no la
+guarda, la misma foto vuelve a la vista previa. El object URL se revoca al
+repetir, al usarla y al desmontar el paso.
+
+### Reducción de la foto en el teléfono (DRV-PROOF-PHOTO-REDUCE-2026-10-20)
+
+Respuesta del owner (pregunta G2, literal en `decision-log.md`): "Reducir y quitar
+metadatos (Recommended)", "JPEG de máximo 1600 px por lado y calidad 80 % (unos
+300-500 KB), sin metadatos. La evidencia guardada es esa foto reducida (su huella
+se calcula después). Caben unas 50 fotos sin señal. Se ve menos detalle al hacer
+zoom."
+
+Antes de la vista previa, `DriverProofPreview.select` reduce el archivo elegido
+con `reduceDriverProofPhoto` (`proofs/proof-photo-reduce.ts`); la pantalla dice
+«Preparando la foto…» mientras tanto. Vale para las tres fotos: recolección,
+entrega y la “Foto del lugar” de “No se pudo entregar”.
+
+1. Decodifica la foto con su orientación visual: `createImageBitmap` con
+   `imageOrientation: "from-image"` (aplica la orientación EXIF) o, donde el
+   navegador no conoce esa opción (`TypeError`), un `<img>` decodificado, que
+   los navegadores también dibujan con su orientación.
+2. Calcula el tamaño: lado mayor de 1600 px como máximo, sin agrandar nunca y
+   con la misma proporción (`driverProofPhotoTargetSize`; 4000x3000 → 1600x1200,
+   3024x4032 → 1200x1600, 800x600 se queda igual).
+3. Dibuja la foto en un `OffscreenCanvas` (o `<canvas>`) con fondo blanco (un
+   PNG transparente queda blanco, no negro) y suavizado `high`, y la codifica
+   con `image/jpeg` y calidad 0.8. Un navegador que no sabe escribir JPEG
+   devuelve PNG: se rechaza.
+4. `stripJpegMetadata` (`proofs/jpeg-structure.ts`) recorre los segmentos del
+   JPEG sin decodificar píxeles y deja fuera APP1 a APP15 (EXIF con GPS,
+   modelo y hora, XMP, ICC, Photoshop/IPTC), los comentarios, todo APP0 que no
+   sea JFIF y lo que venga después de EOI. También quita lo que escribe el
+   propio codificador: Chromium agrega un perfil ICC sRGB (APP2) a cada JPEG de
+   canvas. El resto de los bytes se copia sin cambios.
+5. `readJpegStructure` comprueba el resultado: JPEG bien formado, cuadro del
+   tamaño calculado y ningún segmento de metadatos ni bytes al final. Si algo
+   no cuadra, falla cerrado.
+
+La vista previa muestra esa foto reducida y “Usar esta foto” entrega solo ese
+`Blob`. El SHA-256, la escritura en IndexedDB, la sesión de carga
+(`content_type: image/jpeg`), el `PUT` y la validación del servidor (bytes
+mágicos `FF D8 FF` y SHA-256 de los bytes exactos en `ProofValidationProcessor`)
+no cambian y trabajan sobre esos bytes: la evidencia guardada es la foto
+reducida y su huella se calcula después de reducirla. El archivo elegido nunca
+se guarda, se muestra, se hashea ni se envía.
+
+Si el teléfono no puede decodificar o codificar la foto (formato, archivo
+dañado, memoria), el paso muestra en su alerta de siempre «No se pudo procesar
+la foto en el teléfono. Tómala de nuevo.», no guarda nada y espera otra foto.
+Nunca usa el archivo original en su lugar.
+
+El servidor no cambia: `ProofContentPolicy` acepta `image/jpeg` para
+`PICKUP_PHOTO`, `DELIVERY_PHOTO` (también la del intento fallido) y
+`RETURN_PHOTO`; `SIGNATURE` sigue solo PNG y la app no la envía.
+
+Tamaño típico y límites. Los límites de AI-07 no cambian (10 MiB por foto,
+25 MiB y 100 operaciones por partición). El owner estimó unos 300-500 KB por
+foto de una cámara de 12 MP, unas 50 fotos sin señal (a 500 KB caben unas 51 en
+25 MiB). Medido con este código en Chromium headless sobre imágenes sintéticas
+(no hay fotos reales en el repositorio):
+
+| Entrada | Antes | Después |
+| --- | --- | --- |
+| Fixture `proof-photo-exif-gps.fixture.jpg`, 2000x1000 con orientación EXIF 6 | 14,020 B | 800x1600, 8,164 B |
+| Imagen sintética tipo foto, 4000x3000, JPEG 0.92 | 3,784,112 B | 1600x1200, 257,632 B |
+| Imagen sintética tipo foto, 3024x4032, JPEG 0.92 | 3,836,272 B | 1200x1600, 256,494 B |
+| Ruido puro 4000x3000, JPEG 0.92 (peor caso) | 10,510,814 B | 1600x1200, 660,652 B |
+| PNG 1x1 | 88 B | 1x1, 286 B |
+
+Una foto real con mucho detalle pesa más que la sintética tipo foto; el ruido
+puro es la cota alta. La revisión de 10 MiB sigue aplicándose al archivo elegido
+antes de leerlo, como antes: un archivo de cámara mayor de 10 MiB se sigue
+rechazando aunque reducido cupiera. Una foto que una versión anterior de la app
+ya había guardado en la cola se envía tal como se guardó, con el SHA-256 con el
+que se encoló.
+
+Fixture: `apps/web/src/driver/proofs/proof-photo-exif-gps.fixture.jpg` es un
+JPEG de 2000x1000 en dos colores (rojo a la izquierda, azul a la derecha) escrito
+por el codificador de canvas de Chromium, con un bloque EXIF agregado (marca y
+modelo inventados, orientación 6 y un IFD de GPS con coordenadas imposibles:
+11° 22' 77" N y 44° 55' 88" W), XMP con las mismas coordenadas, un comentario y
+el perfil ICC del codificador. Se ve derecho como 1000x2000, rojo arriba y azul
+abajo.
 
 ## Proyección local
 
@@ -423,7 +505,15 @@ GATE-007 continúa bloqueando evidencia real de producción.
 
 Vitest cubre contrato/runtime parser, idempotencia y timestamps, proyección,
 archivo/hash, contrato API, upload seguro, scheduler, backoff, confirmación REST,
-política del Service Worker, schema IndexedDB y OpenAPI heredado.
+política del Service Worker, schema IndexedDB y OpenAPI heredado. Para la
+reducción de la foto (DRV-PROOF-PHOTO-REDUCE-2026-10-20): `jpeg-structure.test.ts`
+lee el EXIF del fixture (GPS, orientación, marca y modelo) y prueba que quitar
+los metadatos deja fuera EXIF, XMP, ICC, comentarios, APP0 que no es JFIF y
+colas, conserva el resto byte por byte y falla cerrado con JPEG mal formados;
+`proof-photo-reduce.test.ts` prueba el tamaño (sin agrandar), la calidad 0.8,
+el rechazo de un resultado PNG o de otro tamaño y la liberación de la foto
+decodificada; `proof-preview.test.ts` prueba que la vista previa y la cola
+reciben solo la foto reducida y que un fallo no deja nada.
 
 La categoría `DriverOfflineOperationsPwa` ejecuta Chromium real y cubre:
 
@@ -445,7 +535,15 @@ La categoría `DriverOfflineOperationsPwa` ejecuta Chromium real y cubre:
 
 - una operación que el servidor rechaza con `OFFLINE_OPERATION_EXPIRED` se
   elimina una sola vez, conserva su instante de captura tras recargar y muestra
-  el aviso al conductor.
+  el aviso al conductor;
+- DRV-PROOF-PHOTO-REDUCE-2026-10-20: el fixture con EXIF y GPS se ve en la
+  vista previa como 800x1600, y lo guardado, hasheado, declarado y subido es un
+  solo `image/jpeg` derecho (rojo arriba, azul abajo) sin segmentos de metadatos;
+  un PNG que el navegador no puede decodificar muestra «No se pudo procesar la
+  foto en el teléfono. Tómala de nuevo.» y no deja nada; las demás pruebas que
+  suben fotos comprueban que lo enviado es el JPEG reducido de la foto elegida
+  (por su color) y el pipeline real lee de almacenamiento los dos objetos
+  guardados (1x1 y 800x1600, `image/jpeg`, sin metadatos).
 
 Son doce escenarios de navegador en la categoría. El harness serializa el
 servidor Next entre procesos de test y libera el lock al terminar; esto no
@@ -474,6 +572,11 @@ dotnet test .\tests\Paqueteria.IntegrationTests\Paqueteria.IntegrationTests.cspr
 - IndexedDB y Cache API son almacenamiento best-effort del navegador.
 - Los blobs pueden contener información visual sensible y las cuotas disponibles
   varían entre dispositivos.
+- La foto reducida (DRV-PROOF-PHOTO-REDUCE-2026-10-20) muestra menos detalle al
+  hacer zoom, como dice la opción que eligió el owner. Decodificar una foto
+  grande ocupa memoria del teléfono (unos 48 MB para 12 MP); si el navegador no
+  puede, el repartidor ve el aviso y toma otra foto. El camino `<img>` de
+  navegadores sin `imageOrientation: "from-image"` no corre en el Chromium de CI.
 - Una interrupción entre pasos conserva suficiente estado para reanudar, pero
   requiere conectividad y REST autoritativo.
 - El adaptador productivo de identidad sigue fuera de este ticket.
