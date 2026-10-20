@@ -53,9 +53,9 @@ The last step of `azr-static`, *Build and smoke-test the deploy images (no push)
   - `ImageBuildInputTests` in `tools/ci/test_classify_changes.py` proves that every tracked file the images are built from selects `azr-static`, and that the .NET project closure and every `COPY` source stay inside those inputs;
   - `tools/ci/test_image_build_smoke.py` keeps the list equal to the Dockerfiles in the repository and to the pilot workflow's builds, and runs the real step with a stand-in `docker`.
 - **Cost (measured on PR #303):**
-  - the step takes about 3.7 minutes (221 s): API 48 s, Worker 28 s, pilot db-ops 36 s, DEV db-ops 36 s, pilot web 43 s, DEV web 30 s;
-  - `azr-static` goes from about 1.6 to about 5.8 minutes. That is still shorter than the slowest PR Validation job (about 7 minutes), so the wall time of a run does not grow;
-  - Foundation's `normative` job grows by the same 3.7 minutes and stays inside its 15-minute timeout;
+  - the step took 221 s and 162 s on the two runs, so about 3 to 4 minutes. On the first run the images took: API 48 s, Worker 28 s, pilot db-ops 36 s, DEV db-ops 36 s, pilot web 43 s, DEV web 30 s. The two DEV-SYNTHETIC images add about a minute;
+  - `azr-static` goes from about 1.6 minutes to 3.9–5.8 minutes. That is still shorter than the slowest PR Validation job (about 7 minutes), so the wall time of a run does not grow;
+  - Foundation's `normative` job (about 1 minute on the last `push`/`main` run) grows by the same 3 to 4 minutes, well inside its 15-minute timeout;
   - the runner had 80 GB of disk free after the six builds.
 - **Pending owner decisions (not done here):** pinning the base images by digest, with a refresh process; image scanning; ACR tag locks; reusing earlier digests for a rollback. Until then CI and the deploy each `--pull` the floating base tags, so the deploy can build on a newer base than CI tested.
 
