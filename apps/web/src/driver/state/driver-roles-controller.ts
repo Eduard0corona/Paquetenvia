@@ -51,9 +51,11 @@ const unknownRoles: DriverRolesState = Object.freeze({
  * organization when the session starts (a new sign-in or organization is a new
  * session). The answer saved for the partition is used at once, so
  * "No se pudo entregar" keeps working offline for a driver, and a successful
- * answer replaces it. 401 or 403 removes it (the person is no longer a member
- * there; the stops screen clears the rest of the partition on its own
- * revocation) and nothing is asked again. Any other failure - offline, a
+ * answer replaces it. 403 or a session without a usable credential removes it
+ * (the person is no longer a member there; the stops screen clears the rest
+ * of the partition on its own revocation) and nothing is asked again. A 401
+ * (the session ended, DRV-SESSION-EXPIRY-OFFLINE-2026-10-19) keeps the saved
+ * answer for the same driver's next sign-in and nothing is asked again. Any other failure - offline, a
  * timeout, a 5xx, an older API without the operation (404) or an answer that
  * breaks the contract - keeps the saved answer, or leaves the roles unknown
  * when none is saved, and the request is made again when the connection
@@ -179,6 +181,13 @@ export class DriverRolesController {
       await this.options.cache.replaceRoles(partition, roles).catch(() => undefined);
     } catch (error) {
       if (this.disposed) return;
+      if (
+        error instanceof DriverOrganizationRolesApiError &&
+        error.category === "session-ended"
+      ) {
+        this.setState(Object.freeze({ roles: this.state.roles, loading: false }));
+        return;
+      }
       if (
         error instanceof DriverOrganizationRolesApiError &&
         (error.category === "unauthorized" || error.category === "forbidden")

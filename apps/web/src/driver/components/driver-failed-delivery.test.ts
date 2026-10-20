@@ -330,6 +330,8 @@ describe("AI-07 record", () => {
       '"No pudimos confirmar tu rol. Vuelve a abrir la app con conexión para reportar."',
       "never asking to sign out, which would wipe what the phone keeps offline",
       "A failed read keeps the answer already saved and is made again when the connection returns or the app is shown again, at most 5 times per session start and never after 401 or 403",
+      // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (owner answer E2): a 401 keeps the saved answer.
+      "a 403 removes the answer and a 401 keeps it for the same driver''s next sign-in",
       "role_loading: 'ORG-MY-ROLES-2026-10-12",
       "the stop says nothing about the role: loading is not an error",
       "no deploy order is needed between the web and the API",
@@ -346,7 +348,7 @@ describe("AI-07 record", () => {
     );
     expect(kept).toContain("with every snapshot on logout");
     expect(screen.replace(/\s+/g, " ")).toContain(
-      "the saved roles answer (ORG-MY-ROLES-2026-10-12) is wiped with the snapshots, on logout and on 401 or 403",
+      "the saved roles answer (ORG-MY-ROLES-2026-10-12) is wiped with the snapshots, on logout and on 403 or without a usable credential, never on 401",
     );
     expect(plain).not.toContain("ORG-CONTEXT-ROLES");
     expect(plain).not.toContain("the roles array of the selected organization context");

@@ -19,7 +19,7 @@ import { testWindow } from "./driver-roles.fixtures";
  * DRV-DISPATCH-CONTACT-2026-10-12: the number comes from getMyDispatchContact
  * when the session starts; the answer saved for the partition keeps "Llamar a
  * despacho" working offline, a failed call keeps it and is asked again when
- * the connection returns or the app is shown again, and 401 or 403 removes it
+ * the connection returns or the app is shown again, and 403 (not 401) removes it
  * for good. The answers go through the real client and its strict parser. The
  * numbers are synthetic.
  */
@@ -153,7 +153,28 @@ describe("dispatch contact of the driver session", () => {
     expect(cache.saved.size).toBe(0);
   });
 
-  it.each([401, 403])("removes the saved number on %i and never asks again", async (status) => {
+  it("keeps the saved number on 401 (the session ended) and never asks again", async () => {
+    // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (owner answer E2): nothing of the partition is wiped.
+    const cache = new MemoryDispatchContactCache();
+    await saved(cache, syntheticNumber);
+    const page = testWindow();
+    const { controller, fetcher } = controllerFor(answersFetch(problem(401), numberAnswer(newerNumber)), {
+      cache,
+      page,
+    });
+
+    await controller.start();
+    expect(controller.current).toEqual({ phoneE164: syntheticNumber });
+    expect(cache.saved.size).toBe(1);
+
+    page.goOnline();
+    page.show();
+    await Promise.resolve();
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(controller.current).toEqual({ phoneE164: syntheticNumber });
+  });
+
+  it.each([403])("removes the saved number on %i and never asks again", async (status) => {
     const cache = new MemoryDispatchContactCache();
     await saved(cache, syntheticNumber);
     const page = testWindow();

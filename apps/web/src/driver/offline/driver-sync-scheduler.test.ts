@@ -146,6 +146,112 @@ describe("driver sync scheduler", () => {
     await scheduler.dispose();
   });
 
+  describe("session ended (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19, owner answer E2)", () => {
+    function queueWithPendingWork(): MemoryQueue {
+      const transition = operation("CHECK_IN", orderA, 3, 1);
+      const delivery = operation("DELIVERY_PROOF", orderB, 8, 2);
+      const collection = codOperation(orderB, 8, 3);
+      const queue = new MemoryQueue([transition, collection, delivery]);
+      queue.proofs.set(delivery.id, {
+        schemaVersion: 1,
+        partitionKey: partition.key,
+        operationId: delivery.id,
+        blob: new Blob([new Uint8Array([1])], { type: "image/png" }),
+        contentType: "image/png",
+        sizeBytes: 1,
+        sha256: "a".repeat(64),
+      } as DriverProofBlobRecord);
+      return queue;
+    }
+
+    it("keeps the snapshot, every queued action and every photo on a 401, and sends nothing more", async () => {
+      const queue = queueWithPendingWork();
+      const before = queue.operations.map((candidate) => candidate.id);
+      const onAccessRevoked = vi.fn();
+      const transitionOrder = vi
+        .fn()
+        .mockRejectedValue(new DriverSyncApiError("session-ended"));
+      const browser = fakeBrowser();
+      const scheduler = new DriverSyncScheduler({
+        ...schedulerOptions(queue, { transitionOrder }, onAccessRevoked),
+        window: browser.window,
+      });
+
+      await scheduler.requestSync(true);
+
+      expect(queue.clearCount).toBe(0);
+      expect(queue.operations.map((candidate) => candidate.id)).toEqual(before);
+      expect(queue.proofs.size).toBe(1);
+      expect(onAccessRevoked).toHaveBeenCalledExactlyOnceWith("session-ended");
+      // The action in flight stays as last persisted, with its keys.
+      expect(queue.operations[0]).toMatchObject({ id: before[0], status: "PROCESSING" });
+      expect(queue.lease).toBeNull();
+
+      scheduler.start();
+      browser.goOnline();
+      await scheduler.requestSync(true);
+      expect(transitionOrder).toHaveBeenCalledOnce();
+      await scheduler.dispose();
+    });
+
+    it("keeps everything when the confirmation read answers 401", async () => {
+      const queue = queueWithPendingWork();
+      const onAccessRevoked = vi.fn();
+      const transitionOrder = vi.fn();
+      const scheduler = schedulerFor(queue, { transitionOrder }, onAccessRevoked, async () => {
+        throw new DriverSyncApiError("session-ended");
+      });
+
+      await scheduler.requestSync(true);
+
+      expect(queue.clearCount).toBe(0);
+      expect(queue.operations).toHaveLength(3);
+      expect(queue.proofs.size).toBe(1);
+      expect(transitionOrder).not.toHaveBeenCalled();
+      expect(onAccessRevoked).toHaveBeenCalledExactlyOnceWith("session-ended");
+      await scheduler.dispose();
+    });
+
+    it("resumes everything with the same keys once the same driver signs in again", async () => {
+      const queue = queueWithPendingWork();
+      const sent: { id: string; key: string }[] = [];
+      const ended = schedulerFor(queue, {
+        transitionOrder: vi.fn().mockRejectedValue(new DriverSyncApiError("session-ended")),
+      });
+      await ended.requestSync(true);
+      await ended.dispose();
+      const inFlight = queue.operations[0];
+
+      // The same driver in the same organization: the same partition, a new session.
+      const resumed = schedulerFor(queue, {
+        transitionOrder: vi.fn(async (value: DriverOfflineOperation) => {
+          sent.push({ id: value.id, key: value.transitionIdempotencyKey });
+          return { id: value.orderId, status: value.targetStatus!, version: value.expectedVersion + 1 };
+        }),
+      });
+      await resumed.requestSync(true);
+
+      expect(sent[0]).toEqual({ id: inFlight.id, key: inFlight.transitionIdempotencyKey });
+      expect(queue.clearCount).toBe(0);
+      await resumed.dispose();
+    });
+
+    it("still wipes the partition on 403 and without a usable credential", async () => {
+      for (const category of ["forbidden", "unauthorized"] as const) {
+        const queue = queueWithPendingWork();
+        const onAccessRevoked = vi.fn();
+        const scheduler = schedulerFor(queue, {
+          transitionOrder: vi.fn().mockRejectedValue(new DriverSyncApiError(category)),
+        }, onAccessRevoked);
+        await scheduler.requestSync(true);
+        expect(queue.clearCount).toBe(1);
+        expect(queue.operations).toEqual([]);
+        expect(onAccessRevoked).toHaveBeenCalledWith(category);
+        await scheduler.dispose();
+      }
+    });
+  });
+
   it("purges a missing resource without sending or probing another API", async () => {
     const queued = operation("DELIVERY_PROOF", orderA, 8, 1);
     const queue = new MemoryQueue([queued]);
@@ -1223,6 +1329,41 @@ function schedulerFor(
   queue: MemoryQueue,
   apiOverrides: Partial<DriverSyncApi>,
   onAccessRevoked = vi.fn(),
+  refreshStops?: () => Promise<DriverStopList>,
+): DriverSyncScheduler {
+  return new DriverSyncScheduler(
+    schedulerOptions(queue, apiOverrides, onAccessRevoked, refreshStops),
+  );
+}
+
+/** A page whose `online` the test fires; online and shown. */
+function fakeBrowser() {
+  const listeners = new Map<string, Set<() => void>>();
+  const target = {
+    addEventListener: (type: string, listener: () => void) => {
+      if (!listeners.has(type)) listeners.set(type, new Set());
+      listeners.get(type)!.add(listener);
+    },
+    removeEventListener: (type: string, listener: () => void) => {
+      listeners.get(type)?.delete(listener);
+    },
+  };
+  return {
+    window: {
+      ...target,
+      navigator: { onLine: true },
+      document: { visibilityState: "visible", ...target },
+    } as unknown as Pick<Window, "addEventListener" | "removeEventListener" | "navigator" | "document">,
+    goOnline: () => {
+      for (const listener of listeners.get("online") ?? []) listener();
+    },
+  };
+}
+
+function schedulerOptions(
+  queue: MemoryQueue,
+  apiOverrides: Partial<DriverSyncApi>,
+  onAccessRevoked = vi.fn(),
   refreshStops: () => Promise<DriverStopList> = async () => stopList([
     {
       order_id: orderA,
@@ -1255,7 +1396,7 @@ function schedulerFor(
       navigation: syntheticNavigation,
     },
   ]),
-): DriverSyncScheduler {
+): ConstructorParameters<typeof DriverSyncScheduler>[0] {
   const api: DriverSyncApi = {
     transitionOrder: vi.fn(),
     createProofUploadSession: vi.fn(),
@@ -1264,7 +1405,7 @@ function schedulerFor(
     openFailedDeliveryIncident: vi.fn(),
     ...apiOverrides,
   };
-  return new DriverSyncScheduler({
+  return {
     partition,
     queue,
     api,
@@ -1273,7 +1414,7 @@ function schedulerFor(
     onAccessRevoked,
     now: () => new Date("2026-07-26T12:00:00.000Z"),
     randomUuid: () => "99999999-9999-4999-8999-999999999999",
-  });
+  };
 }
 
 function codOperation(

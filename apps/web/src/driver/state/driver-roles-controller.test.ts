@@ -23,7 +23,7 @@ import {
  * ORG-MY-ROLES-2026-10-12: the roles come from getMyOrganizationRoles when the
  * session starts; the answer saved for the partition keeps the report working
  * offline, a failed call keeps it and is asked again when the connection
- * returns or the app is shown again, and 401 or 403 removes it for good.
+ * returns or the app is shown again, and 403 removes it for good (a 401 keeps it).
  */
 const session: DriverSession = {
   organizationId: "33333333-3333-4333-8333-333333333333",
@@ -217,7 +217,25 @@ describe("organization roles of the driver session", () => {
     expect(driverReportRoleOf(controller.current)).toBe("unknown");
   });
 
-  it.each([401, 403])("are removed on %i (the person is no longer a member there) and never asked again", async (status) => {
+  it("are kept on 401 (the session ended) for the same driver's next sign-in, and never asked again", async () => {
+    // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (owner answer E2): nothing of the partition is wiped.
+    const cache = new MemoryRolesCache();
+    await savedFor(cache, ["DRIVER"]);
+    const { controller, fetcher, page } = controllerFor(
+      { status: 401, body: "{}", contentType: "application/problem+json" },
+      { cache },
+    );
+
+    await controller.start();
+    page.goOnline();
+    page.show();
+
+    expect(fetcher).toHaveBeenCalledOnce();
+    expect(controller.current).toEqual({ roles: ["DRIVER"], loading: false });
+    expect(cache.saved.size).toBe(1);
+  });
+
+  it.each([403])("are removed on %i (the person is no longer a member there) and never asked again", async (status) => {
     const cache = new MemoryRolesCache();
     await savedFor(cache, ["DRIVER"]);
     const { controller, fetcher, page } = controllerFor(

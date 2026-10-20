@@ -64,6 +64,33 @@ describe("driver stops generic shell", () => {
     expect(component).toContain("Conéctate a internet para iniciar sesión.");
   });
 
+  it('says "Tu sesión venció, entra de nuevo" with the sign-in and keeps what is pending (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19)', () => {
+    const panel = component.slice(
+      component.indexOf('<StatusPanel title="Tu sesión venció, entra de nuevo">'),
+      component.indexOf("</StatusPanel>", component.indexOf('<StatusPanel title="Tu sesión venció, entra de nuevo">')),
+    );
+    expect(panel).toContain("Lo que tengas pendiente sigue guardado en este teléfono");
+    expect(panel).toContain("<SignInAction route={route} />");
+    expect(component).toContain('(session && state.phase === "session-ended")');
+    expect(component).toContain("(!session && signInAgain)");
+  });
+
+  it("a remembered session reads and queues locally only (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19)", () => {
+    expect(component).toContain("sync: session.remembered !== true,");
+    expect(component).toContain("if (session.remembered !== true) void externalOffersController.start();");
+    expect(component).toContain("session && session.remembered !== true\n        ? createDriverVoiceApi(");
+    expect(component).toContain("Sesión sin confirmar");
+    expect(component).toContain("window.dispatchEvent(new Event(driverSessionCheckRequestedEvent))");
+    // A 403 or a missing credential wiped the partition: the phone forgets that driver, for its own session only.
+    const subscription = component.slice(
+      component.indexOf("const unsubscribe = controller.subscribe((next) => {"),
+      component.indexOf("const unsubscribeRoles"),
+    );
+    expect(subscription).toContain('next.phase === "forbidden" || next.phase === "unauthorized"');
+    expect(subscription).toContain("forgetDriverSessionMarker(");
+    expect(subscription).not.toContain(`next.phase === "session-ended"`);
+  });
+
   it("renders the same prop-free experience from list and detail pages", () => {
     expect(listPage).toContain("<DriverStopsExperience />");
     expect(detailPage).toContain("<DriverStopsExperience />");

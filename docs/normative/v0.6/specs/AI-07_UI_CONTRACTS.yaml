@@ -302,12 +302,18 @@ routes:
     - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
     - UI-PHASE3-ROUTES-NO-IDS-2026-10-12
     - UI-PHASE3-ROUTES-ROW-DRIVER-2026-10-12
+  # DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (project owner, 2026-10-19, "Conservar y pedir entrar (Recommended)" and "Sí,
+  # y envía al validar (Recommended)"): a session that ends keeps what is pending and asks the same driver to sign in
+  # again, and a reload without signal opens the saved stops of the driver the phone remembers
+  # (screen_contracts.driver_stop.session_expiry and offline_reload).
   /driver/stops:
     roles:
     - own_driver
     - external_driver
     release: MVP-0
     offline: true
+    decisions:
+    - DRV-SESSION-EXPIRY-OFFLINE-2026-10-19
   # UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (project owner, 2026-10-09 "avanza con la fase 3"; 2026-10-11 "Sí, como
   # el diseño (Recommended)", "Google Maps (Recommended)" and "Solo confirma el monto (Recommended)"): the stop shows
   # what the driver needs at the door, "Cómo llegar" opens Google Maps and the driver records the cash collected
@@ -322,6 +328,7 @@ routes:
     decisions:
     - UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11
     - UI-PHASE3-DRIVER-FAILED-DELIVERY-2026-10-12
+    - DRV-SESSION-EXPIRY-OFFLINE-2026-10-19
     actions:
     - check_in
     - pickup_proof
@@ -984,10 +991,14 @@ screen_contracts:
     - the count of the driver's stops completed today (a number, no data about those stops)
     - 'the last successful answer of GET /me/organization-roles for the session''s partition: the role codes only
       (ORG-MY-ROLES-2026-10-12, so "No se pudo entregar" keeps its dispatch_role rule offline); it leaves the phone
-      with the partition''s snapshot on 401 or 403 and with every snapshot on logout'
+      with the partition''s snapshot on 403 or without a usable credential and with every snapshot on logout; a 401
+      keeps it (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19)'
     - 'the last successful answer of GET /driver/me/dispatch-contact for the session''s partition: the organization''s
       dispatch number or null, nothing else (DRV-DISPATCH-CONTACT-2026-10-12, so "Llamar a despacho" works offline); it
-      leaves the phone with the partition''s snapshot on 401 or 403 and with every snapshot on logout'
+      leaves the phone with the partition''s snapshot on 403 or without a usable credential and with every snapshot on
+      logout; a 401 keeps it (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19)'
+    - 'the driver and the organization that opened the last driver session (offline_reload.marker,
+      DRV-SESSION-EXPIRY-OFFLINE-2026-10-19): the sessionNamespace and the organization id only, in localStorage'
     - pending events
     - pending proof metadata
     privacy:
@@ -1036,11 +1047,13 @@ screen_contracts:
         never sent
       - the phone keeps the details only inside the latest server snapshot of its session; a stop the server no
         longer returns leaves the phone with the next snapshot
-      - logging out wipes every saved snapshot of the phone before leaving; 401 or 403 wipes the session's snapshot
-      - the saved roles answer (ORG-MY-ROLES-2026-10-12) is wiped with the snapshots, on logout and on 401 or 403
+      - logging out wipes every saved snapshot of the phone before leaving; 403, or a session without a usable
+        credential, wipes the session's snapshot; a 401 keeps it (session_expiry, DRV-SESSION-EXPIRY-OFFLINE-2026-10-19)
+      - the saved roles answer (ORG-MY-ROLES-2026-10-12) is wiped with the snapshots, on logout and on 403 or without
+        a usable credential, never on 401
       - the saved dispatch contact answer (DRV-DISPATCH-CONTACT-2026-10-12) is wiped with the snapshots, on logout and
-        on 401 or 403
-      - the offline queue survives a logout and carries no address or contact datum
+        on 403 or without a usable credential, never on 401
+      - the offline queue survives a logout and a 401 and carries no address or contact datum
       - every listMyStops answer carries Cache-Control no-store
       - synthetic data only until GATE-007 closes
       # UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 review (2026-10-11): the key service never blocks the stops or the
@@ -1054,6 +1067,46 @@ screen_contracts:
         depend on the key service and never wipe the saved details; a stop that comes without details gets one full
         read; a confirmation that cannot answer (logout, aborted pass) never answers an empty list and the queued
         action stays; a stop absent from an answer that left out a stop is never taken for gone
+    # DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (project owner, 2026-10-19, E2 "Conservar y pedir entrar (Recommended)" and
+    # E3 "Sí, y envía al validar (Recommended)"; the questions, answers and option texts are literal in the
+    # decision-log): a session that ends keeps what is pending, and a reload without signal opens the saved stops of
+    # the driver the phone remembers.
+    session_expiry:
+      decision: DRV-SESSION-EXPIRY-OFFLINE-2026-10-19
+      on_401: a 401 on any read or queued request (the BFF session ended - its fixed lifetime passed, AuthCenter ended
+        it or another sign-in replaced it) wipes nothing - the snapshot, the saved roles and dispatch contact and every
+        queued action with its photo and its progress stay in the partition, and the action in flight stays as last
+        persisted with its keys; nothing more is sent with that session and the screen says "Tu sesión venció, entra
+        de nuevo" with "Iniciar sesión" (/login with the stops path as a validated return_url)
+      resume: the same driver (the same sessionNamespace, derived by the API from SHA-256 of the AuthCenter sub) signing
+        in again in the same organization opens the same partition, so the queue is sent by itself with the same keys
+      other_people: another person, or the same person in another organization, opens their own partition; the
+        remembered one is never shown, sent or wiped for them and stays on the phone as it is
+      unchanged: a 403 (membership or driver profile revoked) and a session without a usable credential still wipe the
+        partition; an explicit "Cerrar sesión" still wipes every snapshot and keeps the queue
+      offline_age: the 72-hour rule (OPS-003-OFFLINE-72H) keeps counting from each action's own device time while it
+        waits for the sign-in, so an action older than that is discarded, with its notice, by the first sync after it
+    offline_reload:
+      decision: DRV-SESSION-EXPIRY-OFFLINE-2026-10-19
+      marker: the phone remembers the driver and the organization of the last confirmed driver session - exactly the
+        sessionNamespace and the organization id the partition key is made of, never a token, cookie, CSRF token,
+        password, name, e-mail or phone, never logged - in localStorage (paquetenvia:driver-session-marker), not in
+        IndexedDB, so the driver database keeps version 5 and a rollback leaves the queue readable
+      kept_and_replaced: it is written by every confirmed driver session; another driver, organization or role replaces
+        or removes it; "Cerrar sesión" (once the server ended the session), a 403, a session without a usable
+        credential and an identity the server does not authorize remove it; a 401 and an unreachable server keep it
+      reload: on the driver pages, when GET /auth/session cannot be answered (no signal, a 5xx or an answer that cannot
+        be read), or the organizations of the same person cannot be listed, the remembered driver is opened locally
+        ("Sesión sin confirmar") - the saved stops and queue are shown from IndexedDB and new actions are queued, while
+        nothing is requested from the API, the realtime hub or the phone settings, external offers and masked calls
+        are not offered and "Cerrar sesión" waits
+      confirmation: the session is checked again when the connection returns (online), when the app is shown again, on
+        "Sincronizar ahora" or "Reintentar" and every 30 s while it waits online; only a GET /auth/session for the same
+        sessionNamespace whose organization contexts open the same organization replaces it with the confirmed session,
+        whose queue then syncs; a 401 asks to sign in again (session_expiry); a different person or organization opens
+        their own partition, shows and sends nothing of the remembered one and replaces the marker
+      authority: the marker authorizes nothing - it only chooses which local partition to open while the server cannot
+        be asked; the backend and RLS remain the barrier for everything sent
     # SEC-004-HEAVY-ENDPOINT-MAPPING-2026-10-12 (project owner, 2026-10-12): Q2 "60 cada paso (Recommended)" ("Si se
     # pasa, la app espera lo que indique el servidor y sigue sola.") and Q6 "Mensaje común con espera (Recommended)"
     # ("En la app del repartidor, la cola espera lo que indique el servidor y reintenta sin mensaje.").
@@ -1134,13 +1187,14 @@ screen_contracts:
         sign-in, since logging out wipes the saved answer, or during a retry), "No se pudo entregar" is not offered
         yet and the stop says nothing about the role: loading is not an error'
       role_unknown: 'ORG-MY-ROLES-2026-10-12: when the phone knows no answer for the session and none is on its way
-        (the read failed with nothing saved, the API is earlier and answers 404, the answer broke the contract, or 401
-        or 403), "No se pudo entregar" is not offered (it fails closed) and the stop says "No pudimos confirmar tu rol.
-        Vuelve a abrir la app con conexión para reportar." - never asking to sign out, which would wipe what the phone
-        keeps offline. A failed read keeps the answer already saved and is made again when the connection returns or
-        the app is shown again, at most 5 times per session start and never after 401 or 403, which remove the
-        answer. The sign-in, the stops and every other action of the driver app work as before, so no deploy order
-        is needed between the web and the API'
+        (the read failed with nothing saved, the API is earlier and answers 404, the answer broke the contract, a 403,
+        or a 401 with nothing saved), "No se pudo entregar" is not offered (it fails closed) and the stop says "No
+        pudimos confirmar tu rol. Vuelve a abrir la app con conexión para reportar." - never asking to sign out, which
+        would wipe what the phone keeps offline. A failed read keeps the answer already saved and is made again when
+        the connection returns or the app is shown again, at most 5 times per session start and never after 401 or
+        403; a 403 removes the answer and a 401 keeps it for the same driver''s next sign-in
+        (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19). The sign-in, the stops and every other action of the driver app work
+        as before, so no deploy order is needed between the web and the API'
       settled_report: a report REST already confirms (its transition accepted and the stop at a later version, for
         example after dispatch chose "Reintentar hoy") only waits to leave the queue and never holds back a new report
         of the same stop
@@ -1248,15 +1302,16 @@ screen_contracts:
         que el reporte no se envió. Llama a despacho: ellos deciden y coordinan la devolución del cobro."'
       - a report whose incident is (or may be) open, held because the cash is recorded ("…Llama a despacho…") or still
         saved on the phone ("…si no, llama a despacho.")
-      not_shown: without a known number (none configured, no answer yet on this phone, an earlier API, 401 or 403) the
+      not_shown: without a known number (none configured, no answer yet on this phone, an earlier API, 403) the
         texts stay exactly as they are and nothing else is shown; the link is never placed anywhere else
       read: asked once per session start (a new sign-in or organization), the answer saved for the session's
-        partition used at once; a successful answer (a number or null) replaces it; 401 or 403 removes it; any other
+        partition used at once; a successful answer (a number or null) replaces it; 403 removes it and a 401 keeps it
+        (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19), neither is asked again; any other
         failure keeps it and the read is made again when the connection returns or the app is shown again, at most 5
         times per session start, like the roles read
       offline_cache: the last successful answer per partition in the existing IndexedDB (version 5, store
         dispatch_contacts - the partition key, the schema and the number or null), so the link works offline
-      retention: wiped with the partition on 401 or 403 and with every snapshot on logout
+      retention: wiped with the partition on 403 (never on 401) and with every snapshot on logout
       privacy: a business contact of the organization, never a person's datum; never logged
     recipient_call: VOICE-001-MASKED-CALLS-2026-10-11 ("Sí, con número enmascarado") and
       VOICE-001-PROVIDER-TWILIO-2026-10-11 - the detail of a DELIVERY stop whose confirmed status is DELIVERING offers
