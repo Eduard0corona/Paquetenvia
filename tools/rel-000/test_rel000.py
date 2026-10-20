@@ -3946,8 +3946,8 @@ class BaselinePackageGraphLockfileTests(unittest.TestCase):
         )
         # The permanent MVP-0 freeze is baseline + owner-admitted packages
         # (GOV-DEPENDENCY-ADMISSION-001) + the exact NuGet graphs that owner-authorized
-        # security remediations moved (SEC-2026-12). ACTIVE and MERGED entries both
-        # count; anything else still fails closed.
+        # security remediations moved (SEC-2026-12, SEC-2026-13). ACTIVE and MERGED entries
+        # both count; anything else still fails closed.
         policy = rel000.load_remediation_policy(REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH)
         admissions = policy["dependency_admissions"]
         nuget_remediations = rel000.security_remediation_nuget_graphs(policy)
@@ -5949,6 +5949,7 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
             {
                 rel000.WEB_TRANSITIVE_REMEDIATION_ID,
                 rel000.BRACES_KNOWN_ADVISORY_ID,
+                rel000.OPENAPI_YAMLREADER_REMEDIATION_ID,
             },
             {item["id"] for item in policy["active_remediations"]},
         )
@@ -9092,9 +9093,13 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
 
         policy = rel000.load_remediation_policy(self.repository_policy_path)
         graphs = rel000.security_remediation_nuget_graphs(policy)
+        # SEC-2026-13 is active and declares its own graph, which the checkout also carries.
         self.assertEqual(
-            [(rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID, "MERGED")],
-            [(item["id"], item["status"]) for item in graphs],
+            [
+                (rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID, "MERGED"),
+                (rel000.OPENAPI_YAMLREADER_REMEDIATION_ID, None),
+            ],
+            [(item["id"], item.get("status")) for item in graphs],
         )
         self.assertEqual(
             rel000.SIGNALR_CRYPTOGRAPHY_NUGET_PACKAGE_MOVES,
@@ -9394,7 +9399,7 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
                 )
         path = retired_policy(lambda item: None)
         self.assertEqual(
-            [rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID],
+            [rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID, rel000.OPENAPI_YAMLREADER_REMEDIATION_ID],
             [
                 item["id"]
                 for item in rel000.security_remediation_nuget_graphs(
@@ -9621,7 +9626,12 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
         authorization = self.authorization()
         moves = authorization["expected_nuget_package_moves"]
         graphs = rel000.security_remediation_nuget_graphs(policy)
-        self.assertEqual([rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID], [item["id"] for item in graphs])
+        # The replay appends SEC-2026-12 after the active SEC-2026-13, whose graph the
+        # checkout also carries.
+        self.assertEqual(
+            [rel000.OPENAPI_YAMLREADER_REMEDIATION_ID, rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID],
+            [item["id"] for item in graphs],
+        )
         # Undoing the exact moves restores every authorized base lockfile and the manifest.
         for relative in rel000.SIGNALR_CRYPTOGRAPHY_LOCK_FILES:
             with self.subTest(lock=relative):
@@ -9872,6 +9882,1074 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
                 self.assertIn(
                     "github.head_ref == 'fix/security-2026-12-signalr-common' "
                     "&& 'SEC-2026-12-SIGNALR-CRYPTOGRAPHY'",
+                    workflow,
+                )
+
+
+class OpenApiYamlReaderRemediationPolicyTests(unittest.TestCase):
+    """SEC-2026-13: the Microsoft.OpenApi.YamlReader advisory GHSA-7pxr-59rr-hqj2.
+
+    The second NuGet-only security remediation since the MVP-0 freeze, on the SEC-2026-12
+    route. The owner admitted an exact table (2026-10-19, "Remediar con la tabla"):
+    Microsoft.OpenApi and Microsoft.OpenApi.YamlReader from 2.7.5 to 2.12.0, SharpYaml 2.1.4
+    unchanged. Microsoft.OpenApi moves in four lock files and keeps its node type (Direct in
+    the API and ContractTests, CentralTransitive in ArchitectureTests and IntegrationTests);
+    YamlReader moves only in ContractTests. Transitive pinning is already on and no pin is
+    added.
+    """
+
+    ISSUE = "280"
+    KNOWN_ADVISORY = "GHSA-vfj7-8cjw-p6xm"
+    ADVISORY = "GHSA-7pxr-59rr-hqj2"
+    API_LOCK = "src/Paqueteria.Api/packages.lock.json"
+    ARCHITECTURE_LOCK = "tests/Paqueteria.ArchitectureTests/packages.lock.json"
+    CONTRACT_LOCK = "tests/Paqueteria.ContractTests/packages.lock.json"
+    INTEGRATION_LOCK = "tests/Paqueteria.IntegrationTests/packages.lock.json"
+    MVP0_BASELINE = "988926c7892af98015be2be9559682f156b2748b"
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-openapi-yamlreader-tests-")
+        self.root = Path(self.temp.name)
+        self.policy_path = REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH
+        self.policy_value = json.loads(self.policy_path.read_text(encoding="utf-8"))
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def policy(self):
+        return rel000.load_remediation_policy(self.policy_path)
+
+    def authorization(self):
+        return copy.deepcopy(
+            next(
+                item
+                for item in self.policy_value["active_remediations"]
+                if item["id"] == rel000.OPENAPI_YAMLREADER_REMEDIATION_ID
+            )
+        )
+
+    def base_file(self, relative: str) -> bytes:
+        return subprocess.check_output(
+            ["git", "show", f"{self.authorization()['authorized_base_sha']}:{relative}"],
+            cwd=REPOSITORY_ROOT,
+        )
+
+    def target_file(self, relative: str) -> bytes:
+        # The remediation is active, so its graph is the checkout's (as SEC-2026-12 did while
+        # PR #261 was open). Once a later change moves the graph, pin validated_target_sha
+        # and replay that commit instead.
+        return (REPOSITORY_ROOT / relative).read_bytes()
+
+    def dependency_repo(self):
+        """A repository at the authorized base files, then the remediation's files on top.
+
+        The web lockfile is committed unchanged, so the braces accepted known advisory can
+        be resolved against the same repository.
+        """
+
+        authorization = self.authorization()
+        root = Path(tempfile.mkdtemp(prefix="repo-", dir=self.root))
+        files = [*authorization["required_dependency_files"], "apps/web/pnpm-lock.yaml"]
+        for relative in files:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(self.base_file(relative))
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "rel000@example.invalid"], cwd=root, check=True
+        )
+        subprocess.run(["git", "config", "user.name", "REL-000 Tests"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        for relative in authorization["required_dependency_files"]:
+            (root / relative).write_bytes(self.target_file(relative))
+        return root, base, authorization
+
+    def validate_dependency(self, root, base, authorization=None):
+        return rel000.validate_dependency_diff(
+            root,
+            base,
+            rel000.SECURITY_REMEDIATION,
+            authorization or self.authorization(),
+        )
+
+    @staticmethod
+    def rewrite(path: Path, old: str, new: str) -> None:
+        text = path.read_text(encoding="utf-8")
+        assert old in text, old
+        path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+    @staticmethod
+    def edit_lock(path: Path, mutate) -> None:
+        """Mutate a lockfile and write it back exactly as NuGet formats it."""
+
+        value = json.loads(path.read_text(encoding="utf-8"))
+        mutate(value["dependencies"]["net10.0"])
+        path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+    def policy_with(self, mutate) -> Path:
+        value = copy.deepcopy(self.policy_value)
+        for item in value["active_remediations"]:
+            if item["id"] == rel000.OPENAPI_YAMLREADER_REMEDIATION_ID:
+                mutate(item)
+        path = self.root / "policy.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return path
+
+    def yamlreader_advisory(self):
+        """The advisory exactly as sanitize-audit records the ContractTests finding."""
+
+        return {
+            "advisory_id": self.ADVISORY.upper(),
+            "package": "Microsoft.OpenApi.YamlReader",
+            "installed_versions": ["2.7.5"],
+            "severity": "high",
+            "affected_range": "2.7.5",
+            "patched_range": "consult-advisory",
+            "direct_or_transitive": "direct",
+            "dependency_path_count": 1,
+            "fix_available": False,
+            "fix_compatibility": "requires_compatibility_assessment",
+        }
+
+    def braces_advisory(self):
+        return {
+            "advisory_id": self.KNOWN_ADVISORY,
+            "package": "braces",
+            "installed_versions": ["3.0.3"],
+            "severity": "high",
+            "affected_range": "<=3.0.3",
+            "patched_range": ">=3.0.4",
+            "direct_or_transitive": "transitive",
+            "dependency_path_count": 1,
+            "fix_available": True,
+            "fix_compatibility": "requires_compatibility_assessment",
+        }
+
+    def base_advisories(self):
+        """The sanitized base audit of 13765fb: YamlReader (contract tests) + braces."""
+
+        return [self.yamlreader_advisory(), self.braces_advisory()]
+
+    @staticmethod
+    def audit(advisories):
+        values = copy.deepcopy(advisories)
+        totals = {
+            key: sum(item["severity"] == key for item in values)
+            for key in ("critical", "high", "moderate", "low")
+        }
+        totals["total"] = len(values)
+        return {
+            "format_version": "paquetenvia-rel000-audit-v1",
+            "command_executed": True,
+            "command_exit_code": 1 if values else 0,
+            "parse_succeeded": True,
+            "totals": totals,
+            "affected_packages": sorted({item["package"] for item in values}),
+            "advisories": values,
+        }
+
+    def known_issue(self, **changes):
+        braces = next(
+            item
+            for item in self.policy_value["active_remediations"]
+            if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+        )
+        issue = {
+            "number": 180,
+            "state": "OPEN",
+            "title": braces["tracked_issue_title"],
+            "url": "https://github.com/example/issues/180",
+            "tracked_advisory_ids": [self.KNOWN_ADVISORY.upper()],
+        }
+        issue.update(changes)
+        return issue
+
+    def tracking(self, state="OPEN", tracked=None, known_issues=None):
+        authorization = self.authorization()
+        return {
+            "number": 280,
+            "state": state,
+            "title": authorization["tracked_issue_title"],
+            "url": "https://github.com/example/issues/280",
+            "tracked_advisory_ids": sorted(
+                value.upper()
+                for value in (
+                    authorization["issue_advisories"][self.ISSUE] if tracked is None else tracked
+                )
+            ),
+            # CI always attaches the SEC-2026-08 related Issue; SEC-2026-13 ignores it.
+            "related_issue": {
+                "number": 40,
+                "state": "CLOSED",
+                "title": "SEC-2026-08: remediate transitive SSH.NET advisory",
+                "url": "https://github.com/example/issues/40",
+                "tracked_advisory_ids": ["GHSA-Q939-RPR3-3284"],
+            },
+            "known_advisory_issues": [self.known_issue()] if known_issues is None else known_issues,
+        }
+
+    @staticmethod
+    def issue5():
+        return {
+            "number": 5,
+            "state": "CLOSED",
+            "title": "Sharp historical remediation",
+            "url": "https://github.com/example/issues/5",
+            "tracked_advisory_ids": [rel000.ISSUE5_ADVISORY],
+        }
+
+    def accepted(self, root, base, tracking=None):
+        return rel000.resolve_accepted_known_advisories(
+            root,
+            base,
+            self.policy(),
+            tracking if tracking is not None else self.tracking(),
+            self.audit(self.base_advisories()),
+            self.audit([self.braces_advisory()]),
+            self.authorization(),
+        )
+
+    def security(self, tracking=None, base=None, branch=None, accepted=None, authorization=None):
+        tracking = tracking if tracking is not None else self.tracking()
+        base = base if base is not None else self.audit(self.base_advisories())
+        branch = branch if branch is not None else self.audit([self.braces_advisory()])
+        if accepted is None:
+            root, base_sha, _ = self.dependency_repo()
+            accepted = self.accepted(root, base_sha)
+        return rel000.validate_issue_and_audit(
+            self.issue5(),
+            tracking,
+            base,
+            branch,
+            {
+                "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
+                "vulnerable_lock_versions": [],
+            },
+            rel000.SECURITY_REMEDIATION,
+            authorization or self.authorization(),
+            accepted,
+        )
+
+    def test_policy_loads_and_mode_requires_exact_branch_id_and_base(self):
+        policy = self.policy()
+        authorization = self.authorization()
+        self.assertEqual(
+            "fix/security-2026-13-openapi-yamlreader", authorization["authorized_source_branch"]
+        )
+        self.assertEqual(
+            "13765fbb252ee9d0b9fb13a9a5a8527efda4e79c", authorization["authorized_base_sha"]
+        )
+        self.assertEqual(
+            rel000.SECURITY_REMEDIATION,
+            rel000.resolve_rel000_mode(
+                policy, authorization["authorized_source_branch"], authorization["id"]
+            ),
+        )
+        self.assertIsNotNone(
+            rel000.validate_mode_authorization(
+                rel000.SECURITY_REMEDIATION,
+                policy,
+                authorization["authorized_source_branch"],
+                authorization["authorized_base_sha"],
+                authorization["id"],
+            )
+        )
+        self.assert_reason(
+            "REMEDIATION_ID_REQUIRED",
+            lambda: rel000.resolve_rel000_mode(policy, authorization["authorized_source_branch"]),
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(policy, "feature/other", authorization["id"]),
+        )
+        # The other active NuGet route does not accept this branch, nor this id another one.
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(
+                policy, "fix/security-2026-12-signalr-common", authorization["id"]
+            ),
+        )
+
+    def test_wrong_base_sha_is_rejected(self):
+        authorization = self.authorization()
+        self.assert_reason(
+            "SECURITY_REMEDIATION_BASE_MISMATCH",
+            lambda: rel000.validate_mode_authorization(
+                rel000.SECURITY_REMEDIATION,
+                self.policy(),
+                authorization["authorized_source_branch"],
+                "0" * 40,
+                authorization["id"],
+            ),
+        )
+
+    def test_authorization_is_exact_and_tampering_is_rejected(self):
+        authorization = self.authorization()
+        self.assertEqual(
+            [*authorization["issue_advisories"][self.ISSUE], self.KNOWN_ADVISORY],
+            authorization["expected_base_advisories"],
+        )
+        moves = authorization["expected_nuget_package_moves"]
+        # Exactly the owner's table: two packages, SharpYaml unchanged and therefore absent.
+        self.assertEqual(
+            {
+                "Microsoft.OpenApi": [
+                    self.API_LOCK,
+                    self.ARCHITECTURE_LOCK,
+                    self.CONTRACT_LOCK,
+                    self.INTEGRATION_LOCK,
+                ],
+                "Microsoft.OpenApi.YamlReader": [self.CONTRACT_LOCK],
+            },
+            {package: move["lock_files"] for package, move in moves.items()},
+        )
+        self.assertEqual(
+            {("2.7.5", "2.12.0", False)},
+            {
+                (move["from_version"], move["to_version"], move["pinned_centrally"])
+                for move in moves.values()
+            },
+        )
+        self.assertNotIn("SharpYaml", moves)
+        self.assertEqual([], authorization["expected_central_version_additions"])
+        self.assertFalse(authorization["central_package_transitive_pinning_required"])
+        self.assertFalse(
+            [
+                path
+                for path in authorization["allowed_non_dependency_files"]
+                if path.startswith("docs/normative/") or path.endswith(".cs")
+            ]
+        )
+        mutations = [
+            lambda item: item.update(tracked_issue=260),
+            lambda item: item.update(tracked_issue_title="SEC-2026-13: something else"),
+            lambda item: item["issue_advisories"][self.ISSUE].append(self.KNOWN_ADVISORY),
+            lambda item: item["issue_advisories"][self.ISSUE].pop(),
+            lambda item: item["expected_base_advisories"].pop(),
+            lambda item: item["expected_base_packages"].update(
+                {self.ADVISORY: "Microsoft.OpenApi"}
+            ),
+            lambda item: item["expected_base_severities"].update({self.ADVISORY: "moderate"}),
+            lambda item: item["expected_base_totals"].update(high=1, total=1),
+            lambda item: item["expected_branch_totals"].update(high=0, total=0),
+            lambda item: item["expected_cves"].update({self.ADVISORY: "CVE-2026-0000"}),
+            lambda item: item.update(nuget_affected_range=">=2.0.0 <2.12.0"),
+            lambda item: item.update(nuget_first_patched_version="2.12.2"),
+            lambda item: item["allowed_direct_packages"].append("SharpYaml"),
+            lambda item: item["allowed_dependency_files"].append(
+                "src/Paqueteria.Worker/packages.lock.json"
+            ),
+            lambda item: item["required_dependency_files"].pop(),
+            lambda item: item["allowed_non_dependency_files"].append(
+                "src/Paqueteria.Api/Program.cs"
+            ),
+            lambda item: item["allowed_non_dependency_files"].append(
+                "docs/normative/v0.6/decision-log.md"
+            ),
+            lambda item: item["expected_central_version_changes"][
+                "Microsoft.OpenApi.YamlReader"
+            ].update(to="2.12.2"),
+            lambda item: item["expected_central_version_changes"].pop("Microsoft.OpenApi"),
+            # The "Subir a 2.12.2" option (not chosen) would also pin SharpYaml 2.1.5.
+            lambda item: item["expected_central_version_additions"].append(
+                {"id": "SharpYaml", "version": "2.1.5", "before": "System.Security.Cryptography.Pkcs"}
+            ),
+            lambda item: item.update(central_package_transitive_pinning_required=True),
+            lambda item: item["expected_nuget_package_moves"].pop(
+                "Microsoft.OpenApi.YamlReader"
+            ),
+            lambda item: item["expected_nuget_package_moves"].update(
+                {
+                    "SharpYaml": {
+                        "from_version": "2.1.4",
+                        "from_content_hash": "A" * 86 + "==",
+                        "to_version": "2.1.5",
+                        "to_content_hash": "B" * 86 + "==",
+                        "pinned_centrally": False,
+                        "lock_files": [self.CONTRACT_LOCK],
+                    }
+                }
+            ),
+            lambda item: item["expected_nuget_package_moves"]["Microsoft.OpenApi"].update(
+                to_content_hash="A" * 86 + "=="
+            ),
+            lambda item: item["expected_nuget_package_moves"]["Microsoft.OpenApi.YamlReader"][
+                "lock_files"
+            ].append(self.INTEGRATION_LOCK),
+            lambda item: item["expected_nuget_package_moves"]["Microsoft.OpenApi"].update(
+                pinned_centrally=True
+            ),
+            lambda item: item["expected_lockfile_sha256"].update({self.API_LOCK: "x"}),
+            lambda item: item["expected_lockfile_sha256"].pop(self.API_LOCK),
+            lambda item: item.update(related_tracked_issue=40),
+            lambda item: item.update(require_sharp_runtime_smoke=True),
+            lambda item: item.update(target_sharp_version="0.35.5"),
+            lambda item: item.update(manual_lockfile_edits_allowed=True),
+        ]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(mutation=index):
+                path = self.policy_with(mutate)
+                self.assert_reason(
+                    "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+                )
+
+    def test_nuget_graph_fields_belong_only_to_this_exact_authorization(self):
+        authorization = self.authorization()
+        for field in rel000.NUGET_REMEDIATION_GRAPH_FIELDS:
+            # Neither another active authorization nor a retired one may carry them, and the
+            # retired SEC-2026-12 entry may not carry this graph instead of its own.
+            for target in (
+                rel000.WEB_TRANSITIVE_REMEDIATION_ID,
+                rel000.BRACES_KNOWN_ADVISORY_ID,
+                rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID,
+                rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID,
+            ):
+                with self.subTest(field=field, target=target):
+                    value = copy.deepcopy(self.policy_value)
+                    for item in [*value["historical_remediations"], *value["active_remediations"]]:
+                        if item["id"] == target:
+                            item[field] = copy.deepcopy(authorization[field])
+                    path = self.root / "policy.json"
+                    path.write_text(json.dumps(value), encoding="utf-8")
+                    self.assert_reason(
+                        "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+                    )
+
+        # Retired, the entry still declares exactly this graph (the permanent check reads
+        # it), so a historical copy with any other move or central edit fails closed too.
+        def retired_policy(mutate) -> Path:
+            retired = copy.deepcopy(authorization)
+            retired["status"] = "MERGED"
+            mutate(retired)
+            value = copy.deepcopy(self.policy_value)
+            value["active_remediations"] = [
+                item
+                for item in value["active_remediations"]
+                if item["id"] != rel000.OPENAPI_YAMLREADER_REMEDIATION_ID
+            ]
+            value["historical_remediations"].append(retired)
+            path = self.root / "retired.json"
+            path.write_text(json.dumps(value), encoding="utf-8")
+            return path
+
+        for name, mutate in (
+            (
+                "other move",
+                lambda item: item["expected_nuget_package_moves"]["Microsoft.OpenApi"].update(
+                    to_version="2.12.2"
+                ),
+            ),
+            (
+                "other central change",
+                lambda item: item["expected_central_version_changes"][
+                    "Microsoft.OpenApi"
+                ].update(to="2.12.2"),
+            ),
+            (
+                "central addition",
+                lambda item: item["expected_central_version_additions"].append(
+                    {"id": "SharpYaml", "version": "2.1.5", "before": "Testcontainers.PostgreSql"}
+                ),
+            ),
+            (
+                "pinning claimed",
+                lambda item: item.update(central_package_transitive_pinning_required=True),
+            ),
+            (
+                "SEC-2026-12 graph",
+                lambda item: item.update(
+                    expected_nuget_package_moves=copy.deepcopy(
+                        rel000.SIGNALR_CRYPTOGRAPHY_NUGET_PACKAGE_MOVES
+                    )
+                ),
+            ),
+        ):
+            with self.subTest(retired=name):
+                path = retired_policy(mutate)
+                self.assert_reason(
+                    "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+                )
+        path = retired_policy(lambda item: None)
+        self.assertEqual(
+            [rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID, rel000.OPENAPI_YAMLREADER_REMEDIATION_ID],
+            [
+                item["id"]
+                for item in rel000.security_remediation_nuget_graphs(
+                    rel000.load_remediation_policy(path)
+                )
+            ],
+        )
+
+    def test_exact_generated_dependency_graph_is_accepted(self):
+        root, base, authorization = self.dependency_repo()
+        result = self.validate_dependency(root, base, authorization)
+        self.assertEqual("AUTHORIZED_SECURITY_REMEDIATION", result["dependency_diff_against_base"])
+        self.assertEqual(rel000.OPENAPI_YAMLREADER_REMEDIATION_ID, result["remediation_id"])
+        self.assertEqual(authorization["required_dependency_files"], result["changed_dependency_files"])
+        self.assertEqual(rel000.OPENAPI_YAMLREADER_LOCK_FILES, result["nuget_lockfiles_regenerated"])
+        self.assertEqual(authorization["expected_lockfile_sha256"], result["nuget_lockfile_sha256"])
+        self.assertEqual(
+            {"Microsoft.OpenApi": "2.12.0", "Microsoft.OpenApi.YamlReader": "2.12.0"},
+            result["nuget_versions"],
+        )
+        # Pinning stays on from SEC-2026-12; this remediation neither adds nor removes it.
+        self.assertTrue(result["central_package_transitive_pinning"])
+        self.assertFalse(result["dependency_workspace_changed"])
+
+    def test_generated_graph_is_exactly_the_owner_table(self):
+        """Per lock file, only the table's nodes (and the API project's request) differ."""
+
+        for relative in rel000.OPENAPI_YAMLREADER_LOCK_FILES:
+            with self.subTest(lock=relative):
+                base = json.loads(self.base_file(relative))["dependencies"]["net10.0"]
+                target = json.loads(self.target_file(relative))["dependencies"]["net10.0"]
+                self.assertEqual(set(base), set(target))
+                changed = sorted(name for name in base if base[name] != target[name])
+                expected = ["Microsoft.OpenApi"]
+                if relative == self.CONTRACT_LOCK:
+                    expected.append("Microsoft.OpenApi.YamlReader")
+                if relative in (self.ARCHITECTURE_LOCK, self.INTEGRATION_LOCK):
+                    # The paqueteria.api project node requests the API's own reference.
+                    expected.append("paqueteria.api")
+                    self.assertEqual(
+                        ("[2.7.5, )", "[2.12.0, )"),
+                        (
+                            base["paqueteria.api"]["dependencies"]["Microsoft.OpenApi"],
+                            target["paqueteria.api"]["dependencies"]["Microsoft.OpenApi"],
+                        ),
+                    )
+                self.assertEqual(sorted(expected), changed)
+                self.assertEqual(base["Microsoft.OpenApi"]["type"], target["Microsoft.OpenApi"]["type"])
+        contract = json.loads(self.target_file(self.CONTRACT_LOCK))["dependencies"]["net10.0"]
+        base_contract = json.loads(self.base_file(self.CONTRACT_LOCK))["dependencies"]["net10.0"]
+        self.assertEqual(base_contract["SharpYaml"], contract["SharpYaml"])
+        self.assertEqual("2.1.4", contract["SharpYaml"]["resolved"])
+        self.assertEqual(
+            {"Microsoft.OpenApi": "2.12.0", "SharpYaml": "2.1.4"},
+            contract["Microsoft.OpenApi.YamlReader"]["dependencies"],
+        )
+        # ASP.NET Core OpenAPI keeps its nuspec minimum; only the central pin resolves 2.12.0.
+        api = json.loads(self.target_file(self.API_LOCK))["dependencies"]["net10.0"]
+        self.assertEqual(
+            {"Microsoft.OpenApi": "2.0.0"}, api["Microsoft.AspNetCore.OpenApi"]["dependencies"]
+        )
+
+    def test_file_outside_allowlist_is_rejected(self):
+        for relative in (
+            "src/Paqueteria.Api/Program.cs",
+            # A main-direct remediation never touches docs/normative/**, so the back-sync
+            # merges cleanly; the decision-log row goes in with the retirement.
+            "docs/normative/v0.6/decision-log.md",
+        ):
+            with self.subTest(file=relative):
+                root, base, authorization = self.dependency_repo()
+                path = root / relative
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("drift\n", encoding="utf-8")
+                self.assert_reason(
+                    "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+        # Another lockfile (the Worker never references Microsoft.OpenApi) is a dependency
+        # file outside the authorization.
+        root, base, authorization = self.dependency_repo()
+        path = root / "src/Paqueteria.Worker/packages.lock.json"
+        path.parent.mkdir(parents=True)
+        path.write_text('{"version": 2, "dependencies": {"net10.0": {}}}\n', encoding="utf-8")
+        self.assert_reason(
+            "UNAUTHORIZED_DEPENDENCY_FILE_CHANGED",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_every_authorized_dependency_file_must_change(self):
+        for relative in (self.API_LOCK, self.INTEGRATION_LOCK):
+            with self.subTest(lock=relative):
+                root, base, authorization = self.dependency_repo()
+                (root / relative).write_bytes(self.base_file(relative))
+                self.assert_reason(
+                    "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+
+    def test_central_manifest_drift_is_rejected(self):
+        pinning = rel000.CENTRAL_TRANSITIVE_PINNING_LINE
+        core = '    <PackageVersion Include="Microsoft.OpenApi" Version="2.12.0" />\n'
+        reader = '    <PackageVersion Include="Microsoft.OpenApi.YamlReader" Version="2.12.0" />\n'
+        for old, new in (
+            # Either package stays vulnerable, or jumps past the authorized patch.
+            (core, core.replace("2.12.0", "2.7.5")),
+            (core, core.replace("2.12.0", "2.12.2")),
+            (reader, reader.replace("2.12.0", "2.7.5")),
+            (reader, reader.replace("2.12.0", "2.12.2")),
+            # The two lines are reordered or one is dropped.
+            (core + reader, reader + core),
+            (reader, ""),
+            # SharpYaml is pinned (the 2.12.2 option the owner did not choose).
+            (reader, reader + '    <PackageVersion Include="SharpYaml" Version="2.1.5" />\n'),
+            # Transitive pinning is dropped or turned off.
+            (f"    {pinning}\n", ""),
+            (pinning, pinning.replace(">true<", ">false<")),
+            # NuGet audit suppression is outside the exact edits.
+            (f"    {pinning}\n", f"    {pinning}\n    <NuGetAuditMode>direct</NuGetAuditMode>\n"),
+        ):
+            with self.subTest(old=old, new=new):
+                root, base, authorization = self.dependency_repo()
+                self.rewrite(root / rel000.CENTRAL_PACKAGES_PATH, old, new)
+                self.assert_reason(
+                    "NUGET_CENTRAL_VERSION_CHANGE_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+
+    def test_lock_change_outside_the_authorized_graph_is_rejected(self):
+        def unrelated(nodes):
+            nodes["Npgsql"]["contentHash"] = "A" * 86 + "=="
+
+        def sharpyaml_moved(nodes):
+            nodes["SharpYaml"].update(resolved="2.1.5", contentHash="A" * 86 + "==")
+
+        def stale_edge(nodes):
+            nodes["Microsoft.OpenApi.YamlReader"]["dependencies"]["Microsoft.OpenApi"] = "2.7.5"
+
+        def other_hash(nodes):
+            nodes["Microsoft.OpenApi.YamlReader"]["contentHash"] = "A" * 86 + "=="
+
+        def vulnerable_reader(nodes):
+            base = json.loads(self.base_file(self.CONTRACT_LOCK))
+            nodes["Microsoft.OpenApi.YamlReader"] = base["dependencies"]["net10.0"][
+                "Microsoft.OpenApi.YamlReader"
+            ]
+
+        def other_request(nodes):
+            nodes["Microsoft.OpenApi"]["requested"] = "[2.12.0, 3.0.0)"
+
+        def added(nodes):
+            nodes["System.Text.Json"] = {
+                "type": "Transitive",
+                "resolved": "8.0.5",
+                "contentHash": "A" * 86 + "==",
+            }
+
+        for name, mutate, package in (
+            ("unrelated node", unrelated, "Npgsql"),
+            ("SharpYaml moved", sharpyaml_moved, "SharpYaml"),
+            ("stale edge", stale_edge, "Microsoft.OpenApi.YamlReader"),
+            ("other content hash", other_hash, "Microsoft.OpenApi.YamlReader"),
+            ("vulnerable YamlReader retained", vulnerable_reader, "Microsoft.OpenApi.YamlReader"),
+            ("other request", other_request, "Microsoft.OpenApi"),
+            ("added package", added, "System.Text.Json"),
+        ):
+            with self.subTest(case=name):
+                root, base, authorization = self.dependency_repo()
+                self.edit_lock(root / self.CONTRACT_LOCK, mutate)
+                failure = self.assert_reason(
+                    "NUGET_LOCK_GRAPH_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+                self.assertEqual(package, failure.details["package"])
+                self.assertEqual(self.CONTRACT_LOCK, failure.details["file"])
+
+        def stale_project_request(nodes):
+            nodes["paqueteria.api"]["dependencies"]["Microsoft.OpenApi"] = "[2.7.5, )"
+
+        def not_central(nodes):
+            nodes["Microsoft.OpenApi"]["type"] = "Transitive"
+            del nodes["Microsoft.OpenApi"]["requested"]
+
+        def aspnetcore_edge(nodes):
+            nodes["Microsoft.AspNetCore.OpenApi"]["dependencies"]["Microsoft.OpenApi"] = "2.12.0"
+
+        for name, mutate, package in (
+            ("stale project request", stale_project_request, "paqueteria.api"),
+            ("no longer CentralTransitive", not_central, "Microsoft.OpenApi"),
+            ("ASP.NET Core OpenAPI edge moved", aspnetcore_edge, "Microsoft.AspNetCore.OpenApi"),
+        ):
+            with self.subTest(case=name):
+                root, base, authorization = self.dependency_repo()
+                self.edit_lock(root / self.ARCHITECTURE_LOCK, mutate)
+                failure = self.assert_reason(
+                    "NUGET_LOCK_GRAPH_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+                self.assertEqual(package, failure.details["package"])
+                self.assertEqual(self.ARCHITECTURE_LOCK, failure.details["file"])
+
+    def test_yamlreader_never_moves_outside_the_contract_tests(self):
+        root, base, authorization = self.dependency_repo()
+
+        def add_reader(nodes):
+            nodes["Microsoft.OpenApi.YamlReader"] = {
+                "type": "Transitive",
+                "resolved": "2.12.0",
+                "contentHash": authorization["expected_nuget_package_moves"][
+                    "Microsoft.OpenApi.YamlReader"
+                ]["to_content_hash"],
+            }
+
+        self.edit_lock(root / self.INTEGRATION_LOCK, add_reader)
+        failure = self.assert_reason(
+            "NUGET_LOCK_GRAPH_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        self.assertEqual(self.INTEGRATION_LOCK, failure.details["file"])
+
+    def test_generated_lockfile_drift_is_rejected(self):
+        # Same graph, other bytes: only the generated file is accepted.
+        root, base, authorization = self.dependency_repo()
+        path = root / self.API_LOCK
+        path.write_bytes(path.read_bytes() + b"\n")
+        self.assert_reason(
+            "LOCKFILE_GENERATED_GRAPH_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        root, base, authorization = self.dependency_repo()
+        authorization["expected_lockfile_sha256"][self.CONTRACT_LOCK] = "0" * 64
+        self.assert_reason(
+            "LOCKFILE_GENERATED_GRAPH_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_prerelease_target_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        authorization["expected_nuget_package_moves"]["Microsoft.OpenApi.YamlReader"][
+            "to_version"
+        ] = "2.12.0-preview.1"
+        self.assert_reason(
+            "PRERELEASE_DEPENDENCY_REJECTED",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_base_must_be_the_authorized_vulnerable_graph(self):
+        authorization = self.authorization()
+        moves = authorization["expected_nuget_package_moves"]
+        for relative in rel000.OPENAPI_YAMLREADER_LOCK_FILES:
+            with self.subTest(lock=relative):
+                self.assertEqual(
+                    json.loads(self.target_file(relative)),
+                    rel000.nuget_remediation_expected_lock(
+                        relative, json.loads(self.base_file(relative)), moves
+                    ),
+                )
+        for relative, name, mutate in (
+            (
+                self.ARCHITECTURE_LOCK,
+                "other start",
+                lambda nodes: nodes["Microsoft.OpenApi"].update(resolved="2.7.4"),
+            ),
+            (
+                self.ARCHITECTURE_LOCK,
+                "other request",
+                lambda nodes: nodes["Microsoft.OpenApi"].update(requested="[2.7.4, )"),
+            ),
+            (
+                self.API_LOCK,
+                "other hash",
+                lambda nodes: nodes["Microsoft.OpenApi"].update(contentHash="x"),
+            ),
+            (
+                self.CONTRACT_LOCK,
+                "missing",
+                lambda nodes: nodes.pop("Microsoft.OpenApi.YamlReader"),
+            ),
+        ):
+            with self.subTest(lock=relative, case=name):
+                tampered = json.loads(self.base_file(relative))
+                mutate(tampered["dependencies"]["net10.0"])
+                self.assert_reason(
+                    "BASE_LOCK_GRAPH_UNEXPECTED",
+                    lambda: rel000.nuget_remediation_expected_lock(relative, tampered, moves),
+                )
+        base_props = self.base_file(rel000.CENTRAL_PACKAGES_PATH).decode("utf-8")
+        # The base already has transitive pinning (SEC-2026-12); this remediation keeps it.
+        self.assertIn(rel000.CENTRAL_TRANSITIVE_PINNING_LINE, base_props)
+        self.assertEqual(
+            self.target_file(rel000.CENTRAL_PACKAGES_PATH).decode("utf-8").splitlines(),
+            rel000.nuget_remediation_expected_props(base_props, authorization),
+        )
+        reader = '<PackageVersion Include="Microsoft.OpenApi.YamlReader" Version="2.7.5" />'
+        for old, new in (
+            ('"Microsoft.OpenApi" Version="2.7.5"', '"Microsoft.OpenApi" Version="2.7.4"'),
+            (reader, f"{reader}\n    {reader}"),
+        ):
+            with self.subTest(old=old):
+                self.assertIn(old, base_props)
+                self.assert_reason(
+                    "BASE_CENTRAL_PACKAGES_UNEXPECTED",
+                    lambda: rel000.nuget_remediation_expected_props(
+                        base_props.replace(old, new, 1), authorization
+                    ),
+                )
+
+    def test_permanent_graph_admits_exactly_this_remediation(self):
+        """The MVP-0 freeze accepts these exact moves, and nothing near them."""
+
+        policy = self.policy()
+        authorization = self.authorization()
+        moves = authorization["expected_nuget_package_moves"]
+        graphs = rel000.security_remediation_nuget_graphs(policy)
+        self.assertEqual(
+            [rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID, rel000.OPENAPI_YAMLREADER_REMEDIATION_ID],
+            [item["id"] for item in graphs],
+        )
+        # Undoing the exact moves restores every authorized base lockfile and the manifest.
+        for relative in rel000.OPENAPI_YAMLREADER_LOCK_FILES:
+            with self.subTest(lock=relative):
+                self.assertEqual(
+                    json.loads(self.base_file(relative)),
+                    rel000.nuget_remediation_reverted_lock(
+                        relative, json.loads(self.target_file(relative)), moves
+                    ),
+                )
+        self.assertEqual(
+            self.base_file(rel000.CENTRAL_PACKAGES_PATH).decode("utf-8"),
+            rel000.nuget_remediation_reverted_props(
+                self.target_file(rel000.CENTRAL_PACKAGES_PATH).decode("utf-8"), authorization
+            ),
+        )
+        # A node that is not exactly at its target is never undone, so the freeze judges it.
+        current = json.loads(self.target_file(self.CONTRACT_LOCK))
+        current["dependencies"]["net10.0"]["Microsoft.OpenApi.YamlReader"]["contentHash"] = "x"
+        reverted = rel000.nuget_remediation_reverted_lock(self.CONTRACT_LOCK, current, moves)
+        nodes = reverted["dependencies"]["net10.0"]
+        self.assertEqual("x", nodes["Microsoft.OpenApi.YamlReader"]["contentHash"])
+        self.assertEqual("2.7.5", nodes["Microsoft.OpenApi"]["resolved"])
+        # A CentralTransitive node or a project request at any other range is not this
+        # remediation's: it stays as it is, so test_k judges it and fails closed.
+        current = json.loads(self.target_file(self.INTEGRATION_LOCK))
+        current["dependencies"]["net10.0"]["Microsoft.OpenApi"]["requested"] = "[2.12.1, )"
+        current["dependencies"]["net10.0"]["paqueteria.api"]["dependencies"][
+            "Microsoft.OpenApi"
+        ] = "[2.12.1, )"
+        kept = copy.deepcopy(current)
+        self.assertEqual(
+            kept,
+            rel000.nuget_remediation_reverted_lock(self.INTEGRATION_LOCK, current, moves),
+        )
+        # A manifest missing any one edit is left as it is.
+        props = self.target_file(rel000.CENTRAL_PACKAGES_PATH).decode("utf-8")
+        partial = props.replace(
+            '"Microsoft.OpenApi.YamlReader" Version="2.12.0"',
+            '"Microsoft.OpenApi.YamlReader" Version="2.7.5"',
+        )
+        self.assertNotEqual(props, partial)
+        self.assertEqual(partial, rel000.nuget_remediation_reverted_props(partial, authorization))
+        # Against the MVP-0 baseline, the checkout passes only with both remediation graphs.
+        admissions = policy["dependency_admissions"]
+        for name, subset in (("none", None), ("SEC-2026-12 only", graphs[:1])):
+            with self.subTest(graphs=name):
+                self.assert_reason(
+                    "BASELINE_CENTRAL_PACKAGES_CHANGED",
+                    lambda: rel000.validate_admitted_central_packages(
+                        REPOSITORY_ROOT, self.MVP0_BASELINE, admissions, subset
+                    ),
+                )
+        self.assertTrue(
+            rel000.validate_admitted_central_packages(
+                REPOSITORY_ROOT, self.MVP0_BASELINE, admissions, graphs
+            )["changed"]
+        )
+        changed = sorted(
+            {
+                path
+                for output in (
+                    rel000.run_git(REPOSITORY_ROOT, "diff", "--name-only", self.MVP0_BASELINE),
+                    rel000.run_git(REPOSITORY_ROOT, "ls-files", "--others", "--exclude-standard"),
+                )
+                for path in output.splitlines()
+                if path.strip()
+            }
+        )
+        lockfiles = sorted(path for path in changed if Path(path).name == "packages.lock.json")
+        self.assertTrue(set(rel000.OPENAPI_YAMLREADER_LOCK_FILES) <= set(lockfiles))
+        self.assertEqual(
+            lockfiles,
+            rel000.package_graph_lockfile_diff(
+                REPOSITORY_ROOT, self.MVP0_BASELINE, changed, admissions, graphs
+            )[0],
+        )
+
+    def test_real_audits_and_issue_are_pending_merge_with_braces_accepted(self):
+        authorization = self.authorization()
+        result = self.security()
+        self.assertEqual(rel000.SECURITY_REMEDIATION, result["mode"])
+        self.assertEqual("REMEDIATED_PENDING_MERGE", result["dependency_security_status"])
+        self.assertEqual(
+            "BLOCKED_BY_SECURITY_REMEDIATION_MERGE_AND_OWNER_DECISION",
+            result["release_candidate_status"],
+        )
+        self.assertEqual(
+            [
+                ("Issue #5", "CLOSED", 1, "REMEDIATED"),
+                ("Issue #280", "OPEN", 1, "REMEDIATED_PENDING_MERGE"),
+                ("Issue #180", "OPEN", 1, "ACCEPTED_KNOWN_ADVISORY"),
+            ],
+            [
+                (item["id"], item["state"], item["tracked_advisories"], item["remediation_status"])
+                for item in result["known_security_issues"]
+            ],
+        )
+        self.assertEqual([self.KNOWN_ADVISORY], result["remaining_advisory_ids"])
+        self.assertEqual(
+            sorted(value.upper() for value in authorization["issue_advisories"][self.ISSUE]),
+            result["removed_advisory_ids"],
+        )
+        self.assertEqual(
+            {"Issue #280"}, {item["tracking_issue"] for item in result["remediated_advisories"]}
+        )
+        self.assertEqual(
+            {"total": 1, "critical": 0, "high": 1, "moderate": 0, "low": 0},
+            result["branch_totals"],
+        )
+        self.assertIsNone(result["related_security_issue"])
+        rel000.assert_redacted(result["accepted_known_advisories"])
+
+    def test_sanitized_nuget_audit_matches_the_authorized_baseline(self):
+        """sanitize-audit merges the contract and integration findings as CI produces them."""
+
+        contract = {
+            "version": 1,
+            "parameters": "--vulnerable --include-transitive",
+            "sources": ["https://api.nuget.org/v3/index.json"],
+            "projects": [
+                {
+                    "path": "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj",
+                    "frameworks": [
+                        {
+                            "framework": "net10.0",
+                            "topLevelPackages": [
+                                {
+                                    "id": "Microsoft.OpenApi.YamlReader",
+                                    "requestedVersion": "2.7.5",
+                                    "resolvedVersion": "2.7.5",
+                                    "vulnerabilities": [
+                                        {
+                                            "severity": "High",
+                                            "advisoryurl": f"https://github.com/advisories/{self.ADVISORY}",
+                                        }
+                                    ],
+                                }
+                            ],
+                        }
+                    ],
+                }
+            ],
+        }
+        # The integration tests carry no YamlReader: their audit lists the project only.
+        integration = {
+            "version": 1,
+            "parameters": "--vulnerable --include-transitive",
+            "sources": ["https://api.nuget.org/v3/index.json"],
+            "projects": [
+                {"path": "tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj"}
+            ],
+        }
+        for name, value in (
+            ("pnpm", {"advisories": {}}),
+            ("contract", contract),
+            ("integration", integration),
+        ):
+            (self.root / f"{name}.json").write_text(json.dumps(value), encoding="utf-8")
+        output = self.root / "base-audit.json"
+        rel000.sanitize_audit(
+            self.root / "pnpm.json",
+            output,
+            True,
+            1,
+            [self.root / "contract.json", self.root / "integration.json"],
+        )
+        sanitized = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual([self.yamlreader_advisory()], sanitized["advisories"])
+        authorization = self.authorization()
+        self.assertEqual(
+            {value.lower() for value in authorization["issue_advisories"][self.ISSUE]},
+            {item["advisory_id"].lower() for item in sanitized["advisories"]},
+        )
+
+    def test_retained_advisory_is_rejected_or_blocks(self):
+        reader = self.yamlreader_advisory()
+        self.assert_reason(
+            "BRANCH_AUDIT_NOT_ZERO",
+            lambda: self.security(branch=self.audit([self.braces_advisory(), reader])),
+        )
+        # A retained advisory that replaces braces in the totals still blocks the gate.
+        self.assertEqual(
+            "BLOCKED", self.security(branch=self.audit([reader]))["dependency_security_status"]
+        )
+
+    def test_base_audit_must_match_the_authorized_baseline(self):
+        self.assert_reason(
+            "BASE_AUDIT_UNEXPECTED",
+            lambda: self.security(base=self.audit([self.braces_advisory()])),
+        )
+        advisories = self.base_advisories()
+        advisories[0]["package"] = "Microsoft.OpenApi.Readers"
+        self.assert_reason(
+            "BASE_AFFECTED_PACKAGES_UNEXPECTED",
+            lambda: self.security(base=self.audit(advisories)),
+        )
+        # The exact severity mapping is checked even when the totals still match.
+        authorization = self.authorization()
+        authorization["expected_base_severities"][self.ADVISORY] = "moderate"
+        self.assert_reason(
+            "BASE_ADVISORY_SEVERITIES_UNEXPECTED",
+            lambda: self.security(authorization=authorization),
+        )
+
+    def test_tracking_issue_must_be_open_exact_and_not_cite_braces(self):
+        self.assert_reason(
+            "ADDITIONAL_SECURITY_ISSUE_STATE_INVALID",
+            lambda: self.security(tracking=self.tracking(state="CLOSED")),
+        )
+        tracked = self.authorization()["issue_advisories"][self.ISSUE]
+        for ids in (
+            [],
+            [*tracked, self.KNOWN_ADVISORY],
+            [*tracked, "GHSA-aaaa-bbbb-cccc"],
+        ):
+            with self.subTest(ids=ids):
+                self.assert_reason(
+                    "ADDITIONAL_SECURITY_TRACKING_INVALID",
+                    lambda: self.security(tracking=self.tracking(tracked=ids)),
+                )
+        root, base, _ = self.dependency_repo()
+        self.assert_reason(
+            "KNOWN_ADVISORY_ISSUE_STATE_INVALID",
+            lambda: self.accepted(
+                root, base, self.tracking(known_issues=[self.known_issue(state="CLOSED")])
+            ),
+        )
+
+    def test_sharp_runtime_smoke_is_not_required(self):
+        self.assertEqual(
+            {"executed": False, "status": "NOT_REQUIRED"},
+            rel000.validate_sharp_runtime_smoke(
+                None, rel000.SECURITY_REMEDIATION, self.authorization()
+            ),
+        )
+
+    def test_fixture_and_both_workflows_bind_issue_branch_and_remediation(self):
+        fixture = json.loads(
+            (REPOSITORY_ROOT / "tests/fixtures/rel-000/security-tracking.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            280, fixture["remediation_issues"][rel000.OPENAPI_YAMLREADER_REMEDIATION_ID]
+        )
+        self.assertEqual({rel000.BRACES_KNOWN_ADVISORY_ID: 180}, fixture["known_advisory_issues"])
+        for name in ("ci.yml", "pr-validation.yml"):
+            workflow = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            with self.subTest(workflow=name):
+                self.assertIn(
+                    "github.head_ref == 'fix/security-2026-13-openapi-yamlreader' "
+                    "&& 'SEC-2026-13-OPENAPI-YAMLREADER'",
                     workflow,
                 )
 
