@@ -430,6 +430,66 @@ SIGNALR_CRYPTOGRAPHY_NUGET_PACKAGE_MOVES = {
         "lock_files": list(SIGNALR_CRYPTOGRAPHY_LOCK_FILES),
     },
 }
+OPENAPI_YAMLREADER_REMEDIATION_ID = "SEC-2026-13-OPENAPI-YAMLREADER"
+OPENAPI_YAMLREADER_ISSUE = 280
+OPENAPI_YAMLREADER_ISSUE_TITLE = (
+    "SEC-2026-13: remediate Microsoft.OpenApi.YamlReader advisory GHSA-7pxr-59rr-hqj2 "
+    "(CVE-2026-72923)"
+)
+# The advisory of 2026-10-14 that SEC-2026-13 remediates, fixed in 2.12.0 on the 2.x line:
+# advisory -> (affected package, severity, CVE). Microsoft.OpenApi core has no advisory; it
+# moves only because YamlReader 2.12.0 requires Microsoft.OpenApi 2.12.0.
+OPENAPI_YAMLREADER_ADVISORIES = {
+    "GHSA-7pxr-59rr-hqj2": ("Microsoft.OpenApi.YamlReader", "high", "CVE-2026-72923"),
+}
+_OPENAPI_YAMLREADER_CONTRACT_LOCK = "tests/Paqueteria.ContractTests/packages.lock.json"
+OPENAPI_YAMLREADER_LOCK_FILES = [
+    "src/Paqueteria.Api/packages.lock.json",
+    "tests/Paqueteria.ArchitectureTests/packages.lock.json",
+    _OPENAPI_YAMLREADER_CONTRACT_LOCK,
+    "tests/Paqueteria.IntegrationTests/packages.lock.json",
+]
+# Main-direct like SEC-2026-12: docs/normative/** stays untouched so the back-sync merges
+# cleanly; the decision-log row and CHANGELOG entry go in with the retirement.
+OPENAPI_YAMLREADER_NON_DEPENDENCY_FILES = [
+    ".github/workflows/ci.yml",
+    ".github/workflows/pr-validation.yml",
+    "docs/development/rel-000-internal-release.md",
+    "tests/fixtures/rel-000/security-tracking.json",
+    "tools/rel-000/rel000.py",
+    "tools/rel-000/security-remediation-policy.json",
+    "tools/rel-000/test_rel000.py",
+]
+# Exact SEC-2026-13 central package edits (owner decision of 2026-10-19, "Remediar con la
+# tabla"): the two existing PackageVersion lines move in place. Transitive pinning is already
+# on (SEC-2026-12) and no pin is added.
+OPENAPI_YAMLREADER_CENTRAL_VERSION_CHANGES = {
+    "Microsoft.OpenApi": {"from": "2.7.5", "to": "2.12.0"},
+    "Microsoft.OpenApi.YamlReader": {"from": "2.7.5", "to": "2.12.0"},
+}
+OPENAPI_YAMLREADER_CENTRAL_VERSION_ADDITIONS: list[dict[str, str]] = []
+# Exact SEC-2026-13 NuGet graph (the owner's table): Microsoft.OpenApi moves in four lock
+# files and keeps its node type (Direct in the API and ContractTests, CentralTransitive in
+# ArchitectureTests and IntegrationTests); YamlReader moves only in ContractTests. SharpYaml
+# 2.1.4 is not a move, so its node keeps its base bytes like every other node.
+OPENAPI_YAMLREADER_NUGET_PACKAGE_MOVES = {
+    "Microsoft.OpenApi": {
+        "from_version": "2.7.5",
+        "from_content_hash": "0FA67RSnRM4tcBKqiqVu/HPdZ9+QOKbmeRjxRUGTCjPU4C0bmUhd97Dso7Yild5P7nOV6GxJ2xrK0Kv/O9xp0w==",
+        "to_version": "2.12.0",
+        "to_content_hash": "0xB/be+f6qYOhvQPUrVsLrau+fkowYv6gt9RIkajMhwT7sZnqtcA797yW3bS5kgSje+AQW4xZgyLnW641YFioQ==",
+        "pinned_centrally": False,
+        "lock_files": list(OPENAPI_YAMLREADER_LOCK_FILES),
+    },
+    "Microsoft.OpenApi.YamlReader": {
+        "from_version": "2.7.5",
+        "from_content_hash": "IDzNlclDyWci87dNyrAvmbSdcbnPUYc11HCDSh/Otsb+d7KyHGnBaCS5NhTySg/v1j3wB+jPhAfz2+X+n8iMAg==",
+        "to_version": "2.12.0",
+        "to_content_hash": "PMpQU9qh4Ni9F+vCuYVJ4w+GMPflmPuY16iS4ZoNq2biSNJmmY6V2nHRMN9KXJSdpD+heMnKEsczU+fTNXmi4A==",
+        "pinned_centrally": False,
+        "lock_files": [_OPENAPI_YAMLREADER_CONTRACT_LOCK],
+    },
+}
 # Policy fields that declare a NuGet graph moved through the security route.
 NUGET_REMEDIATION_GRAPH_FIELDS = (
     "expected_nuget_package_moves",
@@ -437,6 +497,22 @@ NUGET_REMEDIATION_GRAPH_FIELDS = (
     "expected_central_version_additions",
     "central_package_transitive_pinning_required",
 )
+# The only authorizations that may declare those fields, active or retired, each with exactly
+# its own graph: remediation id -> (moves, central changes, central additions, pinning added).
+NUGET_REMEDIATION_GRAPHS = {
+    SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID: (
+        SIGNALR_CRYPTOGRAPHY_NUGET_PACKAGE_MOVES,
+        SIGNALR_CRYPTOGRAPHY_CENTRAL_VERSION_CHANGES,
+        SIGNALR_CRYPTOGRAPHY_CENTRAL_VERSION_ADDITIONS,
+        True,
+    ),
+    OPENAPI_YAMLREADER_REMEDIATION_ID: (
+        OPENAPI_YAMLREADER_NUGET_PACKAGE_MOVES,
+        OPENAPI_YAMLREADER_CENTRAL_VERSION_CHANGES,
+        OPENAPI_YAMLREADER_CENTRAL_VERSION_ADDITIONS,
+        False,
+    ),
+}
 EXPECTED_MVP0_P0_COUNT = 29
 FIN001_EXPECTED_DEPENDENCIES = {"DSP-002", "EXT-001", "RTE-001"}
 ITEM_STATUSES = {"VERIFIED", "PARTIAL", "NOT_STARTED", "BLOCKED", "NOT_APPLICABLE"}
@@ -1333,6 +1409,74 @@ def validate_remediation_policy(policy: Any, *, base_policy: bool = False) -> di
                     "The SignalR and cryptography NuGet remediation authorization is "
                     "incomplete or inconsistent.",
                 )
+        if authorization.get("id") == OPENAPI_YAMLREADER_REMEDIATION_ID:
+            tracked_ids = list(OPENAPI_YAMLREADER_ADVISORIES)
+            known_id = BRACES_KNOWN_ADVISORY["advisory_id"]
+            dependency_files = [CENTRAL_PACKAGES_PATH, *OPENAPI_YAMLREADER_LOCK_FILES]
+            lock_hashes = authorization.get("expected_lockfile_sha256")
+            if (
+                authorization.get("tracked_issue") != OPENAPI_YAMLREADER_ISSUE
+                or authorization.get("tracked_issue_title") != OPENAPI_YAMLREADER_ISSUE_TITLE
+                or "related_tracked_issue" in authorization
+                or authorization.get("issue_advisories")
+                != {str(OPENAPI_YAMLREADER_ISSUE): tracked_ids}
+                or authorization.get("expected_base_advisories") != [*tracked_ids, known_id]
+                or authorization.get("expected_base_packages")
+                != {
+                    **{
+                        advisory_id: package
+                        for advisory_id, (package, _, _) in OPENAPI_YAMLREADER_ADVISORIES.items()
+                    },
+                    known_id: BRACES_KNOWN_ADVISORY["package"],
+                }
+                or authorization.get("expected_base_severities")
+                != {
+                    **{
+                        advisory_id: severity
+                        for advisory_id, (_, severity, _) in OPENAPI_YAMLREADER_ADVISORIES.items()
+                    },
+                    known_id: BRACES_KNOWN_ADVISORY["severity"],
+                }
+                or authorization.get("expected_base_totals")
+                != {"total": 2, "critical": 0, "high": 2, "moderate": 0, "low": 0}
+                or authorization.get("expected_branch_totals")
+                != {"total": 1, "critical": 0, "high": 1, "moderate": 0, "low": 0}
+                or authorization.get("expected_cves")
+                != {
+                    advisory_id: cve
+                    for advisory_id, (_, _, cve) in OPENAPI_YAMLREADER_ADVISORIES.items()
+                }
+                or authorization.get("nuget_affected_range") != ">=2.0.0-preview.11 <2.12.0"
+                or authorization.get("nuget_first_patched_version") != "2.12.0"
+                or authorization.get("allowed_direct_packages")
+                != list(OPENAPI_YAMLREADER_CENTRAL_VERSION_CHANGES)
+                or authorization.get("allowed_dependency_files") != dependency_files
+                or authorization.get("required_dependency_files") != dependency_files
+                or authorization.get("allowed_non_dependency_files")
+                != OPENAPI_YAMLREADER_NON_DEPENDENCY_FILES
+                or authorization.get("expected_central_version_changes")
+                != OPENAPI_YAMLREADER_CENTRAL_VERSION_CHANGES
+                or authorization.get("expected_central_version_additions")
+                != OPENAPI_YAMLREADER_CENTRAL_VERSION_ADDITIONS
+                or authorization.get("central_package_transitive_pinning_required") is not False
+                or authorization.get("expected_nuget_package_moves")
+                != OPENAPI_YAMLREADER_NUGET_PACKAGE_MOVES
+                or not isinstance(lock_hashes, dict)
+                or list(lock_hashes) != OPENAPI_YAMLREADER_LOCK_FILES
+                or any(
+                    re.fullmatch(r"[0-9a-f]{64}", str(value)) is None
+                    for value in lock_hashes.values()
+                )
+                or authorization.get("require_sharp_runtime_smoke") is not False
+                or "target_sharp_version" in authorization
+                or authorization.get("prohibited_prereleases") is not True
+                or authorization.get("manual_lockfile_edits_allowed") is not False
+            ):
+                fail(
+                    "REMEDIATION_POLICY_INVALID",
+                    "The Microsoft.OpenApi.YamlReader NuGet remediation authorization is "
+                    "incomplete or inconsistent.",
+                )
     # An accepted known advisory exists only under its own exact authorization.
     for authorization in [*historical, *active]:
         if "accepted_known_advisory" in authorization and authorization.get("id") != (
@@ -1353,21 +1497,20 @@ def validate_remediation_policy(policy: Any, *, base_policy: bool = False) -> di
                 "Only the exact SEC-2026-11 authorization may rebind or cite a known advisory.",
             )
         # A NuGet graph moved through the security route exists only under the exact
-        # SEC-2026-12 authorization, active or retired, and only with its exact moves: the
-        # permanent package graph check reads it (see security_remediation_nuget_graphs).
+        # SEC-2026-12 or SEC-2026-13 authorization, active or retired, and only with its own
+        # exact moves: the permanent package graph check reads it (see
+        # security_remediation_nuget_graphs).
+        graph = NUGET_REMEDIATION_GRAPHS.get(str(authorization.get("id")))
         if any(field in authorization for field in NUGET_REMEDIATION_GRAPH_FIELDS) and (
-            authorization.get("id") != SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID
-            or authorization.get("expected_nuget_package_moves")
-            != SIGNALR_CRYPTOGRAPHY_NUGET_PACKAGE_MOVES
-            or authorization.get("expected_central_version_changes")
-            != SIGNALR_CRYPTOGRAPHY_CENTRAL_VERSION_CHANGES
-            or authorization.get("expected_central_version_additions")
-            != SIGNALR_CRYPTOGRAPHY_CENTRAL_VERSION_ADDITIONS
-            or authorization.get("central_package_transitive_pinning_required") is not True
+            graph is None
+            or authorization.get("expected_nuget_package_moves") != graph[0]
+            or authorization.get("expected_central_version_changes") != graph[1]
+            or authorization.get("expected_central_version_additions") != graph[2]
+            or authorization.get("central_package_transitive_pinning_required") is not graph[3]
         ):
             fail(
                 "REMEDIATION_POLICY_INVALID",
-                "Only the exact SEC-2026-12 authorization may move a NuGet graph.",
+                "Only the exact SEC-2026-12 or SEC-2026-13 authorization may move a NuGet graph.",
             )
     validate_dependency_admission_registry(policy, identifiers, branches)
     return policy
@@ -5650,10 +5793,12 @@ def nuget_remediation_expected_lock(
     """Apply only the declared moves of a NuGet security remediation to a base lockfile.
 
     In every framework of the lockfile, each declared node must sit exactly at its starting
-    version and content hash. It moves to its exact target, a Direct node requests the new
-    version, and a node pinned centrally turns from Transitive into CentralTransitive. Its
-    edges to other packages moved in the same lockfile follow them. Every other node and
-    every other edge keeps its base value.
+    version and content hash. It moves to its exact target, a Direct or already
+    CentralTransitive node requests the new version, and a node pinned centrally turns from
+    Transitive into CentralTransitive. Its edges to other packages moved in the same
+    lockfile follow them, and so does a Project node's request for it when that request is
+    exactly the starting version (SEC-2026-13: the API project's own reference). Every other
+    node and every other edge keeps its base value.
     """
 
     applicable = _nuget_moves_for_lock(relative, moves)
@@ -5673,10 +5818,15 @@ def nuget_remediation_expected_lock(
                 not isinstance(node, dict)
                 or node.get("resolved") != move["from_version"]
                 or node.get("contentHash") != move["from_content_hash"]
-                or node_type not in ({"Transitive"} if move["pinned_centrally"] else {"Direct", "Transitive"})
+                or node_type
+                not in (
+                    {"Transitive"}
+                    if move["pinned_centrally"]
+                    else {"Direct", "Transitive", "CentralTransitive"}
+                )
                 or (node_type == "Transitive" and "requested" in node)
                 or (
-                    node_type == "Direct"
+                    node_type in {"Direct", "CentralTransitive"}
                     and node.get("requested") != _nuget_requested(move["from_version"])
                 )
             ):
@@ -5701,7 +5851,30 @@ def nuget_remediation_expected_lock(
                     if target is not None and version == target["from_version"]:
                         edges[dependency] = target["to_version"]
             nodes[package] = moved
+        _nuget_project_requests_follow(nodes, applicable, "from_version", "to_version")
     return expected
+
+
+def _nuget_project_requests_follow(
+    nodes: Any,
+    applicable: dict[str, dict[str, Any]],
+    start: str,
+    end: str,
+) -> None:
+    """Move a Project node's request for a moved package, only from exactly ``[start, )``."""
+
+    if not isinstance(nodes, dict):
+        return
+    for node in nodes.values():
+        if not isinstance(node, dict) or node.get("type") != "Project":
+            continue
+        edges = node.get("dependencies")
+        if not isinstance(edges, dict):
+            continue
+        for dependency, request in edges.items():
+            move = applicable.get(dependency)
+            if move is not None and request == _nuget_requested(move[start]):
+                edges[dependency] = _nuget_requested(move[end])
 
 
 def nuget_remediation_reverted_lock(
@@ -5713,8 +5886,9 @@ def nuget_remediation_reverted_lock(
 
     Only a node that sits exactly at its declared target (version, content hash, type and
     requested range) returns to its declared start, with its edges to other moved packages.
-    Anything else is left as it is, so the permanent package graph check still judges it
-    and fails closed on any other drift.
+    A Project node's request returns only from exactly the target version. Anything else is
+    left as it is, so the permanent package graph check still judges it and fails closed on
+    any other drift.
     """
 
     applicable = _nuget_moves_for_lock(relative, moves)
@@ -5742,7 +5916,10 @@ def nuget_remediation_reverted_lock(
                 or (
                     not move["pinned_centrally"]
                     and not (
-                        (node.get("type") == "Direct" and node.get("requested") == target_request)
+                        (
+                            node.get("type") in {"Direct", "CentralTransitive"}
+                            and node.get("requested") == target_request
+                        )
                         or (node.get("type") == "Transitive" and "requested" not in node)
                     )
                 )
@@ -5754,7 +5931,7 @@ def nuget_remediation_reverted_lock(
             if move["pinned_centrally"]:
                 original["type"] = "Transitive"
                 del original["requested"]
-            elif original["type"] == "Direct":
+            elif original["type"] in {"Direct", "CentralTransitive"}:
                 original["requested"] = _nuget_requested(move["from_version"])
             edges = original.get("dependencies")
             if isinstance(edges, dict):
@@ -5763,6 +5940,7 @@ def nuget_remediation_reverted_lock(
                     if other is not None and version == other["to_version"]:
                         edges[dependency] = other["from_version"]
             nodes[package] = original
+        _nuget_project_requests_follow(nodes, applicable, "to_version", "from_version")
     return reverted
 
 
@@ -5773,9 +5951,11 @@ def _central_package_line(package: str, version: str) -> str:
 def nuget_remediation_expected_props(base_text: str, authorization: dict[str, Any]) -> list[str]:
     """Apply only the declared central edits of a NuGet security remediation to the base.
 
-    Each changed PackageVersion line keeps its place and indentation, transitive pinning is
-    inserted right after the Central Package Management switch, and each new pin is
-    inserted right before its anchor, in declaration order. Returns the expected lines.
+    Each changed PackageVersion line keeps its place and indentation, transitive pinning
+    (when the remediation turns it on) is inserted right after the Central Package
+    Management switch, and each new pin is inserted right before its anchor, in declaration
+    order. A remediation that does not turn pinning on keeps the base PropertyGroup as it
+    is. Returns the expected lines.
     """
 
     lines = base_text.splitlines()
@@ -5793,7 +5973,9 @@ def nuget_remediation_expected_props(base_text: str, authorization: dict[str, An
     def indentation(index: int) -> str:
         return lines[index][: len(lines[index]) - len(lines[index].lstrip())]
 
-    if any("CentralPackageTransitivePinningEnabled" in line for line in lines):
+    if authorization.get("central_package_transitive_pinning_required") is True and any(
+        "CentralPackageTransitivePinningEnabled" in line for line in lines
+    ):
         fail(
             "BASE_CENTRAL_PACKAGES_UNEXPECTED",
             "The base central package manifest already configures transitive pinning.",
@@ -5858,7 +6040,7 @@ def security_remediation_nuget_graphs(policy: dict[str, Any]) -> list[dict[str, 
 
     The permanent package graph is the MVP-0 baseline plus the admitted packages
     (GOV-DEPENDENCY-ADMISSION-001) plus exactly these moves, which the policy loader pins
-    to the SEC-2026-12 authorization (``NUGET_REMEDIATION_GRAPH_FIELDS``).
+    to the SEC-2026-12 and SEC-2026-13 authorizations (``NUGET_REMEDIATION_GRAPHS``).
     """
 
     return [
@@ -7761,6 +7943,57 @@ def validate_signalr_cryptography_remediation_diff(
     file. Every other dependency file, and every file outside the allowlist, is rejected.
     """
 
+    return validate_nuget_security_remediation_diff(
+        repository_root,
+        base_main_sha,
+        all_changed,
+        changed_dependency_files,
+        authorization,
+        SIGNALR_CRYPTOGRAPHY_LOCK_FILES,
+        "SignalR and cryptography",
+    )
+
+
+def validate_openapi_yamlreader_remediation_diff(
+    repository_root: Path,
+    base_main_sha: str,
+    all_changed: list[str],
+    changed_dependency_files: list[str],
+    authorization: dict[str, Any],
+) -> dict[str, Any]:
+    """SEC-2026-13: prove the NuGet tree is the base plus only the owner's exact table.
+
+    ``Directory.Packages.props`` must equal the base lines after only the two declared
+    version edits (Microsoft.OpenApi and Microsoft.OpenApi.YamlReader 2.7.5 -> 2.12.0, in
+    place). Each of the four lockfiles (API, ArchitectureTests, ContractTests and
+    IntegrationTests) must equal the base graph after only the declared node moves, with
+    the exact target content hashes, and must be byte-identical to its pinned generated
+    file. SharpYaml and every other node keep their base bytes; every other dependency
+    file, and every file outside the allowlist, is rejected.
+    """
+
+    return validate_nuget_security_remediation_diff(
+        repository_root,
+        base_main_sha,
+        all_changed,
+        changed_dependency_files,
+        authorization,
+        OPENAPI_YAMLREADER_LOCK_FILES,
+        "Microsoft.OpenApi.YamlReader",
+    )
+
+
+def validate_nuget_security_remediation_diff(
+    repository_root: Path,
+    base_main_sha: str,
+    all_changed: list[str],
+    changed_dependency_files: list[str],
+    authorization: dict[str, Any],
+    lock_files: list[str],
+    label: str,
+) -> dict[str, Any]:
+    """The exact-graph check shared by the NuGet security remediations (SEC-2026-12/13)."""
+
     allowed_all = set(authorization["allowed_dependency_files"]) | set(
         authorization["allowed_non_dependency_files"]
     )
@@ -7768,16 +8001,14 @@ def validate_signalr_cryptography_remediation_diff(
     if unexpected:
         fail(
             "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
-            "The SignalR and cryptography remediation changed a file outside its exact "
-            "authorization.",
+            f"The {label} remediation changed a file outside its exact authorization.",
             files=unexpected,
         )
     required = set(authorization["required_dependency_files"])
     if set(changed_dependency_files) != required:
         fail(
             "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
-            "The SignalR and cryptography remediation dependency files do not match the "
-            "exact authorization.",
+            f"The {label} remediation dependency files do not match the exact authorization.",
             expected=sorted(required),
             actual=changed_dependency_files,
         )
@@ -7800,7 +8031,7 @@ def validate_signalr_cryptography_remediation_diff(
     if current_props.splitlines() != expected_props or not current_props.endswith("\n"):
         fail(
             "NUGET_CENTRAL_VERSION_CHANGE_INVALID",
-            "Directory.Packages.props differs from the exact SignalR and cryptography edits.",
+            f"Directory.Packages.props differs from the exact {label} edits.",
         )
     central_versions = _central_package_versions_from_xml(
         current_props, "NUGET_CENTRAL_VERSION_CHANGE_INVALID", "current"
@@ -7822,7 +8053,7 @@ def validate_signalr_cryptography_remediation_diff(
         )
 
     lock_hashes: dict[str, str] = {}
-    for lock_path in SIGNALR_CRYPTOGRAPHY_LOCK_FILES:
+    for lock_path in lock_files:
         try:
             base_lock = json.loads(run_git(repository_root, "show", f"{base_main_sha}:{lock_path}"))
         except json.JSONDecodeError as exc:
@@ -7836,7 +8067,7 @@ def validate_signalr_cryptography_remediation_diff(
         if current_lock != expected_lock:
             fail(
                 "NUGET_LOCK_GRAPH_INVALID",
-                "The NuGet lockfile changed outside the exact SignalR and cryptography graph.",
+                f"The NuGet lockfile changed outside the exact {label} graph.",
                 file=lock_path,
                 **_first_nuget_node_difference(expected_lock, current_lock),
             )
@@ -7860,10 +8091,11 @@ def validate_signalr_cryptography_remediation_diff(
         "changed_dependency_files": changed_dependency_files,
         "lockfile_consistency_verified": True,
         "vulnerable_lock_versions": [],
-        "nuget_lockfiles_regenerated": list(SIGNALR_CRYPTOGRAPHY_LOCK_FILES),
+        "nuget_lockfiles_regenerated": list(lock_files),
         "nuget_lockfile_sha256": lock_hashes,
         "nuget_versions": {package: move["to_version"] for package, move in moves.items()},
-        "central_package_transitive_pinning": True,
+        "central_package_transitive_pinning": CENTRAL_TRANSITIVE_PINNING_LINE
+        in {line.strip() for line in current_props.splitlines()},
     }
 
 
@@ -8111,6 +8343,17 @@ def validate_dependency_diff(
         and authorization.get("id") == SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID
     ):
         return validate_signalr_cryptography_remediation_diff(
+            repository_root,
+            base_main_sha,
+            all_changed,
+            changed,
+            authorization,
+        )
+    if (
+        authorization is not None
+        and authorization.get("id") == OPENAPI_YAMLREADER_REMEDIATION_ID
+    ):
+        return validate_openapi_yamlreader_remediation_diff(
             repository_root,
             base_main_sha,
             all_changed,
