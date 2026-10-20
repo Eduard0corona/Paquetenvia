@@ -572,7 +572,7 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
             await page.Locator("body").InnerTextAsync());
     }
 
-    private static async Task EnsureServiceWorkerControlAsync(IPage page)
+    internal static async Task EnsureServiceWorkerControlAsync(IPage page)
     {
         await page.EvaluateAsync(
             "() => navigator.serviceWorker.ready.then(() => undefined)");
@@ -589,7 +589,7 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
             """);
     }
 
-    private static async Task WaitForSnapshotCountAsync(IPage page, int minimum)
+    internal static async Task WaitForSnapshotCountAsync(IPage page, int minimum)
     {
         await page.WaitForFunctionAsync(
             """
@@ -645,7 +645,7 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         Assert.True(state[3]);
     }
 
-    private static Task<bool> NetworkIsUnavailableAsync(IPage page, string pathname) =>
+    internal static Task<bool> NetworkIsUnavailableAsync(IPage page, string pathname) =>
         page.EvaluateAsync<bool>(
             """
             async path => {
@@ -746,10 +746,10 @@ public sealed class DriverStopsPwaPlaywrightTests(DriverStopsNextServerFixture s
         Body = body,
     };
 
-    private static async Task ExpectTextAsync(IPage page, string text) =>
+    internal static async Task ExpectTextAsync(IPage page, string text) =>
         await page.GetByText(text, new() { Exact = false }).First.WaitForAsync();
 
-    private static Task<bool> HasHorizontalOverflowAsync(IPage page) =>
+    internal static Task<bool> HasHorizontalOverflowAsync(IPage page) =>
         page.EvaluateAsync<bool>(
             "() => document.documentElement.scrollWidth > document.documentElement.clientWidth");
 }

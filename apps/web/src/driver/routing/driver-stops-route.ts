@@ -25,6 +25,68 @@ export function parseDriverStopsPathname(pathname: string): DriverStopsRoute {
   }
 }
 
+/**
+ * DRV-PWA-INAPP-NAVIGATION: dispatched on the window after an in-app move
+ * between the stops list and a stop detail, so the stops screen reads the new
+ * pathname (`popstate` covers the browser's back and forward).
+ */
+export const driverStopsRouteChangedEvent =
+  "paquetenvia:driver-stops-route-changed";
+
+/** The parts of a click that decide whether the app may take it over. */
+export interface DriverStopsLinkClick {
+  readonly button: number;
+  readonly defaultPrevented: boolean;
+  readonly metaKey: boolean;
+  readonly ctrlKey: boolean;
+  readonly shiftKey: boolean;
+  readonly altKey: boolean;
+}
+
+/**
+ * A plain primary click (or Enter on the link) moves inside the app; a
+ * modified or secondary click keeps the browser's own behaviour (for example
+ * opening the stop in a new tab).
+ */
+export function isInAppNavigationClick(event: DriverStopsLinkClick): boolean {
+  return (
+    !event.defaultPrevented &&
+    event.button === 0 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey
+  );
+}
+
+export interface DriverStopsNavigationHost {
+  readonly history: Pick<History, "pushState">;
+  dispatchEvent(event: Event): boolean;
+  scrollTo(x: number, y: number): void;
+}
+
+/**
+ * DRV-PWA-INAPP-NAVIGATION: moves between the stops list and a stop detail
+ * without loading a page. The History API entry is the one the Next.js App
+ * Router keeps in sync (usePathname, back and forward); nothing is fetched,
+ * so the move works the same offline and the session, the controllers and the
+ * open IndexedDB partition stay as they are. Only the canonical list and
+ * detail paths are taken; anything else returns false and the caller lets the
+ * browser load it. Like a page load, the new screen starts at the top.
+ */
+export function navigateWithinDriverStops(
+  href: string,
+  host: DriverStopsNavigationHost = window,
+): boolean {
+  if (parseDriverStopsPathname(href).kind === "not-found") {
+    return false;
+  }
+  host.history.pushState(null, "", href);
+  host.dispatchEvent(new Event(driverStopsRouteChangedEvent));
+  host.scrollTo(0, 0);
+  return true;
+}
+
 export function findDriverStopForRoute<
   TStop extends Readonly<{ order_id: string }>,
 >(route: DriverStopsRoute | null, stops: readonly TStop[]): TStop | undefined {
