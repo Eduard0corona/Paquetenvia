@@ -899,7 +899,7 @@ class TemplateGuardTests(unittest.TestCase):
         self.assert_fails(21, self.context(metric_alert), "metric alerts must be exactly")
 
         def metric_alert_on_application_insights(t):
-            alert = copy.deepcopy(self.resource(t, "observability", "Microsoft.Insights/metricAlerts", "warning"))
+            alert = copy.deepcopy(self.resource(t, "observability", "Microsoft.Insights/metricAlerts", "connections-warning"))
             alert["name"] = "mar-pv-pilot-appi-requests"
             alert["properties"]["scopes"] = ["[resourceId('Microsoft.Insights/components', format('appi-pv-pilot-{0}', variables('suffix')))]"]
             t["observability"]["resources"].append(alert)
@@ -909,17 +909,18 @@ class TemplateGuardTests(unittest.TestCase):
         """SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14: two metric alerts on the pilot server's active_connections,
         28 (Sev 2) and 33 (Sev 1), Maximum over 5 minutes every minute, stateful, through ag-pv-pilot-ops."""
         def warning(t):
-            return self.resource(t, "observability", "Microsoft.Insights/metricAlerts", "warning")
+            return self.resource(t, "observability", "Microsoft.Insights/metricAlerts", "connections-warning")
 
         def critical(t):
-            return self.resource(t, "observability", "Microsoft.Insights/metricAlerts", "critical")
+            return self.resource(t, "observability", "Microsoft.Insights/metricAlerts", "connections-critical")
 
         def criterion(alert):
             return alert["properties"]["criteria"]["allOf"][0]
 
         compiled = self.context().templates["observability"]
         alerts = {r["name"]: r for r in compiled["resources"] if r.get("type") == "Microsoft.Insights/metricAlerts"}
-        self.assertEqual({"mar-pv-pilot-pg-connections-warning", "mar-pv-pilot-pg-connections-critical"}, set(alerts))
+        self.assertEqual({"mar-pv-pilot-pg-connections-warning", "mar-pv-pilot-pg-connections-critical"},
+                         {name for name in alerts if "-connections-" in name})
         for name, (severity, threshold) in guards.REQUIRED_CONNECTION_ALERTS.items():
             properties = alerts[name]["properties"]
             self.assertEqual((severity, threshold), (properties["severity"], criterion(alerts[name])["threshold"]))
@@ -992,12 +993,154 @@ class TemplateGuardTests(unittest.TestCase):
             self.edit(t, "observability", "Paquetenvia pilot operations (OBS-002)", "Paquetenvia pilot operations (ops@example.com)")
         self.assert_fails(21, self.context(email_in_workbook), "observability.bicep must not contain an e-mail address")
 
-        # The two series count against the 5 USD bound (0.10 each at worst): log alerts at 4.95 USD pass alone, not with them.
+        # The six metric alert series (the two connection alerts and, since SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20,
+        # the four resource alerts) count against the 5 USD bound (0.10 each at worst): log alerts at 4.95 USD pass
+        # alone, not with them.
         def log_alerts_at_4_95(t):
             for rule in t["observability"]["variables"]["rules"][:4]:
                 rule["frequency"] = "PT10M"
                 rule["window"] = "PT15M"
-        self.assert_fails(21, self.context(log_alerts_at_4_95), "alert rules cost 5.15 USD per month")
+        self.assert_fails(21, self.context(log_alerts_at_4_95), "alert rules cost 5.55 USD per month")
+
+    def test_scl007_postgres_resource_alerts_fail_closed(self):
+        """SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20: four more metric alerts on the pilot server, one level each
+        (severity 2), every minute, stateful, through ag-pv-pilot-ops: CPU Average over 30 minutes >= 70, memory Maximum
+        over 5 minutes >= 80, storage Maximum over 5 minutes >= 70 and CPU credits Minimum over 5 minutes <= 72. With the
+        two connection alerts, six metric alerts in all; each drift fails closed."""
+        # name -> (metric, aggregation, operator symbol, threshold, window, the metric's dimension on Microsoft Learn).
+        rules = {
+            "mar-pv-pilot-pg-cpu-warning": ("cpu_percent", "Average", ">=", 70, "PT30M", "ServerName"),
+            "mar-pv-pilot-pg-memory-warning": ("memory_percent", "Maximum", ">=", 80, "PT5M", "ServerName"),
+            "mar-pv-pilot-pg-storage-warning": ("storage_percent", "Maximum", ">=", 70, "PT5M", "ServerName"),
+            "mar-pv-pilot-pg-cpu-credits-warning": ("cpu_credits_remaining", "Minimum", "<=", 72, "PT5M", "LogicalServerName"),
+        }
+        operators = {">=": "GreaterThanOrEqual", "<=": "LessThanOrEqual"}
+
+        def alert(t, name):
+            return self.resource(t, "observability", "Microsoft.Insights/metricAlerts", name)
+
+        def criterion(resource):
+            return resource["properties"]["criteria"]["allOf"][0]
+
+        compiled = self.context().templates["observability"]
+        alerts = {r["name"]: r for r in compiled["resources"] if r.get("type") == "Microsoft.Insights/metricAlerts"}
+        self.assertEqual(sorted(["mar-pv-pilot-pg-connections-warning", "mar-pv-pilot-pg-connections-critical", *rules]), sorted(alerts))
+        self.assertEqual(sorted(alerts), sorted(guards.REQUIRED_METRIC_ALERTS))
+        for name, (metric, aggregation, symbol, threshold, window, _) in rules.items():
+            properties = alerts[name]["properties"]
+            self.assertEqual(
+                (2, True, True, "PT1M", window, [guards.POSTGRES_SERVER_ID], [{"actionGroupId": guards.PILOT_ACTION_GROUP_ID}], "global"),
+                (properties["severity"], properties["enabled"], properties["autoMitigate"], properties["evaluationFrequency"],
+                 properties["windowSize"], properties["scopes"], properties["actions"], alerts[name]["location"]))
+            self.assertEqual({
+                "criterionType": "StaticThresholdCriterion",
+                "name": metric.replace("_", "-"),
+                "metricNamespace": "Microsoft.DBforPostgreSQL/flexibleServers",
+                "metricName": metric,
+                "timeAggregation": aggregation,
+                "operator": operators[symbol],
+                "threshold": threshold,
+            }, criterion(alerts[name]))
+
+        # CPU takes the AI-15 db_cpu_utilization warning and window; 70 % of the 32 GiB disk is 22.4 GiB; 72 is 25 % of
+        # the 288 credits a B1ms banks at most.
+        contract = guards.yaml.safe_load(
+            (REPO_ROOT / "docs/normative/v0.6/specs/AI-15_SCALABILITY_CONTRACT.yaml").read_text(encoding="utf-8"))
+        signal = next(item for item in contract["scaling_signals"]["database"] if item["metric"] == "db_cpu_utilization")
+        self.assertEqual((70, "PT30M"), (round(signal["warning"] * 100), "PT" + signal["window"].upper()))
+        self.assertEqual((22.4, 72), (guards.POSTGRES_STORAGE_GB * 70 / 100, guards.POSTGRES_MAX_CPU_CREDITS * 25 // 100))
+
+        other_aggregation = {"Average": "Maximum", "Maximum": "Average", "Minimum": "Average"}
+        strict = {">=": "GreaterThan", "<=": "LessThan"}
+        other_window = {"PT30M": "PT15M", "PT5M": "PT15M"}
+        for name, (metric, aggregation, symbol, threshold, window, dimension) in rules.items():
+            def rule(t, name=name):
+                return alert(t, name)
+
+            expected = f"{metric} {symbol} {threshold}"
+            window_message = f"over {guards._iso_minutes(window)} minutes ({window})"
+            mutations = {
+                "threshold + 1": (lambda t: criterion(rule(t)).update(threshold=threshold + 1), expected),
+                "threshold - 1": (lambda t: criterion(rule(t)).update(threshold=threshold - 1), expected),
+                "fractional threshold": (lambda t: criterion(rule(t)).update(threshold=float(threshold)), expected),
+                "other aggregation": (lambda t: criterion(rule(t)).update(timeAggregation=other_aggregation[aggregation]),
+                                      f"{aggregation} of {metric}"),
+                "strict operator": (lambda t: criterion(rule(t)).update(operator=strict[symbol]), expected),
+                "opposite operator": (lambda t: criterion(rule(t)).update(
+                    operator="LessThanOrEqual" if symbol == ">=" else "GreaterThanOrEqual"), expected),
+                "other metric": (lambda t: criterion(rule(t)).update(metricName="cpu_percent" if metric != "cpu_percent" else "memory_percent"),
+                                 expected),
+                "other namespace": (lambda t: criterion(rule(t)).update(metricNamespace="Microsoft.DBforMySQL/flexibleServers"), expected),
+                "dimension": (lambda t: criterion(rule(t)).update(dimensions=[{"name": dimension, "operator": "Include", "values": ["*"]}]),
+                              "no dimension"),
+                "dynamic threshold": (lambda t: criterion(rule(t)).update(criterionType="DynamicThresholdCriterion"), expected),
+                "second criterion": (lambda t: rule(t)["properties"]["criteria"]["allOf"].append(copy.deepcopy(criterion(rule(t)))),
+                                     "no dimension or other criterion"),
+                "multi-resource criteria": (lambda t: rule(t)["properties"]["criteria"].update(
+                    {"odata.type": "Microsoft.Azure.Monitor.MultipleResourceMultipleMetricCriteria"}), expected),
+                "severity 1": (lambda t: rule(t)["properties"].update(severity=1), "must have severity 2"),
+                "severity 3": (lambda t: rule(t)["properties"].update(severity=3), "must have severity 2"),
+                "every 5 minutes": (lambda t: rule(t)["properties"].update(evaluationFrequency="PT5M"), "every minute (PT1M)"),
+                "other window": (lambda t: rule(t)["properties"].update(windowSize=other_window[window]), window_message),
+                "one-hour window": (lambda t: rule(t)["properties"].update(windowSize="PT1H"), window_message),
+                "stateless": (lambda t: rule(t)["properties"].update(autoMitigate=False), "stateful"),
+                "disabled": (lambda t: rule(t)["properties"].update(enabled=False), "enabled and stateful"),
+                "scope Application Insights": (lambda t: rule(t)["properties"].update(
+                    scopes=["[resourceId('Microsoft.Insights/components', format('appi-pv-pilot-{0}', variables('suffix')))]"]),
+                    "only the pilot PostgreSQL server"),
+                "scope another server": (lambda t: rule(t)["properties"].update(
+                    scopes=["[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', 'pg-pv-other')]"]), "only the pilot PostgreSQL server"),
+                "scope the resource group": (lambda t: rule(t)["properties"].update(scopes=["[resourceGroup().id]"]),
+                                             "only the pilot PostgreSQL server"),
+                "two scopes": (lambda t: rule(t)["properties"]["scopes"].append("[resourceGroup().id]"), "only the pilot PostgreSQL server"),
+                "multi-resource target": (lambda t: rule(t)["properties"].update(
+                    targetResourceType="Microsoft.DBforPostgreSQL/flexibleServers", targetResourceRegion="mexicocentral"),
+                    "unexpected properties"),
+                "webhook": (lambda t: rule(t)["properties"]["actions"][0].update(webHookProperties={"route": "x"}),
+                            "only through the pilot action group"),
+                "other action group": (lambda t: rule(t)["properties"].update(
+                    actions=[{"actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', 'ag-other')]"}]),
+                    "only through the pilot action group"),
+                "no action": (lambda t: rule(t)["properties"].update(actions=[]), "only through the pilot action group"),
+                "copy loop": (lambda t: rule(t).update(copy={"name": "c", "count": 1}), "one literal global resource"),
+                "regional": (lambda t: rule(t).update(location="mexicocentral"), "one literal global resource"),
+                # Assembled from parts so no address literal is committed (example.com is reserved, RFC 2606).
+                "hard-coded e-mail": (lambda t: rule(t)["properties"].update(description="Write to ops" + "@" + "example.com"),
+                                      "must not contain an e-mail address"),
+                "dropped": (lambda t: t["observability"]["resources"].remove(rule(t)), "metric alerts must be exactly"),
+                "duplicated": (lambda t: t["observability"]["resources"].append(copy.deepcopy(rule(t))), "metric alerts must be exactly"),
+                "renamed": (lambda t: rule(t).update(name=name + "-x"), "metric alerts must be exactly"),
+            }
+            for case, (mutate, fragment) in mutations.items():
+                with self.subTest(rule=name, case=case):
+                    self.assert_fails(21, self.context(mutate), fragment)
+
+            def in_platform(t, name=name):
+                t["platform"]["resources"].append(copy.deepcopy(alert(t, name)))
+            with self.subTest(rule=name, case="in platform.bicep"):
+                self.assert_fails(1, self.context(in_platform), "allowed only in observability.bicep")
+
+        # One level only (D2-a): a critical level for any of them is a seventh rule and is refused.
+        def cpu_critical(t):
+            extra = copy.deepcopy(alert(t, "mar-pv-pilot-pg-cpu-warning"))
+            extra["name"] = "mar-pv-pilot-pg-cpu-critical"
+            extra["properties"]["severity"] = 1
+            criterion(extra)["threshold"] = 85
+            t["observability"]["resources"].append(extra)
+        self.assert_fails(21, self.context(cpu_critical), "metric alerts must be exactly")
+
+        # The thresholds belong to the B1ms server (288 CPU credits at most) and to its 32 GiB disk.
+        def other_sku(t):
+            self.resource(t, "platform", "Microsoft.DBforPostgreSQL/flexibleServers")["sku"].update(name="Standard_B2s")
+        self.assert_fails(21, self.context(other_sku), "the CPU credits alert (72) is 25 % of its 288 credits")
+
+        def other_disk(t):
+            self.resource(t, "platform", "Microsoft.DBforPostgreSQL/flexibleServers")["properties"]["storage"].update(storageSizeGB=64)
+        self.assert_fails(21, self.context(other_disk), "revisit it with the disk size, found 64")
+
+        def no_disk_size(t):
+            del self.resource(t, "platform", "Microsoft.DBforPostgreSQL/flexibleServers")["properties"]["storage"]["storageSizeGB"]
+        self.assert_fails(21, self.context(no_disk_size), "revisit it with the disk size, found None")
 
 
 if __name__ == "__main__":
