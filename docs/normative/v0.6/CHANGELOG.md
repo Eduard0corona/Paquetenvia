@@ -1,5 +1,38 @@
 # Changelog
 
+## Organización de plataforma y primer administrador (TEN-003-PLATFORM-BOOTSTRAP-2026-10-19) — 2026-10-19
+
+- Respuesta literal del project owner (2026-10-19, decisión E1), registrada en `decision-log.md` con su contexto y la
+  opción no elegida: "Comando único auditado (Recommended)" ("Un comando del migrador que corres una sola vez, antes de tu primer inicio de sesión: crea la organización de plataforma y te hace administrador con tu cuenta de AuthCenter, deja registro en auditoría y se niega a correr una segunda vez."). No elegida: "SQL manual con runbook" ("Un procedimiento paso a paso que ejecutas tú como administrador de PostgreSQL. Sin código nuevo, pero sin auditoría automática y con más riesgo de error.").
+- Seguimiento E1b del project owner (2026-10-20, en el PR #283), registrado en `decision-log.md` con su contexto y
+  la opción no elegida: "Restaurar y repetir (Recommended)" ("Se mantiene la negativa, sin código nuevo. Si pasa, se restaura la base a un punto antes de tu inicio de sesión (la base del piloto aún está vacía) y corres el comando. La guía lo explica paso a paso. Coincide con E1: 'antes de tu primer inicio de sesión'."). No elegida: "Tomar ese usuario si está solo" ("El comando acepta tu usuario ya creado solo si es el único de la base y no tiene ninguna membresía. Evita la restauración, pero agrega código y pruebas al PR y una ruta más que revisar.").
+  Sin código nuevo: el comando sigue negándose (`SUBJECT_ALREADY_SIGNED_IN`, código 11, sin escribir nada). La salida
+  es restaurar la base del piloto a un punto anterior a ese primer inicio de sesión (README de ENV-001 §6.4) y correr
+  el comando otra vez. Solo sirve mientras nadie haya usado el piloto, y pierde lo escrito después de ese punto, que
+  entonces es solo el usuario del owner y su sesión. La guía del owner §7.5 lo explica paso a paso.
+- Nuevo comando del migrador `platform-bootstrap --connection-env NAME --identity-subject <sub de AuthCenter>
+  --legal-name TEXT --display-name TEXT`. El owner lo corre una sola vez, antes de su primer inicio de sesión, en una
+  ejecución del job de migración que solo cambia los argumentos (README de ENV-001 §6.1 paso 10; guía del owner
+  §7.5). Primero verifica la base y todas las lanes de módulo.
+- En una transacción, con el aprovisionador de TEN-003 y un autorizador ligado a ese único `sub`, crea:
+  - la organización PLATFORM (ACTIVE);
+  - el usuario de ese `sub` (el id de usuario de AuthCenter, un UUID en minúsculas);
+  - su membresía PLATFORM_ADMIN (ACTIVE, predeterminada);
+  - una fila de auditoría `INITIAL_ORGANIZATION_PROVISIONED`, escrita con el escritor append-only compartido.
+- La transacción toma una llave de advisory lock y revisa, como el login de despliegue, si ya hay datos. Con
+  `set_config(..., true)` después de `BEGIN` preautoriza solo los UUID nuevos y escribe como `paqueteria_migrator`
+  (NOBYPASSRLS) bajo FORCE RLS, igual que `master-data-gate`. No usa `paqueteria_app`: el login de despliegue de
+  Azure no puede asumirlo, y ese rol no ve otros tenants para negarse a una segunda corrida.
+- Se niega sin escribir nada (código 11) si ya existe cualquier organización PLATFORM, cualquier PLATFORM_ADMIN o un
+  usuario con ese `sub`, y también con un login que no salta RLS. Su salida no muestra el `sub`, los nombres ni
+  ningún id, y un error de argumentos no repite el valor.
+- El aprovisionador de TEN-003 ahora recibe la interfaz existente `ITenantTransactionRunner<OrganizationsDbContext>`.
+  La API lo sigue armando con `TenantTransactionContext` (`paqueteria_app`) y el autorizador que niega.
+  `Paqueteria.Infrastructure` expone sus internos al migrador.
+- Sin cambios en AI-04, AI-05, AI-06 ni AI-18, ni migraciones, roles, permisos, funciones, paquetes o flujos entre
+  módulos. AI-08 TEN-003 registra el comando, su criterio y su prueba. Pruebas: validación de argumentos y contrato en
+  PostgreSQL real. Nota: `docs/development/ten-003-platform-bootstrap.md`.
+
 ## Remediación de seguridad NuGet: Microsoft.OpenApi y Microsoft.OpenApi.YamlReader a 2.12.0 (SEC-2026-13-NUGET-REMEDIATION-2026-10-19) — 2026-10-19
 
 - Respuesta literal del project owner (2026-10-19), registrada en `decision-log.md` con su contexto y las opciones no
