@@ -37,4 +37,8 @@ regexes = [
   # the history of feat/voice-001-masked-call-bridge (commit ed1ca22; the test now derives its value at runtime)
   # and that pushed history cannot be rewritten.
   '''SyntheticTwilioApiKeySecret0001''',
+  # OPS-002 unit-test connection password, the sequential hex digits 0-f (the test repeated them four times), never a
+  # credential. It is only in the history of fix/ops-002-restore-follows-server (commit a77d2f8; the test now uses
+  # "ab" * 32), and the task rules forbid amending or rebasing that commit.
+  '''PASSWORD = "0123456789abcdef"''',
 ]

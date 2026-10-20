@@ -4,31 +4,53 @@
 # The pilot database itself is never modified. Run by the owner in Azure Cloud Shell (bash); see
 # docs/operations/env-001-pilot/README.md "Restore and restore drill".
 #
-#   ./restore-drill.sh --resource-group rg-pv-pilot --restore-time 2026-10-05T13:10:00Z [--keep]
+#   ./restore-drill.sh --resource-group rg-pv-pilot --restore-time 2026-10-05T13:10:00Z [--keep | --real]
+#
+# OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20: the source is the server in service, the postgresName output of the last
+# deployment (it follows the azure-pilot variable PILOT_POSTGRES_SERVER_NAME). New servers are named after its base
+# name, the first server's (never after the whole source name, so names do not grow): a drill <base>-drill-<UTC minute>;
+# with --real (README §6.4 "Real restore") <base>-r<UTC minute>, kept only when `assert` succeeds, ready to be set as
+# PILOT_POSTGRES_SERVER_NAME. A restore always creates a new server; the source is never changed or deleted here.
 #
 # Prints only resource names, timestamps and job status; never a password or a connection string.
 set -euo pipefail
 
-usage() { echo "usage: $0 --resource-group NAME --restore-time YYYY-MM-DDTHH:MM:SSZ [--keep]" >&2; exit 2; }
-RG="" RESTORE_TIME="" KEEP=0
+usage() { echo "usage: $0 --resource-group NAME --restore-time YYYY-MM-DDTHH:MM:SSZ [--keep | --real]" >&2; exit 2; }
+RG="" RESTORE_TIME="" KEEP=0 REAL=0
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --resource-group) RG="${2:-}"; shift 2 ;;
     --restore-time) RESTORE_TIME="${2:-}"; shift 2 ;;
     --keep) KEEP=1; shift ;;
+    --real) REAL=1; shift ;;
     *) usage ;;
   esac
 done
 [[ "${RG}" =~ ^[A-Za-z0-9._-]{1,90}$ ]] || usage
 [[ "${RESTORE_TIME}" =~ ^20[0-9]{2}-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-5][0-9]Z$ ]] || usage
+[[ "${KEEP}" == 0 || "${REAL}" == 0 ]] || usage
 
 security="$(az deployment group show -g "${RG}" -n env001-security --query properties.outputs -o json)"
 platform="$(az deployment group show -g "${RG}" -n env001-platform --query properties.outputs -o json)"
 VAULT="$(jq -r .vaultName.value <<<"${security}")"
 SOURCE="$(jq -r .postgresName.value <<<"${platform}")"
 ADMIN_LOGIN="$(jq -r .postgresAdministratorLogin.value <<<"${platform}")"
-DRILL="${SOURCE}-drill-$(date -u +%Y%m%d%H%M)"
-DRILL="${DRILL:0:63}"
+# Same format as tools/azr-001/env001_pilot_guards.py postgres-server-name; group 1 is the base name.
+if [[ ! "${SOURCE}" =~ ^(pg-pv-pilot-[a-z0-9]{13})(-[a-z0-9]+)*$ || ${#SOURCE} -gt 63 ]]; then
+  echo "env001-platform has no pilot PostgreSQL server name in postgresName; run the deployment first" >&2
+  exit 1
+fi
+BASE="${BASH_REMATCH[1]}"
+if [[ "${REAL}" == 1 ]]; then
+  DRILL="${BASE}-r$(date -u +%Y%m%d%H%M)"
+else
+  DRILL="${BASE}-drill-$(date -u +%Y%m%d%H%M)"
+fi
+# The cleanup may delete the target, so it must not be a server that already exists (a second run in the same minute).
+if az postgres flexible-server show -g "${RG}" -n "${DRILL}" --only-show-errors --output none 2>/dev/null; then
+  echo "server ${DRILL} already exists; wait a minute and run again" >&2
+  exit 1
+fi
 JOB="job-pv-pilot-verify"
 SECRET="pg-restore-drill-connection"
 MIGRATE_PRINCIPAL="$(az identity show -g "${RG}" -n id-pv-pilot-migrate --query principalId -o tsv)"
@@ -44,9 +66,11 @@ drill_requested=0
 #   (the vault has purge protection, so it is disabled rather than deleted; the next drill adds a version);
 # - close this machine's temporary Key Vault firewall rule and wipe the local temporary file;
 # - unless --keep, delete the restored server. It is a full copy of the pilot database with real data and
-#   lives outside the Bicep-managed resource set, so it must never outlive a failed run.
+#   lives outside the Bicep-managed resource set, so it must never outlive a failed run. With --real it is kept
+#   only when the run succeeds (it is not in service until the owner sets PILOT_POSTGRES_SERVER_NAME).
 cleanup() {
   local rc=$?
+  if [[ "${REAL}" == 1 && "${rc}" == 0 ]]; then KEEP=1; fi
   az containerapp job update -g "${RG}" -n "${JOB}" --only-show-errors --output none \
     --set-env-vars "KeyVaultSecrets__Mappings__0__SecretName=pg-migrate-connection" || true
   if [[ -n "${SECRET_SCOPE}" ]]; then
@@ -72,9 +96,10 @@ trap cleanup EXIT
 started="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "restore_drill_started=${started} source=${SOURCE} target=${DRILL} restore_point=${RESTORE_TIME}"
 
-# 1. Point-in-time restore into a new server. A restore of a private-access server keeps the source's
-#    delegated subnet and private DNS zone, so it stays unreachable from the internet. From here on the
-#    cleanup deletes the server (unless --keep), even if the restore itself fails half-way.
+# 1. Point-in-time restore into a new server. Without --vnet, --subnet or --private-dns-zone the Azure CLI gives the
+#    new server the source's network (its delegated subnet and private DNS zone), so it stays unreachable from the
+#    internet and platform.bicep can adopt it in place after a real restore. From here on the cleanup deletes the
+#    server (unless --keep, or --real and success), even if the restore itself fails half-way.
 drill_requested=1
 az postgres flexible-server restore --resource-group "${RG}" --name "${DRILL}" \
   --source-server "${SOURCE}" --restore-time "${RESTORE_TIME}" --only-show-errors --output none
@@ -115,6 +140,10 @@ finished="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "verify_execution=${execution} status=${status} finished=${finished}"
 
 # 4. The cleanup trap points the job back at the pilot database, disables the drill secret, closes the
-#    firewall and, unless --keep, deletes the restored server.
+#    firewall and, unless --keep (or --real and success), deletes the restored server.
 echo "EVIDENCE restore_point=${RESTORE_TIME} started=${started} restored=${restored} verified=${finished} verify_status=${status} execution=${execution}"
 [[ "${status}" == "Succeeded" ]]
+if [[ "${REAL}" == 1 ]]; then
+  echo "restored_server_kept=${DRILL} source_unchanged=${SOURCE}"
+  echo "next_step=set the azure-pilot variable PILOT_POSTGRES_SERVER_NAME to ${DRILL}, then run Deploy Azure PILOT (README section 6.4)"
+fi

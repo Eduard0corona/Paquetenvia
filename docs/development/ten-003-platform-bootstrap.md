@@ -157,7 +157,11 @@ organization id that `master-data-gate` needs.
   new code: a point-in-time restore of the pilot database to a moment before that first sign-in (README §6.4), then
   running the command again, and only then signing in. It is safe only while nobody has used the pilot yet. It loses
   everything written after the restore point; at that stage, when only the owner signed in, that is the owner's own
-  user row and its session. Steps: owner guide §7.5, box *Si ya iniciaste sesión antes de correr el comando*.
+  user row and its session. Steps: owner guide §7.5, box *Si ya iniciaste sesión antes de correr el comando*, which
+  uses the real restore of owner guide §7.7 and README §6.4. Since OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20 (owner
+  J1) the restored server goes into service by setting the `azure-pilot` variable `PILOT_POSTGRES_SERVER_NAME` to it
+  and re-running the workflow, which follows it; the earlier "swap names" or "point the four connection secrets"
+  methods are gone. The old server stays, with its backups, until the owner deletes it.
 - **Execution history.** The job execution keeps its arguments (the subject and the two names) in its history,
   readable by whoever can read the resource group. None of them is a secret.
 - **The `az` override is unverified.** `az containerapp job start --yaml` with the job's own template and new
@@ -172,6 +176,7 @@ organization id that `master-data-gate` needs.
 - **Data:** the command is forward-only. Its audit row is append-only, and no runtime role can delete the
   organization, user or membership. To undo a run (for example, a wrong subject):
   - before anyone has used the PLATFORM organization, restore the pilot database to a point in time before the run
-    (README §6.4, point-in-time restore), then run the command again with the right subject;
+    (README §6.4, real restore: `restore-drill.sh --real`, then `PILOT_POSTGRES_SERVER_NAME` and a workflow re-run),
+    then run the command again with the right subject;
   - after other activity, removing or replacing the root identity needs its own owner decision. Never delete the
     audit row.

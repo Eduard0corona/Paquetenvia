@@ -162,6 +162,7 @@ In the GitHub UI: *Settings → Environments → New environment* `azure-pilot`.
 | `PILOT_TRACKING_SUPPORT_URL` | optional `https://` support link for public tracking; leave it unset while GATE-001 is open (GATE-001-TRACKING-SUPPORT-LINK-2026-10-11: default is no link, and the build refuses a link that names the commercial name) |
 | `PILOT_GATE_007_DECISION` | ID of the decision-log row `GATE-007-...` whose Type is `Gate resolution` or `Gate scoping` (privacy). Not set until the owner records it; `GATE-007-PRIVACY-DRAFT` is rejected. |
 | `PILOT_GATE_012_DECISION` | `GATE-012-PILOT-SCOPE` (Type `Gate scoping`, cloud and data residency) |
+| `PILOT_POSTGRES_SERVER_NAME` | leave it unset (empty = the first PostgreSQL server). Set it only after a real restore, to the restored server that `restore-drill.sh --real` prints (README §6.4, OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20) |
 
 Or with the GitHub CLI (`gh auth login` first):
 
