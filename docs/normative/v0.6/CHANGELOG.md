@@ -29,6 +29,39 @@
   foto que no se puede decodificar no deja nada). Notas: `docs/development/drv-002-offline-events-pod.md`; borradores
   legales actualizados. Sin cambios de API, SQL, migraciones, roles, esquema de IndexedDB, Service Worker ni paquetes.
 
+## Alertas de CPU, memoria, disco y créditos de CPU de PostgreSQL en el piloto (SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20) — 2026-10-20
+
+- Respuestas literales del project owner (2026-10-20, preguntas D2, D2-a, D2-b, D2-c y D2-d), registradas en
+  `decision-log.md` con su contexto y las opciones no elegidas:
+  - "La base de datos del piloto solo tiene las 2 alertas de conexiones. ¿Agregamos alertas para ver un problema antes de que lo reporten los usuarios?" Respuesta: "CPU, memoria y disco (Recommended)" ("3 alertas de métrica más al mismo correo de alertas. Con las 2 de conexiones son 5 de las 10 gratis por recurso; si no, unos 0.10 USD por serie al mes.");
+  - "Alertas de la base (D2): elegiste 3 alertas (CPU, memoria y disco). Las de conexiones tienen dos niveles (aviso y crítico). ¿Las nuevas tienen uno o dos niveles?" Respuesta: "Un nivel, de aviso (Recommended)" ("3 reglas, tal como respondiste. Con las 2 de conexiones son 5 de las 10 series gratis.");
+  - "¿Con qué umbrales? Los contratos solo fijan CPU (70 % aviso, 85 % crítico, en 30 min). El disco de 32 GB crece solo al 80 % (y duplica su costo) y la base se pone en solo lectura al quedar menos de 5 GB libres (84 %)." Respuesta: "CPU 70, memoria 80, disco 70 (Recommended)" ("CPU: promedio de 30 min ≥ 70 % (contrato). Memoria: máximo en 5 min ≥ 80 %, como conexiones. Disco ≥ 70 % (22 GB): avisa antes de que crezca y antes del solo lectura. Si eliges dos niveles: CPU 70/85, memoria 80/95, disco 70/80.");
+  - "La base del piloto es de tipo económico (Burstable). Cuando se le acaban los créditos de CPU se frena mucho, y Microsoft recomienda una alerta de «créditos de CPU restantes». ¿La agregamos como cuarta alerta?" Respuesta: "Sí, agregarla (Recommended)" ("Una regla más (avisa con pocos créditos). Sigue dentro de las 10 series gratis. Es la falla más probable de este tipo de servidor, y la alerta de CPU sola podría no mostrarla.");
+  - "Alerta de créditos de CPU: el servidor del piloto (B1ms) guarda hasta 288 créditos y gana 12 por hora. A CPU llena gasta cerca de 0.8 por minuto; con 0 se frena al 20 %. ¿Con cuántos créditos avisa?" Respuesta: "Menos de 72 (25 %) (Recommended)" ("Avisa con 72 créditos o menos (mínimo en 5 min, cada minuto). A CPU llena da cerca de hora y media antes del freno. Las cifras de 288 y 12 por hora son las de las máquinas B1ms; la página de PostgreSQL no las repite, así que se revisan en el primer despliegue.").
+- `deploy/azure/pilot/observability.bicep` (etapa 5 del flujo del piloto, sin cambios en el flujo) agrega cuatro alertas
+  de métrica de Azure Monitor sobre el servidor `pg-pv-pilot-<suffix>`, de un solo nivel (aviso, severidad 2), evaluadas
+  cada minuto, con estado (un correo al dispararse y otro al resolverse) y al grupo de acciones `ag-pv-pilot-ops`:
+  `mar-pv-pilot-pg-cpu-warning` (`cpu_percent`, promedio de 30 minutos ≥ 70, el `db_cpu_utilization` de AI-15),
+  `mar-pv-pilot-pg-memory-warning` (`memory_percent`, máximo en 5 minutos ≥ 80), `mar-pv-pilot-pg-storage-warning`
+  (`storage_percent`, máximo en 5 minutos ≥ 70, 22.4 de 32 GiB) y `mar-pv-pilot-pg-cpu-credits-warning`
+  (`cpu_credits_remaining`, mínimo en 5 minutos ≤ 72, el 25 % de los 288 créditos del B1ms). Las dos alertas de
+  conexiones no cambian. Métricas, unidades, agregaciones y dimensiones verificadas en learn.microsoft.com (*Supported
+  metrics for Microsoft.DBforPostgreSQL/flexibleServers*). El disco no tenía ventana en la respuesta: usa el máximo en
+  5 minutos, como las de conexiones. Los créditos siguen el texto de la opción ("72 créditos o menos"), no la etiqueta
+  "Menos de 72".
+- Costo: con las 2 de conexiones son 6 series, dentro de las 10 gratis por recurso; si no, unos 0.10 USD por serie al
+  mes. La opción de D2 contaba "5 de las 10" para tres reglas; la cuarta (D2-c) sigue gratis. Los totales del piloto no
+  cambian.
+- Guardas del piloto: P21 exige exactamente las seis alertas de métrica (métrica, agregación, operador, umbral entero,
+  ventana, frecuencia, severidad, servidor, grupo de acciones, activas y con estado, sin dimensión ni correo), rechaza
+  cualquier otra (un segundo nivel incluido), exige el SKU Standard_B1ms y el disco de 32 GiB en la plantilla y suma
+  las seis series al tope de 5 USD de las alertas. Las pruebas prueban que cada desviación de cada regla falla cerrada.
+- AI-08 SCL-007: un criterio DECIDED y la prueba de la guarda. AI-15 no lista reglas de alerta y no cambia. Sin cambios
+  de código, esquema, roles, permisos, paquetes ni topología de CI. Revisar en el primer despliegue: las cifras de
+  créditos del B1ms (máximo 288, 12 por hora) en el servidor real, y que los porcentajes del disco suponen 32 GiB
+  (después de un crecimiento automático son de un disco mayor). Notas: `docs/operations/env-001-pilot/README.md` §10.3 y
+  la guía del owner §6.2.
+
 ## Organización de plataforma y primer administrador (TEN-003-PLATFORM-BOOTSTRAP-2026-10-19) — 2026-10-19
 
 - Respuesta literal del project owner (2026-10-19, decisión E1), registrada en `decision-log.md` con su contexto y la
