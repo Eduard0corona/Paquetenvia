@@ -413,10 +413,11 @@ qué pasa si resulta falsa. Meta exige ese permiso y puede limitar o bloquear el
 
 10.4. **Baja.** El destinatario puede dejar de recibir avisos de tres formas:
 
-- **En WhatsApp**, respondiendo "BAJA" o tocando "No recibir avisos". Recibe una sola vez la confirmación "Listo. Ya
+- **Por WhatsApp**, respondiendo "BAJA" o tocando "No recibir avisos". Recibe una sola vez la confirmación "Listo. Ya
   no recibirás avisos en este número." Deja de recibir los avisos por WhatsApp.
-- **En el correo**, con el enlace que trae cada uno. La página que abre confirma la baja en pantalla; no se le manda
-  ningún mensaje. Deja de recibir los avisos por correo.
+- **Por correo**, con el enlace de baja de cada correo. El enlace abre una página con un botón para darse de baja; al
+  tocarlo, la página confirma la baja en pantalla y no se le manda ningún mensaje. Deja de recibir los avisos por
+  correo.
 - **Por teléfono**, pidiéndolo para que el personal toque "Detener avisos" en la orden. Antes de detenerlos, el
   personal ve: "El destinatario dejará de recibir avisos de todas las empresas. Durante el piloto no se puede
   deshacer." Al destinatario no se le manda nada. Deja de recibir los avisos por WhatsApp y por correo.
@@ -454,7 +455,8 @@ estado. Hoy, por el enlace de seguimiento que le pase el personal.]**
 > NTF-RECIPIENT-NOTICES-2026-10-20 (decision log) y en `docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md`, puntos 5 y 7.
 > Textos de WhatsApp y cuerpos de correo: AI-24 `recipient_notices.templates`; el correo, que no tiene botones, dice
 > "en el enlace de abajo" donde WhatsApp dice "con el botón Ver seguimiento" (E4-P14). Confirmaciones y permanencia de
-> la baja: AI-24 `recipient_notices.opt_out` (`confirmation` y `permanence`) y AI-08 NTF-006. "Detener avisos" detiene
+> la baja: AI-24 `recipient_notices.opt_out` (`confirmation` y `permanence`) y AI-08 NTF-006. Página de baja del
+> correo: AI-07 `/avisos/baja/:token` (abrirla no cambia nada; un botón da la baja). "Detener avisos" detiene
 > los dos canales del contacto de la orden (`opt_out.dispatcher`). El texto de su diálogo es la decisión I4, que se
 > aplica en AI-08 NTF-007 y todavía no está en el decision log; AI-07 (`/ops/orders/:id`, `recipient_notices.stop`)
 > solo pide que diga que el destinatario deja de recibir avisos de todas las organizaciones. Canales:
