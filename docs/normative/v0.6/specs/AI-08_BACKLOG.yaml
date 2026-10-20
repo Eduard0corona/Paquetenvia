@@ -2,7 +2,7 @@ meta:
   version: '0.6'
   generated: '2026-07-19'
   execution_order: topological by depends_on; P0 before P1
-  item_count: 77
+  item_count: 78
 definition_of_ready:
 - normative inputs identified
 - dependencies DONE
@@ -1550,10 +1550,36 @@ items:
   acceptance_criteria:
   - master data loads are idempotent, audited and tenant-scoped
   - real zones require GATE-010 resolution or explicit owner scoping; tariffs follow GATE-011-VAT-INCLUDED-2026-09-29
+  - 'DECIDED GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20 (project owner, G4 "Sí, propónmelos (Recommended)", H2 "Aprobar la tabla (Recommended)" and H3 "Aprobar la lista (Recommended)"): the pilot driver eligibility maps are the reviewed Drivers__Eligibility entries of deploy/azure/pilot/apps.settings.json, shared by every organization and not loaded as master data - per order, packages / total grams / heaviest package grams / length x width x height mm: MOTORCYCLE 5 / 20000 / 10000 / 400 x 400 x 350, CAR 10 / 100000 / 20000 / 900 x 800 x 600, VAN 20 / 400000 / 20000 / 2000 x 1200 x 1200, BICYCLE 3 / 10000 / 10000 / 450 x 400 x 300, WALKER 2 / 5000 / 5000 / 450 x 400 x 300, RequireDimensions false for all five; documents IDENTITY, DRIVER_LICENSE, VEHICLE_CARD and INSURANCE for MOTORCYCLE, CAR and VAN and IDENTITY for BICYCLE and WALKER, each with an expiry date (no NonExpiringDocumentTypes) and no BACKGROUND_CHECK; pickups count as VAN and cargo bikes as BICYCLE; GATE-010 stays open for zones, hours, prohibited items and SLA, and no real driver is assignable before DRV-DOC-001'
   required_tests:
   - idempotent reload
   - cross-tenant isolation
   approval_gate: GATE-010
+- id: DRV-DOC-001
+  decision: GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20 (project owner; H1 and H3)
+  epic: Driver
+  release: MVP-1
+  title: Registro de documentos de repartidor y validación por despacho
+  priority: P1
+  depends_on:
+  - DSP-001
+  - MDM-001
+  expected_outputs:
+  - a way to record the documents of each real driver in drivers.driver_documents - AI-05 registerMyDriverDocument and listMyDriverDocuments (/driver/me/documents), or an MDM-001 loader extension that carries the document metadata; the implementing task chooses with an ADR
+  - a dispatch operation that marks a document VALID or REJECTED, or the same outcome recorded through the MDM-001 loader; any AI-05, AI-06 or AI-18 change it needs is part of that ADR
+  acceptance_criteria:
+  - 'DECIDED GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20 (project owner, H1 "Tarea nueva, tras GATE-007 (Recommended)"): the H3 document list is the target policy; documents are registered and dispatch validates them'
+  - no real driver document is stored before GATE-007 is resolved or explicitly scoped by the project owner (driver documents are part of GATE-007)
+  - a document registered by a driver starts PENDING; only dispatch makes it VALID or REJECTED (a dispatcher of the driver organization authorized in the backend and by RLS, or a reviewed MDM-001 load), audited in the same transaction; a driver never validates a document
+  - every required document carries expires_at (NonExpiringDocumentTypes stays empty, H3); a permanent Sinaloa driver license is recorded with the review date the owner defines
+  - a document file never travels through the API as multipart; no document number, file, object key or hash appears in logs, outbox, events or audit payloads
+  - a driver reads only their own documents; another organization's document answers the uniform 404
+  required_tests:
+  - DSP-001 eligibility end to end - VALID and unexpired documents of the pilot list make the driver eligible; a missing, PENDING, REJECTED or expired one keeps its DSP-001 rejection
+  - PostgreSQL RLS and cross-tenant isolation of drivers.driver_documents
+  - authorization matrix of the registration and validation operations
+  - migration up and down on real PostgreSQL when the schema changes
+  approval_gate: GATE-007
 - id: TRK-002
   decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)
   epic: Tracking
