@@ -425,7 +425,8 @@ public sealed class ClaimWindowFinalizationPostgreSqlContractTests(PostgreSqlCon
                 DROP ROLE {Executor};
                 DELETE FROM platform."__ef_migrations_history_orders" WHERE "MigrationId" IN (
                   '{AddOrderLifecycleFinalizationExecutor.MigrationId}','{AddTrackingLinkGenerations.MigrationId}',
-                  '{AddOrderServiceWindow.MigrationId}','{AddOrderAutoCloseDiscovery.MigrationId}');
+                  '{AddOrderServiceWindow.MigrationId}','{AddOrderAutoCloseDiscovery.MigrationId}',
+                  '{AddOrderReadIndexes.MigrationId}');
                 """);
             await using (var connection = await fixture.AdminDataSource.OpenConnectionAsync())
             {

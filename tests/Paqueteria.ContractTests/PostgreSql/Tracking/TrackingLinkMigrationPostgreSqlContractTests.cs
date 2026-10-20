@@ -116,7 +116,7 @@ public sealed class TrackingLinkMigrationPostgreSqlContractTests(PostgreSqlContr
                 ALTER TABLE orders.public_tracking_tokens DROP COLUMN key_version, DROP COLUMN generation;
                 DELETE FROM platform."__ef_migrations_history_orders" WHERE "MigrationId" IN (
                   '{AddTrackingLinkGenerations.MigrationId}','{AddOrderServiceWindow.MigrationId}',
-                  '{AddOrderAutoCloseDiscovery.MigrationId}');
+                  '{AddOrderAutoCloseDiscovery.MigrationId}','{AddOrderReadIndexes.MigrationId}');
                 DELETE FROM platform."__ef_migrations_history_platform_evolution" WHERE "MigrationId"='{BoundTrackingLinksToOrderLifecycle.MigrationId}';
                 """);
             await ExecuteAdminAsync(ApplyPilotContractDeltas.UpSql);

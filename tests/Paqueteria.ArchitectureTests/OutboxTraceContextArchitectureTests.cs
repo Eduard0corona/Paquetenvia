@@ -178,9 +178,14 @@ public sealed partial class OutboxTraceContextArchitectureTests
         Assert.Contains("NEW.created_at,NEW.trace_parent)", latest["platform.protect_outbox_content"], StringComparison.Ordinal);
         Assert.Contains("NEW.created_at,NEW.trace_parent)", latest["platform.protect_location_outbox_content"], StringComparison.Ordinal);
 
-        // The migrator applies both steps as the latest of their lanes.
+        // The migrator applies both steps. The Notifications one is the latest of its lane; the Dispatch one is followed
+        // only by the DP-INDEXES-ORDERS-DISPATCH-2026-10-20 read-index step and keeps its own source rule.
         var coordinator = File.ReadAllText(TestRepository.GetPath("tools/Paqueteria.DatabaseMigrator/ModuleMigrationCoordinator.cs"));
-        Assert.Contains("(\"Dispatch\", \"__ef_migrations_history_dispatch\", AddOutboxTraceContext.MigrationId,", coordinator, StringComparison.Ordinal);
+        Assert.Contains("(\"Dispatch\", \"__ef_migrations_history_dispatch\", AddAssignmentReadIndexes.MigrationId,", coordinator, StringComparison.Ordinal);
+        Assert.Contains(
+            "AddOutboxTraceContext.MigrationId,\n            \"src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20261013000100_AddOutboxTraceContext.cs\",\n            IsOutboxTraceContextDispatchSource);",
+            coordinator.ReplaceLineEndings("\n"),
+            StringComparison.Ordinal);
         Assert.Contains("(\"Notifications\", \"__ef_migrations_history_notifications\", CarryOutboxTraceContext.MigrationId,", coordinator, StringComparison.Ordinal);
     }
 

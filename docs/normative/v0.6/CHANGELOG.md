@@ -1,5 +1,41 @@
 # Changelog
 
+## Índices de lectura de órdenes y despacho (DP-INDEXES-ORDERS-DISPATCH-2026-10-20) — 2026-10-20
+
+- Respuesta literal del project owner (2026-10-20, pregunta G3), registrada en `decision-log.md` con su contexto y la
+  opción no elegida: "Índices de rendimiento: «hechas hoy» lee todos los eventos de la organización, el selector de repartidor lee todo el historial de asignaciones y la lista de órdenes recorre todas las órdenes. Con 20 entregas al día no se nota. ¿Los agregamos?" Respuesta: "Ahora, en un PR (Recommended)" ("Cambio a AI-06 y migración con subida y bajada probadas. 0 USD. Crearlos con las tablas casi vacías es instantáneo; después tardan más.").
+- Respuestas literales del project owner (2026-10-20, ronda I, preguntas I1, I2 e I3 sobre lo que un índice solo no
+  resolvía en este PR), registradas en `decision-log.md` con su contexto y las opciones no elegidas:
+  - "Índices (#294): la lista de órdenes por defecto («Todos los estados», sin fechas) no mejora con un índice, porque el permiso filtra por dueño O por operador y la lista ordena por fecha. Con 150 mil órdenes de prueba tarda 87-104 ms. ¿Qué hacemos?" Respuesta: "Reescribir la consulta (Recommended)" ("Se divide en dos partes (como dueño y como operador) con un índice para cada una. No cambia nada visible. Va en el mismo PR #294, con su prueba.");
+  - "Los conteos de la bandeja cuentan todas las órdenes de la historia en cada refresco (381 ms con 150 mil órdenes de prueba; con el volumen del piloto, mucho menos). ¿Qué hacemos?" Respuesta: "Dejarlo para el piloto (Recommended)" ("Sin cambio. A 20 entregas al día tarda poco; se revisa con las alertas de CPU.");
+  - "El filtro «Cobros pendientes» (solo finanzas) recorre todas las órdenes de la organización (198-233 ms con 150 mil de prueba), por cómo está escrita la consulta. ¿Lo mejoramos?" Respuesta: "Dejarlo por ahora (Recommended)" ("Lo usa solo finanzas y poco; se revisa con datos reales.").
+- AI-06 declara seis índices de lectura y las instalaciones existentes los reciben por su carril: Orders
+  `20261020000100_AddOrderReadIndexes` (`order_events_actor_status_time_idx`, `orders_price_review_idx` y, por I1,
+  `orders_owner_created_idx` y `orders_operator_created_idx`) y Dispatch `20261020000100_AddAssignmentReadIndexes`
+  (`assignments_driver_open_idx` y `assignments_order_driver_idx`). Cada paso adopta el índice que AI-06 ya creó, rechaza
+  uno con el mismo nombre y otra forma, comprueba la definición exacta y su bajada quita solo sus índices (cuatro y
+  dos). Se crean con `CREATE INDEX` normal dentro de la transacción del carril (nunca `CONCURRENTLY`); con las tablas casi
+  vacías es instantáneo.
+- «Hechas hoy» del repartidor lee solo sus cambios de estado del día y una consulta por cambio, en vez de todas las
+  asignaciones que tuvo; las paradas, la lista de repartidores y el selector de repartidor leen solo las asignaciones
+  abiertas; el filtro de revisión de precio del tablero lee solo las órdenes sin terminar en revisión. En PostgreSQL 18.4
+  con 150 000 órdenes sintéticas: 11.7 a 1.5 ms, 55 a 19 ms, 35 a 5.6 ms y 216 a 0.14 ms.
+- Lista de órdenes sin filtro de dueña, de número de guía ni de cobros pendientes (la vista «Todos los estados», también
+  con estado, fechas y cursor), por I1: se lee en dos partes por cada organización de `app.current_org_ids` (el mismo
+  ajuste que lee RLS): las órdenes que es dueña, con `orders_owner_created_idx`, y las que solo opera (su dueña no está
+  en el contexto), con `orders_operator_created_idx`; cada parte en el orden de la lista y con su límite, y luego se
+  juntan. Mismas filas, orden, tamaño de página y cursor; RLS sigue filtrando cada fila. Con dueña, número de guía o
+  cobros pendientes la consulta es la de siempre. Para esa sola transacción el runtime apaga los bitmap scans
+  (`SET LOCAL enable_bitmapscan = off`): PostgreSQL subestima las órdenes de una organización con poca parte de la tabla
+  y, si no, las recorre todas. Con 150 000 órdenes sintéticas: primera página de la organización grande 166-221 a 0.23
+  ms, del aliado 15-22 a 0.29 ms, de un negocio chico 4.1 a 0.21 ms; estado CLOSED 142 a 0.30 ms; últimos 30 días 35 a
+  0.26 ms.
+- Sin cambio, por I2 e I3: los conteos de la bandeja y el filtro de cobros contra entrega pendientes siguen leyendo todas
+  las órdenes de la organización.
+- AI-08 SCL-003: un criterio DECIDED y las pruebas requeridas de planes y de equivalencia de la lista. Sin cambios de
+  AI-18, API, columnas, restricciones, políticas, roles, permisos ni paquetes; la única consulta que cambia es la lista
+  de órdenes de I1. Nota: `docs/development/dp-indexes-orders-dispatch.md`.
+
 ## Reglas de elegibilidad por tipo de vehículo en el piloto y tarea de documentos de repartidor (GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20) — 2026-10-20
 
 - Respuestas literales del project owner (2026-10-20, preguntas G4, H1, H2 y H3), registradas en `decision-log.md` con

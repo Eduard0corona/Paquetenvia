@@ -210,7 +210,9 @@ public sealed class PostgreSqlDriverStopsQuery(
     /// PICKED_UP, DELIVERED or RETURNED that this driver made today, in America/Mazatlan time, on orders of the
     /// selected organization the driver is or was assigned to (<see cref="DriverStopsCompletedToday"/>). Only the
     /// count leaves the database; the day bounds are computed by PostgreSQL from the request time, in its own
-    /// time zone database.
+    /// time zone database. DP-INDEXES-ORDERS-DISPATCH-2026-10-20: order_events_actor_status_time_idx reads only the
+    /// driver's status changes of that day and assignments_order_driver_idx answers the assignment probe per event, so
+    /// neither the driver's assignment history nor the tenant's events are walked.
     /// </summary>
     private static async Task<int> CountCompletedTodayAsync(
         NpgsqlConnection connection,

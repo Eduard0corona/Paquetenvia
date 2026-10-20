@@ -102,7 +102,8 @@ public sealed class OrderServiceWindowMigrationPostgreSqlContractTests(PostgreSq
                 ALTER TABLE orders.orders DROP CONSTRAINT orders_service_window_check;
                 ALTER TABLE orders.orders DROP COLUMN service_window_from, DROP COLUMN service_window_to;
                 DELETE FROM platform."__ef_migrations_history_orders" WHERE "MigrationId" IN (
-                  '{AddOrderServiceWindow.MigrationId}','{AddOrderAutoCloseDiscovery.MigrationId}');
+                  '{AddOrderServiceWindow.MigrationId}','{AddOrderAutoCloseDiscovery.MigrationId}',
+                  '{AddOrderReadIndexes.MigrationId}');
                 """);
             var before = await SnapshotAsync(scenario.OrderId);
 
