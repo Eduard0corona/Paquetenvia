@@ -1042,8 +1042,8 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
 - Both db-ops images run the migrator. Before 2026-10-20 they did not copy the three lane sources under
   `src/BuildingBlocks/Paqueteria.Infrastructure` (the SCL-001 key-ring lane and the two PlatformEvolution
   migrations). Every migrator command therefore exited 3 at start ("DataProtection adoption migration is missing"),
-  as uid 1654 and as root. Now both images, built locally from their Dockerfiles, pass `verify` with all 13 lanes
-  `VERIFIED`. The pilot image also runs `apply` and then `assert` as uid 1654 against the pinned PostGIS 18/3.6
+  as uid 1654 and as root. Now both images, built locally with their final stage verbatim (only the sandbox proxy CA
+  was added to the build stage), pass `verify` with all 13 lanes `VERIFIED`. The pilot image also runs `apply` and then `assert` as uid 1654 against the pinned PostGIS 18/3.6
   image. That run used a local `postgres` superuser, so it did not use `--azure-ownership-bridge`.
   `DbOpsImageArchitectureTests` fails if a file the migrator reads is not copied into every
   `deploy/**/Dockerfile.db-ops*`.
