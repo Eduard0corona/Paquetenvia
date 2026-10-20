@@ -261,6 +261,13 @@ No metric tag carries the organization pseudonym, the actor role type, a subject
     - `Pilot_alerts_query_only_obs002_events_and_dimensions` (every event a query reads is skipped);
     - the unit test `Observability_events_never_carry_the_pseudonym_or_role_kind`;
     - guard P21 checks the queries.
+- **Never the real id beside it:** since the enrichment adds the pseudonym and the role kind, no log template names
+  the tenant, the actor or the organization by id, nor a user, a subject or a driver (a driver profile is one-to-one
+  with its user). `LogTemplateIdentifierArchitectureTests` refuses, in every log template under `src/**` (API and
+  Worker), any placeholder or interpolated name ending in `TenantId`, `ActorId`, `OrganizationId`, `OrgId`, `UserId`,
+  `SubjectId` or `DriverId`, in any case, including templates written through `LoggerMessage` or a string constant.
+  Order, assignment and other resource ids stay allowed (DSP-002). Until 2026-10-19 seven Dispatch and Pricing lines
+  still wrote the organization id and the actor's user id; they now carry only their counts, results and resource ids.
 - **The key:**
   - Development and Testing use a synthetic key when none is configured: SHA-256 of a public constant, version 0, so
     `v0-` marks synthetic pseudonyms.

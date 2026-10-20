@@ -207,7 +207,7 @@ public sealed class PostgreSqlQuoteService(
                         privateTariffId,
                         LowPriceAuthorized: authorizationInput is not null),
                     rules);
-                ThrowIfFailed(evaluation, command.OrganizationId, originLocation.CityId, serviceType);
+                ThrowIfFailed(evaluation, originLocation.CityId, serviceType);
 
                 // LOW-PRICE-MANUAL-AUTH-2026-10-02: an authorization that the selected price does not need is the
                 // uniform 409, decided before anything is written; it is never stored silently.
@@ -356,7 +356,6 @@ public sealed class PostgreSqlQuoteService(
 
     private void ThrowIfFailed(
         TariffEvaluationResult evaluation,
-        Guid organizationId,
         Guid cityId,
         ServiceType serviceType)
     {
@@ -365,11 +364,12 @@ public sealed class PostgreSqlQuoteService(
             return;
         }
 
+        // OBS-003-TENANT-PSEUDONYM-2026-10-12: the quoting organization reaches these lines only as the pseudonym the
+        // logger factory adds, never as its id.
         if (evaluation.Failure == TariffEvaluationFailure.AmbiguousRule)
         {
             logger.LogWarning(
-                "Ambiguous tariff configuration for organization {OrganizationId}, city {CityId}, service {ServiceType}.",
-                organizationId,
+                "Ambiguous tariff configuration for city {CityId}, service {ServiceType}.",
                 cityId,
                 serviceType.ToContractValue());
         }
@@ -377,8 +377,7 @@ public sealed class PostgreSqlQuoteService(
         if (evaluation.Failure == TariffEvaluationFailure.PolicyVersionMissing)
         {
             logger.LogWarning(
-                "Tariff rule without a pricing policy version for organization {OrganizationId}, city {CityId}, service {ServiceType}; the rule is not quotable until it carries one.",
-                organizationId,
+                "Tariff rule without a pricing policy version for city {CityId}, service {ServiceType}; the rule is not quotable until it carries one.",
                 cityId,
                 serviceType.ToContractValue());
         }

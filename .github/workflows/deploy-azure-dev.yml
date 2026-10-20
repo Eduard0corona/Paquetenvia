@@ -38,7 +38,7 @@ env:
 jobs:
   provenance:
     name: Verify provenance and static guards
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
       contents: read
@@ -134,7 +134,7 @@ jobs:
   deploy-core:
     name: Phase B shared infrastructure (deploy-core.ps1)
     needs: provenance
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     environment: azure-dev
     permissions:

@@ -216,14 +216,18 @@ resource blobService 'Microsoft.Storage/storageAccounts/blobServices@2025-01-01'
   parent: storage
   name: 'default'
   properties: {
+    // Versioning stays off (ADP-001). ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20 (owner: "Borrado suave más largo
+    // (Recommended)"): a deleted proof photo, or the state of one before an overwrite (a soft-deleted snapshot, since
+    // versioning is off), stays recoverable for 30 days; the container gets the same 30 days, so deleting `proofs`
+    // is not a shorter way to lose them. Neither protects against deleting the storage account. Guard P12 pins both.
     isVersioningEnabled: false
     deleteRetentionPolicy: {
       enabled: true
-      days: 7
+      days: 30
     }
     containerDeleteRetentionPolicy: {
       enabled: true
-      days: 7
+      days: 30
     }
     cors: {
       corsRules: [

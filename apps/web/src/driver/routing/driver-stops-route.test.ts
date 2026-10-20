@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
+  driverStopsRouteChangedEvent,
   findDriverStopForRoute,
+  isInAppNavigationClick,
+  navigateWithinDriverStops,
   parseDriverStopsPathname,
 } from "./driver-stops-route";
 
@@ -39,6 +42,75 @@ describe("parseDriverStopsPathname", () => {
     `/driver/stops/${orderId}#other`,
   ])("rejects the non-canonical pathname %s", (pathname) => {
     expect(parseDriverStopsPathname(pathname)).toEqual({ kind: "not-found" });
+  });
+});
+
+describe("in-app navigation (DRV-PWA-INAPP-NAVIGATION)", () => {
+  const plainClick = {
+    button: 0,
+    defaultPrevented: false,
+    metaKey: false,
+    ctrlKey: false,
+    shiftKey: false,
+    altKey: false,
+  };
+
+  function host() {
+    const calls: string[] = [];
+    return {
+      calls,
+      history: {
+        pushState: (_data: unknown, _unused: string, url?: string | URL | null) => {
+          calls.push(`push:${String(url)}`);
+        },
+      },
+      dispatchEvent: (event: Event) => {
+        calls.push(`event:${event.type}`);
+        return true;
+      },
+      scrollTo: (x: number, y: number) => {
+        calls.push(`scroll:${x},${y}`);
+      },
+    };
+  }
+
+  it("takes over only a plain primary click", () => {
+    expect(isInAppNavigationClick(plainClick)).toBe(true);
+    for (const modified of [
+      { button: 1 },
+      { button: 2 },
+      { defaultPrevented: true },
+      { metaKey: true },
+      { ctrlKey: true },
+      { shiftKey: true },
+      { altKey: true },
+    ]) {
+      expect(isInAppNavigationClick({ ...plainClick, ...modified })).toBe(false);
+    }
+  });
+
+  it.each(["/driver/stops", `/driver/stops/${orderId}`])(
+    "moves to %s with one history entry, tells the screen and starts at the top",
+    (href) => {
+      const target = host();
+      expect(navigateWithinDriverStops(href, target)).toBe(true);
+      expect(target.calls).toEqual([
+        `push:${href}`,
+        `event:${driverStopsRouteChangedEvent}`,
+        "scroll:0,0",
+      ]);
+    },
+  );
+
+  it.each([
+    "/login",
+    "/driver/stops/not-a-uuid",
+    `/driver/stops/${orderId}/extra`,
+    "https://evil.test/driver/stops",
+  ])("leaves %s to the browser", (href) => {
+    const target = host();
+    expect(navigateWithinDriverStops(href, target)).toBe(false);
+    expect(target.calls).toEqual([]);
   });
 });
 
