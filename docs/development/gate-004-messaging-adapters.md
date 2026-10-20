@@ -154,7 +154,8 @@ Neutral recipient text while GATE-001 is open (GATE-001-NEUTRAL-PUBLIC-BRAND-202
 approved in WhatsApp Manager and the email `Subject`/`PlainText` sent to recipients use the neutral
 "Seguimiento de envío" and never name "Paquetenvia". The repository holds no recipient text: these
 adapters have no default template, and the only stored template (`orders.created.operations`, `IN_APP`)
-goes to dispatchers.
+goes to dispatchers. Since NTF-RECIPIENT-NOTICES-2026-10-20 the owner-approved drafts of the four recipient
+notices are recorded as contract in AI-24 `recipient_notices.templates`; the adapters still have no default text.
 
 Key Vault mappings follow PILOT-KEYVAULT-PRIVATE-APP-READ, for example
 `KeyVaultSecrets__Mappings__2__SecretName=whatsapp-cloud-api-token`,
@@ -173,6 +174,10 @@ and the Key Vault secrets must change together, after the owner creates the secr
 that does not exist stops the Worker at start and fails the `existing` secret reference in Bicep.
 
 ## Not in this change (blocked on owner decisions or GATE-007)
+
+The owner decided the five points below on 2026-10-19 and 2026-10-20 (NTF-RECIPIENT-NOTICES-2026-10-20); they are
+recorded as contracts and built by AI-08 NTF-002 to NTF-008, still behind GATE-004 and GATE-007. See
+[`ntf-recipient-notices.md`](ntf-recipient-notices.md).
 
 1. **Producer and audience**: which events notify which customers (NTF-001-OWNER-001..003 approve only
    `orders.created` → dispatchers → `IN_APP`).

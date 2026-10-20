@@ -29,7 +29,7 @@ public sealed class NormativeBaselineTests
         using var document = JsonDocument.Parse(File.ReadAllText(Path.Combine(normativeRoot, "MANIFEST.json")));
         var root = document.RootElement;
         Assert.Equal(74, root.GetProperty("file_count").GetInt32());
-        Assert.Equal("3a491699ee7462ffd6071bcf2a1092d66654916ed2502bf474b9e4fac78b6754", root.GetProperty("canonical_sql_sha256").GetString());
+        Assert.Equal("11e71a17fe328421d67a5a79f6bca7a849e0012cedd6e5c4d3fe757571ba7f99", root.GetProperty("canonical_sql_sha256").GetString());
 
         var declaredPaths = new HashSet<string>(StringComparer.Ordinal);
         foreach (var entry in root.GetProperty("files").EnumerateArray())
@@ -57,7 +57,7 @@ public sealed class NormativeBaselineTests
     {
         var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("specs", "AI-08_BACKLOG.yaml"));
         var items = root.Sequence("items").Children.Cast<YamlMappingNode>().ToArray();
-        Assert.Equal(70, items.Length);
+        Assert.Equal(77, items.Length);
         var byId = items.ToDictionary(item => item.Scalar("id"), StringComparer.Ordinal);
         Assert.Equal(items.Length, byId.Count);
         Assert.Contains("ARC-002", byId.Keys);
