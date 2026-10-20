@@ -113,6 +113,8 @@ public sealed class OutboxTraceContextPostgreSqlContractTests(PostgreSqlContract
                 "security.append_operator_order_outbox",
                 "security.emit_notification_status_changed",
                 "security.expand_order_created_notifications",
+                // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-003): the recipient notice expansion.
+                "security.expand_recipient_notice_request",
             ],
             inserts.Select(insert => insert.Function).Distinct().Order(StringComparer.Ordinal));
         Assert.All(inserts, insert => Assert.Matches(@"\btrace_parent\b", insert.Columns ?? string.Empty));
@@ -341,7 +343,7 @@ public sealed class OutboxTraceContextPostgreSqlContractTests(PostgreSqlContract
         var sendClaim = await ClaimAsync(connection, transaction, "claim_notifications_outbox", send);
         Assert.Equal(TraceA, sendClaim.TraceParent);
         Assert.True(await ScalarAsync<bool>(connection, transaction,
-            "SELECT security.apply_notification_outcome(@outbox,@lease,@notification,1,'TRANSIENT','SYNTHETIC_TRANSIENT',clock_timestamp(),clock_timestamp())",
+            "SELECT security.apply_notification_outcome(@outbox,@lease,@notification,1,'TRANSIENT','SYNTHETIC_TRANSIENT',NULL,clock_timestamp(),clock_timestamp())",
             P("outbox", send), P("lease", sendClaim.Lease), P("notification", notification)));
         Assert.Equal(
             $"notifications.send-requested={TraceA},notifications.status-changed={TraceA},notifications.status-changed={TraceA}",
@@ -385,8 +387,9 @@ public sealed class OutboxTraceContextPostgreSqlContractTests(PostgreSqlContract
             Assert.Contains("column:location_outbox_events.trace_parent:text:nullable:-", installed);
             Assert.Contains("column:outbox_events.trace_parent:text:nullable:-", installed);
             Assert.Contains("column-acl:outbox_events.trace_parent:paqueteria_operator_outbox_executor:INSERT:false", installed);
-            // The definer, the two Notifications writers and the two content guards name the column.
-            Assert.Equal(5, installed.Count(line => line.StartsWith("function:", StringComparison.Ordinal) && line.EndsWith(":trace", StringComparison.Ordinal)));
+            // The definer, the two Notifications writers and the two content guards name the column, and so does the
+            // NTF-RECIPIENT-NOTICES-2026-10-20 expansion of the recipient notice lane step that follows the OBS-003 one.
+            Assert.Equal(6, installed.Count(line => line.StartsWith("function:", StringComparison.Ordinal) && line.EndsWith(":trace", StringComparison.Ordinal)));
 
             await using var dispatch = CreateDispatchContext(connection);
             await using var notifications = CreateNotificationsContext(connection);
@@ -527,9 +530,11 @@ public sealed class OutboxTraceContextPostgreSqlContractTests(PostgreSqlContract
         var ids = context.GetService<IMigrationsAssembly>().Migrations.Keys.Order(StringComparer.Ordinal).ToArray();
         var index = Array.IndexOf(ids, migrationId);
         Assert.True(index > 0, $"{migrationId} must follow an earlier step of its lane");
-        // Only the DP-INDEXES-ORDERS-DISPATCH-2026-10-20 read-index step may follow the OBS-003 step: rolling back to the
-        // previous step reverts it first, and it touches no outbox object, grant or function.
-        Assert.All(ids[(index + 1)..], later => Assert.Equal(AddAssignmentReadIndexes.MigrationId, later));
+        // Only the DP-INDEXES-ORDERS-DISPATCH-2026-10-20 read-index step (Dispatch) and the NTF-RECIPIENT-NOTICES-2026-10-20
+        // recipient notice lane step (Notifications) may follow the OBS-003 steps: rolling back to the previous step reverts
+        // them first; the read-index step touches no outbox object, grant or function, and the recipient notice step keeps
+        // the trace context of every row it writes and restores the OBS-003 emitter on its way down.
+        Assert.All(ids[(index + 1)..], later => Assert.Contains(later, new[] { AddAssignmentReadIndexes.MigrationId, AddRecipientNoticeLane.MigrationId }));
         return ids[index - 1];
     }
 

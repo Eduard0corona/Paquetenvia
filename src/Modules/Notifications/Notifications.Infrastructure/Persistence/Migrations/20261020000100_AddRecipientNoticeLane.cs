@@ -285,7 +285,8 @@ public sealed class AddRecipientNoticeLane : Migration
         ))
              OR (p_code='TRACKING_LINK_UNAVAILABLE' AND p_outcome<>'PERMANENT')
              OR (p_provider_reference IS NOT NULL AND (p_outcome='CANCELLED'
-               OR p_provider_reference !~ '^[A-Za-z0-9._:=+/-]{1,256}$')) THEN
+               OR char_length(p_provider_reference) NOT BETWEEN 1 AND 256
+               OR p_provider_reference !~ '^[A-Za-z0-9._:=+/-]+$')) THEN
             RAISE EXCEPTION 'invalid provider outcome' USING ERRCODE='22023';
           END IF;
           SELECT * INTO v_request FROM platform.outbox_events
@@ -606,7 +607,8 @@ public sealed class AddRecipientNoticeLane : Migration
             recipient_kind='ORDER_DESTINATION' OR status IN ('PENDING','SENT','FAILED')),
           ADD CONSTRAINT notifications_delivered_at_check CHECK ((status='DELIVERED')=(delivered_at IS NOT NULL)),
           ADD CONSTRAINT notifications_provider_reference_check CHECK (provider_reference IS NULL OR (
-            recipient_kind='ORDER_DESTINATION' AND provider_reference ~ '^[A-Za-z0-9._:=+/-]{1,256}$'));
+            recipient_kind='ORDER_DESTINATION' AND char_length(provider_reference) BETWEEN 1 AND 256
+            AND provider_reference ~ '^[A-Za-z0-9._:=+/-]+$'));
         CREATE UNIQUE INDEX notifications_order_destination_uq
           ON notifications.notifications(owner_org_id,order_event_id,channel,template_key)
           WHERE recipient_kind='ORDER_DESTINATION';
