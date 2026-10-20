@@ -1623,10 +1623,11 @@ def validate_dispatch_contacts(entries: list[Any]) -> list[str]:
 # Driver eligibility rules. apps.bicep runs the pilot API with Drivers__Provider=PostgreSql and
 # Routing__Provider=PostgreSql, so the API refuses to start unless Drivers:Eligibility gives every vehicle type at
 # least one required document type and a valid capacity (IsComplete in Drivers.Infrastructure and
-# Routing.Infrastructure DependencyInjection; PilotApiStartupConfigurationTests pins both failures while the file has
-# none). They are owner business rules with no default: settings-check stops while any is missing, naming the vehicle
-# type and each missing setting, and holds every entry present to the API's rules. The static guard (P17,
-# allow_missing) tolerates the missing ones, like OWNER_DECISION_REQUIRED, but not an invalid one.
+# Routing.Infrastructure DependencyInjection; PilotApiStartupConfigurationTests pins both failures without them). They
+# are owner business rules with no default (the file carries the owner's since
+# GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20): settings-check stops while any is missing, naming the vehicle type
+# and each missing setting, and holds every entry present to the API's rules. The static guard (P17, allow_missing)
+# tolerates the missing ones, like OWNER_DECISION_REQUIRED, but not an invalid one.
 ELIGIBILITY_PREFIX = "Drivers__Eligibility"
 ELIGIBILITY_DOCUMENTS = "RequiredDocumentTypesByVehicleType"
 ELIGIBILITY_NON_EXPIRING = "NonExpiringDocumentTypes"

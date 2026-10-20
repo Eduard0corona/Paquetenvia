@@ -67,11 +67,41 @@ empresa, iniciando con `piloto-2026-10-v1`), quitó `Dispatch__AssignmentPolicyV
 `Drivers__Eligibility__PolicyVersion` del archivo, las versiones viven en cada organización y el guard
 rechaza esos nombres si reaparecen.
 
-**Lo que sí tienes que hacer aquí antes del primer deploy: las reglas de elegibilidad de repartidores.** La
-API corre con `Drivers__Provider=PostgreSql` y `Routing__Provider=PostgreSql` y no arranca sin ellas. Hoy el
-archivo solo tiene `Finance__OperationalTimeZone`, así que `settings-check` se detiene con
-`STOP_FOR_OWNER_DECISION: driver eligibility rules for vehicle type <TIPO> are missing: ...` y nombra cada
-valor que falta. Para cada tipo de vehículo (`MOTORCYCLE`, `CAR`, `VAN`, `BICYCLE`, `WALKER`) agrega:
+**Reglas de elegibilidad de repartidores: ya están en el archivo** (tu decisión del 20 de octubre: G4 "Sí,
+propónmelos (Recommended)", H2 "Aprobar la tabla (Recommended)" y H3 "Aprobar la lista (Recommended)";
+`GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20`). La API corre con `Drivers__Provider=PostgreSql` y
+`Routing__Provider=PostgreSql` y no arranca sin ellas; con el archivo actual arranca y `settings-check` imprime
+`ENV001_SETTINGS=PASS`. Los límites son por pedido:
+
+| Tipo | Paquetes | Peso total | Paquete más pesado | Largo × ancho × alto | Medidas obligatorias | Documentos |
+|---|---|---|---|---|---|---|
+| `MOTORCYCLE` (moto) | 5 | 20 kg | 10 kg | 40 × 40 × 35 cm | no | INE (`IDENTITY`), licencia, tarjeta de circulación y seguro |
+| `CAR` (auto) | 10 | 100 kg | 20 kg | 90 × 80 × 60 cm | no | INE, licencia, tarjeta de circulación y seguro |
+| `VAN` (van) | 20 | 400 kg | 20 kg | 200 × 120 × 120 cm | no | INE, licencia, tarjeta de circulación y seguro |
+| `BICYCLE` (bici) | 3 | 10 kg | 10 kg | 45 × 40 × 30 cm | no | INE |
+| `WALKER` (a pie) | 2 | 5 kg | 5 kg | 45 × 40 × 30 cm | no | INE |
+
+- **La API arranca, pero todavía no se puede asignar a ningún repartidor real.** Hoy nada registra ni valida
+  documentos de repartidor (el API los define en `/driver/me/documents`, pero no está implementado; solo los datos
+  sintéticos tienen). Hasta que lleguen la tarea DRV-DOC-001 de AI-08 (registro de documentos y validación por
+  despacho, tu decisión H1) y GATE-007, cada repartidor recibe `REQUIRED_DOCUMENT_MISSING`.
+- **Pickup cuenta como `VAN` y bici de carga como `BICYCLE`** (H2); no hay otros tipos de vehículo.
+- **Para operación: los límites se aplican a cada pedido.** Cada pedido se compara solo, con todos sus paquetes;
+  nadie suma los pedidos que ya lleva un repartidor ni los de una ruta. Despacho decide cuántos pedidos lleva cada
+  quien. La cotización no revisa ningún vehículo: un pedido más grande que la fila `VAN` se crea, pero nadie lo puede
+  tomar.
+- Todos los documentos llevan fecha de vencimiento (no hay `NonExpiringDocumentTypes`); a una licencia permanente de
+  Sinaloa se le pone una fecha de revisión que tú definas. Sin antecedentes penales (`BACKGROUND_CHECK`) por ahora
+  (se decide con GATE-007 y GATE-008).
+- Los números de paquetes de moto, auto, bici y a pie, y el peso y tamaño a pie, son supuestos sin fuente; se ajustan
+  después con la operación real. El seguro es política tuya (GATE-009 sigue abierto); si contratas una póliza de
+  flotilla se quita.
+- GATE-010 sigue abierto (zonas, horarios, artículos prohibidos, SLA); esto solo cubre las reglas por vehículo.
+
+Si después cambias un valor, es otra decisión y un PR al mismo archivo. El guard sigue deteniendo el deploy si
+falta alguna regla, con `STOP_FOR_OWNER_DECISION: driver eligibility rules for vehicle type <TIPO> are missing: ...`
+y el nombre de cada valor que falta. El formato, para cada tipo de vehículo (`MOTORCYCLE`, `CAR`, `VAN`, `BICYCLE`,
+`WALKER`):
 
 - **Documentos:** `Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TIPO>__0`, `__1`, …: al menos
   uno, cada uno de `IDENTITY`, `DRIVER_LICENSE`, `VEHICLE_CARD`, `INSURANCE`, `BACKGROUND_CHECK` u `OTHER`.
@@ -86,9 +116,9 @@ valor que falta. Para cada tipo de vehículo (`MOTORCYCLE`, `CAR`, `VAN`, `BICYC
   no vencen; los demás necesitan una fecha de vencimiento vigente).
 
 No hay valores por defecto: son reglas de negocio tuyas y el repo no las inventa. Van por PR → `development`
-→ `main` como cualquier cambio del archivo (README §4, "Driver eligibility rules"). Sin este alto, el primer
-deploy fallaría solo en el smoke test (`/auth/session is not served by the API`), y en los siguientes la
-revisión anterior seguiría sirviendo.
+→ `main` como cualquier cambio del archivo (README §4, "Driver eligibility rules"). Sin este alto, un deploy
+fallaría solo en el smoke test (`/auth/session is not served by the API`) o dejaría sirviendo la revisión
+anterior.
 
 > **Versiones de términos y aviso de privacidad (bloquea el deploy):** `PAQUETERIA_TERMS_VERSION` y
 > `PAQUETERIA_PRIVACY_VERSION` del contenedor web ya están cableados en `apps.bicep`. Sus valores van en
@@ -881,9 +911,10 @@ Después mándame los dos nombres (no son secretos) para el cambio que conecte e
 1. **GATE-007 (bloqueante):** no hay ninguna fila `GATE-007-*` con Type `Gate resolution`/`Gate scoping`
    en `decision-log.md`. Sin ella el deploy no inicia sesión en Azure. ¿Qué se registra y con qué ID?
    Implica tocar `docs/normative/**` con checksums y manifest sincronizados.
-2. **apps.settings.json (bloqueante):** las versiones de política quedaron resueltas por el PR #174 (versión
-   por empresa, `piloto-2026-10-v1`), pero faltan las reglas de elegibilidad de repartidores (documentos y
-   capacidad por tipo de vehículo, paso 0.2). Sin ellas `settings-check` detiene el deploy.
+2. ~~apps.settings.json~~: resuelto. Las versiones de política quedaron resueltas por el PR #174 (versión por
+   empresa, `piloto-2026-10-v1`) y las reglas de elegibilidad de repartidores que aprobaste (G4, H2 y H3,
+   `GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20`) ya están en el archivo (paso 0.2). Queda: ningún repartidor
+   real se puede asignar hasta DRV-DOC-001 y GATE-007 (punto 1).
 3. **Términos y privacidad web** (`PAQUETERIA_TERMS_VERSION`/`PAQUETERIA_PRIVACY_VERSION`): ya están
    cableados (`web.parameters.json`, paso 6.1). **Bloquean el deploy** hasta que definas ambas versiones,
    que dependen del aviso de privacidad aprobado (GATE-007).
