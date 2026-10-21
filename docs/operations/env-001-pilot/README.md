@@ -507,11 +507,12 @@ Two further caveats:
    - The images it builds come from the same Dockerfiles that CI builds and smoke-tests on every PR that touches
      them (`docs/development/branching-and-ci.md`, *Deploy image build smoke*).
    - After stage 4, the step *Check that the new API, Worker and Web revisions serve this run's images* waits, for
-     each app, until its latest revision is ready, then requires that revision to run the digest this run pushed and
-     to be active and `Healthy` (at most about 10 minutes for the three apps). Container Apps keeps the previous
-     revision serving while a new one never becomes ready, so without this step a run could stay green on old code.
-     If it fails, the error names the app and the revision and gives the `az containerapp logs show ... --type system`
-     command (§6.7).
+     each app, until its latest revision is ready, runs the digest this run pushed and is active and `Healthy` (at
+     most about 10 minutes for the three apps). A ready revision on another image counts as not ready yet, because
+     right after stage 4 Container Apps can still report the previous revision as the latest one. Container Apps keeps
+     the previous revision serving while a new one never becomes ready, so without this step a run could stay green
+     on old code. If it fails, the error names the app and the revision and gives the
+     `az containerapp logs show ... --type system` command (§6.7).
    - The run summary lists the four digests it pushed (API, Worker, Web, DB ops) and the revision that serves each
      app.
 6. The first run creates the vault, then stops with *"lacks authcenter-paquetenvia-client-secret"*. The
@@ -926,8 +927,9 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
     A setting or secret the app refuses to start without shows up there.
   - *"... is ready but active=..., healthState=..."*: the revision started but is inactive or not `Healthy` after the
     wait. `az containerapp revision list -n <app> -g <rg> -o table` shows every revision with its state.
-  - *"runs '...', not the image this run pushed"*: the latest ready revision does not run this run's image, so stage 4
-    did not apply it. Read the stage 4 output and run the workflow again.
+  - *"... is ready but runs '...', not this run's image (...) after about 10 minutes"*: for the whole wait the latest
+    ready revision ran another image (the error names the revision, the image it runs and this run's image), so stage
+    4 did not apply this run's image. Read the stage 4 output and run the workflow again.
 - **Job console logs:** Log Analytics →
   `ContainerAppConsoleLogs_CL | where ContainerJobName_s startswith "job-pv-pilot" | order by TimeGenerated desc`.
 - **App logs:** `ContainerAppConsoleLogs_CL | where ContainerAppName_s == "ca-pv-pilot-api"`. The logs
@@ -1158,12 +1160,14 @@ script:
   unconditional step (`id: revisions`) reads the three pushed images from `steps.images.outputs` and, for
   `ca-pv-pilot-api`, `ca-pv-pilot-worker` and `ca-pv-pilot-web` in that order, polls `latestRevisionName` against
   `latestReadyRevisionName` (`polls_left=40`, `sleep 15`), then requires the ready revision's
-  `template.containers[].image` to equal the pushed digest and the revision to be `active` and `Healthy`; every failure
-  carries the `az containerapp logs show ... --type system` hint. The always-run summary step reads the four image
+  `template.containers[].image` to equal the pushed digest and the revision to be `active` and `Healthy`. A ready
+  revision on another image is polled again within the same budget, never failed at once; every failure carries the
+  `az containerapp logs show ... --type system` hint. The always-run summary step reads the four image
   outputs and the three serving revisions. The unit tests also run the step with a stand-in `az`: ready on the first
-  poll, ready after some polls, never ready, a first deploy never ready, one poll budget for the three apps, another
-  image, unhealthy or inactive, a revision the start step re-activated after a real restore, the new revision that
-  replaces it, and an image without a digest.
+  poll, ready after some polls, never ready, a first deploy never ready, one poll budget for the three apps, a ready
+  revision on another image that is then replaced by this run's (passes) or stays until the wait ends (fails, naming
+  the revision, the image it runs and this run's image), unhealthy or inactive, a revision the start step re-activated
+  after a real restore, the new revision that replaces it, and an image without a digest.
 
 The unit tests compile the real templates whenever the pinned Bicep CLI is present (the azr-static CI
 job installs it). They mutate the ARM output to prove that each guard fails closed.
@@ -1245,9 +1249,10 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
   active revision isn't deactivated until the new revision is ready") and the ARM reference (`latestRevisionName`,
   `latestReadyRevisionName`, revision `active`, `healthState` Healthy/Unhealthy/None, `template.containers[].image`),
   never against Azure:
-  - that `latestRevisionName` names the new revision once stage 4's `az deployment group create` returns, and that the
-    revision's `template.containers[].image` is the exact `<registry>/paquetenvia-<image>@sha256:...` string stage 4
-    passed;
+  - that `latestRevisionName` names the new revision once stage 4's `az deployment group create` returns (the check
+    tolerates the previous revision still being reported as latest and ready: it waits within the same budget), and
+    that the revision's `template.containers[].image` is the exact `<registry>/paquetenvia-<image>@sha256:...` string
+    stage 4 passed;
   - what `latestReadyRevisionName` and `healthState` show right after the start step re-activates a revision stopped
     for a real restore (§6.4 step 5). The check tolerates a transient `None` or `Unhealthy` within its wait, so either
     behaviour passes once the replicas are healthy;

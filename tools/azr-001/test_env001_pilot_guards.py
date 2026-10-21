@@ -1232,8 +1232,10 @@ else:
 
 class WorkflowRevisionCheckTests(WorkflowStepHarness):
     """ENV-001 F-06: after stage 4 each of the API, the Worker and the Web must reach a latest revision that is ready,
-    runs the digest this run pushed, is active and Healthy. The poll is bounded (40 polls 15 s apart for the three apps
-    together); a failure names the app and the revision and points to its system log; nothing secret is read."""
+    runs this run's digest, is active and Healthy. The poll is bounded (40 polls 15 s apart for the three apps
+    together); a ready revision on another image is polled again within that budget, because right after stage 4 the
+    control plane can still report the previous revision as the latest one. A failure names the app and the revision
+    and points to its system log; nothing secret is read."""
 
     APPS = (guards.API_APP, guards.WORKER_APP, guards.WEB_APP)
     REGISTRY = "crpvpilotabcdefghijklm.azurecr.io"
@@ -1332,17 +1334,52 @@ class WorkflowRevisionCheckTests(WorkflowStepHarness):
                                       worker: [[f"{worker}--new", f"{worker}--old"]]})
         self.assert_failed(result, worker, f"latest revision {worker}--new is not ready")
         self.assertEqual(40, self.sleeps())
+        # Polls spent waiting for this run's image count against the same budget.
+        result = self.run_check(revisions={f"{api}/{api}--new": [self.healthy(api, images=[self.old_image(api)])] * 30 + [self.healthy(api)],
+                                           f"{worker}/{worker}--new": [self.healthy(worker, images=[self.old_image(worker)])]})
+        self.assert_failed(result, worker, f"revision {worker}--new is ready but runs '{self.old_image(worker)}'")
+        self.assertEqual(40, self.sleeps())
 
-    def test_a_ready_revision_on_another_image_fails_at_once(self):
-        worker = guards.WORKER_APP
-        old = f"{self.REGISTRY}/paquetenvia-worker@sha256:{'d' * 64}"
+    def old_image(self, app: str) -> str:
+        return f"{self.REGISTRY}/paquetenvia-{app.split('-')[-1]}@sha256:{'d' * 64}"
+
+    def test_a_ready_revision_on_another_image_is_polled_again_until_this_runs_image_serves(self):
+        api, worker = guards.API_APP, guards.WORKER_APP
+        with self.subTest(case="the previous revision is still reported as latest and ready, then the new one"):
+            result = self.run_check(apps={api: [[f"{api}--old", f"{api}--old"]] * 2 + [[f"{api}--new", f"{api}--new"]]},
+                                    revisions={f"{api}/{api}--old": [self.healthy(api, images=[self.old_image(api)])]})
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(2, self.sleeps())
+            self.assertIn(f"{api}: revision {api}--old is ready but runs '{self.old_image(api)}', not this run's image "
+                          f"({self.images[api]}); polling again in 15 s", result.stdout)
+            self.assertEqual(f"{api}--new", self.outputs()["api_revision"])
+            self.assertNotIn("::error::", result.stdout)
+        with self.subTest(case="another image, then this run's image"):
+            result = self.run_check(revisions={f"{worker}/{worker}--new": [self.healthy(worker, images=[self.old_image(worker)])] * 3
+                                               + [self.healthy(worker)]})
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(3, self.sleeps())
+            self.assertEqual(f"{worker}--new", self.outputs()["worker_revision"])
+            self.assertNotIn("::error::", result.stdout)
+
+    def test_a_ready_revision_on_another_image_until_the_budget_ends_fails_naming_both_images(self):
+        api, worker = guards.API_APP, guards.WORKER_APP
+        old = self.old_image(worker)
         for images, shown in (([old], old), ([], ""), ([self.images[worker], old], f"{self.images[worker]} {old}")):
             with self.subTest(images=images):
                 result = self.run_check(revisions={f"{worker}/{worker}--new": [self.healthy(worker, images=images)]})
-                self.assert_failed(result, worker, f"revision {worker}--new runs '{shown}', not the image this run pushed "
-                                                   f"({self.images[worker]}).")
-                self.assertEqual(0, self.sleeps())
+                self.assert_failed(result, worker, f"revision {worker}--new is ready but runs '{shown}', not this run's image "
+                                                   f"({self.images[worker]}) after about 10 minutes; the previous revision, "
+                                                   "if any, is still serving.")
+                self.assertEqual(40, self.sleeps())
                 self.assertNotIn("worker_revision", self.outputs())
+        with self.subTest(case="the previous revision is reported as latest and ready until the end"):
+            result = self.run_check(apps={api: [[f"{api}--old", f"{api}--old"]]},
+                                    revisions={f"{api}/{api}--old": [self.healthy(api, images=[self.old_image(api)])]})
+            self.assert_failed(result, api, f"revision {api}--old is ready but runs '{self.old_image(api)}', not this run's image "
+                                            f"({self.images[api]}) after about 10 minutes")
+            self.assertEqual(40, self.sleeps())
+            self.assertEqual({}, self.outputs())
 
     def test_an_unhealthy_or_inactive_revision_fails(self):
         web = guards.WEB_APP
@@ -1383,7 +1420,7 @@ class WorkflowRevisionCheckTests(WorkflowStepHarness):
             with self.subTest(image=image):
                 result = self.run_check(API_IMAGE=image)
                 self.assertNotEqual(0, result.returncode)
-                self.assertIn(f"::error::{guards.API_APP}: this run pushed no digest-pinned image", result.stdout)
+                self.assertIn(f"::error::{guards.API_APP}: this run has no digest-pinned image for it", result.stdout)
                 self.assertEqual([], self.calls())
 
 
@@ -2431,7 +2468,7 @@ class TemplateGuardTests(unittest.TestCase):
             "no revision step": (("        id: revisions\n", "        id: other\n"), "one deploy step (id revisions)"),
             "another app's image": (("WEB_IMAGE: ${{ steps.images.outputs.web }}\n        run: |\n          set -euo pipefail\n          polls_left",
                                      "WEB_IMAGE: ${{ steps.images.outputs.api }}\n        run: |\n          set -euo pipefail\n          polls_left"),
-                                    "must read exactly the pushed images"),
+                                    "must read exactly this run's images"),
             "latest never compared with ready": (('[[ -n "${latest}" && "${latest}" == "${ready}" ]]', '[[ -n "${latest}" ]]'),
                                                  "must poll, assert and hint"),
             "image not compared": (('[[ "${images}" != "${image}" ]]', '[[ -z "${images}" ]]'), "must poll, assert and hint"),
@@ -2446,6 +2483,12 @@ class TemplateGuardTests(unittest.TestCase):
             "summary only on success": (("      - name: Summary and DNS records for the owner\n        if: always()\n",
                                          "      - name: Summary and DNS records for the owner\n"), "always-run summary"),
             "summary without the db-ops digest": (("| \\`${DBOPS_IMAGE:-not pushed}\\` |", "| |"), "always-run summary"),
+            "another image fails at once": ((guards.REVISION_IMAGE_NOT_YET + "\n",
+                                             guards.REVISION_IMAGE_NOT_YET + "\n                  return 1\n"),
+                                            "polled again, not failed at once"),
+            "another image fails the app": ((guards.REVISION_IMAGE_NOT_YET + "\n",
+                                             guards.REVISION_IMAGE_NOT_YET + '\n                  fail "${app}" "${status}."\n'),
+                                            "polled again, not failed at once"),
             "summary without the serving revision": (("API_REVISION: ${{ steps.revisions.outputs.api_revision }}",
                                                       "API_REVISION: ${{ steps.revisions.outputs.worker_revision }}"),
                                                      "always-run summary"),

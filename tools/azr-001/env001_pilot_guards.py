@@ -1659,13 +1659,18 @@ REVISION_CHECK_CALLS = (
     f'check_revision worker_revision {WORKER_APP} "${{WORKER_IMAGE}}"',
     f'check_revision web_revision {WEB_APP} "${{WEB_IMAGE}}"',
 )
+# A ready revision on another image is not yet this run's revision: it is polled again within the same budget.
+REVISION_IMAGE_MISMATCH = 'if [[ "${images}" != "${image}" ]]; then'
+REVISION_IMAGE_NOT_YET = "status=\"revision ${ready} is ready but runs '${images}', not this run's image (${image})\""
+REVISION_HEALTHY = 'elif [[ "${active}" == "true" && "${health}" == "Healthy" ]]; then'
 # What the check reads and asserts; a bounded poll, and the system-log hint on every failure.
 REVISION_CHECK_FRAGMENTS = (
     "{latest: properties.latestRevisionName, ready: properties.latestReadyRevisionName}",
     "{active: properties.active, health: properties.healthState, images: properties.template.containers[].image}",
     '[[ -n "${latest}" && "${latest}" == "${ready}" ]]',
-    '[[ "${images}" != "${image}" ]]',
-    '[[ "${active}" == "true" && "${health}" == "Healthy" ]]',
+    REVISION_IMAGE_MISMATCH,
+    REVISION_IMAGE_NOT_YET,
+    REVISION_HEALTHY,
     "polls_left=40\n",
     "(( polls_left == 0 ))",
     "sleep 15",
@@ -1685,8 +1690,10 @@ def guard_26_revision_check(ctx: Context) -> GuardResult:
     """ENV-001 F-06: in single revision mode Container Apps keeps the previous revision serving while a new one never
     becomes ready, so a green stage 4 and smoke test can hide old code. After stage 4 and before the smoke test, one
     unconditional step (id revisions) must check, for the API, the Worker and the Web, that the latest revision is ready,
-    runs the digest this run pushed, and is active and Healthy, with a bounded poll and the system-log hint on failure.
-    The always-run summary lists the four pushed digests (F-05) and the serving revisions."""
+    runs this run's digest, and is active and Healthy, with a bounded poll and the system-log hint on failure. A ready
+    revision on another image is polled again within the same budget (right after stage 4 the control plane can still
+    report the previous revision as the latest one), never failed at once. The always-run summary lists the four
+    digests (F-05) and the serving revisions."""
     failures: list[str] = []
     deploy = (ctx.workflow.get("jobs", {}) or {}).get("deploy", {}) or {}
     steps = [s for s in deploy.get("steps", []) or [] if isinstance(s, dict)]
@@ -1701,10 +1708,14 @@ def guard_26_revision_check(ctx: Context) -> GuardResult:
         step = steps[checks[0]]
         text = run(step)
         if env(step) != REVISION_IMAGE_ENV:
-            failures.append(f"the revision check must read exactly the pushed images {REVISION_IMAGE_ENV}")
+            failures.append(f"the revision check must read exactly this run's images {REVISION_IMAGE_ENV}")
         missing = [fragment for fragment in REVISION_CHECK_FRAGMENTS if fragment not in text]
         if missing:
             failures.append(f"the revision check must poll, assert and hint with {missing}")
+        elif text.count(REVISION_IMAGE_MISMATCH) != 1 or text.count(REVISION_HEALTHY) != 1 or \
+                re.search(r"\breturn\b|\bfail\b|\bexit\b",
+                          text[text.index(REVISION_IMAGE_MISMATCH):text.index(REVISION_HEALTHY)]):
+            failures.append("a ready revision on another image must be polled again, not failed at once")
         lines = [line.strip() for line in text.splitlines()]
         if [line for line in lines if line.startswith("check_revision ")] != list(REVISION_CHECK_CALLS):
             failures.append(f"the revision check must end with {list(REVISION_CHECK_CALLS)}")
@@ -1716,7 +1727,7 @@ def guard_26_revision_check(ctx: Context) -> GuardResult:
     if len(summary) != 1 or summary[0].get("if") != "always()" \
             or any(env(summary[0]).get(name) != value for name, value in SUMMARY_ENV.items()) \
             or any(f"${{{name}:-" not in run(summary[0]) for name in SUMMARY_ENV):
-        failures.append("the always-run summary must list the four pushed image digests and the serving revisions")
+        failures.append("the always-run summary must list the four image digests and the serving revisions")
     return _result(26, "new revisions serve this run's digests (ENV-001 F-06)", failures,
                    "after stage 4 the API, Worker and Web revisions are ready, active, Healthy and on this run's digests")
 

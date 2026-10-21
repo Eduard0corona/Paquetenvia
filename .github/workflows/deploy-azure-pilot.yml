@@ -596,9 +596,11 @@ jobs:
       # ENV-001 F-06: a successful stage 4 does not mean the new code serves. In single revision mode Container Apps
       # keeps the previous revision serving until the new one is ready, and keeps it serving if the new one never
       # becomes ready, so the smoke test below would pass on old code. Each app must reach a latest revision that is
-      # ready, runs the digest this run pushed, is active and Healthy. Up to 40 polls 15 s apart (about 10 minutes) for
-      # the three apps together; health is polled too, because a revision the start step above re-activated (README
-      # §6.4 step 5) is ready again before its replicas pass their probes. Nothing secret is read or printed.
+      # ready, runs this run's digest, is active and Healthy. Up to 40 polls 15 s apart (about 10 minutes) for the three
+      # apps together; a ready revision on another image is polled again too, because right after stage 4 the control
+      # plane can still report the previous revision as the latest one, and so is health, because a revision the start
+      # step above re-activated (README §6.4 step 5) is ready again before its replicas pass their probes. Nothing
+      # secret is read or printed.
       - name: Check that the new API, Worker and Web revisions serve this run's images
         id: revisions
         shell: bash
@@ -616,7 +618,7 @@ jobs:
           # check_revision OUTPUT APP IMAGE
           check_revision() {
             local output="$1" app="$2" image="$3" state latest ready revision images active health status
-            [[ "${image##*@}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::${app}: this run pushed no digest-pinned image"; return 1; }
+            [[ "${image##*@}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::${app}: this run has no digest-pinned image for it"; return 1; }
             while true; do
               state="$(az containerapp show --name "${app}" --resource-group "${PILOT_RESOURCE_GROUP}" \
                 --query "{latest: properties.latestRevisionName, ready: properties.latestReadyRevisionName}" -o json)"
@@ -626,18 +628,18 @@ jobs:
                 revision="$(az containerapp revision show --name "${app}" --resource-group "${PILOT_RESOURCE_GROUP}" --revision "${ready}" \
                   --query "{active: properties.active, health: properties.healthState, images: properties.template.containers[].image}" -o json)"
                 images="$(jq -r '(.images // []) | join(" ")' <<<"${revision}")"
-                if [[ "${images}" != "${image}" ]]; then
-                  fail "${app}" "revision ${ready} runs '${images}', not the image this run pushed (${image})."
-                  return 1
-                fi
                 active="$(jq -r '.active // false' <<<"${revision}")"
                 health="$(jq -r '.health // ""' <<<"${revision}")"
-                if [[ "${active}" == "true" && "${health}" == "Healthy" ]]; then
+                if [[ "${images}" != "${image}" ]]; then
+                  # Not yet this run's revision: right after stage 4 the previous one can still be reported as latest.
+                  status="revision ${ready} is ready but runs '${images}', not this run's image (${image})"
+                elif [[ "${active}" == "true" && "${health}" == "Healthy" ]]; then
                   echo "${app}: revision ${ready} is ready, active and Healthy, and runs ${image}"
                   echo "${output}=${ready}" >> "${GITHUB_OUTPUT}"
                   return 0
+                else
+                  status="revision ${ready} is ready but active=${active}, healthState=${health:-none}"
                 fi
-                status="revision ${ready} is ready but active=${active}, healthState=${health:-none}"
               else
                 status="latest revision ${latest:-none} is not ready (latest ready revision: ${ready:-none})"
               fi
