@@ -13,7 +13,7 @@ role model. Their mandatory hashes and order are declared in
 `database/migrations/v0.6-baseline.json`:
 
 ```text
-AI-06 228cebbe67877cf4ca6818dfb7fa000883e01c1f57d8080dd998c34edb2aae6f
+AI-06 39f92cae3f143612aaeb611fda567cb14f11b6f8998c0a58bd6420c60f8a65f6
 AI-18 793f9b54b56cd0f99eb9f3a732e48a77b1f50b4a15eb8564e64d4ca6fafb707e
 ```
 

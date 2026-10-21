@@ -2,6 +2,7 @@ using System.Globalization;
 using System.Reflection;
 using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
+using Paqueteria.Application.Contacts;
 using Paqueteria.Application.Idempotency;
 using Paqueteria.ContractTests.Support;
 using Pricing.Application.Quotes;
@@ -32,6 +33,13 @@ public sealed class PricingOpenApiImplementationTests
         AssertJsonProperties<LowPriceAuthorizationInput>("reason");
         AssertJsonProperties<LowPriceAuthorizationResponse>("actor_id", "reason", "valid_until");
         AssertJsonProperties<AddressInput>("address_text", "contact_name", "lat", "lng", "phone", "references");
+        // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002): only the destination accepts the optional e-mail.
+        AssertJsonProperties<DestinationAddressInput>(
+            "address_text", "contact_name", "email", "lat", "lng", "phone", "references");
+        Assert.Equal(typeof(AddressInput), typeof(CreateQuoteRequest).GetProperty(nameof(CreateQuoteRequest.Origin))!.PropertyType);
+        Assert.Equal(
+            typeof(DestinationAddressInput),
+            typeof(CreateQuoteRequest).GetProperty(nameof(CreateQuoteRequest.Destination))!.PropertyType);
         AssertJsonProperties<PackageInput>(
             "declared_value_cents", "description", "height_mm", "length_mm", "weight_grams", "width_mm");
         AssertJsonProperties<QuoteResponse>(
@@ -45,6 +53,98 @@ public sealed class PricingOpenApiImplementationTests
         Assert.DoesNotContain(response, name => name.Contains("Hash", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(response, name => name.Contains("Cipher", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(response, name => name.Contains("Financial", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(response, name => name.Contains("Email", StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(response, name => name.Contains("Notice", StringComparison.OrdinalIgnoreCase));
+    }
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-05 x-pilot-contract-deltas NTF-RECIPIENT-NOTICES, part NTF-002): the
+    /// destination is DestinationAddressInput (AddressInput plus the optional email), the origin stays AddressInput,
+    /// and the e-mail is never part of a quote answer.
+    /// </summary>
+    [Fact]
+    public void Only_the_destination_of_createQuote_declares_the_optional_email()
+    {
+        var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var schemas = root.Mapping("components").Mapping("schemas");
+        var request = schemas.Mapping("CreateQuoteRequest").Mapping("properties");
+        Assert.Equal("#/components/schemas/AddressInput", request.Mapping("origin").Scalar("$ref"));
+        Assert.Equal("#/components/schemas/DestinationAddressInput", request.Mapping("destination").Scalar("$ref"));
+
+        var parts = schemas.Mapping("DestinationAddressInput").Sequence("allOf").Children.OfType<YamlDotNet.RepresentationModel.YamlMappingNode>().ToArray();
+        Assert.Equal(2, parts.Length);
+        Assert.Equal("#/components/schemas/AddressInput", parts[0].Scalar("$ref"));
+        var extension = parts[1].Mapping("properties");
+        Assert.Equal(["email"], extension.Children.Keys.Select(key => key.ToString()));
+        Assert.False(parts[1].Children.ContainsKey(new YamlDotNet.RepresentationModel.YamlScalarNode("required")));
+        Assert.False(schemas.Mapping("AddressInput").Mapping("properties").Children.ContainsKey(
+            new YamlDotNet.RepresentationModel.YamlScalarNode("email")));
+        Assert.DoesNotContain(
+            "email",
+            schemas.Mapping("Quote").Mapping("properties").Children.Keys.Select(key => key.ToString()));
+    }
+
+    /// <summary>
+    /// The AI-05 DestinationAddressInput.email pattern and length bound describe exactly what
+    /// <see cref="RecipientEmailPolicy"/> accepts (on the raw text, before trimming).
+    /// </summary>
+    [Theory]
+    [InlineData("destinatario@example.invalid", true)]
+    [InlineData("  Destinatario@Example.INVALID\t", true)]
+    [InlineData("\r\n a.b+c@sub.example.mx \n", true)]
+    [InlineData("x@a.b", true)]
+    [InlineData("a@b..c", true)]
+    [InlineData("o'brien!#$%&*+-/=?^_`{|}~@example.com", true)]
+    [InlineData("", false)]
+    [InlineData("   ", false)]
+    [InlineData("destinatario", false)]
+    [InlineData("@example.com", false)]
+    [InlineData("destinatario@", false)]
+    [InlineData("destinatario@example", false)]
+    [InlineData("destinatario@.com", false)]
+    [InlineData("destinatario@example.", false)]
+    [InlineData("destinatario@@example.com", false)]
+    [InlineData("des@tinatario@example.com", false)]
+    [InlineData("desti natario@example.com", false)]
+    [InlineData("destinat\u00e1rio@example.com", false)]
+    [InlineData("\u00a0destinatario@example.com", false)]
+    [InlineData("destinatario@example.com\u0000", false)]
+    [InlineData("destinatario@example.com\u2028", false)]
+    public void Email_contract_pattern_matches_the_recipient_email_policy(string email, bool valid)
+    {
+        var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var schema = root.Mapping("components").Mapping("schemas").Mapping("DestinationAddressInput")
+            .Sequence("allOf").Children.OfType<YamlDotNet.RepresentationModel.YamlMappingNode>().Last()
+            .Mapping("properties").Mapping("email");
+        var pattern = new Regex(schema.Scalar("pattern"), RegexOptions.CultureInvariant);
+        var maximumLength = int.Parse(schema.Scalar("maxLength"), CultureInfo.InvariantCulture);
+
+        Assert.Equal(RecipientEmailPolicy.MaximumLength, maximumLength);
+        Assert.Equal(RecipientEmailPolicy.Pattern, schema.Scalar("pattern"));
+        Assert.Equal(valid, RecipientEmailPolicy.IsValid(email));
+        Assert.Equal(valid, email.Length <= maximumLength && pattern.IsMatch(email));
+    }
+
+    [Fact]
+    public void The_email_length_bound_of_the_contract_is_the_policy_bound()
+    {
+        var atLimit = new string('a', 254 - "@example.com".Length) + "@example.com";
+        Assert.True(RecipientEmailPolicy.IsValid(atLimit));
+        Assert.False(RecipientEmailPolicy.IsValid("a" + atLimit));
+    }
+
+    [Fact]
+    public void Quote_request_DTOs_never_print_personal_values()
+    {
+        var destination = new DestinationAddressInput(
+            "Calle Sintetica 200", "Destino Sintetico", "6672222222", 24.81, -107.41, null, "destinatario@example.invalid");
+        foreach (var printed in new[] { destination.ToString(), destination.ToAddress().ToString() })
+        {
+            Assert.DoesNotContain("destinatario@example.invalid", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("6672222222", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("Calle Sintetica", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("Destino Sintetico", printed, StringComparison.Ordinal);
+        }
     }
 
     [Fact]

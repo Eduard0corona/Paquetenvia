@@ -69,23 +69,26 @@ No pedimos datos personales sensibles. La sección 3.6 explica en qué casos pod
 | --- | --- | --- |
 | Nombre del contacto | Lo captura el personal de la organización al cotizar el envío | Cifrado, con una llave distinta por dato |
 | Teléfono (10 dígitos de México) | Igual | Cifrado |
+| Correo electrónico (opcional) **[PENDIENTE: GATE-007]** | Lo captura el personal en la nueva orden, solo para quien recibe y solo si lo dio | Cifrado. Nunca se muestra en una pantalla después de crear la orden, ni se registra en bitácoras |
 | Dirección y referencias para llegar | Igual | Cifrado |
 | Ubicación del domicilio en el mapa (latitud y longitud) | Igual: el personal marca el punto | **Sin cifrar.** Se usa para saber si el domicilio está dentro de la zona de servicio |
 | Datos del envío: número de guía, estado, fechas y horas de cada cambio, ventana de entrega, monto a cobrar contra entrega y si se cobró | Los genera la plataforma | Acceso restringido a la organización de la orden |
 | Fotografías de recolección y de entrega, y la foto del lugar cuando no se pudo entregar | Las toma el repartidor | El teléfono reduce la foto y le quita los metadatos (ubicación GPS, modelo del teléfono, hora) antes de guardarla. Almacenamiento privado; cada foto pasa un análisis de malware antes de aceptarse |
 | Motivo de un intento fallido (por ejemplo "No había nadie") y la descripción que escribe el personal de despacho | Repartidor y despacho | La descripción se guarda cifrada |
 
-Hoy **no** recabamos del destinatario: correo electrónico, firma, identificación oficial, nombre de quien recibe
-(el sistema lo rechaza), dirección IP ni datos de su dispositivo.
+Hoy **no** recabamos del destinatario: firma, identificación oficial, nombre de quien recibe (el sistema lo rechaza),
+dirección IP ni datos de su dispositivo. El correo electrónico es opcional y solo del destinatario, nunca de quien
+envía; hoy no se le envía nada.
 
 **[PENDIENTE: una fotografía de entrega puede mostrar a la persona que recibe, su domicilio o placas de vehículos.]**
 Los metadatos de la imagen (EXIF), que según el teléfono pueden llevar la ubicación GPS y la hora de la toma, se quitan
 en el teléfono antes de guardar la foto (decisión del owner DRV-PROOF-PHOTO-REDUCE-2026-10-20).
 
-**[PENDIENTE: avisos al destinatario por WhatsApp y correo (GATE-004). Los conectores existen pero están apagados y
-nada los usa. Hoy no se recaba el correo del destinatario: el formulario de cotización no tiene ese campo. Si se
-habilitan antes de publicar el aviso, se agregan: el teléfono para WhatsApp, el correo si se empieza a pedir, y el
-contenido de los mensajes (número de guía y enlace de seguimiento).]**
+**[PENDIENTE: avisos al destinatario por WhatsApp y correo (GATE-004 y GATE-007). Los conectores existen pero están
+apagados y nada los usa. El correo opcional del destinatario ya se puede capturar en la nueva orden (decisión del owner
+E4: "se agrega como campo opcional en la nueva orden"), pero no se le envía nada. Antes de habilitar los avisos se
+agregan: el teléfono para WhatsApp, el correo, el contenido de los mensajes (número de guía y enlace de seguimiento;
+nunca nombre ni dirección) y los puntos legales de `docs/development/ntf-recipient-notices.md`.]**
 
 > **Nota para revisión.**
 > - Captura: `AddressInput` de `createQuote` (AI-05) pide `address_text`, `contact_name` y `phone`; `lat`, `lng` y
@@ -94,6 +97,13 @@ contenido de los mensajes (número de guía y enlace de seguimiento).]**
 >   el sobre de ADP-001: llave de datos AES-256-GCM propia de cada valor, envuelta con una llave RSA de Key Vault y
 >   ligada a organización, fila y columna (`docs/development/adp-001-production-adapters.md`). El piloto usa
 >   `Locations__PiiProtector=AzureKeyVault` (`deploy/azure/pilot/apps.bicep`).
+> - Correo del destinatario (NTF-RECIPIENT-NOTICES-2026-10-20, AI-08 NTF-002): `DestinationAddressInput.email` de
+>   `createQuote`, opcional y solo en el destino. Se guarda cifrado en `locations.locations.email_ciphertext` con la
+>   llave de datos personales (E4-P17: "Dos copias, como el teléfono"). Cuando se configure la llave de avisos
+>   `recipient-notice-kek` (AI-08 NTF-008; hoy `Locations__NoticeKeyProtector` vale `Disabled`), se guardarán además
+>   copias del teléfono y del correo con esa llave (`notice_phone_ciphertext`, `notice_email_ciphertext`), las únicas
+>   que el proceso de avisos podrá abrir. Ninguna se devuelve, registra, audita ni publica; borrar la ubicación borra
+>   todas las copias (`docs/development/ntf-002-recipient-contact.md`).
 > - `point` (coordenadas) va en claro. `address_summary` va en claro, pero las ubicaciones que crea la cotización
 >   guardan un texto fijo ("Synthetic quote origin/destination"). Solo `createLocation`, que la web no usa, guarda un
 >   resumen escrito por el cliente.
@@ -325,7 +335,7 @@ datos a un encargado no requiere informarlo ni pedir consentimiento. Los nombram
 | --- | --- | --- | --- | --- |
 | Microsoft (Azure) **[PENDIENTE: entidad contratante]** | Hospedaje de la aplicación y la base de datos, almacenamiento de fotografías, análisis de malware de cada foto (Microsoft Defender for Storage), custodia de llaves de cifrado (Key Vault) y registros técnicos (Log Analytics) | Todos los que guarda la plataforma. Los datos de contacto se guardan cifrados con llaves que viven en Key Vault | Región Azure México Central | Activo |
 | Microsoft (Azure Application Insights) | Trazas y métricas técnicas para diagnosticar fallas | Ningún dato de contacto. La organización aparece con un seudónimo y la persona solo con su tipo de rol | Región Azure México Central | Construido y apagado; el owner decidió encenderlo después de medir la primera semana del piloto |
-| Microsoft (Azure Communication Services, correo) | Enviar correos del envío | Correo del destinatario y contenido del mensaje | **[PENDIENTE]** | Construido y apagado; el correo del destinatario no se recaba |
+| Microsoft (Azure Communication Services, correo) | Enviar correos del envío | Correo del destinatario y contenido del mensaje | **[PENDIENTE]** | Construido y apagado; el correo opcional del destinatario se puede capturar, pero no se le envía nada |
 | Meta Platforms (WhatsApp Business Cloud API) | Enviar mensajes de WhatsApp del envío | Teléfono del destinatario y los datos de la plantilla aprobada, por ejemplo número de guía y enlace de seguimiento **[PENDIENTE: plantillas]** | **[PENDIENTE]**, fuera de México | Construido y apagado; nada lo usa |
 | Twilio | Conectar la llamada enmascarada entre repartidor y destinatario | Celular del repartidor y teléfono del destinatario, en cada llamada. Twilio conserva sus propios registros de llamadas. No se graban las llamadas | **[PENDIENTE]**, fuera de México | Construido y apagado |
 | Google (Maps Platform, Geocoding API) | Ubicar en el mapa la dirección escrita | Solo el texto de la dirección, sin nombre ni teléfono | **[PENDIENTE]**, fuera de México | Construido y apagado; el piloto usa el punto que marca el personal |

@@ -2,6 +2,7 @@ using System.Text.Json.Serialization;
 using Organizations.Application.Session;
 using Organizations.Endpoints.Authorization;
 using Organizations.Endpoints.Tenancy;
+using Paqueteria.Application.Contacts;
 using Paqueteria.Application.Idempotency;
 using Paqueteria.Application.Tenancy;
 using Pricing.Application.Quotes;
@@ -97,7 +98,7 @@ public static class QuoteEndpoints
                     idempotencyKey,
                     request.ClientAccountId,
                     ToApplication(request.Origin),
-                    ToApplication(request.Destination),
+                    ToApplication(request.Destination.ToAddress()) with { Email = request.Destination.Email },
                     request.ServiceType,
                     request.ConsolidatedRoute,
                     request.Packages.Select(ToApplication).ToArray(),
@@ -179,7 +180,11 @@ public static class QuoteEndpoints
     private static bool IsValid(CreateQuoteRequest request) =>
         request.Origin is not null && request.Destination is not null &&
         request.Packages is { Count: > 0 and <= QuoteInputLimits.MaximumPackages } &&
-        IsValid(request.Origin) && IsValid(request.Destination) && request.Packages.All(IsValid) &&
+        IsValid(request.Origin) && IsValid(request.Destination.ToAddress()) &&
+        // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002): an e-mail, when given, follows RecipientEmailPolicy; any
+        // other value is the uniform 422 before any effect and is never echoed.
+        (request.Destination.Email is null || RecipientEmailPolicy.IsValid(request.Destination.Email)) &&
+        request.Packages.All(IsValid) &&
         (request.LowPriceAuthorization is null || IsValid(request.LowPriceAuthorization));
 
     /// <summary>LOW-PRICE-MANUAL-AUTH-2026-10-02: the reason, once trimmed, holds 1 to 200 characters.</summary>
@@ -277,7 +282,7 @@ public static class QuoteEndpoints
 public sealed record CreateQuoteRequest(
     [property: JsonPropertyName("client_account_id")] Guid? ClientAccountId,
     [property: JsonPropertyName("origin")] AddressInput Origin,
-    [property: JsonPropertyName("destination")] AddressInput Destination,
+    [property: JsonPropertyName("destination")] DestinationAddressInput Destination,
     [property: JsonPropertyName("service_type")] string ServiceType,
     [property: JsonPropertyName("consolidated_route")] bool ConsolidatedRoute,
     [property: JsonPropertyName("packages")] IReadOnlyList<PackageInput> Packages,
@@ -299,13 +304,38 @@ public sealed record LowPriceAuthorizationResponse(
     [property: JsonPropertyName("actor_id"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] Guid? ActorId,
     [property: JsonPropertyName("reason"), JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)] string? Reason);
 
+/// <summary>AI-05 <c>AddressInput</c>. <see cref="ToString"/> never prints a personal value.</summary>
 public sealed record AddressInput(
     [property: JsonPropertyName("address_text")] string AddressText,
     [property: JsonPropertyName("contact_name")] string ContactName,
     [property: JsonPropertyName("phone")] string Phone,
     [property: JsonPropertyName("lat")] double? Lat,
     [property: JsonPropertyName("lng")] double? Lng,
-    [property: JsonPropertyName("references")] string? References);
+    [property: JsonPropertyName("references")] string? References)
+{
+    public override string ToString() => "AddressInput { [redacted] }";
+}
+
+/// <summary>
+/// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-05 <c>DestinationAddressInput</c>, part NTF-002): the destination of a quote,
+/// <see cref="AddressInput"/> plus the optional recipient <c>email</c>. The origin keeps <see cref="AddressInput"/>, so
+/// an origin never carries an e-mail (an <c>email</c> member sent on the origin is an unknown member, ignored like any
+/// other, and never read, hashed or stored). The e-mail is stored only sealed and never returned by any operation,
+/// logged, audited or placed in a snapshot, an outbox payload or an event. <see cref="ToString"/> never prints a value.
+/// </summary>
+public sealed record DestinationAddressInput(
+    [property: JsonPropertyName("address_text")] string AddressText,
+    [property: JsonPropertyName("contact_name")] string ContactName,
+    [property: JsonPropertyName("phone")] string Phone,
+    [property: JsonPropertyName("lat")] double? Lat,
+    [property: JsonPropertyName("lng")] double? Lng,
+    [property: JsonPropertyName("references")] string? References,
+    [property: JsonPropertyName("email")] string? Email = null)
+{
+    public AddressInput ToAddress() => new(AddressText, ContactName, Phone, Lat, Lng, References);
+
+    public override string ToString() => "DestinationAddressInput { [redacted] }";
+}
 
 public sealed record PackageInput(
     [property: JsonPropertyName("description")] string Description,

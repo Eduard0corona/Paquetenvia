@@ -45,8 +45,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Identity/Identity.Infrastructure/Persistence/Migrations/20260927000400_AddBffSessionStore.cs"),
         ("Organizations", "__ef_migrations_history_organizations", VersionDispatchPoliciesPerOrganization.MigrationId,
             "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20261002000100_VersionDispatchPoliciesPerOrganization.cs"),
-        ("Locations", "__ef_migrations_history_locations", AdoptCanonicalLocationsBaseline.MigrationId,
-            "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalLocationsBaseline.cs"),
+        ("Locations", "__ef_migrations_history_locations", AddRecipientNoticeContact.MigrationId,
+            "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20261020000100_AddRecipientNoticeContact.cs"),
         ("Drivers", "__ef_migrations_history_drivers", AddDriverVoiceBridge.MigrationId,
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20261011000100_AddDriverVoiceBridge.cs"),
         ("Pricing", "__ef_migrations_history_pricing", RequireMazatlanTimeZoneInMasterDataLoader.MigrationId,
@@ -150,6 +150,11 @@ internal sealed class ModuleMigrationCoordinator
                 // and the recipient call request table; its rollback refuses while any request or phone exists and
                 // otherwise drops exactly those objects. DRV-003 is verified below as an adoption.
                 "Drivers" => IsDriverVoiceBridgeSource(source),
+                // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002): the lane's latest step only adds the four nullable
+                // recipient contact columns of locations.locations and their two checks (or adopts the AI-06 ones); its
+                // rollback refuses while any of them holds a value and otherwise drops exactly those. The GEO-001
+                // adoption before it is verified below as an adoption.
+                "Locations" => IsRecipientNoticeContactSource(source),
                 // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: the lane's latest step only lets
                 // incidents.incidents.next_action be NULL (dispatch decides); its rollback restores NOT NULL and
                 // refuses while any incident leaves the decision to dispatch. The evidence index before it is
@@ -210,6 +215,11 @@ internal sealed class ModuleMigrationCoordinator
             root,
             ApplyPilotContractDeltas.MigrationId,
             "src/BuildingBlocks/Paqueteria.Infrastructure/Database/Evolution/Migrations/20260927000100_ApplyPilotContractDeltas.cs");
+        VerifyAdoptionSource(
+            root,
+            "Locations",
+            AdoptCanonicalLocationsBaseline.MigrationId,
+            "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalLocationsBaseline.cs");
         VerifyAdoptionSource(
             root,
             "Identity",
@@ -531,6 +541,8 @@ internal sealed class ModuleMigrationCoordinator
 
         string[] expectedIds = contract.Module switch
         {
+            "Locations" =>
+                [AdoptCanonicalLocationsBaseline.MigrationId, AddRecipientNoticeContact.MigrationId],
             "Drivers" =>
                 [
                     AdoptCanonicalDriversBaseline.MigrationId,
@@ -611,6 +623,27 @@ internal sealed class ModuleMigrationCoordinator
                 : "DRIFT";
         return new ModuleMigrationState(contract.Module, $"platform.{contract.HistoryTable}", contract.MigrationId, status);
     }
+
+    /// <summary>NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002): the four recipient contact columns and their two checks
+    /// only; the rollback is guarded by <c>NTF002_DOWNGRADE_BLOCKED_DATA_PRESENT</c> and drops no table, role, function,
+    /// policy or row.</summary>
+    private static bool IsRecipientNoticeContactSource(string source) =>
+        source.Contains(AddRecipientNoticeContact.DecisionId, StringComparison.Ordinal) &&
+        source.Contains(AddRecipientNoticeContact.DowngradeBlockedMessage, StringComparison.Ordinal) &&
+        source.Contains("ALTER TABLE locations.locations", StringComparison.Ordinal) &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP INDEX", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE locations", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("GRANT ", StringComparison.Ordinal) &&
+        !source.Contains("REVOKE ", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
 
     /// <summary>VOICE-001-MASKED-CALLS-2026-10-11: the driver phone columns and the recipient call request table only;
     /// the rollback is guarded by <c>VOICE001_DOWNGRADE_BLOCKED_DATA_PRESENT</c> and drops exactly that table.</summary>

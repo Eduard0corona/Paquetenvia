@@ -9,8 +9,13 @@ namespace Paqueteria.IntegrationTests.Pricing;
 public sealed class QuoteHttpTests : IClassFixture<QuoteHttpWebApplicationFactory>
 {
     private readonly HttpClient client;
+    private readonly QuoteHttpWebApplicationFactory factory;
 
-    public QuoteHttpTests(QuoteHttpWebApplicationFactory factory) => client = factory.CreateClient();
+    public QuoteHttpTests(QuoteHttpWebApplicationFactory factory)
+    {
+        this.factory = factory;
+        client = factory.CreateClient();
+    }
 
     [Fact]
     public async Task POST_requires_authentication()
@@ -114,6 +119,78 @@ public sealed class QuoteHttpTests : IClassFixture<QuoteHttpWebApplicationFactor
 
         Assert.Equal(expected, response.StatusCode);
         Assert.DoesNotContain(phone, await response.Content.ReadAsStringAsync(), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002; AI-05 DestinationAddressInput.email): an optional destination
+    /// e-mail is accepted; any other value is the declared 422 before the service is reached, and no answer echoes it.
+    /// </summary>
+    [Theory]
+    [InlineData("destinatario@example.invalid", HttpStatusCode.Created)]
+    [InlineData("  Destinatario@Example.INVALID ", HttpStatusCode.Created)]
+    [InlineData("x@a.b", HttpStatusCode.Created)]
+    [InlineData("", HttpStatusCode.UnprocessableEntity)]
+    [InlineData("   ", HttpStatusCode.UnprocessableEntity)]
+    [InlineData("destinatario", HttpStatusCode.UnprocessableEntity)]
+    [InlineData("destinatario@example", HttpStatusCode.UnprocessableEntity)]
+    [InlineData("destinatario@@example.com", HttpStatusCode.UnprocessableEntity)]
+    [InlineData("desti natario@example.com", HttpStatusCode.UnprocessableEntity)]
+    [InlineData("destinat\u00e1rio@example.com", HttpStatusCode.UnprocessableEntity)]
+    [InlineData("@example.com", HttpStatusCode.UnprocessableEntity)]
+    public async Task POST_accepts_only_a_valid_optional_destination_email_and_never_echoes_it(string email, HttpStatusCode expected)
+    {
+        var key = $"quote-http-email-{Guid.NewGuid():N}";
+        using var request = Authenticated(HttpMethod.Post, "/api/v1/quotes");
+        request.Headers.Add("Idempotency-Key", key);
+        request.Content = ValidBody(destinationEmail: email);
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(expected, response.StatusCode);
+        var body = await response.Content.ReadAsStringAsync();
+        if (!string.IsNullOrWhiteSpace(email))
+        {
+            Assert.DoesNotContain(email.Trim(), body, StringComparison.OrdinalIgnoreCase);
+        }
+
+        Assert.DoesNotContain("email", body, StringComparison.OrdinalIgnoreCase);
+        var received = factory.ReceivedCommands.Where(command => command.IdempotencyKey == key).ToArray();
+        if (expected == HttpStatusCode.Created)
+        {
+            Assert.Equal(email, Assert.Single(received).Destination.Email);
+        }
+        else
+        {
+            Assert.Empty(received);
+        }
+    }
+
+    /// <summary>
+    /// The origin stays AddressInput: an e-mail sent there is an unknown member and never reaches the service, and a
+    /// destination without the member (or with null) carries none.
+    /// </summary>
+    [Fact]
+    public async Task POST_never_takes_an_email_from_the_origin()
+    {
+        var key = $"quote-http-origin-email-{Guid.NewGuid():N}";
+        using var request = Authenticated(HttpMethod.Post, "/api/v1/quotes");
+        request.Headers.Add("Idempotency-Key", key);
+        request.Content = ValidBody(originEmail: "remitente@example.invalid");
+
+        using var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.Created, response.StatusCode);
+        var command = Assert.Single(factory.ReceivedCommands, command => command.IdempotencyKey == key);
+        Assert.Null(command.Origin.Email);
+        Assert.Null(command.Destination.Email);
+
+        var nullKey = $"quote-http-null-email-{Guid.NewGuid():N}";
+        using var withNull = Authenticated(HttpMethod.Post, "/api/v1/quotes");
+        withNull.Headers.Add("Idempotency-Key", nullKey);
+        withNull.Content = ValidBody(destinationEmailNull: true);
+        using var nullResponse = await client.SendAsync(withNull);
+        Assert.Equal(HttpStatusCode.Created, nullResponse.StatusCode);
+        Assert.Null(Assert.Single(factory.ReceivedCommands, command => command.IdempotencyKey == nullKey).Destination.Email);
     }
 
     /// <summary>AI05-INPUT-LIMITS: 1 to 20 packages per quote; 21 is the declared 422 validation error.</summary>
@@ -265,26 +342,43 @@ public sealed class QuoteHttpTests : IClassFixture<QuoteHttpWebApplicationFactor
         double originLat = 24.8,
         string packageDescription = "Synthetic parcel",
         int packageCount = 1,
-        string originPhone = "6671111111") => JsonContent.Create(new
+        string originPhone = "6671111111",
+        string? destinationEmail = null,
+        string? originEmail = null,
+        bool destinationEmailNull = false)
+    {
+        var origin = new Dictionary<string, object?>
+        {
+            ["address_text"] = originAddress,
+            ["contact_name"] = "Synthetic Sender",
+            ["phone"] = originPhone,
+            ["lat"] = includeCoordinates ? originLat : null,
+            ["lng"] = includeCoordinates ? -107.4 : null,
+            ["references"] = "Synthetic gate",
+        };
+        if (originEmail is not null)
+        {
+            origin["email"] = originEmail;
+        }
+
+        var destination = new Dictionary<string, object?>
+        {
+            ["address_text"] = "Synthetic destination 200",
+            ["contact_name"] = "Synthetic Receiver",
+            ["phone"] = "667 222 2222",
+            ["lat"] = includeCoordinates ? 24.81 : null,
+            ["lng"] = includeCoordinates ? -107.41 : null,
+        };
+        if (destinationEmail is not null || destinationEmailNull)
+        {
+            destination["email"] = destinationEmail;
+        }
+
+        return JsonContent.Create(new
         {
             client_account_id = (Guid?)null,
-            origin = new
-            {
-                address_text = originAddress,
-                contact_name = "Synthetic Sender",
-                phone = originPhone,
-                lat = includeCoordinates ? originLat : (double?)null,
-                lng = includeCoordinates ? -107.4 : (double?)null,
-                references = "Synthetic gate",
-            },
-            destination = new
-            {
-                address_text = "Synthetic destination 200",
-                contact_name = "Synthetic Receiver",
-                phone = "667 222 2222",
-                lat = includeCoordinates ? 24.81 : (double?)null,
-                lng = includeCoordinates ? -107.41 : (double?)null,
-            },
+            origin,
+            destination,
             service_type = "SAME_DAY",
             consolidated_route = consolidated,
             packages = Enumerable.Range(0, packageCount).Select(_ => new
@@ -297,4 +391,5 @@ public sealed class QuoteHttpTests : IClassFixture<QuoteHttpWebApplicationFactor
                 height_mm = 100,
             }).ToArray(),
         });
+    }
 }

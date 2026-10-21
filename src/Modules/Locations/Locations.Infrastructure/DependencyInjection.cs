@@ -32,7 +32,8 @@ public static class DependencyInjection
     {
         services.AddOptions<LocationsOptions>()
             .Bind(configuration.GetSection(LocationsOptions.SectionName))
-            .Validate(options => Enum.IsDefined(options.Provider) && Enum.IsDefined(options.GeocodingProvider) && Enum.IsDefined(options.PiiProtector),
+            .Validate(options => Enum.IsDefined(options.Provider) && Enum.IsDefined(options.GeocodingProvider) &&
+                    Enum.IsDefined(options.PiiProtector) && Enum.IsDefined(options.NoticeKeyProtector),
                 "Locations providers contain an unsupported value.")
             .Validate(options => options.CommandTimeoutSeconds is >= 1 and <= 60,
                 "Locations:CommandTimeoutSeconds must be between 1 and 60.")
@@ -46,6 +47,14 @@ public static class DependencyInjection
                 "Locations:GeocodingProvider=GoogleMaps requires Locations:GoogleMaps (ApiKey from Key Vault, https BaseUri, ComponentsCountry locked to MX, bounded resilience settings).")
             .Validate(options => options.PiiProtector != LocationPiiProtectorKind.Mock || IsMockProviderAllowed(environment),
                 "The mock PII protector is DEV_SYNTHETIC_ONLY outside Development and Testing; it is not a Staging or Production pattern.")
+            // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002): the notice copies follow the ADP-001 pattern - the
+            // synthetic digests only where the mock PII protector is allowed, and the Key Vault notice key only next to
+            // the Key Vault PII key, so a real notice copy never sits beside a mock PII copy.
+            .Validate(options => options.NoticeKeyProtector != LocationNoticeKeyProtectorKind.Mock || IsMockProviderAllowed(environment),
+                "The mock recipient-notice key is DEV_SYNTHETIC_ONLY outside Development and Testing; it is not a Staging or Production pattern.")
+            .Validate(options => options.NoticeKeyProtector != LocationNoticeKeyProtectorKind.AzureKeyVault ||
+                    options.PiiProtector == LocationPiiProtectorKind.AzureKeyVault,
+                "Locations:NoticeKeyProtector=AzureKeyVault requires Locations:PiiProtector=AzureKeyVault.")
             .Validate(options => options.Provider != LocationsProviderKind.PostgreSql ||
                     options.GeocodingProvider != GeocodingProviderKind.Disabled,
                 "PostgreSQL location creation requires a geocoding provider.")
@@ -104,6 +113,22 @@ public static class DependencyInjection
             serviceProvider => serviceProvider.GetRequiredService<IOptions<LocationsOptions>>().Value.PiiProtector ==
                 LocationPiiProtectorKind.AzureKeyVault);
         services.AddSingleton<AzureKeyVaultLocationPiiProtector>();
+        // NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P2): the recipient-notice key, registered lazily like the PII key. The
+        // API only wraps with it: nothing registered here can open a notice copy.
+        services.AddAzureKeyVaultRecipientNoticeKey(
+            configuration,
+            serviceProvider => serviceProvider.GetRequiredService<IOptions<LocationsOptions>>().Value.NoticeKeyProtector ==
+                LocationNoticeKeyProtectorKind.AzureKeyVault);
+        services.AddSingleton<DisabledLocationNoticeContactSealer>();
+        services.AddSingleton<DeterministicMockLocationNoticeContactSealer>();
+        services.AddSingleton<AzureKeyVaultLocationNoticeContactSealer>();
+        services.AddScoped<ILocationNoticeContactSealer>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<LocationsOptions>>().Value.NoticeKeyProtector switch
+            {
+                LocationNoticeKeyProtectorKind.Mock => serviceProvider.GetRequiredService<DeterministicMockLocationNoticeContactSealer>(),
+                LocationNoticeKeyProtectorKind.AzureKeyVault => serviceProvider.GetRequiredService<AzureKeyVaultLocationNoticeContactSealer>(),
+                _ => serviceProvider.GetRequiredService<DisabledLocationNoticeContactSealer>(),
+            });
         // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the values are read back the way they were protected, from the
         // same bound option, so a module that shows a location never repeats the mode, purposes or storage format.
         services.AddSingleton<DisabledLocationPiiReader>();

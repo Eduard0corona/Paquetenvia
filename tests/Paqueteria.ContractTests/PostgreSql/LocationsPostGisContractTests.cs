@@ -39,6 +39,7 @@ public sealed class LocationsPostGisContractTests(PostgreSqlContractFixture fixt
                 new TenantTransactionContext<LocationsDbContext>(context, state),
                 new ManualGeocodingProvider(),
                 new DeterministicMockLocationPiiProtector(),
+                new DisabledLocationNoticeContactSealer(),
                 new PostgreSqlAppendOnlyAuditWriter(state),
                 new SystemClock());
 
@@ -134,6 +135,7 @@ public sealed class LocationsPostGisContractTests(PostgreSqlContractFixture fixt
                 new TenantTransactionContext<LocationsDbContext>(context, state),
                 new ManualGeocodingProvider(),
                 new DeterministicMockLocationPiiProtector(),
+                new DisabledLocationNoticeContactSealer(),
                 new PostgreSqlAppendOnlyAuditWriter(state),
                 new SystemClock());
 
@@ -440,7 +442,8 @@ public sealed class LocationsPostGisContractTests(PostgreSqlContractFixture fixt
 
     private RuntimeScope CreateRuntimeScope(
         IAppendOnlyAuditWriter? auditWriter = null,
-        ILocationPiiProtector? piiProtector = null)
+        ILocationPiiProtector? piiProtector = null,
+        ILocationNoticeContactSealer? noticeSealer = null)
     {
         var dataSource = fixture.CreateAppDataSource(applicationName: "Paqueteria.GEO001.Runtime");
         var state = new TenantDatabaseExecutionState();
@@ -453,6 +456,7 @@ public sealed class LocationsPostGisContractTests(PostgreSqlContractFixture fixt
             new TenantTransactionContext<LocationsDbContext>(context, state),
             new ManualGeocodingProvider(),
             piiProtector ?? new DeterministicMockLocationPiiProtector(),
+            noticeSealer ?? new DisabledLocationNoticeContactSealer(),
             auditWriter ?? new PostgreSqlAppendOnlyAuditWriter(state),
             new SystemClock());
         return new RuntimeScope(dataSource, context, service);

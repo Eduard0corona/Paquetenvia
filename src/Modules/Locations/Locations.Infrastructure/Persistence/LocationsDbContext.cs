@@ -79,6 +79,11 @@ public sealed class LocationsDbContext(
         location.Property(entity => entity.PhoneCiphertext).HasColumnName("phone_ciphertext").HasColumnType("bytea");
         location.Property(entity => entity.PiiKeyVersion).HasColumnName("pii_key_version").HasColumnType("text").IsRequired();
         location.Property(entity => entity.CreatedAt).HasColumnName("created_at").HasColumnType("timestamp with time zone").ValueGeneratedNever();
+        // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002, Locations lane 20261020000100_AddRecipientNoticeContact).
+        location.Property(entity => entity.EmailCiphertext).HasColumnName("email_ciphertext").HasColumnType("bytea");
+        location.Property(entity => entity.NoticePhoneCiphertext).HasColumnName("notice_phone_ciphertext").HasColumnType("bytea");
+        location.Property(entity => entity.NoticeEmailCiphertext).HasColumnName("notice_email_ciphertext").HasColumnType("bytea");
+        location.Property(entity => entity.NoticeKeyVersion).HasColumnName("notice_key_version").HasColumnType("text");
         location.HasOne<City>().WithMany().HasForeignKey(entity => entity.CityId).OnDelete(DeleteBehavior.NoAction);
         location.HasOne<ServiceArea>().WithMany().HasForeignKey(entity => entity.ServiceAreaId).OnDelete(DeleteBehavior.NoAction);
         location.HasOne<OperatingZone>().WithMany().HasForeignKey(entity => entity.OperatingZoneId).OnDelete(DeleteBehavior.NoAction);

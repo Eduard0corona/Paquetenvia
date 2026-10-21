@@ -346,9 +346,12 @@ recipient_notices:
   - NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03
   - TRK-002-AUTO-LINK
   - GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10
-  status: DECIDED by the project owner on 2026-10-19 and 2026-10-20 (E4 and E4-P1 to E4-P16); nothing is implemented,
-    configured or enabled yet. AI-08 NTF-002 to NTF-008 deliver it, each item with its own code and tests; only a later
-    change that records the GATE-004 and GATE-007 resolution rows turns it on. GATE-004 and GATE-007 stay open
+  status: DECIDED by the project owner on 2026-10-19 and 2026-10-20 (E4 and E4-P1 to E4-P17). AI-08 NTF-002 is
+    implemented (the optional recipient e-mail, the Locations contact columns and the API's wrap-only recipient-notice
+    sealer, Locations:NoticeKeyProtector Disabled by default and in the pilot, so no notice copy is written yet); nothing
+    else is implemented, configured or enabled. AI-08 NTF-003 to NTF-008 deliver the rest, each item with its own code
+    and tests; only a later change that records the GATE-004 and GATE-007 resolution rows turns it on. GATE-004 and
+    GATE-007 stay open
   adr: docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md
   audience: the delivery recipient of the order only, reached at the contact of its destination location; never the
     sender or its business (E4-P13, out of this work until BUS-001), a driver or a dispatcher
