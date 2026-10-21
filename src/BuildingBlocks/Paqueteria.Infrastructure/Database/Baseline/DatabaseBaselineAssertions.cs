@@ -614,6 +614,9 @@ public sealed class DatabaseBaselineAssertions
             await AssertPilotIndexesAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 
+            await AssertRecipientNoticeContactAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
+            checks++;
+
             await AssertLifecycleExecutorBoundaryAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 
@@ -936,6 +939,111 @@ public sealed class DatabaseBaselineAssertions
                OR pg_catalog.pg_get_indexdef(i.indexrelid)<>e.definition
             """,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002; AI-06 declared contract): the Locations lane step that adds the
+    /// recipient contact columns of <c>locations.locations</c>. AI-06 carries the same DDL on fresh installations.
+    /// </summary>
+    public const string RecipientNoticeContactMigrationId = "20261020000100_AddRecipientNoticeContact";
+
+    /// <summary>The four columns as <c>name:type:nullable:default</c>, ordered by name.</summary>
+    public static IReadOnlyList<string> RecipientNoticeContactColumns { get; } = Array.AsReadOnly(new[]
+    {
+        "email_ciphertext:bytea:YES:",
+        "notice_email_ciphertext:bytea:YES:",
+        "notice_key_version:text:YES:",
+        "notice_phone_ciphertext:bytea:YES:",
+    });
+
+    /// <summary>The two checks as <c>name:pg_get_constraintdef:validated</c>, ordered by name.</summary>
+    public static IReadOnlyList<string> RecipientNoticeContactChecks { get; } = Array.AsReadOnly(new[]
+    {
+        "locations_notice_email_check:CHECK (((notice_email_ciphertext IS NULL) OR (email_ciphertext IS NOT NULL))):true",
+        "locations_notice_key_version_check:CHECK (((notice_key_version IS NULL) = ((notice_phone_ciphertext IS NULL) AND (notice_email_ciphertext IS NULL)))):true",
+    });
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20: <c>locations.locations</c> carries <see cref="RecipientNoticeContactColumns"/>
+    /// and <see cref="RecipientNoticeContactChecks"/> exactly. Recorded history, not the catalog, decides: on a fresh
+    /// baseline (no Locations lane history yet) and once <see cref="RecipientNoticeContactMigrationId"/> is recorded
+    /// they must be present; while the Locations lane has not recorded that step (an installation upgraded before the
+    /// lane runs, or after the step's guarded rollback) they must be either exactly present or entirely absent, never
+    /// partial or different. The columns keep the table's FORCE RLS policy and runtime privileges, checked elsewhere.
+    /// </summary>
+    private static async Task AssertRecipientNoticeContactAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        ICollection<string> violations,
+        CancellationToken cancellationToken)
+    {
+        var required = await ScalarAsync<bool>(
+            connection,
+            transaction,
+            """
+            SELECT pg_catalog.to_regclass('platform.__ef_migrations_history_locations') IS NULL
+            """,
+            cancellationToken).ConfigureAwait(false);
+        if (!required)
+        {
+            required = await ScalarAsync<bool>(
+                connection,
+                transaction,
+                """
+                SELECT EXISTS (
+                  SELECT 1 FROM platform.__ef_migrations_history_locations WHERE "MigrationId"=@migration_id)
+                """,
+                cancellationToken,
+                new NpgsqlParameter<string>("migration_id", RecipientNoticeContactMigrationId)).ConfigureAwait(false);
+        }
+
+        var columns = await ListAsync(
+            connection,
+            transaction,
+            """
+            SELECT column_name || ':' || data_type || ':' || is_nullable || ':' || COALESCE(column_default,'')
+            FROM information_schema.columns
+            WHERE table_schema='locations' AND table_name='locations'
+              AND column_name IN ('email_ciphertext','notice_phone_ciphertext','notice_email_ciphertext','notice_key_version')
+            ORDER BY column_name
+            """,
+            cancellationToken).ConfigureAwait(false);
+        var checks = await ListAsync(
+            connection,
+            transaction,
+            """
+            SELECT conname || ':' || pg_catalog.pg_get_constraintdef(oid) || ':' || convalidated::text
+            FROM pg_catalog.pg_constraint
+            WHERE conrelid=pg_catalog.to_regclass('locations.locations') AND contype='c'
+              AND conname IN ('locations_notice_email_check','locations_notice_key_version_check')
+            ORDER BY conname
+            """,
+            cancellationToken).ConfigureAwait(false);
+        var exact = columns.SequenceEqual(RecipientNoticeContactColumns, StringComparer.Ordinal) &&
+            checks.SequenceEqual(RecipientNoticeContactChecks, StringComparer.Ordinal);
+        var absent = columns.Count == 0 && checks.Count == 0;
+        if (required ? !exact : !(exact || absent))
+        {
+            violations.Add(
+                "locations.locations recipient contact columns or checks differ from the NTF-RECIPIENT-NOTICES-2026-10-20 contract (AI-06).");
+        }
+    }
+
+    private static async Task<IReadOnlyList<string>> ListAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string sql,
+        CancellationToken cancellationToken)
+    {
+        var values = new List<string>();
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            values.Add(reader.GetString(0));
+        }
+
+        return values;
     }
 
     private static async Task AssertBootstrapContractsAsync(

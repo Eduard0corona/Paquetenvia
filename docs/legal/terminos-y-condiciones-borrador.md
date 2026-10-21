@@ -394,14 +394,14 @@ después del fin del envío y hoy no se borran.]**
 **Hoy el sistema no envía ningún aviso al destinatario.** Los conectores de WhatsApp y correo existen, pero están
 apagados y nada los usa. El personal puede ver y copiar el enlace de seguimiento de cada orden.
 
-El owner ya decidió cómo funcionarán cuando se construyan y se habiliten **[PENDIENTE: GATE-004 y GATE-007; ninguna de
-estas decisiones está construida, y todas, salvo el texto del diálogo de "Detener avisos", ya están registradas en el
-decision log]**. Este borrador las recoge para que el abogado revise las obligaciones del Cliente:
+El owner ya decidió cómo funcionarán cuando se construyan y se habiliten **[PENDIENTE: GATE-004 y GATE-007; de estas
+decisiones solo está construido el campo opcional del correo del destinatario (AI-08 NTF-002), y todas, salvo el texto
+del diálogo de "Detener avisos", ya están registradas en el decision log]**. Este borrador las recoge para que el abogado revise las obligaciones del Cliente:
 
 10.1. **Qué avisos.** Por WhatsApp: el enlace de seguimiento cuando la orden queda confirmada, "Va en camino" cuando el
 repartidor inicia el traslado, "No se pudo entregar" (sin el motivo; no se avisa si falla la recolección) y
-"Entregado". Por correo, los mismos avisos si se captura el correo del destinatario; hoy no se captura y se agregaría
-como campo opcional.
+"Entregado". Por correo, los mismos avisos si se captura el correo del destinatario, que es un campo opcional de la
+nueva orden (ya existe; hoy no se le envía nada).
 
 10.2. **Permiso del destinatario.** En la nueva orden habrá una casilla: "El destinatario aceptó recibir avisos de su
 envío por WhatsApp". Si no se marca, no se envía WhatsApp; sí se envía correo si hay. Queda registro de quién la marcó

@@ -5,7 +5,7 @@
       "id": "0001-canonical-schema",
       "order": 1,
       "path": "docs/normative/v0.6/database/AI-06_SCHEMA.sql",
-      "sha256": "0c565dd5361013f00a72dc44a9e901e7f07373ed16b67ab98b008fc567362686",
+      "sha256": "f21b62c74942a128a5d4ab6ace8631214efcb212627fc7fbc9c4f3c55f924162",
       "credential": "privileged-deployment",
       "description": "Install the canonical v0.6 PostgreSQL and PostGIS schema.",
       "required": true

@@ -10,6 +10,7 @@ import { TenantApiError } from "../api/tenant-request";
 import {
   codAmountAboveCapMessage,
   confirmationBlockerLabels,
+  invalidRecipientEmailMessage,
   lowPriceAuthorizationNotNeededMessage,
   parseCreatedOrder,
   parseQuote,
@@ -338,6 +339,40 @@ describe("price (createQuote) inside the wizard", () => {
     expect(controller.getSnapshot().quote).not.toBeNull();
     controller.updatePackage(0, { weightGrams: "900" });
     expect(controller.getSnapshot().quote).toBeNull();
+  });
+
+  // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-07 create_order.recipient_notices.email): the e-mail is part of createQuote.
+  it("sends the destination e-mail only when typed and drops the price when it changes", async () => {
+    const { controller, orders } = setup({ [orgA]: "DISPATCHER" });
+    await controller.start();
+    fillShipment(controller);
+    controller.next();
+    controller.next();
+    await controller.requestQuote();
+    const first = vi.mocked(orders.createQuote).mock.calls[0]?.[0];
+    expect(first?.destination).not.toHaveProperty("email");
+    expect(first?.origin).not.toHaveProperty("email");
+    controller.updateAddress("destination", { email: " Destinatario@EXAMPLE.invalid " });
+    expect(controller.getSnapshot().quote).toBeNull();
+    await controller.requestQuote();
+    const second = vi.mocked(orders.createQuote).mock.calls[1]?.[0];
+    expect(second?.destination.email).toBe("Destinatario@example.invalid");
+    expect(second?.origin).not.toHaveProperty("email");
+    expect(controller.getSnapshot().quote).not.toBeNull();
+    // The same address typed with other spaces or domain case is the same request: the price stays.
+    controller.updateAddress("destination", { email: "Destinatario@example.INVALID" });
+    expect(controller.getSnapshot().quote).not.toBeNull();
+    // An e-mail typed on the origin draft is never sent.
+    controller.updateAddress("origin", { email: "remitente@example.invalid" });
+    expect(controller.getSnapshot().quote).not.toBeNull();
+    // An invalid e-mail stops step 1 with one message on the field, without the typed value.
+    controller.updateAddress("destination", { email: "destinatario@example" });
+    controller.goTo("where");
+    controller.next();
+    const snapshot = controller.getSnapshot();
+    expect(snapshot.step).toBe("where");
+    expect(snapshot.fieldErrors).toEqual([{ field: "destination.email", message: invalidRecipientEmailMessage }]);
+    expect(JSON.stringify(snapshot.fieldErrors)).not.toContain("destinatario@example");
   });
 
   it("drops an expired price at Siguiente and asks to calculate it again", async () => {
