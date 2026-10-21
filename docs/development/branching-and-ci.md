@@ -57,7 +57,8 @@ The last step of `azr-static`, *Build and smoke-test the deploy images (no push)
   - `azr-static` goes from about 1.6 minutes to 3.9–5.8 minutes. That is still shorter than the slowest PR Validation job (about 7 minutes), so the wall time of a run does not grow;
   - Foundation's `normative` job (about 1 minute on the last `push`/`main` run) grows by the same 3 to 4 minutes, well inside its 15-minute timeout;
   - the runner had 80 GB of disk free after the six builds.
-- **Pending owner decisions (not done here):** pinning the base images by digest, with a refresh process; image scanning; ACR tag locks; reusing earlier digests for a rollback. Until then CI and the deploy each `--pull` the floating base tags, so the deploy can build on a newer base than CI tested.
+- **Rollback reuses the image (ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21):** the pilot deploy builds an image once per commit. When `paquetenvia-<image>:<tested sha>` is already in the pilot registry, it reuses that tag's digest and builds and pushes nothing, so a rollback returns to the same bytes; it locks each tag after its first push (`az acr repository update --write-enabled false`), so the registry refuses a push over it (guard P27, `docs/operations/env-001-pilot/README.md` §6.2). The bases stay unpinned, so a base patch reaches the pilot with the next commit's build.
+- **Pending owner decisions (not done here):** pinning the base images by digest, with a refresh process; image scanning. Until then CI and the deploy each `--pull` the floating base tags, so a new deploy build can use a newer base than CI tested.
 
 ## Dependency route through main (MAIN_BACKSYNC)
 
@@ -128,9 +129,10 @@ Anything unregistered still fails closed: an extra transitive package, another v
     Pilot templates are built into their own directory, and any pilot lint diagnostic, warning
     included, fails the step. `azr-static` also runs the pilot guard tests
     (`tools/azr-001/test_env001_pilot_guards.py`). The same step is in Foundation's `normative` job.
-  - `azr-static` also builds and smoke-tests the four images the pilot deploys (see *Deploy image build smoke*). After
-    stage 4 the deploy checks that the new API, Worker and Web revisions are ready, active, `Healthy` and on the digests
-    it pushed (guard P26). The run summary lists those digests.
+  - `azr-static` also builds and smoke-tests the four images the pilot deploys (see *Deploy image build smoke*). The
+    deploy reuses an image its commit already pushed and locks every tag (guard P27). After stage 4 it checks that the
+    new API, Worker and Web revisions are ready, active, `Healthy` and on this run's digests (guard P26). The run
+    summary lists those digests and whether each was built or reused.
 - **Locally:** `python3 -m unittest discover -s tools/ci -p "test_*.py"`, `python3 -m unittest discover -s tools/azr-001 -p "test_*.py"`, `python3 docs/normative/v0.6/tools/validate_contracts.py`.
 
 ## Workflow conventions

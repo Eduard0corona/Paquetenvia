@@ -8,7 +8,7 @@ guards; they check the pilot's own owner decisions against the compiled ARM outp
 (`bicep build`) and the workflow. They never contact Azure.
 
 Commands:
-  check            evaluate every pilot guard (P00..P26)
+  check            evaluate every pilot guard (P00..P27)
   settings-check   validate deploy/azure/pilot/apps.settings.json (fails while an owner value is missing)
   observability-check  validate deploy/azure/pilot/observability.parameters.json (OBS-002 alert e-mail)
   web-check        validate deploy/azure/pilot/web.parameters.json (UI-001 accepted terms/privacy versions)
@@ -1732,6 +1732,99 @@ def guard_26_revision_check(ctx: Context) -> GuardResult:
                    "after stage 4 the API, Worker and Web revisions are ready, active, Healthy and on this run's digests")
 
 
+# ---------------------------------------------------------------------- ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21 (P27)
+IMAGE_STEP_ENV = {
+    "REGISTRY": "${{ steps.platform.outputs.registryName }}",
+    "REGISTRY_SERVER": "${{ steps.platform.outputs.registryServer }}",
+}
+# The images step, in this order: read the registry (a failure stops the step, also inside build()), reuse the digest
+# of an existing paquetenvia-<name>:<tested sha>, build and push only in the other branch, then lock the tag and read it
+# back (same digest, writeEnabled false) before the step reports the image.
+IMAGE_REUSE_FRAGMENTS = (
+    "shopt -s inherit_errexit\n",
+    'repositories="$(az acr repository list --name "${REGISTRY}" --only-show-errors --output json)"',
+    'tags="$(az acr repository show-tags --name "${REGISTRY}" --repository "${repository}" --only-show-errors --output json)"',
+    "found=\"$(jq -r --arg tag \"${TESTED_GIT_SHA}\" 'any(.[]; . == $tag)' <<<\"${tags}\")\"",
+    'az acr repository show --name "${REGISTRY}" --image "${repository}:${TESTED_GIT_SHA}" --only-show-errors --output json \\\n',
+    "| jq -r '.digest'\n",
+    'digest="$(tag_digest "${repository}")"',
+    'if [[ -n "${digest}" ]]; then',
+    "source=reused",
+    'echo "reusing ${REGISTRY_SERVER}/${repository}@${digest}" >&2',
+    "else",
+    "source=built",
+    'echo "building ${ref}" >&2',
+    'docker build --pull --file "${dockerfile}" --build-arg "SOURCE_SHA=${TESTED_GIT_SHA}" "$@" --tag "${ref}" . >&2',
+    'docker push "${ref}" >&2',
+    "fi",
+    'az acr repository update --name "${REGISTRY}" --image "${repository}:${TESTED_GIT_SHA}" --write-enabled false',
+    'tag="$(az acr repository show --name "${REGISTRY}" --image "${repository}:${TESTED_GIT_SHA}" --only-show-errors --output json)"',
+    "\"$(jq -r '.digest' <<<\"${tag}\")\" != \"${digest}\"",
+    "\"$(jq -r '.changeableAttributes.writeEnabled' <<<\"${tag}\")\" != \"false\"",
+    'echo "${name//-/}_source=${source}" >> "${GITHUB_OUTPUT}"',
+    'echo "${REGISTRY_SERVER}/${repository}@${digest}"',
+)
+# Output key and image name of each build() call, in order.
+IMAGE_STEP_OUTPUTS = (("api", "api"), ("worker", "worker"), ("dbops", "db-ops"), ("web", "web"))
+# Nothing in the workflow may unlock, delete, untag or import an image.
+IMAGE_TAG_FORBIDDEN = ("--write-enabled true", "--delete-enabled true", "az acr repository delete",
+                       "az acr repository untag", "az acr manifest delete", "az acr import")
+SUMMARY_SOURCE_ENV = {f"{key.upper()}_SOURCE": f"${{{{ steps.images.outputs.{key}_source }}}}" for key, _ in IMAGE_STEP_OUTPUTS}
+
+
+def guard_27_image_reuse(ctx: Context) -> GuardResult:
+    """ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21 (owner K2, "Reusar la imagen (Recommended)"): an image is built once per
+    commit. When paquetenvia-<name>:<tested sha> is already in the pilot registry, the images step reuses its digest
+    and neither builds nor pushes, so a rollback deploys the same bytes; otherwise it builds (bases unpinned) and
+    pushes. It then locks the tag (write-enabled false), so the registry refuses any later push over it, and reads it
+    back. A registry read that fails stops the step. The always-run summary says which images were reused."""
+    failures: list[str] = []
+    deploy = (ctx.workflow.get("jobs", {}) or {}).get("deploy", {}) or {}
+    steps = [s for s in deploy.get("steps", []) or [] if isinstance(s, dict)]
+    run = lambda step: str(step.get("run", ""))  # noqa: E731
+    images = _step_index(steps, lambda s: s.get("id") == "images")
+    if len(images) != 1:
+        failures.append("one deploy step (id images) must build or reuse the images")
+    else:
+        step = steps[images[0]]
+        text = run(step)
+        if (step.get("env", {}) or {}) != IMAGE_STEP_ENV:
+            failures.append(f"the images step must read exactly {IMAGE_STEP_ENV}")
+        if "if" in step or "continue-on-error" in step or not text.startswith("set -euo pipefail\n"):
+            failures.append("the images step must always run, with set -euo pipefail, and fail the run")
+        position, missing = 0, []
+        for fragment in IMAGE_REUSE_FRAGMENTS:
+            found = text.find(fragment, position)
+            if found < 0:
+                missing.append(fragment)
+            else:
+                position = found + len(fragment)
+        if missing:
+            failures.append(f"the images step must reuse an existing tag, else build and push, then lock it: {missing}")
+        for command in ("docker build", "docker push", "az acr repository update"):
+            if text.count(command) != 1 or ctx.workflow_text.count(command) != 1:
+                failures.append(f"the workflow must run {command} exactly once, in the images step")
+        position, unreported = 0, []
+        for key, name in IMAGE_STEP_OUTPUTS:
+            call = text.find(f'image="$(build {name} ', position)
+            output = text.find(f'echo "{key}=${{image}}" >> "${{GITHUB_OUTPUT}}"', max(call, position))
+            if call < 0 or output < 0:
+                unreported.append(name)
+            else:
+                position = output
+        if unreported or text.count("$(build ") != len(IMAGE_STEP_OUTPUTS):
+            failures.append(f"the images step must report each image right after its build() call: {unreported}")
+    forbidden = [command for command in IMAGE_TAG_FORBIDDEN if command in ctx.workflow_text]
+    if forbidden:
+        failures.append(f"the workflow must never unlock, delete, untag or import an image: {forbidden}")
+    summary = [s for s in steps if "GITHUB_STEP_SUMMARY" in run(s)]
+    if len(summary) != 1 or any((summary[0].get("env", {}) or {}).get(name) != value for name, value in SUMMARY_SOURCE_ENV.items()) \
+            or any(f"${{{name}:-" not in run(summary[0]) for name in SUMMARY_SOURCE_ENV):
+        failures.append("the always-run summary must say whether each image was built or reused")
+    return _result(27, "images reused by commit, tags locked (ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21)", failures,
+                   "an existing paquetenvia-<name>:<tested sha> is reused, never rebuilt, and every tag is locked")
+
+
 def guard_20_guard_tool_dependencies(ctx: Context) -> GuardResult:
     """Every job that runs a guard tool (both import PyYAML at module scope) installs the pinned PyYAML
     with actions/setup-python first, in the same job."""
@@ -1788,6 +1881,7 @@ GUARDS: tuple[Callable[[Context], GuardResult], ...] = (
     guard_24_non_root_images,
     guard_25_postgres_server_setting,
     guard_26_revision_check,
+    guard_27_image_reuse,
 )
 
 
