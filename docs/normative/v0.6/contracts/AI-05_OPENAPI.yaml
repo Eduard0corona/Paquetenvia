@@ -53,6 +53,12 @@ paths:
         other refusal after location resolution, the Idempotency-Key stays
         bound to the request). The authorization (actor and reason) is part of
         the Idempotency-Key fingerprint.
+        NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002): the destination
+        (DestinationAddressInput) may carry the optional email of the delivery
+        recipient; an invalid one is 422 before any effect and never echoed, it
+        is part of the Idempotency-Key fingerprint only when present, and it is
+        never returned, logged, audited or placed in request_snapshot_redacted,
+        an outbox payload or an event.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - $ref: '#/components/parameters/IdempotencyKey'
@@ -3869,6 +3875,28 @@ components:
         references:
           type: string
           maxLength: 500
+    DestinationAddressInput:
+      description: >-
+        NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002; x-pilot-contract-deltas NTF-RECIPIENT-NOTICES, part NTF-002) -
+        the destination of a quote: AddressInput plus the optional email of the delivery recipient. The origin keeps
+        AddressInput, so an origin never carries an e-mail.
+      allOf:
+      - $ref: '#/components/schemas/AddressInput'
+      - type: object
+        properties:
+          email:
+            type: string
+            maxLength: 254
+            pattern: '^[\t-\r ]*[!-?A-~]+@[!-?A-~]+\.[!-?A-~]+[\t-\r ]*$'
+            description: >-
+              Optional. ASCII whitespace is trimmed from both ends; what remains is printable ASCII without spaces,
+              with exactly one @ after a non-empty local part and a domain holding a dot with at least one character
+              before and after it; the domain is lower-cased and the local part kept as typed. Any other value (null
+              is read as absent) is 422 ValidationError before any effect, and the value is never echoed. Present, it
+              enters the quote input hash and the Idempotency-Key fingerprint; absent, both stay byte-identical to a
+              request without the field. It is stored only sealed - under the PII key and, when the recipient-notice
+              key is configured, as a notice copy (AI-24 recipient_notices.contact) - and never returned by any
+              operation, logged, audited or placed in request_snapshot_redacted, an outbox payload or an event.
     CreateQuoteRequest:
       type: object
       required:
@@ -3883,7 +3911,7 @@ components:
         origin:
           $ref: '#/components/schemas/AddressInput'
         destination:
-          $ref: '#/components/schemas/AddressInput'
+          $ref: '#/components/schemas/DestinationAddressInput'
         service_type:
           type: string
           enum:
@@ -8277,9 +8305,13 @@ x-pilot-contract-deltas:
       E4-P13 recorded in decision-log.md; docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md; AI-24 recipient_notices)
     literal: '"Avisos al destinatario: con tu decisión "Empezaremos con todo habilitado" toca construirlos (WhatsApp y correo, apagados hasta cerrar GATE-004). ¿Qué avisos manda el piloto?" - Los 4 del plan (Recommended)'
     option: 'Enlace de seguimiento al crear la orden, "Va en camino", "No se pudo entregar" y "Entregado", por WhatsApp. Por correo solo si hay correo del destinatario: hoy no se captura, se agrega como campo opcional en la nueva orden.'
-    implementation: pending - nothing below is served or accepted yet; each part is published in this file together with
-      its code and tests by the AI-08 item it names, and until then the HTTP surface above is unchanged; GATE-004 and
-      GATE-007 stay open and every switch stays off
+    implementation: part NTF-002 shipped by feat/ntf-002-recipient-contact together with its code and tests -
+      DestinationAddressInput on createQuote, RecipientEmailPolicy, the e-mail in the quote input hash only when present,
+      the Locations lane step 20261020000100_AddRecipientNoticeContact with its AI-06 DDL and baseline assertions, the
+      wrap-only recipient-notice sealer (Locations:NoticeKeyProtector, Disabled by default and in the pilot, so no notice
+      copy is written until AI-08 NTF-008 wires the key) and the wizard field; every other part is pending - nothing
+      else below is served or accepted yet; each part is published in this file together with its code and tests by the
+      AI-08 item it names; GATE-004 and GATE-007 stay open and every switch stays off
     delta: recipient notices (TRACKING_LINK, IN_TRANSIT, DELIVERY_FAILED and DELIVERED) to the delivery recipient by
       WhatsApp and by e-mail; the parts below add an optional recipient e-mail, the WhatsApp consent, the dispatcher
       list and stop operations, the provider webhooks and the e-mail unsubscribe; every error keeps

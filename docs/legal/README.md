@@ -168,6 +168,7 @@ Después de la aprobación (no lo hace este cambio):
 
 ## Mantenimiento
 
-Los avisos y las reglas de retención describen el código al 2026-10-19; los términos, al 2026-10-20. Si un cambio
+Los avisos y las reglas de retención describen el código al 2026-10-20 (con el correo opcional del destinatario de
+AI-08 NTF-002); los términos, al 2026-10-20. Si un cambio
 posterior altera qué datos personales se recaban, dónde se guardan, a quién se envían o cuánto duran, o lo que el
 sistema registra al aceptar, cobra, entrega, devuelve o reclama, actualice estos documentos en el mismo PR.

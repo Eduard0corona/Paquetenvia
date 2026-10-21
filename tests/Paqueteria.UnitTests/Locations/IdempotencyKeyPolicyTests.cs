@@ -63,6 +63,7 @@ public sealed class IdempotencyKeyPolicyTests
             new TenantTransactionContext<LocationsDbContext>(context, state),
             geocoder,
             new DisabledLocationPiiProtector(),
+            new DisabledLocationNoticeContactSealer(),
             new PostgreSqlAppendOnlyAuditWriter(state),
             new SystemClock());
 

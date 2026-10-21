@@ -30,8 +30,9 @@ términos y el aviso de privacidad vigentes." El personal se lo muestra o se lo 
 > **[RAZÓN SOCIAL]**, con domicilio en [DOMICILIO], es responsable de los datos personales de este envío.
 >
 > **Qué datos tratamos:** nombre, teléfono, dirección, referencias y ubicación en el mapa de quien entrega y de quien
-> recibe el paquete; descripción, peso, medidas y valor del paquete; fotografías de la recolección y la entrega; y el
-> registro de su aceptación (versiones, fecha y hora). No pedimos datos sensibles.
+> recibe el paquete; el correo electrónico de quien recibe, si lo dio; descripción, peso, medidas y valor del paquete;
+> fotografías de la recolección y la entrega; y el registro de su aceptación (versiones, fecha y hora). No pedimos
+> datos sensibles.
 >
 > **Para qué:** cotizar, recoger, entregar o devolver el paquete; dejar evidencia de la entrega; cobrar y facturar el
 > servicio; atender incidentes y reclamaciones; y mostrar el estado del envío en la página de seguimiento. Todas son
@@ -50,6 +51,10 @@ registro de la aceptación es asistido.]**
 
 **[PENDIENTE: agregar estas finalidades solo si están habilitadas al publicar: "conectar una llamada enmascarada con el
 repartidor (Twilio)", "enviarle avisos por WhatsApp o correo" y "ubicar la dirección en el mapa (Google)".]**
+
+**[PENDIENTE: GATE-007. El correo de quien recibe es opcional y hoy solo se guarda cifrado; no se le envía nada hasta
+habilitar los avisos (NTF-RECIPIENT-NOTICES-2026-10-20). El abogado decide si el aviso lo menciona desde ahora o solo
+cuando los avisos se habiliten.]**
 
 ---
 

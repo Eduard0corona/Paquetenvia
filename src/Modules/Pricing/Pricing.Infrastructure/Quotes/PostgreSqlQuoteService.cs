@@ -11,6 +11,7 @@ using Npgsql;
 using NpgsqlTypes;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
+using Paqueteria.Application.Contacts;
 using Paqueteria.Application.Idempotency;
 using Paqueteria.Application.Tenancy;
 using Paqueteria.Infrastructure.Tenancy;
@@ -46,8 +47,9 @@ public sealed class PostgreSqlQuoteService(
         ValidateLowPriceAuthorization(command);
         // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: from here on only the normalized 10-digit phone exists, so the
         // idempotency hash, the protected location PII and the redacted snapshot all see the same value however the
-        // separators were typed.
-        command = WithNormalizedPhones(command);
+        // separators were typed. NTF-RECIPIENT-NOTICES-2026-10-20: the same holds for the optional destination e-mail
+        // (trimmed, domain lower-cased).
+        command = WithNormalizedContacts(command);
         var serviceType = ParseServiceType(command.ServiceType);
         var inputHash = ComputeInputHash(command);
 
@@ -407,7 +409,8 @@ public sealed class PostgreSqlQuoteService(
             address.References,
             address.Lat!.Value,
             address.Lng!.Value,
-            command.RequestId);
+            command.RequestId,
+            role == QuoteLocationRole.Destination ? address.Email : null);
 
     private static QuoteLocationResult RequireResolved(ResolveQuoteLocationResult result)
     {
@@ -826,6 +829,14 @@ public sealed class PostgreSqlQuoteService(
 
         ValidateAddress(command.Origin);
         ValidateAddress(command.Destination);
+
+        // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002): only the destination accepts an e-mail, and an invalid one
+        // is refused (422) before any effect; the value is never echoed.
+        if (command.Origin.Email is not null ||
+            (command.Destination.Email is not null && !RecipientEmailPolicy.IsValid(command.Destination.Email)))
+        {
+            throw new QuoteValidationException(QuoteValidationCode.InvalidRequest);
+        }
         if (!PricingPackagePolicy.IsValid(command.Packages.Select(package => new PricingPackage(
                 package.Description,
                 package.WeightGrams,
@@ -877,15 +888,22 @@ public sealed class PostgreSqlQuoteService(
         }
     }
 
-    /// <summary>Runs after <see cref="Validate"/>, so both phones are known to normalize.</summary>
-    private static CreateQuoteCommand WithNormalizedPhones(CreateQuoteCommand command)
+    /// <summary>Runs after <see cref="Validate"/>, so both phones and the destination e-mail are known to normalize.</summary>
+    private static CreateQuoteCommand WithNormalizedContacts(CreateQuoteCommand command)
     {
         _ = QuotePhonePolicy.TryNormalize(command.Origin.Phone, out var origin);
         _ = QuotePhonePolicy.TryNormalize(command.Destination.Phone, out var destination);
+        string? email = null;
+        if (command.Destination.Email is not null)
+        {
+            _ = RecipientEmailPolicy.TryNormalize(command.Destination.Email, out var normalizedEmail);
+            email = normalizedEmail;
+        }
+
         return command with
         {
             Origin = command.Origin with { Phone = origin },
-            Destination = command.Destination with { Phone = destination },
+            Destination = command.Destination with { Phone = destination, Email = email },
         };
     }
 
@@ -920,6 +938,15 @@ public sealed class PostgreSqlQuoteService(
         writer.WriteNumber("lat", address.Lat!.Value);
         writer.WriteNumber("lng", address.Lng!.Value);
         if (address.References is null) writer.WriteNull("references"); else writer.WriteString("references", address.References);
+
+        // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002): the destination e-mail enters the fingerprint only when
+        // present, so a request without one keeps the hash it had before (stored idempotency records stay
+        // replayable; LOW-PRICE-MANUAL-AUTH-2026-10-02 precedent). Only the destination can carry it (Validate).
+        if (address.Email is not null)
+        {
+            writer.WriteString("email", address.Email);
+        }
+
         writer.WriteEndObject();
     }
 

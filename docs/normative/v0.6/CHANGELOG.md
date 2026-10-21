@@ -1,5 +1,37 @@
 # Changelog
 
+## Avisos al destinatario, PR-1: correo opcional del destinatario y llave de avisos (NTF-RECIPIENT-NOTICES-2026-10-20, AI-08 NTF-002) — 2026-10-20
+
+- Aplica, sin decisión nueva, la fila `NTF-RECIPIENT-NOTICES-2026-10-20` (E4 "Los 4 del plan (Recommended)": "se agrega
+  como campo opcional en la nueva orden"; E4-P2 "Llave propia para avisos (Recommended)"; E4-P17 "Dos copias, como el
+  teléfono (Recommended)"). Todo sigue apagado: nada se envía, GATE-004 y GATE-007 siguen abiertas y la configuración del
+  piloto no cambia.
+- AI-05: `createQuote` publica la parte NTF-002 de `x-pilot-contract-deltas` NTF-RECIPIENT-NOTICES. El destino pasa a
+  `DestinationAddressInput` (`AddressInput` más `email` opcional: ASCII, máximo 254 caracteres, una sola `@`, dominio con
+  punto, sin espacios; se recorta y el dominio va en minúsculas); el origen sigue siendo `AddressInput`. Un correo
+  inválido es 422 antes de cualquier efecto y nunca se repite en la respuesta. El correo entra en el hash de la
+  cotización y en la huella de la Idempotency-Key solo cuando viene, así que los hashes existentes no cambian (vector
+  fijo en las pruebas). Esquemas: 126; referencias: 663.
+- AI-06: el DDL declarado entra a la línea base: `locations.locations` gana `email_ciphertext`,
+  `notice_phone_ciphertext`, `notice_email_ciphertext` y `notice_key_version` (nulas) y los checks
+  `locations_notice_key_version_check` y `locations_notice_email_check`. Carril Locations
+  `20261020000100_AddRecipientNoticeContact`: adopta el DDL de AI-06 en una instalación nueva, lo crea en una que lo
+  antecede sin reescribir filas, rechaza cualquier otra forma y su bajada se niega mientras alguna de las cuatro columnas
+  tenga valor. Las aserciones de la línea base revisan las columnas y los checks según el historial del carril. AI-18
+  sin cambios: el Worker ya lee `locations.locations` bajo RLS.
+- Al cotizar, la API sella el correo del destino con la llave PII (propósito `locations.email`) y, cuando la llave de
+  avisos está configurada, guarda además copias del teléfono y del correo con la llave RSA de Key Vault
+  `recipient-notice-kek` (propósitos `locations.notice_phone` y `locations.notice_email`, sobre ADP-001 v1). La API solo
+  envuelve, con la parte pública de esa llave: no tiene forma de abrir una copia, y el Worker no gana acceso a la llave
+  PII. `Locations:NoticeKeyProtector` es `Disabled` por omisión y en el piloto (`Mock` solo en Development, Testing y
+  DEV_SYNTHETIC; `AzureKeyVault` solo junto a la llave PII de Key Vault, con `PiiProtection:RecipientNoticeKey:KeyId`
+  distinto de la llave PII); AI-08 NTF-008 la conecta en el piloto. El origen nunca lleva correo ni copia.
+- El correo y las copias nunca se devuelven, registran en logs, auditan ni van a `request_snapshot_redacted`, a un
+  outbox ni a un evento; los tipos que los llevan imprimen `[redacted]`.
+- AI-07: el campo "Correo del destinatario (opcional)" del paso "Dónde" de "Nueva orden" está construido. AI-24:
+  `recipient_notices.status` registra lo que existe. `docs/legal`: los borradores listan el correo opcional del
+  destinatario como pendiente de GATE-007. Nota: `docs/development/ntf-002-recipient-contact.md`.
+
 ## La restauración real sigue al servidor restaurado (OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20) — 2026-10-20
 
 - Respuesta literal del project owner (2026-10-20, ronda J, pregunta J1), registrada en `decision-log.md` con su

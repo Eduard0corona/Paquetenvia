@@ -50,6 +50,11 @@ export function OrderSummary({ state }: { readonly state: CreateOrderState }) {
         items={[
           { label: "Origen", value: draft.origin.addressText.trim() || notCaptured },
           { label: "Destino", value: draft.destination.addressText.trim() || notCaptured },
+          // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-07): the summary is the only place that restates the typed e-mail.
+          (draft.destination.email ?? "").trim() !== "" && {
+            label: "Correo del destinatario",
+            value: (draft.destination.email ?? "").trim(),
+          },
           { label: "Qué se envía", value: described ? packagesSummaryText(packages) : notCaptured },
           described &&
             packages.declaredCents !== null && {
