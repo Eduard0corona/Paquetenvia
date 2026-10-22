@@ -1193,7 +1193,7 @@
           "braces@3.0.3"
         ],
         "lockfile": "apps/web/pnpm-lock.yaml",
-        "expected_lockfile_sha256": "336b1c82c246994b45af1a0ba8c4ffa1b39c7279a827380883047c3c98b1e101",
+        "expected_lockfile_sha256": "c0af3824e79eb9f15e536ce20ba37c3c9cd6e17c15a9e2bc118ef4bc5c3414d1",
         "tracked_issue": 180,
         "tracked_issue_title": "SEC-2026-10: track braces stack-exhaustion advisory until a patched release ships",
         "exit_condition": "When braces>=3.0.4 is published on npm: add the override \"braces@<3.0.4\": 3.0.4 in apps/web/pnpm-workspace.yaml, regenerate apps/web/pnpm-lock.yaml with pnpm 11.15.1, verify a zero audit, retire this accepted known advisory and close Issue #180."
@@ -1316,6 +1316,255 @@
         "tests/Paqueteria.ContractTests/packages.lock.json": "77ffe94f308bc2103d14892064e1c71cb7897a550d1f4c33f4b16e1f7355b67f",
         "tests/Paqueteria.IntegrationTests/packages.lock.json": "c60895219c4fc31a6fbfdbe5b8c1bdb02eb9c870af7e3f154a34c347b9d6e1af"
       },
+      "require_sharp_runtime_smoke": false,
+      "prohibited_prereleases": true,
+      "manual_lockfile_edits_allowed": false
+    },
+    {
+      "id": "SEC-2026-14-VITE",
+      "mode": "SECURITY_REMEDIATION",
+      "authorized_base_sha": "c84ef92ef32fb8517f7625ea7933c65940348345",
+      "authorized_source_branch": "fix/security-2026-14-vite",
+      "tracked_issue": 304,
+      "tracked_issue_title": "SEC-2026-14: remediate vite 8.1.5 and vitest 4.1.11 advisories",
+      "issue_advisories": {
+        "304": [
+          "GHSA-698v-4r3x-3vcv",
+          "GHSA-587h-7wmj-h5pm",
+          "GHSA-r825-w8mm-5pxw",
+          "GHSA-rq7h-c2jc-7f22",
+          "GHSA-9jrq-w75r-8gcw",
+          "GHSA-xp26-3454-mjgp",
+          "GHSA-qxg6-89mg-rqv8"
+        ]
+      },
+      "expected_base_advisories": [
+        "GHSA-698v-4r3x-3vcv",
+        "GHSA-587h-7wmj-h5pm",
+        "GHSA-r825-w8mm-5pxw",
+        "GHSA-rq7h-c2jc-7f22",
+        "GHSA-9jrq-w75r-8gcw",
+        "GHSA-xp26-3454-mjgp",
+        "GHSA-qxg6-89mg-rqv8",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "expected_base_packages": {
+        "GHSA-698v-4r3x-3vcv": "vite",
+        "GHSA-587h-7wmj-h5pm": "vite",
+        "GHSA-r825-w8mm-5pxw": "vite",
+        "GHSA-rq7h-c2jc-7f22": "vite",
+        "GHSA-9jrq-w75r-8gcw": "vite",
+        "GHSA-xp26-3454-mjgp": "@vitest/mocker",
+        "GHSA-qxg6-89mg-rqv8": "@vitest/mocker",
+        "GHSA-vfj7-8cjw-p6xm": "braces"
+      },
+      "expected_base_severities": {
+        "GHSA-698v-4r3x-3vcv": "moderate",
+        "GHSA-587h-7wmj-h5pm": "high",
+        "GHSA-r825-w8mm-5pxw": "moderate",
+        "GHSA-rq7h-c2jc-7f22": "moderate",
+        "GHSA-9jrq-w75r-8gcw": "low",
+        "GHSA-xp26-3454-mjgp": "moderate",
+        "GHSA-qxg6-89mg-rqv8": "moderate",
+        "GHSA-vfj7-8cjw-p6xm": "high"
+      },
+      "expected_base_totals": {
+        "total": 8,
+        "critical": 0,
+        "high": 2,
+        "moderate": 5,
+        "low": 1
+      },
+      "expected_branch_totals": {
+        "total": 1,
+        "critical": 0,
+        "high": 1,
+        "moderate": 0,
+        "low": 0
+      },
+      "expected_cves": {
+        "GHSA-698v-4r3x-3vcv": "CVE-2026-112943",
+        "GHSA-587h-7wmj-h5pm": "CVE-2026-112942",
+        "GHSA-r825-w8mm-5pxw": "CVE-2026-112944",
+        "GHSA-rq7h-c2jc-7f22": "CVE-2026-112946",
+        "GHSA-9jrq-w75r-8gcw": "CVE-2026-112945",
+        "GHSA-xp26-3454-mjgp": "CVE-2026-112950",
+        "GHSA-qxg6-89mg-rqv8": "CVE-2026-112949"
+      },
+      "advisory_affected_ranges": {
+        "GHSA-698v-4r3x-3vcv": ">=8.0.0 <8.1.6",
+        "GHSA-587h-7wmj-h5pm": ">=8.0.0 <8.1.6",
+        "GHSA-r825-w8mm-5pxw": ">=8.0.0 <8.1.6",
+        "GHSA-rq7h-c2jc-7f22": ">=8.0.0 <8.1.6",
+        "GHSA-9jrq-w75r-8gcw": ">=8.0.0 <8.1.6",
+        "GHSA-xp26-3454-mjgp": ">=4.1.11 <4.1.12",
+        "GHSA-qxg6-89mg-rqv8": ">=2.1.0-beta.7 <4.1.12"
+      },
+      "first_patched_versions": {
+        "vite": "8.1.6",
+        "@vitest/mocker": "4.1.12"
+      },
+      "allowed_direct_packages": [
+        "vitest"
+      ],
+      "allowed_dependency_files": [
+        "apps/web/package.json",
+        "apps/web/pnpm-lock.yaml"
+      ],
+      "required_dependency_files": [
+        "apps/web/package.json",
+        "apps/web/pnpm-lock.yaml"
+      ],
+      "allowed_non_dependency_files": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/pr-validation.yml",
+        "docs/development/rel-000-internal-release.md",
+        "tests/fixtures/rel-000/security-tracking.json",
+        "tools/rel-000/rel000.py",
+        "tools/rel-000/security-remediation-policy.json",
+        "tools/rel-000/test_rel000.py"
+      ],
+      "expected_direct_version_changes": {
+        "vitest": {
+          "from": "4.1.11",
+          "to": "4.1.12"
+        }
+      },
+      "expected_override_changes": {},
+      "expected_override_additions": [],
+      "expected_lock_version_replacements": {
+        "vite": {
+          "from": [
+            "8.1.5"
+          ],
+          "to": [
+            "8.1.6"
+          ]
+        },
+        "vitest": {
+          "from": [
+            "4.1.11"
+          ],
+          "to": [
+            "4.1.12"
+          ]
+        },
+        "@vitest/expect": {
+          "from": [
+            "4.1.11"
+          ],
+          "to": [
+            "4.1.12"
+          ]
+        },
+        "@vitest/mocker": {
+          "from": [
+            "4.1.11"
+          ],
+          "to": [
+            "4.1.12"
+          ]
+        },
+        "@vitest/pretty-format": {
+          "from": [
+            "4.1.11"
+          ],
+          "to": [
+            "4.1.12"
+          ]
+        },
+        "@vitest/runner": {
+          "from": [
+            "4.1.11"
+          ],
+          "to": [
+            "4.1.12"
+          ]
+        },
+        "@vitest/snapshot": {
+          "from": [
+            "4.1.11"
+          ],
+          "to": [
+            "4.1.12"
+          ]
+        },
+        "@vitest/spy": {
+          "from": [
+            "4.1.11"
+          ],
+          "to": [
+            "4.1.12"
+          ]
+        },
+        "@vitest/utils": {
+          "from": [
+            "4.1.11"
+          ],
+          "to": [
+            "4.1.12"
+          ]
+        }
+      },
+      "allowed_lock_metadata_additions": [],
+      "expected_lock_metadata_changes": [
+        {
+          "package": "vitest@4.1.12",
+          "from": "      '@vitest/browser-playwright': 4.1.11",
+          "to": "      '@vitest/browser-playwright': 4.1.12"
+        },
+        {
+          "package": "vitest@4.1.12",
+          "from": "      '@vitest/browser-preview': 4.1.11",
+          "to": "      '@vitest/browser-preview': 4.1.12"
+        },
+        {
+          "package": "vitest@4.1.12",
+          "from": "      '@vitest/browser-webdriverio': 4.1.11",
+          "to": "      '@vitest/browser-webdriverio': ^4.1.11"
+        },
+        {
+          "package": "vitest@4.1.12",
+          "from": "      '@vitest/coverage-istanbul': 4.1.11",
+          "to": "      '@vitest/coverage-istanbul': 4.1.12"
+        },
+        {
+          "package": "vitest@4.1.12",
+          "from": "      '@vitest/coverage-v8': 4.1.11",
+          "to": "      '@vitest/coverage-v8': 4.1.12"
+        },
+        {
+          "package": "vitest@4.1.12",
+          "from": "      '@vitest/ui': 4.1.11",
+          "to": "      '@vitest/ui': 4.1.12"
+        }
+      ],
+      "expected_lock_integrities": {
+        "vite@8.1.6": "sha512-aRAHIxx5SW5zc1sMqFwJU/t5qaFfXb5Hj0J7W0VXihu/X99+346tz6080tO1T1xVIJORX/b3zVTXGFqUXh35uw==",
+        "vitest@4.1.12": "sha512-5eWdz2yb3ajxWF3C8C4TjkXl7FGm3n2E/VlazALrQHzK7nYMSGFnCZto0bbPNl77AwkOZVLk0YnBAejUu0NiWA==",
+        "@vitest/expect@4.1.12": "sha512-vFlTt+YEu9WBpNjdGayNmlMVzrWPi1+sv853/7t2FU7hpO5gAFBKHzQmkCq5Xjpr+evegF2994LQT3hF3mRlqQ==",
+        "@vitest/mocker@4.1.12": "sha512-fKShNpKZzupWZuY0z7egydvL0sqW4INEZBEExMBMAa6izlENEVHwoXgdaTCaBZ5fwlr4xf2o1wXC83n9RpO+NA==",
+        "@vitest/pretty-format@4.1.12": "sha512-XW9O8+Mxx4VpCtkYdMJLZQQwsVryP9wk7cPKDxtXFfwSak6yRh5+2fep/Y0XF/ElBvJHq8bcYdi6aeuai0opZA==",
+        "@vitest/runner@4.1.12": "sha512-NKlVKCr5QnCe8jijdMnmkpHHU+WTqiLFR6G0pHji9uRjXK9xJl1k1nTw6F3pOOj2PDcsDt2GKQMI7wIsaT491w==",
+        "@vitest/snapshot@4.1.12": "sha512-ko1y1Qgb/slzQ9mr+b89Cuqud8WG1TKtsPD8r7ZUBdvVOGt85Af2HwCqHujrhwJq95hs/9RM7fcAPg57o1vlzw==",
+        "@vitest/spy@4.1.12": "sha512-RGq9x4JNGNTZHEJxvN0oSiJjeSCExm0n2gZKKJZHY9cX5AVA6M7VJILBT3ZJ/tJ/0J9uWT7fETV9/btoi//vSg==",
+        "@vitest/utils@4.1.12": "sha512-Q3awXrwOfEV+qc3WmO5ONyE0yO7Q1gQ9/oyHxGLZ/pl7N3NO/ZztqQwKLuwMkV+CA1JYSIeO3gkHnRDIo4AVaA=="
+      },
+      "known_advisory_base_binding": {
+        "remediation_id": "SEC-2026-10-BRACES-DOS-TRACKED",
+        "advisory_id": "GHSA-vfj7-8cjw-p6xm",
+        "lockfile": "apps/web/pnpm-lock.yaml",
+        "lock_path": [
+          "eslint-config-next@16.3.8",
+          "@next/eslint-plugin-next@16.3.8",
+          "fast-glob@3.3.1",
+          "micromatch@4.0.8",
+          "braces@3.0.3"
+        ],
+        "expected_lockfile_sha256": "336b1c82c246994b45af1a0ba8c4ffa1b39c7279a827380883047c3c98b1e101"
+      },
+      "expected_lock_package_count": 475,
+      "expected_lockfile_sha256": "c0af3824e79eb9f15e536ce20ba37c3c9cd6e17c15a9e2bc118ef4bc5c3414d1",
       "require_sharp_runtime_smoke": false,
       "prohibited_prereleases": true,
       "manual_lockfile_edits_allowed": false

@@ -379,6 +379,65 @@ override incompatible, versión vulnerable duplicada o smoke test ausente o
 fallido. La suite focal deriva su conteo de los tests descubiertos y exige que
 todos los casos descubiertos sean ejecutados y aprobados, sin fallos ni skips.
 
+### Remediación pnpm de vite y vitest (SEC-2026-14)
+
+`SEC-2026-14-VITE` (Issue #304, rama `fix/security-2026-14-vite`, base `c84ef92`) remedia siete
+avisos publicados el 20 y 21 de octubre de 2026 sobre las herramientas de prueba del web:
+
+- cinco en `vite` 8.1.5 (`>=8.0.0 <8.1.6`), que sólo llega por `vitest`: `GHSA-698v-4r3x-3vcv`,
+  `GHSA-587h-7wmj-h5pm` (alto, sólo Windows) y `GHSA-r825-w8mm-5pxw` en el `launch-editor` que
+  incluye, y `GHSA-rq7h-c2jc-7f22` y `GHSA-9jrq-w75r-8gcw` (bajo) en su servidor de desarrollo;
+- dos en `@vitest/mocker` 4.1.11, moderados: `GHSA-xp26-3454-mjgp` y `GHSA-qxg6-89mg-rqv8`.
+  Sólo los corrige `@vitest/mocker` 4.1.12, que `vitest` fija exactamente.
+
+El owner decidió "Remediar con la tabla", "Incluir los 3", "Retirar en main primero" y "Agregar
+vitest 4.1.12" (2026-10-21/22). Si salen más avisos que esta misma tabla corrige, se agregan sin
+volver a preguntar. La tabla:
+
+| Paquete | De | A | Dónde |
+|---|---|---|---|
+| `vite` | 8.1.5 | 8.1.6 | transitivo de `vitest`, sólo lockfile |
+| `vitest` | 4.1.11 | 4.1.12 | `devDependency` exacta en `apps/web/package.json` y lockfile |
+| `@vitest/expect`, `mocker`, `pretty-format`, `runner`, `snapshot`, `spy`, `utils` | 4.1.11 | 4.1.12 | transitivos fijados por `vitest`, lockfile |
+
+- **Archivos.** `package.json` cambia una línea. `pnpm-workspace.yaml` no cambia y no hay
+  override. Lo regeneró pnpm 11.15.1: para mover sólo `vite` se usó un override temporal
+  `vite: 8.1.6`, `pnpm install --lockfile-only`, se quitó el override y se corrió otra vez;
+  después, el pin de `vitest` y otra corrida. Cambian 51 líneas: 36 claves y referencias de los
+  nueve paquetes movidos, sus 9 integridades y 6 líneas de metadatos de la entrada
+  `vitest@4.1.12` (sus pares opcionales `@vitest/*` declarados en 4.1.12, y
+  `@vitest/browser-webdriverio` en `^4.1.11`). Siguen 475 paquetes, ninguno nuevo.
+- **Validador.** `validate_vite_remediation_diff` exige:
+  - el manifiesto igual a la base salvo la línea exacta del pin de `vitest`;
+  - el lockfile igual a la base tras los movimientos, con el grafo exacto de SEC-2026-11
+    (`validate_next_sharp_sourcemap_exact_lock_graph`) y sin cambios de overrides;
+  - las seis líneas de metadatos declaradas (`expected_lock_metadata_changes`), cada una una sola
+    vez dentro de la entrada `vitest@4.1.12`;
+  - la integridad de cada paquete movido igual a la del registro npm (`expected_lock_integrities`);
+  - el SHA-256 del lockfile y el conteo de paquetes.
+
+  Cualquier otro archivo, línea, versión o prerelease falla cerrado.
+  `expected_lock_metadata_changes` sólo puede aparecer en esta autorización, con exactamente sus
+  líneas.
+- **braces (SEC-2026-10, Issue #180).** Regenerar el lockfile cambia los bytes sobre los que está
+  aceptado, así que la remediación revincula sólo su `expected_lockfile_sha256`
+  (`336b1c82…` → `c0af3824…`). Paquete, versión y ruta no cambian.
+  - Como en SEC-2026-11, su `known_advisory_base_binding` hace que sólo su propia corrida lea la
+    base con el hash anterior; el modo normal y cualquier otra remediación la leen contra el nuevo.
+  - `known_advisory_base_binding` sólo puede aparecer en SEC-2026-11 o SEC-2026-14, activa o
+    retirada, cada una con exactamente su vinculación (`KNOWN_ADVISORY_BASE_BINDINGS`).
+    `issue_cited_known_advisories` sigue siendo sólo de SEC-2026-11.
+  - Las réplicas resuelven braces sobre el grafo de su momento: SEC-2026-11 con el lockfile que
+    generó, SEC-2026-12 y SEC-2026-13 con el del checkout.
+- **Orden (K4).** `main` aún mapea SEC-2026-13 en la línea `REL000_REMEDIATION_ID`, que
+  `development` ya retiró (#292), y el back-sync chocaría en esa línea. Tras fusionar esta
+  remediación y certificar `main` 13/13, un PR pequeño a `main` la retira y deja la línea como en
+  `c84ef92`; después vienen el back-sync y, en `development`, la fila del decision-log y su
+  entrada del CHANGELOG.
+
+Las imágenes web instalan las dependencias de desarrollo antes de `NODE_ENV=production` y copian
+`node_modules`, así que incluyen `vite` y `vitest`; `next start` en Linux nunca los carga.
+
 ## Admisión explícita de dependencias (GOV-DEPENDENCY-ADMISSION-001)
 
 Desde MVP-1 el owner admite dependencias nuevas una por una ("Admisión
