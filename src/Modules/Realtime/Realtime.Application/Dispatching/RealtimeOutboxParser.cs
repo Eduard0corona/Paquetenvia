@@ -1,6 +1,7 @@
 using System.Globalization;
 using System.Text.Json;
 using Paqueteria.Application;
+using Realtime.Application.Events;
 
 namespace Realtime.Application.Dispatching;
 
@@ -259,27 +260,72 @@ public static class RealtimeOutboxParser
             status);
     }
 
+    /// <summary>
+    /// <c>notifications.status-changed</c> v1 and v2 (NTF-RECIPIENT-NOTICES-2026-10-20, AI-12 decided amendment). v1:
+    /// channel IN_APP, WHATSAPP or EMAIL and status PENDING, SENT or FAILED (the statuses the v1 emitter could write).
+    /// v2: also DELIVERED and CANCELLED; an IN_APP row carries neither <c>order_id</c> nor <c>notice</c>, a WhatsApp or
+    /// e-mail row (a recipient notice) carries both. A WhatsApp or e-mail row reaches OperationsHub instead of ending DEAD,
+    /// so the dispatcher alerts of NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02 and NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03
+    /// are delivered.
+    /// </summary>
     private static ParsedNotificationStatusChanged ParseNotification(
         ClaimedBusinessOutboxMessage message,
         JsonElement root)
     {
-        RequireExactProperties(
-            root,
-            "schema_version",
-            "notification_id",
-            "channel",
-            "status",
-            "attempts",
-            "occurred_at");
-        RequireSchema(root, "notification-status-changed-v1");
+        var schema = root.ValueKind == JsonValueKind.Object &&
+            root.TryGetProperty("schema_version", out var schemaElement) &&
+            schemaElement.ValueKind == JsonValueKind.String
+                ? schemaElement.GetString()
+                : null;
+        var version2 = string.Equals(schema, "notification-status-changed-v2", StringComparison.Ordinal);
+        var external = version2 &&
+            root.TryGetProperty("channel", out var channelElement) &&
+            channelElement.ValueKind == JsonValueKind.String &&
+            channelElement.GetString() is "WHATSAPP" or "EMAIL";
+        if (external)
+        {
+            RequireExactProperties(
+                root,
+                "schema_version",
+                "notification_id",
+                "channel",
+                "status",
+                "attempts",
+                "occurred_at",
+                "order_id",
+                "notice");
+        }
+        else
+        {
+            RequireExactProperties(
+                root,
+                "schema_version",
+                "notification_id",
+                "channel",
+                "status",
+                "attempts",
+                "occurred_at");
+        }
+
+        if (!version2)
+        {
+            RequireSchema(root, "notification-status-changed-v1");
+        }
+
         var notificationId = RequireGuid(root, "notification_id");
         var channel = RequireString(root, "channel");
         var status = RequireString(root, "status");
         var attemptsElement = root.GetProperty("attempts");
         var occurredAt = RequireUtcTimestamp(root, "occurred_at");
+        var orderId = external ? RequireGuid(root, "order_id") : (Guid?)null;
+        var notice = external ? RequireString(root, "notice") : null;
         if (notificationId != message.AggregateId ||
-            channel != "IN_APP" ||
-            status is not ("PENDING" or "SENT" or "FAILED") ||
+            channel is not ("IN_APP" or "WHATSAPP" or "EMAIL") ||
+            !(version2
+                ? status is "PENDING" or "SENT" or "DELIVERED" or "FAILED" or "CANCELLED"
+                : status is "PENDING" or "SENT" or "FAILED") ||
+            (version2 && channel == "IN_APP" && status is "DELIVERED" or "CANCELLED") ||
+            (notice is not null && notice is not ("TRACKING_LINK" or "IN_TRANSIT" or "DELIVERY_FAILED" or "DELIVERED")) ||
             attemptsElement.ValueKind != JsonValueKind.Number ||
             !attemptsElement.TryGetInt32(out var attempts) ||
             attempts < 0)
@@ -295,7 +341,10 @@ public static class RealtimeOutboxParser
             occurredAt,
             channel,
             status,
-            attempts);
+            attempts,
+            version2 ? RealtimeEventTypes.NotificationStatusChangedV2 : RealtimeEventTypes.NotificationStatusChanged,
+            orderId,
+            notice);
     }
 
     private static ParsedExternalOfferChanged ParseExternalOffer(
