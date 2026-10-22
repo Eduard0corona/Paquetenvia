@@ -140,7 +140,8 @@ BRACES_KNOWN_ADVISORY_ISSUE_TITLE = (
 )
 # Exact accepted known advisory: no patched braces release exists on npm, so the
 # advisory is tolerated only on this package, severity, version and dev-only lock path.
-# SEC-2026-11 rebound only the path and pinned graph to the Next.js 16.3.8 lockfile.
+# SEC-2026-11 rebound only the path and pinned graph to the Next.js 16.3.8 lockfile, and
+# SEC-2026-14 to the Next.js 16.4.1 lockfile.
 BRACES_KNOWN_ADVISORY = {
     "advisory_id": "GHSA-vfj7-8cjw-p6xm",
     "package": "braces",
@@ -152,8 +153,8 @@ BRACES_KNOWN_ADVISORY = {
     "dependency_path_count": 1,
     "dependency_scope": "dev",
     "lock_path": [
-        "eslint-config-next@16.3.8",
-        "@next/eslint-plugin-next@16.3.8",
+        "eslint-config-next@16.4.1",
+        "@next/eslint-plugin-next@16.4.1",
         "fast-glob@3.3.1",
         "micromatch@4.0.8",
         "braces@3.0.3",
@@ -515,11 +516,12 @@ NUGET_REMEDIATION_GRAPHS = {
 }
 VITE_REMEDIATION_ID = "SEC-2026-14-VITE"
 VITE_ISSUE = 304
-VITE_ISSUE_TITLE = "SEC-2026-14: remediate vite 8.1.5 and vitest 4.1.11 advisories"
-# The seven advisories SEC-2026-14 remediates (owner decisions "Remediar con la tabla",
-# "Incluir los 3" and "Agregar vitest 4.1.12", 2026-10-21/22): five on vite 8.1.5 (the
-# launch-editor it bundles and its dev server), fixed by vite 8.1.6, and two on
-# @vitest/mocker 4.1.11, fixed by @vitest/mocker 4.1.12, which only vitest 4.1.12 pins.
+VITE_ISSUE_TITLE = "SEC-2026-14: remediate vite, vitest and Next.js advisories"
+# The nine advisories SEC-2026-14 remediates (owner decisions "Remediar con la tabla",
+# "Incluir los 3", "Agregar vitest 4.1.12" and "Sumar next 16.4.1", 2026-10-21/22): five on
+# vite 8.1.5 (the launch-editor it bundles and its dev server), fixed by vite 8.1.6; two on
+# @vitest/mocker 4.1.11, fixed by @vitest/mocker 4.1.12, which only vitest 4.1.12 pins; and
+# two on next 16.3.8, fixed by next 16.4.1 (one has no CVE yet).
 # advisory -> (affected package, severity, CVE).
 VITE_ADVISORIES = {
     "GHSA-698v-4r3x-3vcv": ("vite", "moderate", "CVE-2026-112943"),
@@ -529,6 +531,8 @@ VITE_ADVISORIES = {
     "GHSA-9jrq-w75r-8gcw": ("vite", "low", "CVE-2026-112945"),
     "GHSA-xp26-3454-mjgp": ("@vitest/mocker", "moderate", "CVE-2026-112950"),
     "GHSA-qxg6-89mg-rqv8": ("@vitest/mocker", "moderate", "CVE-2026-112949"),
+    "GHSA-p3m5-59mp-jv5r": ("next", "high", "CVE-2026-94482"),
+    "GHSA-2464-fhr4-w9xw": ("next", "critical", None),
 }
 # Each advisory's affected range on the installed line (osv.dev) and each affected
 # package's first patched version on that line.
@@ -540,11 +544,14 @@ VITE_ADVISORY_AFFECTED_RANGES = {
     "GHSA-9jrq-w75r-8gcw": ">=8.0.0 <8.1.6",
     "GHSA-xp26-3454-mjgp": ">=4.1.11 <4.1.12",
     "GHSA-qxg6-89mg-rqv8": ">=2.1.0-beta.7 <4.1.12",
+    "GHSA-p3m5-59mp-jv5r": ">=16.0.0 <16.4.1",
+    "GHSA-2464-fhr4-w9xw": ">=16.0.0 <16.4.1",
 }
-VITE_FIRST_PATCHED_VERSIONS = {"vite": "8.1.6", "@vitest/mocker": "4.1.12"}
+VITE_FIRST_PATCHED_VERSIONS = {"vite": "8.1.6", "@vitest/mocker": "4.1.12", "next": "16.4.1"}
 VITE_MANIFEST = "apps/web/package.json"
 VITE_LOCKFILE = "apps/web/pnpm-lock.yaml"
-VITE_DEPENDENCY_FILES = [VITE_MANIFEST, VITE_LOCKFILE]
+VITE_WORKSPACE = "apps/web/pnpm-workspace.yaml"
+VITE_DEPENDENCY_FILES = [VITE_MANIFEST, VITE_LOCKFILE, VITE_WORKSPACE]
 # Main-direct like SEC-2026-12 and SEC-2026-13: docs/normative/** stays untouched; the
 # decision-log row and CHANGELOG entry go to development after the back-sync.
 VITE_NON_DEPENDENCY_FILES = [
@@ -556,12 +563,35 @@ VITE_NON_DEPENDENCY_FILES = [
     "tools/rel-000/security-remediation-policy.json",
     "tools/rel-000/test_rel000.py",
 ]
-# The only manifest edit: the exact vitest devDependency pin, in place.
-VITE_DIRECT_VERSION_CHANGES = {"vitest": {"from": "4.1.11", "to": "4.1.12"}}
+# The only manifest edits: three exact pins, in place (next is a production dependency,
+# eslint-config-next and vitest are development dependencies).
+VITE_DIRECT_VERSION_CHANGES = {
+    "next": {"from": "16.3.8", "to": "16.4.1"},
+    "eslint-config-next": {"from": "16.3.8", "to": "16.4.1"},
+    "vitest": {"from": "4.1.11", "to": "4.1.12"},
+}
+# The Sharp protection edge follows next and keeps Sharp at 0.35.5 (the critical Next.js
+# advisory's own workaround); every other override keeps its base bytes.
+VITE_OVERRIDE_CHANGES = {
+    "next@16.3.8>sharp": {"selector": "next@16.4.1>sharp", "from": "0.35.5", "to": "0.35.5"},
+}
+VITE_ALLOWED_OVERRIDES = {
+    "postcss": "8.5.23",
+    "brace-expansion@<1.1.21": "1.1.21",
+    "brace-expansion@>=4.0.0 <5.0.12": "5.0.12",
+    "nanoid@>=3.0.0 <3.3.18": "3.3.18",
+    "js-yaml@>=4.0.0 <4.3.2": "4.3.2",
+    "browserslist@<=4.28.6": "4.28.7",
+    "baseline-browser-mapping@>=2.0.0 <2.11.0": "2.11.0",
+    "source-map-js@<1.2.2": "1.2.2",
+    "next@16.4.1>sharp": "0.35.5",
+}
+VITE_TARGET_SHARP_VERSION = "0.35.5"
 # Exact SEC-2026-14 graph (the owner's table): vite 8.1.5 -> 8.1.6 (transitive through
-# vitest), vitest 4.1.11 -> 4.1.12 and the seven @vitest/* packages it pins exactly. Their
-# package keys, snapshot keys and every reference follow; every other line keeps its base
-# bytes, so no package is added, removed or moved besides these nine.
+# vitest), vitest 4.1.11 -> 4.1.12 and the seven @vitest/* packages it pins exactly, and
+# next and eslint-config-next 16.3.8 -> 16.4.1 with the ten @next/* packages. Their package
+# keys, snapshot keys and every reference follow; every other line keeps its base bytes, so
+# no package is added, removed or moved besides these twenty-one.
 VITE_VITEST_PACKAGES = (
     "vitest",
     "@vitest/expect",
@@ -572,9 +602,24 @@ VITE_VITEST_PACKAGES = (
     "@vitest/spy",
     "@vitest/utils",
 )
+VITE_NEXT_PACKAGES = (
+    "next",
+    "eslint-config-next",
+    "@next/env",
+    "@next/eslint-plugin-next",
+    "@next/swc-darwin-arm64",
+    "@next/swc-darwin-x64",
+    "@next/swc-linux-arm64-gnu",
+    "@next/swc-linux-arm64-musl",
+    "@next/swc-linux-x64-gnu",
+    "@next/swc-linux-x64-musl",
+    "@next/swc-win32-arm64-msvc",
+    "@next/swc-win32-x64-msvc",
+)
 VITE_LOCK_VERSION_REPLACEMENTS = {
     "vite": {"from": ["8.1.5"], "to": ["8.1.6"]},
     **{package: {"from": ["4.1.11"], "to": ["4.1.12"]} for package in VITE_VITEST_PACKAGES},
+    **{package: {"from": ["16.3.8"], "to": ["16.4.1"]} for package in VITE_NEXT_PACKAGES},
 }
 # The registry integrity of each moved package, exactly as npm publishes it.
 VITE_LOCK_INTEGRITIES = {
@@ -587,6 +632,18 @@ VITE_LOCK_INTEGRITIES = {
     "@vitest/snapshot@4.1.12": "sha512-ko1y1Qgb/slzQ9mr+b89Cuqud8WG1TKtsPD8r7ZUBdvVOGt85Af2HwCqHujrhwJq95hs/9RM7fcAPg57o1vlzw==",
     "@vitest/spy@4.1.12": "sha512-RGq9x4JNGNTZHEJxvN0oSiJjeSCExm0n2gZKKJZHY9cX5AVA6M7VJILBT3ZJ/tJ/0J9uWT7fETV9/btoi//vSg==",
     "@vitest/utils@4.1.12": "sha512-Q3awXrwOfEV+qc3WmO5ONyE0yO7Q1gQ9/oyHxGLZ/pl7N3NO/ZztqQwKLuwMkV+CA1JYSIeO3gkHnRDIo4AVaA==",
+    "next@16.4.1": "sha512-uc657V62E34fOI6W5NtG9IzwsPcms0Z60grz2MJGtglgD+pTFnNt4Yw2PzaU622tfX4vhrDgLZzicE2YlhI20Q==",
+    "eslint-config-next@16.4.1": "sha512-6AsojbCfRdpWkP6BIUnMBv3MH4OvtfmH9p4hSfLh8ZgsW7nfhu7DpUMNBB7leisDyyMz+YYxTc+NAdBOQfovlA==",
+    "@next/env@16.4.1": "sha512-5sUUrrSvs/2/2LnLoesybMGx12EtPB46fdZ6RhAw0XDGSPxU2LFyQBB7yuEiOFFJPKmBY6+q2jTr1/AMbnp0/g==",
+    "@next/eslint-plugin-next@16.4.1": "sha512-2io6M+wAqe7nT5mt2gEVy6FOzye2DmwhjaYCpSvHfrIKL11SXNTwSARxpPHJacRmfgSBSDnNmnEXSp0DaJ23BQ==",
+    "@next/swc-darwin-arm64@16.4.1": "sha512-U+hQ5Gj3fpzf4fveTIF3dpUFYhaSW8vHhdAnbiIomzXzg7boreYFgBqprepXFtW4sw+aTttiNmg0gew/iFNhbg==",
+    "@next/swc-darwin-x64@16.4.1": "sha512-/hqC3V1XLUjhMASf/WridKdO9FXoEgN3HBWmtKbj00MPgnltutfraWJ3bYTpCRIgEIpbjJyOVLpYgAhh/BkdcQ==",
+    "@next/swc-linux-arm64-gnu@16.4.1": "sha512-GHzncHbcaS9g95kcvTNtKQW3aCLoR+xc3Jm7qrkpk1R+D2BjMHIPyvQGRPKCdMX95BsH/421jBUK06q9tEwzjw==",
+    "@next/swc-linux-arm64-musl@16.4.1": "sha512-1SuJyDxW/PR9dHJat/ZRgcYLhuSZ+1psP4DlKb2tKIuXbjygqpLrJWRSq+onZQBv8LcmU67EIrmb6c3XTaJLjw==",
+    "@next/swc-linux-x64-gnu@16.4.1": "sha512-Istng1hMGp9TGO4lUqeKLd70MPN/OOkucVTP2Nmj+gLkwBgmPqUw8CJYBCC7nbl/B/23bBCcjCI5Hsh6hazC1A==",
+    "@next/swc-linux-x64-musl@16.4.1": "sha512-aSC9wMNiZRRFVpPkPWBzRwLQxIGm/CiQcXyFF1XNcgodb+uMxdk7aSSGGpDXCbnvZdf4itjHxpOd5h7i7zaiYw==",
+    "@next/swc-win32-arm64-msvc@16.4.1": "sha512-t/myvwFDlypMUjRvbBf8qLPyuaB0iXYYdBtwMt6DM6f+60wtGr4bSYholdPqNeV5VUXZhrpMwfza829kmhS3iA==",
+    "@next/swc-win32-x64-msvc@16.4.1": "sha512-6ICqPo9awCkrtYNPhwkx1uU7rlFWrZRrIboDHS2LU+jv088UBYQtmJ25h6pCp27/+FZjF6BQ4Te4ErugyMeuBg==",
 }
 # vitest 4.1.12 publishes its optional peers at 4.1.12, except @vitest/browser-webdriverio,
 # now a range. Those six lines of the vitest@4.1.12 package entry are the only metadata that
@@ -606,14 +663,22 @@ VITE_LOCK_METADATA_CHANGES = [
         ("ui", "4.1.12"),
     )
 ]
-# Regenerating the lockfile changes the bytes the braces accepted known advisory is pinned
-# to, so SEC-2026-14 rebinds only that hash (package, version and path are unchanged). Only
-# this remediation's own run reads its authorized base against the previous graph.
+# Regenerating the lockfile with eslint-config-next 16.4.1 changes the braces accepted known
+# advisory's path heads and pinned bytes, so SEC-2026-14 rebinds both (package, version and
+# path shape are unchanged), as SEC-2026-11 did. Only this remediation's own run reads its
+# authorized base against the previous graph, and only a tested base policy that predates
+# SEC-2026-14 may still pin it.
 VITE_KNOWN_ADVISORY_BASE_BINDING = {
     "remediation_id": BRACES_KNOWN_ADVISORY_ID,
     "advisory_id": BRACES_KNOWN_ADVISORY["advisory_id"],
     "lockfile": BRACES_KNOWN_ADVISORY["lockfile"],
-    "lock_path": list(BRACES_KNOWN_ADVISORY["lock_path"]),
+    "lock_path": [
+        "eslint-config-next@16.3.8",
+        "@next/eslint-plugin-next@16.3.8",
+        "fast-glob@3.3.1",
+        "micromatch@4.0.8",
+        "braces@3.0.3",
+    ],
     "expected_lockfile_sha256": "336b1c82c246994b45af1a0ba8c4ffa1b39c7279a827380883047c3c98b1e101",
 }
 # The only authorizations that may rebind a known advisory, active or retired, each with
@@ -1287,6 +1352,16 @@ def validate_remediation_policy(policy: Any, *, base_policy: bool = False) -> di
                         "expected_lockfile_sha256"
                     ],
                 }
+            elif base_policy and VITE_REMEDIATION_ID not in identifiers:
+                # A tested base that predates SEC-2026-14 carries the exact 16.3.8 graph
+                # that SEC-2026-14 rebound, pinned by its hash; nothing else is accepted.
+                expected_known = {
+                    **BRACES_KNOWN_ADVISORY,
+                    "lock_path": VITE_KNOWN_ADVISORY_BASE_BINDING["lock_path"],
+                    "expected_lockfile_sha256": VITE_KNOWN_ADVISORY_BASE_BINDING[
+                        "expected_lockfile_sha256"
+                    ],
+                }
             if (
                 authorization.get("tracked_issue") != BRACES_KNOWN_ADVISORY_ISSUE
                 or authorization.get("tracked_issue_title") != BRACES_KNOWN_ADVISORY_ISSUE_TITLE
@@ -1612,7 +1687,7 @@ def validate_remediation_policy(policy: Any, *, base_policy: bool = False) -> di
                     known_id: BRACES_KNOWN_ADVISORY["severity"],
                 }
                 or authorization.get("expected_base_totals")
-                != {"total": 8, "critical": 0, "high": 2, "moderate": 5, "low": 1}
+                != {"total": 10, "critical": 1, "high": 3, "moderate": 5, "low": 1}
                 or authorization.get("expected_branch_totals")
                 != {"total": 1, "critical": 0, "high": 1, "moderate": 0, "low": 0}
                 or authorization.get("expected_cves")
@@ -1625,8 +1700,9 @@ def validate_remediation_policy(policy: Any, *, base_policy: bool = False) -> di
                 or authorization.get("allowed_non_dependency_files") != VITE_NON_DEPENDENCY_FILES
                 or authorization.get("expected_direct_version_changes")
                 != VITE_DIRECT_VERSION_CHANGES
-                or authorization.get("expected_override_changes") != {}
+                or authorization.get("expected_override_changes") != VITE_OVERRIDE_CHANGES
                 or authorization.get("expected_override_additions") != []
+                or authorization.get("allowed_overrides") != VITE_ALLOWED_OVERRIDES
                 or authorization.get("expected_lock_version_replacements")
                 != VITE_LOCK_VERSION_REPLACEMENTS
                 or authorization.get("allowed_lock_metadata_additions") != []
@@ -1640,14 +1716,15 @@ def validate_remediation_policy(policy: Any, *, base_policy: bool = False) -> di
                     r"[0-9a-f]{64}", str(authorization.get("expected_lockfile_sha256", ""))
                 )
                 is None
-                or authorization.get("require_sharp_runtime_smoke") is not False
-                or "target_sharp_version" in authorization
+                or authorization.get("require_sharp_runtime_smoke") is not True
+                or authorization.get("target_sharp_version") != VITE_TARGET_SHARP_VERSION
                 or authorization.get("prohibited_prereleases") is not True
                 or authorization.get("manual_lockfile_edits_allowed") is not False
             ):
                 fail(
                     "REMEDIATION_POLICY_INVALID",
-                    "The vite and vitest remediation authorization is incomplete or inconsistent.",
+                    "The vite, vitest and Next.js remediation authorization is incomplete or "
+                    "inconsistent.",
                 )
     # An accepted known advisory exists only under its own exact authorization.
     for authorization in [*historical, *active]:
@@ -8148,14 +8225,15 @@ def validate_vite_remediation_diff(
     changed_dependency_files: list[str],
     authorization: dict[str, Any],
 ) -> dict[str, Any]:
-    """SEC-2026-14: prove the web tree is the base plus only the owner's vite/vitest table.
+    """SEC-2026-14: prove the web tree is the base plus only the owner's exact table.
 
-    The manifest changes only in the exact vitest devDependency line; the workspace and its
-    overrides do not change. Every lockfile line must equal the base line after vite 8.1.5 ->
-    8.1.6 and vitest plus the seven @vitest/* packages it pins 4.1.11 -> 4.1.12 (package keys,
-    snapshot keys and each reference), and after the six declared metadata lines of the
-    vitest@4.1.12 entry. The only other admitted difference is each moved package's registry
-    integrity, which must be exactly the declared one.
+    The manifest changes only in the three exact pins (next, eslint-config-next, vitest),
+    in place; the workspace only renames the Sharp edge to next@16.4.1 with Sharp unchanged.
+    Every lockfile line must equal the base line after the table's moves (vite, vitest and
+    its seven @vitest/* pins, next, eslint-config-next and the ten @next/* packages: package
+    keys, snapshot keys and each reference), the Sharp edge rename and the six declared
+    metadata lines of the vitest@4.1.12 entry. The only other admitted difference is each
+    moved package's registry integrity, which must be exactly the declared one.
     """
 
     allowed_all = set(authorization["allowed_dependency_files"]) | set(
@@ -8165,15 +8243,16 @@ def validate_vite_remediation_diff(
     if unexpected:
         fail(
             "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
-            "The vite and vitest remediation changed a file outside its exact authorization.",
+            "The vite, vitest and Next.js remediation changed a file outside its exact "
+            "authorization.",
             files=unexpected,
         )
     required = set(authorization["required_dependency_files"])
     if set(changed_dependency_files) != required:
         fail(
             "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
-            "The vite and vitest remediation dependency files do not match the exact "
-            "authorization.",
+            "The vite, vitest and Next.js remediation dependency files do not match the "
+            "exact authorization.",
             expected=sorted(required),
             actual=changed_dependency_files,
         )
@@ -8196,7 +8275,7 @@ def validate_vite_remediation_diff(
             )
 
     # Git output is stripped, so the manifest is compared line by line: each authorized
-    # devDependency pin moves in place and every other line keeps its base bytes.
+    # pin moves in place, in its own section, and every other line keeps its base bytes.
     base_manifest = run_git(repository_root, "show", f"{base_main_sha}:{VITE_MANIFEST}")
     current_manifest = (repository_root / VITE_MANIFEST).read_text(encoding="utf-8")
     try:
@@ -8206,13 +8285,18 @@ def validate_vite_remediation_diff(
         fail("BASE_DEPENDENCY_MANIFEST_INVALID", "A web package manifest is invalid.", error=str(exc))
     expected_manifest = base_manifest.splitlines()
     for package, change in version_changes.items():
-        if (base_package.get("devDependencies") or {}).get(package) != change["from"]:
+        sections = [
+            section
+            for section in ("dependencies", "devDependencies")
+            if package in (base_package.get(section) or {})
+        ]
+        if len(sections) != 1 or base_package[sections[0]][package] != change["from"]:
             fail(
                 "SECURITY_REMEDIATION_VERSION_INVALID",
                 "A base direct dependency differs from its exact authorization.",
                 package=package,
             )
-        if (current_package.get("devDependencies") or {}).get(package) != change["to"]:
+        if (current_package.get(sections[0]) or {}).get(package) != change["to"]:
             fail(
                 "SECURITY_REMEDIATION_VERSION_INVALID",
                 "A direct dependency differs from its exact authorized target.",
@@ -8235,7 +8319,38 @@ def validate_vite_remediation_diff(
     if current_manifest.splitlines() != expected_manifest or not current_manifest.endswith("\n"):
         fail(
             "UNAUTHORIZED_DEPENDENCY_MANIFEST_CHANGE",
-            "Only the exact authorized vitest devDependency pin may change in the web manifest.",
+            "Only the exact authorized pins may change in the web manifest.",
+        )
+
+    # The workspace is compared line by line too: each authorized override rename applies
+    # in place and every other line keeps its base bytes.
+    override_changes = authorization["expected_override_changes"]
+    base_workspace = run_git(repository_root, "show", f"{base_main_sha}:{VITE_WORKSPACE}")
+    current_workspace = (repository_root / VITE_WORKSPACE).read_text(encoding="utf-8")
+    if any(
+        _workspace_overrides(base_workspace).get(selector) != change["from"]
+        for selector, change in override_changes.items()
+    ):
+        fail(
+            "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+            "A base override differs from its exact authorization.",
+        )
+    line_changes = {
+        f'  "{selector}": {change["from"]}': f'  "{change["selector"]}": {change["to"]}'
+        for selector, change in override_changes.items()
+    }
+    expected_workspace = [line_changes.get(line, line) for line in base_workspace.splitlines()]
+    current_overrides = _workspace_overrides(current_workspace)
+    if (
+        current_overrides != authorization["allowed_overrides"]
+        or current_workspace.splitlines() != expected_workspace
+        or not current_workspace.endswith("\n")
+    ):
+        fail(
+            "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+            "The workspace overrides differ from the exact remediation authorization.",
+            expected=authorization["allowed_overrides"],
+            actual=current_overrides,
         )
 
     lock_bytes = (repository_root / VITE_LOCKFILE).read_bytes()
@@ -8244,7 +8359,7 @@ def validate_vite_remediation_diff(
         run_git(repository_root, "show", f"{base_main_sha}:{VITE_LOCKFILE}"),
         lock_text,
         authorization,
-        "vite and vitest",
+        "vite, vitest and Next.js",
     )
     for key, expected_integrity in authorization["expected_lock_integrities"].items():
         integrity = _lock_resolution_integrity(lock_text, key)
@@ -8293,18 +8408,32 @@ def validate_vite_remediation_diff(
                 "The lockfile importer does not match the authorized manifest pin.",
                 package=package,
             )
+    target_sharp = authorization["target_sharp_version"]
+    if _lock_key_versions(lock_text, "sharp") != {target_sharp} or any(
+        f"  {change['selector']}: {change['to']}" not in lock_text.splitlines()
+        for change in override_changes.values()
+    ):
+        fail(
+            "LOCKFILE_INCONSISTENT",
+            "The lockfile does not keep Sharp on its exact protected edge.",
+            expected=target_sharp,
+            actual=sorted(_lock_key_versions(lock_text, "sharp")),
+        )
 
     return {
         "remediation_id": authorization["id"],
         "dependency_manifest_changed": True,
         "dependency_lockfile_changed": True,
-        "dependency_workspace_changed": False,
+        "dependency_workspace_changed": True,
         "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
         "changed_dependency_files": changed_dependency_files,
         "lockfile_consistency_verified": True,
         "lockfile_sha256": lock_hash,
         "lock_package_count": len(lock_keys),
         "vulnerable_lock_versions": [],
+        "sharp_versions": [target_sharp],
+        "sharp_override_selector": next(iter(override_changes.values()))["selector"],
+        "next_versions": sorted(_lock_key_versions(lock_text, "next")),
         "vite_versions": sorted(_lock_key_versions(lock_text, "vite")),
         "vitest_versions": sorted(_lock_key_versions(lock_text, "vitest")),
         "vitest_mocker_versions": sorted(_lock_key_versions(lock_text, "@vitest/mocker")),
