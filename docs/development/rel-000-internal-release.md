@@ -379,6 +379,48 @@ override incompatible, versión vulnerable duplicada o smoke test ausente o
 fallido. La suite focal deriva su conteo de los tests descubiertos y exige que
 todos los casos descubiertos sean ejecutados y aprobados, sin fallos ni skips.
 
+### Audit que falla (fail closed)
+
+`pnpm audit --json` sale con código 1 tanto si encuentra advisories como si el propio audit
+falla. En el segundo caso (timeout, registry inalcanzable o endpoint inexistente) sólo escribe
+`{"error": {"code": ..., "message": ...}}`; con pnpm 11.15.1 se observaron `23` ("The operation
+was aborted due to timeout"), `pnpm` ("fetch failed") y `ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS`.
+Antes, `sanitize-audit` leía eso como un audit limpio: con base y rama fallidas, el modo normal
+pasaba sin reportar siquiera el aviso conocido de braces. Ahora `sanitize-audit` falla, el paso
+`Capture and sanitize real base and branch audits` termina en rojo y no escribe el audit
+sanitizado, así que la evaluación ni siquiera corre:
+
+| `reason_code` | Cuándo |
+| --- | --- |
+| `AUDIT_COMMAND_FAILED` | El JSON de pnpm trae `error`, o un JSON de `dotnet package list --vulnerable` trae un `problems` de nivel `error` (por ejemplo, una fuente HTTP rechazada). El mismo código ya marcaba un código de salida distinto de 0 y 1. |
+| `AUDIT_REPORT_UNRECOGNIZED` | El JSON de pnpm no trae `advisories` ni `vulnerabilities` como objeto. El reporte limpio de pnpm 11.15.1 es `{"advisories": {}, "metadata": {...}}` con código 0. |
+| `AUDIT_EXIT_CODE_INCONSISTENT` | pnpm salió con 1 pero su reporte no lista ningún advisory. Los hallazgos NuGet no cuentan: el código de salida es sólo de pnpm. |
+
+El error se imprime en el log como una línea JSON
+`REL000_TECHNICAL_VALIDATION_FAILED` que nombra el archivo (`rel000-base-audit-raw.json`,
+`rel000-branch-audit-raw.json` o el JSON NuGet) y lleva `tool_error_code` y
+`tool_error_summary` de la herramienta. El resumen se limpia antes de publicarse: se reemplazan
+URLs (con ruta, query o credenciales, también `//host/:_authToken=`), valores con forma de token
+o secreto, emails e identificadores, y se corta a 240 caracteres.
+
+Para distinguir un audit fallido de un advisory: un audit fallido rompe el paso de captura con
+uno de los tres códigos de arriba; un advisory pasa la captura y, si no está registrado, rompe
+después el paso `Validate and generate redacted REL-000 evidence` con un código de evaluación
+como `UNTRACKED_DEPENDENCY_ADVISORY`, `NEW_DEPENDENCY_ADVISORY` o `BRANCH_ADVISORY_SET_CHANGED`
+junto con los GHSA involucrados.
+
+No hay reintentos: un audit fallido deja el job en rojo y se relanza el job. En los 30 jobs
+REL-000 más recientes de PR Validation y Foundation CI (2026-10-20 a 2026-10-22) no se observó
+ningún audit pnpm fallido: 26 publicaron el aviso conocido de braces y 4 fallaron por avisos
+reales de vite que el audit de la base sí reportó.
+
+Para NuGet, `dotnet package list` sale con 1 cuando no alcanza el feed (escribe texto
+`error: Unable to load the service index ...` en lugar de JSON) y el paso, que corre con
+`set -euo pipefail`, ya fallaba ahí; `sanitize-audit` además rechaza ese texto
+(`JSON_INPUT_INVALID`). Queda un caso que no se puede distinguir: si el feed responde 404 a la
+metadata de un paquete, la herramienta sale con 0 y escribe el proyecto sin `frameworks`,
+exactamente igual que un reporte limpio.
+
 ### Remediación pnpm de vite, vitest y Next.js (SEC-2026-14)
 
 `SEC-2026-14-VITE` (Issue #304, rama `fix/security-2026-14-vite`, base `c84ef92`) remedia nueve

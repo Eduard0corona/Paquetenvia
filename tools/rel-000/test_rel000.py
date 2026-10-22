@@ -11382,7 +11382,8 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
             self.root / "pnpm.json",
             output,
             True,
-            1,
+            # pnpm lists no advisory here, so it exits 0 (exit 1 without one fails closed).
+            0,
             [self.root / "contract.json", self.root / "integration.json"],
         )
         sanitized = json.loads(output.read_text(encoding="utf-8"))
@@ -12647,7 +12648,8 @@ class OpenApiYamlReaderRemediationPolicyTests(unittest.TestCase):
             self.root / "pnpm.json",
             output,
             True,
-            1,
+            # pnpm lists no advisory here, so it exits 0 (exit 1 without one fails closed).
+            0,
             [self.root / "contract.json", self.root / "integration.json"],
         )
         sanitized = json.loads(output.read_text(encoding="utf-8"))
@@ -13341,6 +13343,420 @@ class TestedBaseWorkflowGuardTests(unittest.TestCase):
         self.assertEqual(
             len(self.PROVENANCE_JOBS),
             self.text.count(f"- name: {self.RESOLVE_STEP}"),
+        )
+
+
+class AuditCommandFailureTests(unittest.TestCase):
+    """A dependency audit that fails is a failed gate, never a clean audit.
+
+    The raw shapes below are what the pinned pnpm 11.15.1 and the .NET 10 SDK
+    (`dotnet package list --vulnerable --include-transitive --format json`) wrote on
+    2026-10-22 for a clean report, a report with advisories and a failing registry.
+    """
+
+    # Clean `pnpm audit --json` (exit 0).
+    PNPM_CLEAN = {
+        "advisories": {},
+        "metadata": {
+            "vulnerabilities": {"info": 0, "low": 0, "moderate": 0, "high": 0, "critical": 0},
+            "dependencies": 1,
+            "devDependencies": 0,
+            "optionalDependencies": 0,
+            "totalDependencies": 1,
+        },
+    }
+    # `pnpm audit --json` of the apps/web lockfile on development 11f35da (exit 1).
+    PNPM_ADVISORY = {
+        "advisories": {
+            "1240992": {
+                "findings": [
+                    {
+                        "version": "3.0.3",
+                        "paths": [
+                            ".>eslint-config-next>@next/eslint-plugin-next>fast-glob>micromatch>braces"
+                        ],
+                        "dev": True,
+                        "optional": False,
+                        "bundled": False,
+                    }
+                ],
+                "id": 1240992,
+                "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+                "module_name": "braces",
+                "vulnerable_versions": "<=3.0.3",
+                "patched_versions": ">=3.0.4",
+                "severity": "high",
+                "cwe": "CWE-674",
+                "github_advisory_id": "GHSA-vfj7-8cjw-p6xm",
+                "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            }
+        },
+        "metadata": {
+            "vulnerabilities": {"info": 0, "low": 0, "moderate": 0, "high": 1, "critical": 0},
+            "dependencies": 75,
+            "devDependencies": 363,
+            "optionalDependencies": 94,
+            "totalDependencies": 475,
+        },
+    }
+    # `pnpm audit --json` when the registry fails (all exit 1, nothing on stderr).
+    PNPM_FAILURES = {
+        "23": {"error": {"code": 23, "message": "The operation was aborted due to timeout"}},
+        "pnpm": {"error": {"code": "pnpm", "message": "fetch failed"}},
+        "ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS": {
+            "error": {
+                "code": "ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS",
+                "message": (
+                    "The audit endpoint (at https://httpbin.org/status/500/-/npm/v1/security/"
+                    "advisories/bulk) doesn't exist."
+                ),
+            }
+        },
+    }
+    NUGET_PROJECT = "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj"
+    # Clean `dotnet package list --vulnerable` (exit 0): the project carries no frameworks.
+    NUGET_CLEAN = {
+        "version": 1,
+        "parameters": "--vulnerable --include-transitive",
+        "sources": ["https://api.nuget.org/v3/index.json"],
+        "projects": [{"path": NUGET_PROJECT}],
+    }
+    # A rejected package source (exit 1): JSON with an error-level problem and a project
+    # without frameworks, which reads exactly like the clean report above.
+    NUGET_SOURCE_REJECTED = {
+        "version": 1,
+        "parameters": "--vulnerable --include-transitive",
+        "problems": [
+            {
+                "project": NUGET_PROJECT,
+                "level": "error",
+                "text": (
+                    "You are running the 'list package' operation with an 'HTTP' source, "
+                    "'nuget.org [http://127.0.0.1:9/v3/index.json]'. NuGet requires HTTPS "
+                    "sources. To use HTTP sources, you must explicitly set "
+                    "'allowInsecureConnections' to true in your NuGet.Config file. Refer to "
+                    "https://aka.ms/nuget-https-everywhere for more information."
+                ),
+            }
+        ],
+        "sources": ["http://127.0.0.1:9/v3/index.json"],
+        "projects": [{"path": NUGET_PROJECT}],
+    }
+    NUGET_ADVISORY = {
+        "version": 1,
+        "parameters": "--vulnerable --include-transitive",
+        "sources": ["https://api.nuget.org/v3/index.json"],
+        "projects": [
+            {
+                "path": NUGET_PROJECT,
+                "frameworks": [
+                    {
+                        "framework": "net10.0",
+                        "topLevelPackages": [
+                            {
+                                "id": "Newtonsoft.Json",
+                                "requestedVersion": "12.0.1",
+                                "resolvedVersion": "12.0.1",
+                                "vulnerabilities": [
+                                    {
+                                        "severity": "High",
+                                        "advisoryurl": "https://github.com/advisories/GHSA-5crp-9r3c-p9vr",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-audit-failure-tests-")
+        self.root = Path(self.temp.name)
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def write(self, name: str, value: Any) -> Path:
+        path = self.root / name
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return path
+
+    def sanitize(self, raw: Any, exit_code: int, nuget: list[Any] | None = None) -> Path:
+        output = self.root / "rel000-branch-audit.json"
+        rel000.sanitize_audit(
+            self.write("rel000-branch-audit-raw.json", raw),
+            output,
+            True,
+            exit_code,
+            [
+                self.write(f"rel000-branch-nuget-{index}.json", value)
+                for index, value in enumerate(nuget or [])
+            ]
+            or None,
+        )
+        return output
+
+    def test_pnpm_error_object_fails_closed_with_the_tool_error(self):
+        for code, raw in self.PNPM_FAILURES.items():
+            with self.subTest(code=code):
+                failure = self.assert_reason(
+                    "AUDIT_COMMAND_FAILED", lambda: self.sanitize(raw, 1)
+                )
+                self.assertEqual("rel000-branch-audit-raw.json", failure.details["input"])
+                self.assertEqual(code, failure.details["tool_error_code"])
+                self.assertIn("rel000-branch-audit-raw.json", failure.message)
+                self.assertIn(code, failure.message)
+                self.assertIn(failure.details["tool_error_summary"], failure.message)
+                self.assertFalse((self.root / "rel000-branch-audit.json").exists())
+                rel000.assert_redacted(failure.as_dict())
+        timeout = self.assert_reason(
+            "AUDIT_COMMAND_FAILED", lambda: self.sanitize(self.PNPM_FAILURES["23"], 1)
+        )
+        self.assertEqual(
+            "The operation was aborted due to timeout", timeout.details["tool_error_summary"]
+        )
+        endpoint = self.assert_reason(
+            "AUDIT_COMMAND_FAILED",
+            lambda: self.sanitize(self.PNPM_FAILURES["ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS"], 1),
+        )
+        self.assertEqual(
+            "The audit endpoint (at <url>) doesn't exist.",
+            endpoint.details["tool_error_summary"],
+        )
+
+    def test_error_object_fails_whatever_the_exit_code_or_its_shape(self):
+        for raw, exit_code in (
+            (self.PNPM_FAILURES["pnpm"], 0),
+            ({**self.PNPM_CLEAN, "error": {"code": "pnpm", "message": "fetch failed"}}, 0),
+            ({**self.PNPM_ADVISORY, "error": {"code": "pnpm", "message": "fetch failed"}}, 1),
+            ({"error": "fetch failed"}, 1),
+            ({"error": None}, 1),
+        ):
+            with self.subTest(raw=raw, exit_code=exit_code):
+                self.assert_reason("AUDIT_COMMAND_FAILED", lambda: self.sanitize(raw, exit_code))
+        npm_style = self.assert_reason(
+            "AUDIT_COMMAND_FAILED",
+            lambda: self.sanitize(
+                {
+                    "error": {
+                        "code": "ENOAUDIT",
+                        "summary": "Your configured registry does not support audit requests.",
+                        "detail": "Try again later.",
+                    }
+                },
+                1,
+            ),
+        )
+        self.assertEqual("ENOAUDIT", npm_style.details["tool_error_code"])
+        self.assertEqual(
+            "Your configured registry does not support audit requests.",
+            npm_style.details["tool_error_summary"],
+        )
+        unknown = self.assert_reason(
+            "AUDIT_COMMAND_FAILED", lambda: self.sanitize({"error": {}}, 1)
+        )
+        self.assertEqual("UNKNOWN", unknown.details["tool_error_code"])
+        self.assertEqual("no summary", unknown.details["tool_error_summary"])
+
+    def test_tool_error_never_carries_credentials_or_registry_urls(self):
+        # Token-shaped synthetic values are built at runtime so the secret scan never sees
+        # a credential-shaped literal in the source.
+        npm_token = "npm" + "_" + "AbCdEf0123456789" * 2 + "AbCd"
+        access_key = "AKIA" + "ABCDEFGHIJKLMNOP"
+        secrets = (
+            "s3cr3t-value",
+            npm_token,
+            "eyJhbGciOiJIUzI1NiJ9.e30.c2lnbmF0dXJl",
+            "registry.example.test",
+            "?_authToken",
+            "ci-bot@example.com",
+            "0f8fad5b-d9cb-469f-a165-70867728950e",
+            access_key,
+            "\n",
+        )
+        failure = self.assert_reason(
+            "AUDIT_COMMAND_FAILED",
+            lambda: self.sanitize(
+                {
+                    "error": {
+                        "code": "E401",
+                        "message": (
+                            "Unable to authenticate at "
+                            "https://ci:s3cr3t-value@registry.example.test/-/npm/v1/security/"
+                            "advisories/bulk?_authToken=s3cr3t-value, "
+                            "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.e30.c2lnbmF0dXJl, "
+                            "//registry.example.test/:_authToken=s3cr3t-value "
+                            f"{npm_token} for ci-bot@example.com "
+                            f"request 0f8fad5b-d9cb-469f-a165-70867728950e\nkey {access_key}"
+                        ),
+                    }
+                },
+                1,
+            ),
+        )
+        reported = json.dumps(failure.as_dict(), ensure_ascii=False) + str(failure)
+        for secret in secrets:
+            with self.subTest(secret=secret):
+                self.assertNotIn(secret, reported)
+        self.assertEqual("E401", failure.details["tool_error_code"])
+        self.assertTrue(failure.details["tool_error_summary"].startswith("Unable to authenticate"))
+        rel000.assert_redacted(failure.as_dict())
+        long_summary = self.assert_reason(
+            "AUDIT_COMMAND_FAILED",
+            lambda: self.sanitize({"error": {"code": "pnpm", "message": "x " * 400}}, 1),
+        )
+        self.assertLessEqual(len(long_summary.details["tool_error_summary"]), 240)
+
+    def test_unrecognised_pnpm_report_fails_closed(self):
+        for raw in (
+            {},
+            {"metadata": self.PNPM_CLEAN["metadata"]},
+            {"advisories": []},
+            {"advisories": None},
+            {"vulnerabilities": None},
+            {"advisories": {}, "vulnerabilities": []},
+        ):
+            with self.subTest(raw=raw):
+                failure = self.assert_reason(
+                    "AUDIT_REPORT_UNRECOGNIZED", lambda: self.sanitize(raw, 0)
+                )
+                self.assertEqual("rel000-branch-audit-raw.json", failure.details["input"])
+
+    def test_exit_one_without_a_listed_advisory_fails_closed(self):
+        for raw, nuget in (
+            (self.PNPM_CLEAN, None),
+            ({"vulnerabilities": {}}, None),
+            # A modern entry without a GHSA identifier lists no advisory either.
+            ({"vulnerabilities": {"left-pad": {"severity": "high", "via": ["left-pad"]}}}, None),
+            # The exit code is pnpm's own; a NuGet finding does not explain it.
+            (self.PNPM_CLEAN, [self.NUGET_ADVISORY]),
+        ):
+            with self.subTest(raw=raw, nuget=nuget):
+                failure = self.assert_reason(
+                    "AUDIT_EXIT_CODE_INCONSISTENT", lambda: self.sanitize(raw, 1, nuget)
+                )
+                self.assertEqual(1, failure.details["exit_code"])
+                self.assertEqual("rel000-branch-audit-raw.json", failure.details["input"])
+
+    def test_real_clean_report_passes(self):
+        sanitized = json.loads(self.sanitize(self.PNPM_CLEAN, 0).read_text(encoding="utf-8"))
+        self.assertEqual(
+            {
+                "format_version": "paquetenvia-rel000-audit-v1",
+                "command_executed": True,
+                "command_exit_code": 0,
+                "parse_succeeded": True,
+                "totals": {"critical": 0, "high": 0, "moderate": 0, "low": 0, "total": 0},
+                "affected_packages": [],
+                "advisories": [],
+            },
+            sanitized,
+        )
+        with_nuget = json.loads(
+            self.sanitize(self.PNPM_CLEAN, 0, [self.NUGET_CLEAN, self.NUGET_CLEAN]).read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(sanitized, with_nuget)
+
+    def test_real_advisory_report_passes_as_today(self):
+        sanitized = json.loads(self.sanitize(self.PNPM_ADVISORY, 1).read_text(encoding="utf-8"))
+        self.assertEqual(BracesKnownAdvisoryTests.REAL_DEVELOPMENT_BASE_AUDIT, sanitized)
+        with_nuget = json.loads(
+            self.sanitize(self.PNPM_ADVISORY, 1, [self.NUGET_ADVISORY, self.NUGET_CLEAN]).read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            {"critical": 0, "high": 2, "moderate": 0, "low": 0, "total": 2}, with_nuget["totals"]
+        )
+        self.assertEqual(
+            ["GHSA-5CRP-9R3C-P9VR", "GHSA-vfj7-8cjw-p6xm"],
+            [item["advisory_id"] for item in with_nuget["advisories"]],
+        )
+
+    def test_nuget_error_problem_fails_closed(self):
+        failure = self.assert_reason(
+            "AUDIT_COMMAND_FAILED",
+            lambda: self.sanitize(
+                self.PNPM_ADVISORY, 1, [self.NUGET_CLEAN, self.NUGET_SOURCE_REJECTED]
+            ),
+        )
+        self.assertEqual("rel000-branch-nuget-1.json", failure.details["input"])
+        self.assertEqual("error", failure.details["tool_error_code"])
+        self.assertIn("NuGet requires HTTPS sources", failure.details["tool_error_summary"])
+        self.assertIn("rel000-branch-nuget-1.json", failure.message)
+        self.assertNotIn("127.0.0.1", json.dumps(failure.as_dict()))
+        self.assertNotIn(self.NUGET_PROJECT, json.dumps(failure.as_dict()))
+        rel000.assert_redacted(failure.as_dict())
+        coded = copy.deepcopy(self.NUGET_SOURCE_REJECTED)
+        coded["problems"][0]["level"] = "Error"
+        coded["problems"][0]["text"] = "error NU1301: Unable to load the service index for source."
+        self.assertEqual(
+            "NU1301",
+            self.assert_reason(
+                "AUDIT_COMMAND_FAILED", lambda: self.sanitize(self.PNPM_ADVISORY, 1, [coded])
+            ).details["tool_error_code"],
+        )
+        self.assertFalse((self.root / "rel000-branch-audit.json").exists())
+
+    def test_invalid_nuget_report_fails_closed(self):
+        for nuget in (
+            [],
+            "error: Unable to load the service index for source.",
+            {**self.NUGET_CLEAN, "problems": {"level": "error"}},
+            {**self.NUGET_CLEAN, "problems": ["error"]},
+        ):
+            with self.subTest(nuget=nuget):
+                self.assert_reason(
+                    "AUDIT_PARSE_FAILED", lambda: self.sanitize(self.PNPM_CLEAN, 0, [nuget])
+                )
+        # Text on stdout (an unreachable feed, exit 1) is not JSON at all.
+        text = self.root / "rel000-branch-nuget-text.json"
+        text.write_text(
+            "error: Unable to load the service index for source.\n", encoding="utf-8"
+        )
+        self.assert_reason(
+            "JSON_INPUT_INVALID",
+            lambda: rel000.sanitize_audit(
+                self.write("raw.json", self.PNPM_CLEAN), self.root / "out.json", True, 0, [text]
+            ),
+        )
+
+    def test_cli_exits_non_zero_and_writes_nothing_for_a_failed_audit(self):
+        output = self.root / "rel000-base-audit.json"
+        argv = [
+            "rel000.py",
+            "sanitize-audit",
+            "--input",
+            str(self.write("rel000-base-audit-raw.json", self.PNPM_FAILURES["23"])),
+            "--output",
+            str(output),
+            "--command-executed",
+            "--command-exit-code",
+            "1",
+        ]
+        with patch.object(sys, "argv", argv), patch("sys.stderr", new=io.StringIO()) as stderr:
+            self.assertEqual(1, rel000.main())
+        reported = json.loads(stderr.getvalue())
+        self.assertEqual("AUDIT_COMMAND_FAILED", reported["reason_code"])
+        self.assertEqual("REL000_TECHNICAL_VALIDATION_FAILED", reported["result"])
+        self.assertEqual("rel000-base-audit-raw.json", reported["details"]["input"])
+        self.assertFalse(output.exists())
+        argv[3] = str(self.write("rel000-base-audit-raw.json", self.PNPM_ADVISORY))
+        with patch.object(sys, "argv", argv):
+            self.assertEqual(0, rel000.main())
+        self.assertEqual(
+            BracesKnownAdvisoryTests.REAL_DEVELOPMENT_BASE_AUDIT,
+            json.loads(output.read_text(encoding="utf-8")),
         )
 
 
