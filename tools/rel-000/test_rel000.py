@@ -13615,6 +13615,42 @@ class AuditCommandFailureTests(unittest.TestCase):
         )
         self.assertLessEqual(len(long_summary.details["tool_error_summary"]), 240)
 
+    def test_long_opaque_values_are_redacted_with_or_without_digits(self):
+        letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" + "ABCDEFGH"
+        lowercase = letters.lower()
+        mixed = "QWErtyUIOpasDFGhjkLZXcvbNMqwERtyUI"
+        for opaque in (letters, lowercase, mixed, letters + "_" + letters, "AB_" * 12):
+            with self.subTest(opaque=opaque):
+                failure = self.assert_reason(
+                    "AUDIT_COMMAND_FAILED",
+                    lambda: self.sanitize(
+                        {
+                            "error": {
+                                "code": opaque,
+                                "message": f"Secret rotation required for value {opaque} ahead of audit",
+                            }
+                        },
+                        1,
+                    ),
+                )
+                reported = json.dumps(failure.as_dict(), ensure_ascii=False) + str(failure)
+                self.assertNotIn(opaque, reported)
+                self.assertEqual("<redacted>", failure.details["tool_error_code"])
+                self.assertEqual(
+                    "Secret rotation required for value <redacted> ahead of audit",
+                    failure.details["tool_error_summary"],
+                )
+        # A short tool error code and an UPPER_SNAKE code of short words are kept.
+        for code in ("ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS", "ERR_PNPM_FETCH_401", "ENOAUDIT"):
+            with self.subTest(code=code):
+                self.assertEqual(
+                    code,
+                    self.assert_reason(
+                        "AUDIT_COMMAND_FAILED",
+                        lambda: self.sanitize({"error": {"code": code, "message": "x"}}, 1),
+                    ).details["tool_error_code"],
+                )
+
     def test_unrecognised_pnpm_report_fails_closed(self):
         for raw in (
             {},

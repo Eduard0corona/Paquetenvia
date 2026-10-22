@@ -10495,6 +10495,7 @@ def replay_execution_provenance(args: argparse.Namespace) -> dict[str, Any]:
 # with a URL (registry path, query string or userinfo, also as an npmrc-style
 # //host/:_authToken key), a credential-shaped value, an email, an identifier or a long
 # opaque string.
+AUDIT_TOOL_ERROR_CODE_WORDS = re.compile(r"[A-Z]{1,16}(?:_[A-Z0-9]{1,16}){2,}")
 AUDIT_TOOL_ERROR_REDACTIONS = (
     (re.compile(r"(?:[A-Za-z][A-Za-z0-9+.-]*:)?//[^\s'\"()<>\[\]]+"), "<url>"),
     (re.compile(r"(?i)\b(bearer|basic)\s+\S+"), r"\1 <redacted>"),
@@ -10513,11 +10514,16 @@ AUDIT_TOOL_ERROR_REDACTIONS = (
         "<id>",
     ),
     (re.compile(r"AKIA[0-9A-Z]{16}"), "<redacted>"),
-    # Long opaque strings with a digit (tokens, keys); a tool's error code such as
-    # ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS has none and is kept.
+    # Any other long opaque run (a token, key or digest, with or without digits) is redacted.
+    # Only an UPPER_SNAKE tool error code made of short words, such as
+    # ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS, is kept.
     (
         re.compile(r"[A-Za-z0-9+/_=-]{32,}"),
-        lambda match: "<redacted>" if re.search(r"\d", match.group(0)) else match.group(0),
+        lambda match: (
+            match.group(0)
+            if AUDIT_TOOL_ERROR_CODE_WORDS.fullmatch(match.group(0))
+            else "<redacted>"
+        ),
     ),
 )
 
