@@ -115,7 +115,7 @@ public sealed class PlatformEndToEndFixture : IAsyncLifetime
         }
 
         await Task.WhenAll(Database.InitializeAsync(), Storage.InitializeAsync());
-        // Leased once the containers run: Docker picks their host ports itself, without asking the kernel.
+        // Leased once the containers run: Docker picks host ports itself and can bind one next to a lease.
         _apiPort = LoopbackPortLease.Acquire();
         _webPort = LoopbackPortLease.Acquire();
         _storageTunnel = LoopbackTlsTunnel.Start(

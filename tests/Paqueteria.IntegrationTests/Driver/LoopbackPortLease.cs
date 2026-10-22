@@ -28,6 +28,11 @@ namespace Paqueteria.IntegrationTests.Driver;
 /// points with a socket confined to this one port (<c>IP_LOCAL_PORT_RANGE</c>).
 /// </para>
 /// <para>
+/// The one allocator the lease does not stop is Docker's: it hands out host ports in sequence without asking the kernel
+/// and binds them with <c>SO_REUSEADDR</c>, so a container published while a lease is held can land on its port. Lease
+/// after the containers of a fixture have started (<c>PlatformEndToEndFixture</c> does).
+/// </para>
+/// <para>
 /// Windows and macOS do not let a listener bind next to another bound socket, so there the lease lets go of the port
 /// immediately before the server binds (<see cref="BeforeServerBinds"/>): the window shrinks to the server's own start,
 /// but it is not closed. CI runs on Linux.
