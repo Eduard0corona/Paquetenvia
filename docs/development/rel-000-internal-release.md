@@ -454,10 +454,24 @@ corrige, se agregan sin volver a preguntar. La tabla:
   - Las réplicas resuelven braces sobre el grafo de su momento: SEC-2026-11 con braces tal como lo
     declaraba su `validated_target_sha`, y SEC-2026-12 y SEC-2026-13 con el lockfile del checkout.
 - **Orden (K4).** `main` aún mapea SEC-2026-13 en la línea `REL000_REMEDIATION_ID`, que
-  `development` ya retiró (#292), y el back-sync chocaría en esa línea. Tras fusionar esta
-  remediación y certificar `main` 13/13, un PR pequeño a `main` la retira y deja la línea como en
-  `c84ef92`; después vienen el back-sync y, en `development`, la fila del decision-log y su
-  entrada del CHANGELOG.
+  `development` ya retiró (#292), y el back-sync chocaría en esa línea. Por eso el retiro va
+  primero a `main` y la fila del decision-log y su entrada del CHANGELOG van después, en un PR
+  normal a `development`.
+
+Historia de la remediación:
+
+- **Fusión.** Entró a `main` con #305 (merge `059e2e9`), después de Foundation CI 13/13 en su
+  cabeza `325f2bb`; el árbol de ambos commits es el mismo.
+- **Retiro en `main`.** Un PR pequeño a `main` la movió a `historical_remediations` con `status`
+  `MERGED`, `tracked_pull_request` 305 y `validated_target_sha` `059e2e9`. También devolvió la
+  línea `REL000_REMEDIATION_ID` de ambos flujos y el fixture a su forma de `c84ef92`. No tocó
+  archivos normativos. Las pruebas de SEC-2026-14 reproducen ese commit como la autorización
+  activa que fue. La entrada retirada sigue declarando la tabla exacta, las líneas de metadatos
+  y la vinculación base de braces, y la política sólo carga con exactamente esos valores.
+- **Después del retiro.** El modo normal juzga el grafo fusionado como contenido de la base: un
+  cambio que no toca las dependencias web es `CLEAN`, braces queda aceptado sobre el grafo
+  revinculado y volver a mover `vite`, `vitest` o `next` falla cerrado
+  (`DEPENDENCY_FILES_CHANGED`). El back-sync `main` → `development` entra sin conflictos.
 
 Las imágenes web instalan las dependencias de desarrollo antes de `NODE_ENV=production` y copian
 `node_modules`, así que incluyen `vite` y `vitest`; `next start` en Linux nunca los carga.
