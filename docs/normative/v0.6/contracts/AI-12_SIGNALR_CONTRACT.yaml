@@ -178,14 +178,21 @@ events:
     - status
     - attempts
     - occurred_at
+    - order_id
+    - notice
     rules:
     - operations audience only; never sent to DriverHub unless contract audience is explicitly expanded
+    - event_type NotificationStatusChanged.v1 for an outbox row notification-status-changed-v1 and
+      NotificationStatusChanged.v2 for notification-status-changed-v2 (decided_amendment below); order_id and notice
+      are present only on a v2 recipient notice (WHATSAPP or EMAIL) and absent (omitted, never null) otherwise
     decided_amendment:
-      status: DECIDED_2026-10-20_IMPLEMENTATION_PENDING
+      status: DECIDED_2026-10-20_IMPLEMENTED_NTF_003
       decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner, E4 "Los 4 del plan (Recommended)"; AI-24
         recipient_notices)
-      implementation: AI-08 NTF-003 publishes it with the Realtime parser change and its tests; until then the payload
-        above and NotificationStatusChanged.v1 stand unchanged
+      implementation: AI-08 NTF-003 (the Notifications lane step 20261020000100_AddRecipientNoticeLane) - the emitter
+        writes notification-status-changed-v2; the Realtime parser accepts v1 (channel IN_APP, WHATSAPP or EMAIL, status
+        PENDING, SENT or FAILED) and v2 and publishes NotificationStatusChanged.v1 or NotificationStatusChanged.v2 with
+        the payload above
       text: payload notification-status-changed-v2 adds the optional order_id (the order of a recipient notice) and
         notice (TRACKING_LINK, IN_TRANSIT, DELIVERY_FAILED or DELIVERED), both absent for IN_APP; channel is IN_APP,
         WHATSAPP or EMAIL and status is PENDING, SENT, DELIVERED, FAILED or CANCELLED; the Realtime parser accepts v1 and

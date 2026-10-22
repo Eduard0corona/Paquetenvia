@@ -6,6 +6,11 @@ using Paqueteria.Infrastructure.Database.Outbox;
 
 namespace Notifications.Infrastructure.Dispatching;
 
+/// <summary>
+/// One row of <c>security.read_notification_delivery</c> v2 (NTF-RECIPIENT-NOTICES-2026-10-20, AI-08 NTF-003): the
+/// template body exists only for IN_APP; a recipient notice (<c>ORDER_DESTINATION</c>) carries its order, its order event
+/// and the time of that event, never a recipient value.
+/// </summary>
 internal sealed record NotificationDelivery(
     Guid NotificationId,
     Guid OwnerOrganizationId,
@@ -16,7 +21,14 @@ internal sealed record NotificationDelivery(
     string TemplateKey,
     int TemplateVersion,
     string VariablesSnapshot,
-    string TemplateBody);
+    string? TemplateBody,
+    string RecipientKind = NotificationDelivery.OwnerOrganizationUser,
+    Guid? OrderId = null,
+    Guid? OrderEventId = null,
+    DateTimeOffset? CreatedAt = null)
+{
+    public const string OwnerOrganizationUser = "OWNER_ORG_USER";
+}
 
 internal interface INotificationsStore
 {
@@ -162,7 +174,17 @@ internal sealed class PostgreSqlNotificationsStore(NotificationsWorkerConnection
                     reader.GetString(reader.GetOrdinal("template_key")),
                     reader.GetInt32(reader.GetOrdinal("template_version")),
                     reader.GetString(reader.GetOrdinal("variables_snapshot")),
-                    reader.GetString(reader.GetOrdinal("template_body")));
+                    reader.IsDBNull(reader.GetOrdinal("template_body"))
+                        ? null
+                        : reader.GetString(reader.GetOrdinal("template_body")),
+                    reader.GetString(reader.GetOrdinal("recipient_kind")),
+                    reader.IsDBNull(reader.GetOrdinal("order_id"))
+                        ? null
+                        : reader.GetGuid(reader.GetOrdinal("order_id")),
+                    reader.IsDBNull(reader.GetOrdinal("order_event_id"))
+                        ? null
+                        : reader.GetGuid(reader.GetOrdinal("order_event_id")),
+                    reader.GetFieldValue<DateTimeOffset>(reader.GetOrdinal("created_at")));
             }
         }
 
@@ -229,9 +251,11 @@ internal sealed class PostgreSqlNotificationsStore(NotificationsWorkerConnection
         CancellationToken cancellationToken)
     {
         await using var scope = await OpenWorkerScopeAsync(cancellationToken);
+        // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-003): apply_notification_outcome v2 takes the provider reference;
+        // the synthetic IN_APP provider has none.
         var sql = outcome is null
             ? $"SELECT {function}(@outbox_id,@lease_token,@notification_id,@expected_version,@occurred_at);"
-            : $"SELECT {function}(@outbox_id,@lease_token,@notification_id,@expected_version,@outcome,@code,@occurred_at,@available_at);";
+            : $"SELECT {function}(@outbox_id,@lease_token,@notification_id,@expected_version,@outcome,@code,@provider_reference,@occurred_at,@available_at);";
         await using var command = new NpgsqlCommand(sql, scope.Connection, scope.Transaction);
         command.Parameters.Add(P("outbox_id", NpgsqlDbType.Uuid, request.Id));
         command.Parameters.Add(P("lease_token", NpgsqlDbType.Uuid, request.LeaseToken));
@@ -241,6 +265,7 @@ internal sealed class PostgreSqlNotificationsStore(NotificationsWorkerConnection
         {
             command.Parameters.Add(P("outcome", NpgsqlDbType.Text, outcome));
             command.Parameters.Add(P("code", NpgsqlDbType.Text, code));
+            command.Parameters.Add(P("provider_reference", NpgsqlDbType.Text, null));
             command.Parameters.Add(P("available_at", NpgsqlDbType.TimestampTz, availableAt));
         }
 

@@ -163,14 +163,18 @@ public sealed partial class Obs003OutboxTraceContextMigrationTests
             Assert.Contains("REVOKE CREATE ON SCHEMA security FROM paqueteria_outbox_executor;", sql, StringComparison.Ordinal);
         }
 
-        Assert.Equal(CarryOutboxTraceContext.MigrationId, E002NotificationStateReaderHistoryTail());
+        // NTF-RECIPIENT-NOTICES-2026-10-20: the recipient notice lane step follows it in the recorded history.
+        var history = E002NotificationStateReaderHistory();
+        Assert.Contains(CarryOutboxTraceContext.MigrationId, history);
+        Assert.Contains(AddRecipientNoticeLane.MigrationId, history);
+        Assert.Equal(AddRecipientNoticeLane.MigrationId, E002NotificationStateReader.RecipientNoticeLaneMigrationId);
     }
 
-    private static string E002NotificationStateReaderHistoryTail()
+    private static IReadOnlyList<string> E002NotificationStateReaderHistory()
     {
         var source = File.ReadAllText(TestPath(
             "src/BuildingBlocks/Paqueteria.Infrastructure/Database/Baseline/E002NotificationStateReader.cs"));
-        return Regex.Matches(source, "\"(\\d{14}_[A-Za-z]+)\"").Select(match => match.Groups[1].Value).Last();
+        return Regex.Matches(source, "\"(\\d{14}_[A-Za-z]+)\"").Select(match => match.Groups[1].Value).ToArray();
     }
 
     private static string Header(string definition) =>
