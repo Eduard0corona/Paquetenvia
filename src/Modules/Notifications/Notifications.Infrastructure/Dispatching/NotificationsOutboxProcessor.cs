@@ -125,7 +125,10 @@ internal sealed class NotificationsOutboxProcessor(
         }
 
         var delivery = await store.ReadDeliveryAsync(notificationId, message.OwnerOrganizationId, cancellationToken);
-        if (delivery is null || delivery.Status != "PENDING" || delivery.Channel != NotificationTemplate.Channel)
+        // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-003): the lane stores WhatsApp and e-mail recipient notices, but
+        // only AI-08 NTF-005 sends them; until then this processor sends IN_APP only.
+        if (delivery is null || delivery.Status != "PENDING" || delivery.Channel != NotificationTemplate.Channel ||
+            delivery.TemplateBody is null)
         {
             await SettleAsync(message, "DEAD", NotificationErrorCodes.InvalidPayload, null, cancellationToken);
             return;

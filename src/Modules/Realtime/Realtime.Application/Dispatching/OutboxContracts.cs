@@ -156,6 +156,11 @@ public sealed record ParsedRouteChanged(
     public IReadOnlyList<Guid> ChangedStopIds { get; } = ChangedStopIds.ToArray();
 }
 
+/// <param name="EventType">The envelope type of the row's schema: <c>NotificationStatusChanged.v1</c> for
+/// <c>notification-status-changed-v1</c>, <c>NotificationStatusChanged.v2</c> for <c>notification-status-changed-v2</c>
+/// (NTF-RECIPIENT-NOTICES-2026-10-20, AI-12 decided amendment).</param>
+/// <param name="NoticeOrderId">The order of a recipient notice (payload <c>order_id</c>, v2 only); the base
+/// <c>OrderId</c> of a notification event is its aggregate, the Notification.</param>
 public sealed record ParsedNotificationStatusChanged(
     Guid EventId,
     Guid OwnerOrganizationId,
@@ -164,7 +169,10 @@ public sealed record ParsedNotificationStatusChanged(
     DateTimeOffset OccurredAt,
     string Channel,
     string Status,
-    int Attempts)
+    int Attempts,
+    string EventType = RealtimeEventTypes.NotificationStatusChanged,
+    Guid? NoticeOrderId = null,
+    string? Notice = null)
     : ParsedBusinessOutboxEvent(
         EventId,
         OwnerOrganizationId,
@@ -442,7 +450,7 @@ public static class RealtimeOutboxEnvelopeFactory
         ParsedNotificationStatusChanged value) =>
         new(
             value.EventId,
-            RealtimeEventTypes.NotificationStatusChanged,
+            value.EventType,
             value.OccurredAt,
             value.NotificationId,
             value.AggregateVersion,
@@ -452,7 +460,9 @@ public static class RealtimeOutboxEnvelopeFactory
                 value.Channel,
                 value.Status,
                 value.Attempts,
-                value.OccurredAt));
+                value.OccurredAt,
+                value.NoticeOrderId,
+                value.Notice));
 
     public static RealtimeEnvelope<DriverLocationUpdatedPayload> Location(ParsedDriverLocationUpdated value) =>
         new(

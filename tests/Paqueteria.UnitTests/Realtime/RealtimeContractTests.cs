@@ -27,6 +27,7 @@ public sealed class RealtimeContractTests
                 "IncidentCreated.v1",
                 "ExternalOfferChanged.v1",
                 "NotificationStatusChanged.v1",
+                "NotificationStatusChanged.v2",
                 "DriverLocationUpdated.v1",
                 "PublicOrderStatusChanged.v1",
                 "PublicEtaChanged.v1",
@@ -184,7 +185,7 @@ public sealed class RealtimeContractTests
         AssertProperties<ExternalOfferChangedPayload>(
             "OfferId", "Status", "CommissionCents", "ExpiresAt");
         AssertProperties<NotificationStatusChangedPayload>(
-            "NotificationId", "Channel", "Status", "Attempts", "OccurredAt");
+            "NotificationId", "Channel", "Status", "Attempts", "OccurredAt", "OrderId", "Notice");
         AssertProperties<DriverLocationUpdatedPayload>(
             "DriverId", "Lat", "Lng", "AccuracyM", "CapturedAt");
         AssertProperties<PublicOrderStatusChangedPayload>(

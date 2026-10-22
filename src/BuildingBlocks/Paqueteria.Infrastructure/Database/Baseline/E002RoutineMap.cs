@@ -162,6 +162,24 @@ public static class E002RoutineMap
         "security.requeue_stale_location_outbox(interval,integer,integer)",
     });
 
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-003): the Notifications lane migration
+    /// 20261020000100_AddRecipientNoticeLane replaces <see cref="PublishedApplyOutcomeSignature"/> with v2 and installs
+    /// three more routines, all owned by paqueteria_outbox_executor and executable only by paqueteria_worker.
+    /// <c>security.read_notification_delivery(uuid,uuid)</c> keeps its signature (v2 changes only its result columns).
+    /// </summary>
+    private static readonly E002RoutineEntry[] RecipientNoticeEntries =
+    [
+        new("security.expand_recipient_notice_request(uuid,uuid,boolean,interval,time without time zone,time without time zone,text,text[])", "paqueteria_outbox_executor", ["paqueteria_worker"]),
+        new("security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,text,timestamp with time zone,timestamp with time zone)", "paqueteria_outbox_executor", ["paqueteria_worker"]),
+        new("security.cancel_notification(uuid,uuid,uuid,integer,text,timestamp with time zone)", "paqueteria_outbox_executor", ["paqueteria_worker"]),
+        new("security.is_recipient_opted_out(text,bytea[])", "paqueteria_outbox_executor", ["paqueteria_worker"]),
+    ];
+
+    /// <summary>The published NTF-001 settle, dropped by the recipient notice lane step.</summary>
+    public const string PublishedApplyOutcomeSignature =
+        "security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,timestamp with time zone,timestamp with time zone)";
+
     private static readonly IReadOnlyList<E002RoutineEntry> AppliedEntries =
         Array.AsReadOnly(PendingEntries.Select(entry => entry.Signature switch
         {
@@ -185,6 +203,8 @@ public static class E002RoutineMap
             Mdm001Entries.Length != 1 || Mdm001Entries.Sum(entry => 1 + entry.Grantees.Count) != 2 ||
             OperatorOutboxEntries.Length != 2 || OperatorOutboxEntries.Sum(entry => 1 + entry.Grantees.Count) != 4 ||
             OrderAutoCloseEntries.Length != 1 || OrderAutoCloseEntries.Sum(entry => 1 + entry.Grantees.Count) != 2 ||
+            RecipientNoticeEntries.Length != 4 || RecipientNoticeEntries.Sum(entry => 1 + entry.Grantees.Count) != 8 ||
+            Ntf001Entries.Count(entry => entry.Signature == PublishedApplyOutcomeSignature) != 1 ||
             RealtimeDispatcherRoutines.Count != 6 ||
             RealtimeDispatcherRoutines.Any(signature => AppliedEntries.All(entry => entry.Signature != signature)))
         {
@@ -204,7 +224,8 @@ public static class E002RoutineMap
         bool mdm001Applied = false,
         bool operatorOutboxApplied = false,
         bool orderAutoCloseApplied = false,
-        bool realtimeDispatcherApplied = false)
+        bool realtimeDispatcherApplied = false,
+        bool recipientNoticeLaneApplied = false)
     {
         IReadOnlyList<E002RoutineEntry> entries = state switch
         {
@@ -263,6 +284,18 @@ public static class E002RoutineMap
             selected = selected.Concat(OrderAutoCloseEntries);
         }
 
+        if (recipientNoticeLaneApplied)
+        {
+            if (state == E002RoutineMapState.Pending)
+            {
+                throw new InvalidOperationException("E002_ROUTINE_MAP_TRANSITION_CONTEXT_INVALID");
+            }
+
+            selected = selected
+                .Where(entry => entry.Signature != PublishedApplyOutcomeSignature)
+                .Concat(RecipientNoticeEntries);
+        }
+
         if (realtimeDispatcherApplied)
         {
             if (state == E002RoutineMapState.Pending)
@@ -290,7 +323,8 @@ public static class E002RoutineMap
         bool mdm001Applied = false,
         bool operatorOutboxApplied = false,
         bool orderAutoCloseApplied = false,
-        bool realtimeDispatcherApplied = false)
+        bool realtimeDispatcherApplied = false,
+        bool recipientNoticeLaneApplied = false)
     {
         var prefix = state switch
         {
@@ -311,6 +345,7 @@ public static class E002RoutineMap
             (operatorOutboxApplied ? "_PLUS_DSPOPOUTBOX" : string.Empty) +
             (orderAutoCloseApplied ? "_PLUS_ORDAUTOCLOSE" : string.Empty) +
             (realtimeDispatcherApplied ? "_PLUS_RTMAPIROLE" : string.Empty) +
+            (recipientNoticeLaneApplied ? "_PLUS_NTFRECIPIENT" : string.Empty) +
             "_V1";
     }
 }

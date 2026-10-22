@@ -1,5 +1,47 @@
 # Changelog
 
+## Avisos al destinatario: carril de notificaciones para WhatsApp y correo (NTF-RECIPIENT-NOTICES-2026-10-20, AI-08 NTF-003) — 2026-10-20
+
+- Aplica la parte NTF-003 de la decisión ya registrada `NTF-RECIPIENT-NOTICES-2026-10-20` (E4 "Los 4 del plan
+  (Recommended)"); no hay pregunta ni respuesta nueva del owner. Es el PR-2 de la secuencia de
+  `docs/development/ntf-recipient-notices.md`. Inerte: ningún productor escribe todavía `orders.recipient-notice-requested`
+  (NTF-004), ningún interruptor se enciende y nada se envía (NTF-005); GATE-004 y GATE-007 siguen abiertas.
+- Paso de carril Notifications `20261020000100_AddRecipientNoticeLane`, con ida, vuelta e ida probadas en PostgreSQL 18 y
+  PostGIS 3.6 y el catálogo idéntico tras cada vuelta:
+  - `notification_templates`: canal IN_APP, WHATSAPP o EMAIL; cuerpo solo (y siempre) en IN_APP; catálogo cerrado de
+    variables por clave (`notification_templates_catalog_check`: `order_public_id` es la única variable de un aviso);
+    las cuatro plantillas `recipient.*` versión 1 en WhatsApp y correo, sin texto, para cada organización que tiene la
+    de NTF-001 y para cada organización nueva (`notifications.provision_default_templates`).
+  - `notifications`: `recipient_kind` (OWNER_ORG_USER u ORDER_DESTINATION), `order_event_id`, `delivered_at`;
+    `recipient_user_id` presente exactamente en IN_APP; un aviso no guarda nunca destinatario, usuario ni copia
+    cifrada; índices únicos `notifications_order_destination_uq` (una notificación por organización, evento de la orden,
+    canal y plantilla) y `notifications_provider_reference_uq` (referencia del proveedor única por canal).
+  - `notification_status_events`: también DELIVERED y CANCELLED.
+  - `notifications.recipient_opt_outs`: almacén de bajas de toda la plataforma, solo hashes con llave de 32 bytes,
+    append-only, FORCE ROW LEVEL SECURITY sin política; los roles de runtime no tienen ningún privilegio y el ejecutor
+    del outbox solo lo lee.
+  - `security.resolve_outbox_consumer` enruta `orders.recipient-notice-requested` al lane NOTIFICATIONS. Funciones nuevas o
+    v2, de `paqueteria_outbox_executor`, SECURITY DEFINER con `search_path` fijo, sin SQL dinámico ni RETURNING y con
+    EXECUTE solo para `paqueteria_worker`: `expand_recipient_notice_request` (una notificación por canal elegible, WhatsApp
+    primero, con su evento de estado, su fila de tiempo real y su solicitud de envío disponible al inicio del horario de
+    8:00 a 21:00 de America/Mazatlan, bajo el `lease_token` de la solicitud; liquida PROCESSED con SOURCE_EXPANDED,
+    RECIPIENT_NOTICES_DISABLED, NOTICE_STALE o NO_ELIGIBLE_CHANNEL), `read_notification_delivery` v2,
+    `apply_notification_outcome` v2 (referencia del proveedor, lista cerrada de códigos por familia de canal y resultado
+    CANCELLED sin contar intento; la firma publicada de 8 argumentos se elimina y el Worker pasa a v2),
+    `cancel_notification` e `is_recipient_opted_out`. Las reglas de WhatsApp ambiguo y de lease vencido se mantienen.
+  - La vuelta se niega (`NTF003_DOWNGRADE_BLOCKED_DATA_PRESENT`) mientras exista un aviso, un estado DELIVERED o
+    CANCELLED, una referencia del proveedor, una baja, una solicitud de aviso activa o una fila de tiempo real v2 activa;
+    si no, restaura las funciones, columnas, restricciones y permisos publicados.
+- `security.emit_notification_status_changed` escribe `notification-status-changed-v2`: un aviso lleva además `order_id` y
+  `notice`; IN_APP, ninguno. El parser de tiempo real acepta v1 (ahora también WhatsApp y correo, que antes terminaban
+  DEAD) y v2, y publica `NotificationStatusChanged.v1` o `NotificationStatusChanged.v2`; AI-12 publica la enmienda
+  decidida (`order_id` y `notice` en el payload).
+- AI-06 y AI-18: el contrato declarado del paso NTF-003 pasa a instalado con los nombres exactos que crea el paso, que
+  sigue dueño de su DDL (las tablas de Notifications son del carril); AI-18 suma la aserción 38. Las aserciones de la
+  línea base, el mapa E-002 (`_PLUS_NTFRECIPIENT`) y el migrador siguen el paso. Se vuelven a fijar los hashes de AI-06,
+  AI-18 y AI-12.
+- Sin cambios de API, de la web, de roles, de Locations ni de Orders. Nota: `docs/development/ntf-003-notifications-lane.md`.
+
 ## Avisos al destinatario, PR-1: correo opcional del destinatario y llave de avisos (NTF-RECIPIENT-NOTICES-2026-10-20, AI-08 NTF-002) — 2026-10-20
 
 - Aplica, sin decisión nueva, la fila `NTF-RECIPIENT-NOTICES-2026-10-20` (E4 "Los 4 del plan (Recommended)": "se agrega
