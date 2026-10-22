@@ -4,7 +4,8 @@
   "url": "https://github.com/Eduard0corona/Paquetenvia/issues/38",
   "remediation_issues": {
     "SEC-2026-10-BRACES-DOS-TRACKED": 180,
-    "SEC-2026-13-OPENAPI-YAMLREADER": 280
+    "SEC-2026-13-OPENAPI-YAMLREADER": 280,
+    "SEC-2026-14-VITE": 304
   },
   "known_advisory_issues": {
     "SEC-2026-10-BRACES-DOS-TRACKED": 180

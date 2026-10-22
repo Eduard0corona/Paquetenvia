@@ -5950,6 +5950,7 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
                 rel000.WEB_TRANSITIVE_REMEDIATION_ID,
                 rel000.BRACES_KNOWN_ADVISORY_ID,
                 rel000.OPENAPI_YAMLREADER_REMEDIATION_ID,
+                rel000.VITE_REMEDIATION_ID,
             },
             {item["id"] for item in policy["active_remediations"]},
         )
@@ -7436,25 +7437,56 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
                 "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
             )
 
-    def test_accepted_graph_is_rebound_to_the_next_16_3_8_lockfile(self):
+    def test_accepted_graph_is_rebound_to_the_next_16_4_1_lockfile(self):
         accepted = self.authorization()["accepted_known_advisory"]
         self.assertEqual(
             [
-                "eslint-config-next@16.3.8",
-                "@next/eslint-plugin-next@16.3.8",
+                "eslint-config-next@16.4.1",
+                "@next/eslint-plugin-next@16.4.1",
                 "fast-glob@3.3.1",
                 "micromatch@4.0.8",
                 "braces@3.0.3",
             ],
             accepted["lock_path"],
         )
+        # SEC-2026-14 (vite 8.1.6, vitest 4.1.12, next 16.4.1) regenerated the lockfile and
+        # rebound the path heads and this hash; package, version and path shape are unchanged.
         self.assertEqual(
-            "336b1c82c246994b45af1a0ba8c4ffa1b39c7279a827380883047c3c98b1e101",
+            "3f5834c346a1ad3f172fe52481acd748a9d0d05e0752d418220eb075e84c2ddd",
             accepted["expected_lockfile_sha256"],
         )
         self.assertEqual(
             accepted["expected_lockfile_sha256"],
             rel000.validate_known_advisory_lock_graph(self.base_lock(), accepted, "branch"),
+        )
+        # The 16.3.8 graph of the SEC-2026-14 base no longer satisfies the binding: its path
+        # is the one SEC-2026-14 declares as its base binding.
+        vite = next(
+            item
+            for item in [
+                *self.policy_value["historical_remediations"],
+                *self.policy_value["active_remediations"],
+            ]
+            if item["id"] == rel000.VITE_REMEDIATION_ID
+        )
+        vite_base = subprocess.check_output(
+            ["git", "show", f"{vite['authorized_base_sha']}:apps/web/pnpm-lock.yaml"],
+            cwd=REPOSITORY_ROOT,
+        )
+        self.assert_reason(
+            "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+            lambda: rel000.validate_known_advisory_lock_graph(vite_base, accepted, "base"),
+        )
+        rel000.validate_known_advisory_lock_graph(
+            vite_base,
+            {
+                **accepted,
+                "lock_path": vite["known_advisory_base_binding"]["lock_path"],
+                "expected_lockfile_sha256": vite["known_advisory_base_binding"][
+                    "expected_lockfile_sha256"
+                ],
+            },
+            "base",
         )
         # The 16.3.6 graph the advisory was first accepted on no longer satisfies the binding.
         previous = subprocess.check_output(
@@ -8074,11 +8106,30 @@ class NextSharpSourcemapRemediationPolicyTests(unittest.TestCase):
             "tracked_advisory_ids": [rel000.ISSUE5_ADVISORY],
         }
 
+    def replay_policy(self):
+        """The loaded policy with braces bound as it was when PR #206 was validated.
+
+        SEC-2026-14 later rebound the braces path and graph to the lockfile it generated, so
+        the replay reads braces on the graph this remediation bound it to: the accepted known
+        advisory exactly as the validated target's policy declared it.
+        """
+
+        policy = self.policy()
+        target_policy = json.loads(self.target_file(rel000.REMEDIATION_POLICY_PATH))
+        for item in policy["active_remediations"]:
+            if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID:
+                item["accepted_known_advisory"] = next(
+                    entry["accepted_known_advisory"]
+                    for entry in target_policy["active_remediations"]
+                    if entry["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+                )
+        return policy
+
     def accepted(self, root, base, tracking=None, remediation=None, base_audit=None):
         return rel000.resolve_accepted_known_advisories(
             root,
             base,
-            self.policy(),
+            self.replay_policy(),
             tracking if tracking is not None else self.tracking(),
             base_audit if base_audit is not None else self.audit(self.base_advisories()),
             self.audit([self.braces_advisory()]),
@@ -8743,6 +8794,1371 @@ class NextSharpSourcemapRemediationPolicyTests(unittest.TestCase):
                 )
 
 
+class ViteRemediationPolicyTests(unittest.TestCase):
+    """SEC-2026-14: the vite 8.1.5, @vitest/mocker 4.1.11 and next 16.3.8 advisories.
+
+    The owner admitted an exact table (2026-10-21/22, "Remediar con la tabla", "Incluir los
+    3", "Agregar vitest 4.1.12" and "Sumar next 16.4.1"): vite 8.1.5 -> 8.1.6 (transitive
+    through vitest); vitest 4.1.11 -> 4.1.12 and the seven @vitest/* packages it pins; next
+    and eslint-config-next 16.3.8 -> 16.4.1 and the ten @next/* packages; the Sharp edge
+    renamed to next@16.4.1>sharp with Sharp unchanged at 0.35.5. No new package. Nine
+    advisories: five on vite, two on @vitest/mocker, two on next. The regenerated lockfile
+    moves the braces accepted known advisory (Issue #180) to eslint-config-next 16.4.1, so the
+    same remediation rebinds its path heads and hash, as SEC-2026-11 did: its authorized base
+    still carries the previous graph.
+    """
+
+    ISSUE = "304"
+    KNOWN_ADVISORY = "GHSA-vfj7-8cjw-p6xm"
+    ADVISORIES = (
+        "GHSA-698v-4r3x-3vcv",
+        "GHSA-587h-7wmj-h5pm",
+        "GHSA-r825-w8mm-5pxw",
+        "GHSA-rq7h-c2jc-7f22",
+        "GHSA-9jrq-w75r-8gcw",
+        "GHSA-xp26-3454-mjgp",
+        "GHSA-qxg6-89mg-rqv8",
+        "GHSA-p3m5-59mp-jv5r",
+        "GHSA-2464-fhr4-w9xw",
+    )
+    LOCK = "apps/web/pnpm-lock.yaml"
+    MANIFEST = "apps/web/package.json"
+    WORKSPACE = "apps/web/pnpm-workspace.yaml"
+    VITEST_FAMILY = (
+        "vitest",
+        "@vitest/expect",
+        "@vitest/mocker",
+        "@vitest/pretty-format",
+        "@vitest/runner",
+        "@vitest/snapshot",
+        "@vitest/spy",
+        "@vitest/utils",
+    )
+    NEXT_FAMILY = (
+        "next",
+        "eslint-config-next",
+        "@next/env",
+        "@next/eslint-plugin-next",
+        "@next/swc-darwin-arm64",
+        "@next/swc-darwin-x64",
+        "@next/swc-linux-arm64-gnu",
+        "@next/swc-linux-arm64-musl",
+        "@next/swc-linux-x64-gnu",
+        "@next/swc-linux-x64-musl",
+        "@next/swc-win32-arm64-msvc",
+        "@next/swc-win32-x64-msvc",
+    )
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-vite-tests-")
+        self.root = Path(self.temp.name)
+        self.policy_path = REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH
+        self.policy_value = json.loads(self.policy_path.read_text(encoding="utf-8"))
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def policy(self):
+        return rel000.load_remediation_policy(self.policy_path)
+
+    def authorization(self):
+        return copy.deepcopy(
+            next(
+                item
+                for item in self.policy_value["active_remediations"]
+                if item["id"] == rel000.VITE_REMEDIATION_ID
+            )
+        )
+
+    def braces(self):
+        return copy.deepcopy(
+            next(
+                item
+                for item in self.policy_value["active_remediations"]
+                if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+            )
+        )
+
+    def base_file(self, relative: str) -> bytes:
+        return subprocess.check_output(
+            ["git", "show", f"{self.authorization()['authorized_base_sha']}:{relative}"],
+            cwd=REPOSITORY_ROOT,
+        )
+
+    def target_file(self, relative: str) -> bytes:
+        # The remediation is active, so its graph is the checkout's (as SEC-2026-13 did while
+        # PR #282 was open). Once a later change moves the graph, pin validated_target_sha
+        # and replay that commit instead.
+        return (REPOSITORY_ROOT / relative).read_bytes()
+
+    def dependency_repo(self):
+        """A repository at the authorized base web files, then the remediation's three files."""
+
+        authorization = self.authorization()
+        root = Path(tempfile.mkdtemp(prefix="repo-", dir=self.root))
+        for relative in (self.LOCK, self.MANIFEST, self.WORKSPACE):
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(self.base_file(relative))
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "rel000@example.invalid"], cwd=root, check=True
+        )
+        subprocess.run(["git", "config", "user.name", "REL-000 Tests"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        for relative in authorization["required_dependency_files"]:
+            (root / relative).write_bytes(self.target_file(relative))
+        return root, base, authorization
+
+    def validate_dependency(self, root, base, authorization=None):
+        return rel000.validate_dependency_diff(
+            root,
+            base,
+            rel000.SECURITY_REMEDIATION,
+            authorization or self.authorization(),
+        )
+
+    @staticmethod
+    def rewrite(path: Path, old: str, new: str, count: int = 1) -> None:
+        text = path.read_text(encoding="utf-8")
+        assert old in text, old
+        path.write_text(text.replace(old, new, count), encoding="utf-8")
+
+    def policy_with(self, mutate) -> Path:
+        value = copy.deepcopy(self.policy_value)
+        for item in value["active_remediations"]:
+            if item["id"] == rel000.VITE_REMEDIATION_ID:
+                mutate(item)
+        path = self.root / "policy.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return path
+
+    @staticmethod
+    def advisory(advisory_id, package, severity, version, affected, patched, paths, direct=False):
+        """One advisory exactly as sanitize-audit records the base finding."""
+
+        return {
+            "advisory_id": advisory_id,
+            "package": package,
+            "installed_versions": [version],
+            "severity": severity,
+            "affected_range": affected,
+            "patched_range": patched,
+            "direct_or_transitive": "direct" if direct else "transitive",
+            "dependency_path_count": paths,
+            "fix_available": True,
+            "fix_compatibility": "requires_compatibility_assessment",
+        }
+
+    def vite_advisory(self, advisory_id: str, severity: str):
+        return self.advisory(
+            advisory_id, "vite", severity, "8.1.5", ">=8.0.0 <=8.1.5", ">=8.1.6", 2
+        )
+
+    def mocker_advisory(self, advisory_id: str, affected: str):
+        return self.advisory(
+            advisory_id, "@vitest/mocker", "moderate", "4.1.11", affected, ">=4.1.12", 1
+        )
+
+    def next_advisory(self, advisory_id: str, severity: str):
+        return self.advisory(
+            advisory_id, "next", severity, "16.3.8", ">=16.0.0 <=16.4.0", ">=16.4.1", 1, True
+        )
+
+    def braces_advisory(self):
+        return self.advisory(
+            self.KNOWN_ADVISORY, "braces", "high", "3.0.3", "<=3.0.3", ">=3.0.4", 1
+        )
+
+    def base_advisories(self):
+        """The sanitized pnpm 11.15.1 audit of the authorized base c84ef92, field for field.
+
+        npm's audit data listed the two next advisories a few hours after the owner admitted
+        them (osv.dev already did); the base audit then has all ten.
+        """
+
+        return [
+            self.next_advisory("GHSA-2464-fhr4-w9xw", "critical"),
+            self.vite_advisory("GHSA-587h-7wmj-h5pm", "high"),
+            self.vite_advisory("GHSA-698v-4r3x-3vcv", "moderate"),
+            self.vite_advisory("GHSA-9jrq-w75r-8gcw", "low"),
+            self.next_advisory("GHSA-p3m5-59mp-jv5r", "high"),
+            self.mocker_advisory("GHSA-qxg6-89mg-rqv8", ">=2.1.0-beta.7 <4.1.12"),
+            self.vite_advisory("GHSA-r825-w8mm-5pxw", "moderate"),
+            self.vite_advisory("GHSA-rq7h-c2jc-7f22", "moderate"),
+            self.braces_advisory(),
+            self.mocker_advisory("GHSA-xp26-3454-mjgp", ">=4.1.11 <4.1.12"),
+        ]
+
+    @staticmethod
+    def audit(advisories):
+        values = copy.deepcopy(advisories)
+        totals = {
+            key: sum(item["severity"] == key for item in values)
+            for key in ("critical", "high", "moderate", "low")
+        }
+        totals["total"] = len(values)
+        return {
+            "format_version": "paquetenvia-rel000-audit-v1",
+            "command_executed": True,
+            "command_exit_code": 1 if values else 0,
+            "parse_succeeded": True,
+            "totals": totals,
+            "affected_packages": sorted({item["package"] for item in values}),
+            "advisories": values,
+        }
+
+    def known_issue(self, **changes):
+        issue = {
+            "number": 180,
+            "state": "OPEN",
+            "title": self.braces()["tracked_issue_title"],
+            "url": "https://github.com/example/issues/180",
+            "tracked_advisory_ids": [self.KNOWN_ADVISORY.upper()],
+        }
+        issue.update(changes)
+        return issue
+
+    def tracking(self, state="OPEN", tracked=None, known_issues=None):
+        authorization = self.authorization()
+        return {
+            "number": 304,
+            "state": state,
+            "title": authorization["tracked_issue_title"],
+            "url": "https://github.com/example/issues/304",
+            "tracked_advisory_ids": sorted(
+                value.upper()
+                for value in (
+                    authorization["issue_advisories"][self.ISSUE] if tracked is None else tracked
+                )
+            ),
+            # CI always attaches the SEC-2026-08 related Issue; SEC-2026-14 ignores it.
+            "related_issue": {
+                "number": 40,
+                "state": "CLOSED",
+                "title": "SEC-2026-08: remediate transitive SSH.NET advisory",
+                "url": "https://github.com/example/issues/40",
+                "tracked_advisory_ids": ["GHSA-Q939-RPR3-3284"],
+            },
+            "known_advisory_issues": [self.known_issue()] if known_issues is None else known_issues,
+        }
+
+    @staticmethod
+    def issue5():
+        return {
+            "number": 5,
+            "state": "CLOSED",
+            "title": "Sharp historical remediation",
+            "url": "https://github.com/example/issues/5",
+            "tracked_advisory_ids": [rel000.ISSUE5_ADVISORY],
+        }
+
+    def accepted(self, root, base, tracking=None, remediation=None):
+        return rel000.resolve_accepted_known_advisories(
+            root,
+            base,
+            self.policy(),
+            tracking if tracking is not None else self.tracking(),
+            self.audit(self.base_advisories()),
+            self.audit([self.braces_advisory()]),
+            remediation if remediation is not None else self.authorization(),
+        )
+
+    def security(self, tracking=None, base=None, branch=None, accepted=None, authorization=None):
+        tracking = tracking if tracking is not None else self.tracking()
+        base = base if base is not None else self.audit(self.base_advisories())
+        branch = branch if branch is not None else self.audit([self.braces_advisory()])
+        if accepted is None:
+            root, base_sha, _ = self.dependency_repo()
+            accepted = self.accepted(root, base_sha)
+        return rel000.validate_issue_and_audit(
+            self.issue5(),
+            tracking,
+            base,
+            branch,
+            {
+                "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
+                "vulnerable_lock_versions": [],
+            },
+            rel000.SECURITY_REMEDIATION,
+            authorization or self.authorization(),
+            accepted,
+        )
+
+    def test_policy_loads_and_mode_requires_exact_branch_id_and_base(self):
+        policy = self.policy()
+        authorization = self.authorization()
+        self.assertEqual("fix/security-2026-14-vite", authorization["authorized_source_branch"])
+        self.assertEqual(
+            "c84ef92ef32fb8517f7625ea7933c65940348345", authorization["authorized_base_sha"]
+        )
+        self.assertEqual(
+            rel000.SECURITY_REMEDIATION,
+            rel000.resolve_rel000_mode(
+                policy, authorization["authorized_source_branch"], authorization["id"]
+            ),
+        )
+        self.assertIsNotNone(
+            rel000.validate_mode_authorization(
+                rel000.SECURITY_REMEDIATION,
+                policy,
+                authorization["authorized_source_branch"],
+                authorization["authorized_base_sha"],
+                authorization["id"],
+            )
+        )
+        self.assert_reason(
+            "REMEDIATION_ID_REQUIRED",
+            lambda: rel000.resolve_rel000_mode(policy, authorization["authorized_source_branch"]),
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(policy, "feature/other", authorization["id"]),
+        )
+        # The other active route does not accept this branch, nor this id another one.
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(
+                policy, "fix/security-2026-13-openapi-yamlreader", authorization["id"]
+            ),
+        )
+
+    def test_wrong_base_sha_is_rejected(self):
+        authorization = self.authorization()
+        self.assert_reason(
+            "SECURITY_REMEDIATION_BASE_MISMATCH",
+            lambda: rel000.validate_mode_authorization(
+                rel000.SECURITY_REMEDIATION,
+                self.policy(),
+                authorization["authorized_source_branch"],
+                "0" * 40,
+                authorization["id"],
+            ),
+        )
+
+    def test_authorization_is_exact_and_tampering_is_rejected(self):
+        authorization = self.authorization()
+        self.assertEqual(
+            [*self.ADVISORIES, self.KNOWN_ADVISORY], authorization["expected_base_advisories"]
+        )
+        self.assertEqual({self.ISSUE: list(self.ADVISORIES)}, authorization["issue_advisories"])
+        self.assertEqual(
+            {
+                "vite": {"from": ["8.1.5"], "to": ["8.1.6"]},
+                **{
+                    package: {"from": ["4.1.11"], "to": ["4.1.12"]}
+                    for package in self.VITEST_FAMILY
+                },
+                **{
+                    package: {"from": ["16.3.8"], "to": ["16.4.1"]}
+                    for package in self.NEXT_FAMILY
+                },
+            },
+            authorization["expected_lock_version_replacements"],
+        )
+        self.assertEqual(
+            {
+                "next": {"from": "16.3.8", "to": "16.4.1"},
+                "eslint-config-next": {"from": "16.3.8", "to": "16.4.1"},
+                "vitest": {"from": "4.1.11", "to": "4.1.12"},
+            },
+            authorization["expected_direct_version_changes"],
+        )
+        self.assertEqual(
+            {"next@16.3.8>sharp": {"selector": "next@16.4.1>sharp", "from": "0.35.5", "to": "0.35.5"}},
+            authorization["expected_override_changes"],
+        )
+        self.assertEqual("0.35.5", authorization["target_sharp_version"])
+        self.assertEqual(
+            "sha512-aRAHIxx5SW5zc1sMqFwJU/t5qaFfXb5Hj0J7W0VXihu/X99+346tz6080tO1T1xVIJORX/b3zVTXGFqUXh35uw==",
+            authorization["expected_lock_integrities"]["vite@8.1.6"],
+        )
+        self.assertEqual(
+            {"total": 10, "critical": 1, "high": 3, "moderate": 5, "low": 1},
+            authorization["expected_base_totals"],
+        )
+        self.assertIsNone(authorization["expected_cves"]["GHSA-2464-fhr4-w9xw"])
+        self.assertEqual(
+            [self.MANIFEST, self.LOCK, self.WORKSPACE], authorization["required_dependency_files"]
+        )
+        mutations = [
+            lambda item: item.update(tracked_issue=280),
+            lambda item: item.update(tracked_issue_title="SEC-2026-14: something else"),
+            lambda item: item["issue_advisories"][self.ISSUE].pop(),
+            lambda item: item["issue_advisories"][self.ISSUE].append(self.KNOWN_ADVISORY),
+            lambda item: item.update(
+                issue_cited_known_advisories={self.ISSUE: [self.KNOWN_ADVISORY]}
+            ),
+            lambda item: item["expected_base_advisories"].pop(),
+            lambda item: item["expected_base_packages"].update(
+                {"GHSA-qxg6-89mg-rqv8": "vitest"}
+            ),
+            lambda item: item["expected_base_severities"].update(
+                {"GHSA-9jrq-w75r-8gcw": "moderate"}
+            ),
+            lambda item: item["expected_base_totals"].update(low=0, moderate=6),
+            lambda item: item["expected_branch_totals"].update(high=0, total=0),
+            lambda item: item["expected_cves"].update({"GHSA-698v-4r3x-3vcv": "CVE-2026-112944"}),
+            lambda item: item["advisory_affected_ranges"].update(
+                {"GHSA-xp26-3454-mjgp": ">=4.1.0 <4.1.12"}
+            ),
+            lambda item: item["first_patched_versions"].update({"vite": "8.2.4"}),
+            lambda item: item["first_patched_versions"].update({"next": "16.4.2"}),
+            lambda item: item["expected_cves"].update({"GHSA-2464-fhr4-w9xw": "CVE-2026-00000"}),
+            lambda item: item["expected_base_severities"].update(
+                {"GHSA-2464-fhr4-w9xw": "high"}
+            ),
+            lambda item: item["allowed_direct_packages"].append("vite"),
+            lambda item: item["allowed_dependency_files"].append("apps/web/tsconfig.json"),
+            lambda item: item["required_dependency_files"].remove(self.WORKSPACE),
+            lambda item: item["allowed_non_dependency_files"].append("apps/web/next.config.ts"),
+            lambda item: item["allowed_non_dependency_files"].append(
+                "docs/normative/v0.6/decision-log.md"
+            ),
+            lambda item: item["expected_direct_version_changes"]["vitest"].update(to="4.1.13"),
+            lambda item: item["expected_direct_version_changes"].update(
+                {"vite": {"from": "8.1.5", "to": "8.1.6"}}
+            ),
+            lambda item: item["expected_direct_version_changes"]["next"].update(to="16.4.2"),
+            lambda item: item["expected_override_changes"].update(
+                {"vite": {"selector": "vite", "from": "8.1.5", "to": "8.1.6"}}
+            ),
+            lambda item: item["expected_override_changes"]["next@16.3.8>sharp"].update(
+                to="0.35.6"
+            ),
+            lambda item: item["allowed_overrides"].update({"next@16.4.1>sharp": "0.35.4"}),
+            lambda item: item["expected_lock_version_replacements"]["next"].update(to=["16.4.2"]),
+            lambda item: item["expected_override_additions"].append(
+                {"selector": "vite", "to": "8.1.6", "before": "next@16.3.8>sharp"}
+            ),
+            lambda item: item["expected_lock_version_replacements"]["vite"].update(to=["8.2.4"]),
+            lambda item: item["expected_lock_version_replacements"].pop("@vitest/spy"),
+            lambda item: item["expected_lock_version_replacements"].update(
+                {"chai": {"from": ["6.2.2"], "to": ["6.2.3"]}}
+            ),
+            lambda item: item["allowed_lock_metadata_additions"].append(
+                {"package": "vite@8.1.6", "line": "    deprecated: anything"}
+            ),
+            lambda item: item["expected_lock_metadata_changes"].pop(),
+            lambda item: item["expected_lock_metadata_changes"][2].update(
+                to="      '@vitest/browser-webdriverio': 4.1.12"
+            ),
+            lambda item: item["expected_lock_metadata_changes"][0].update(package="vite@8.1.6"),
+            lambda item: item["expected_lock_integrities"].update(
+                {"vite@8.1.6": "sha512-" + "A" * 86 + "=="}
+            ),
+            lambda item: item["expected_lock_integrities"].pop("@vitest/mocker@4.1.12"),
+            lambda item: item["known_advisory_base_binding"].update(
+                expected_lockfile_sha256="0" * 64
+            ),
+            lambda item: item["known_advisory_base_binding"]["lock_path"].pop(1),
+            lambda item: item.pop("known_advisory_base_binding"),
+            lambda item: item.update(expected_lockfile_sha256="x"),
+            lambda item: item.update(expected_lock_package_count=476),
+            lambda item: item.update(related_tracked_issue=40),
+            lambda item: item.update(require_sharp_runtime_smoke=False),
+            lambda item: item.update(target_sharp_version="0.35.4"),
+            lambda item: item.update(prohibited_prereleases=False),
+            lambda item: item.update(manual_lockfile_edits_allowed=True),
+        ]
+        for mutate in mutations:
+            path = self.policy_with(mutate)
+            self.assert_reason(
+                "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+            )
+
+    def test_rebinding_and_metadata_changes_belong_only_to_this_authorization(self):
+        authorization = self.authorization()
+        self.assertEqual(
+            rel000.VITE_KNOWN_ADVISORY_BASE_BINDING, authorization["known_advisory_base_binding"]
+        )
+        # The braces path keeps its shape; only its two heads move from 16.3.8 to 16.4.1.
+        accepted_path = self.braces()["accepted_known_advisory"]["lock_path"]
+        self.assertEqual(
+            [node.replace("@16.4.1", "@16.3.8") for node in accepted_path],
+            authorization["known_advisory_base_binding"]["lock_path"],
+        )
+        self.assertEqual(
+            ["eslint-config-next@16.4.1", "@next/eslint-plugin-next@16.4.1"], accepted_path[:2]
+        )
+        self.assertEqual(
+            authorization["known_advisory_base_binding"]["expected_lockfile_sha256"],
+            hashlib.sha256(self.base_file(self.LOCK)).hexdigest(),
+        )
+        self.assertEqual(
+            authorization["expected_lockfile_sha256"],
+            self.braces()["accepted_known_advisory"]["expected_lockfile_sha256"],
+        )
+        binding = authorization["known_advisory_base_binding"]
+        metadata = authorization["expected_lock_metadata_changes"]
+        cases = {
+            # This binding on another authorization, active or retired.
+            "binding on web transitive": (
+                rel000.WEB_TRANSITIVE_REMEDIATION_ID, "known_advisory_base_binding", binding
+            ),
+            "binding on braces": (
+                rel000.BRACES_KNOWN_ADVISORY_ID, "known_advisory_base_binding", binding
+            ),
+            "binding on SEC-2026-13": (
+                rel000.OPENAPI_YAMLREADER_REMEDIATION_ID, "known_advisory_base_binding", binding
+            ),
+            "binding on retired SEC-2026-10": (
+                rel000.NEXT_OG_CRITICAL_REMEDIATION_ID, "known_advisory_base_binding", binding
+            ),
+            # The two rebinding authorizations cannot swap their bindings.
+            "SEC-2026-11 binding here": (
+                rel000.VITE_REMEDIATION_ID,
+                "known_advisory_base_binding",
+                rel000.NEXT_SHARP_SOURCEMAP_KNOWN_ADVISORY_BASE_BINDING,
+            ),
+            "this binding on SEC-2026-11": (
+                rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID, "known_advisory_base_binding", binding
+            ),
+            # Metadata line changes exist only here, active or retired.
+            "metadata on SEC-2026-11": (
+                rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID,
+                "expected_lock_metadata_changes",
+                metadata,
+            ),
+            "metadata on braces": (
+                rel000.BRACES_KNOWN_ADVISORY_ID, "expected_lock_metadata_changes", metadata
+            ),
+        }
+        for label, (target, field, value) in cases.items():
+            with self.subTest(case=label):
+                policy = copy.deepcopy(self.policy_value)
+                for item in [*policy["historical_remediations"], *policy["active_remediations"]]:
+                    if item["id"] == target:
+                        item[field] = copy.deepcopy(value)
+                path = self.root / "policy.json"
+                path.write_text(json.dumps(policy), encoding="utf-8")
+                self.assert_reason(
+                    "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+                )
+
+    def test_exact_generated_dependency_graph_is_accepted(self):
+        root, base, authorization = self.dependency_repo()
+        result = self.validate_dependency(root, base, authorization)
+        self.assertEqual("AUTHORIZED_SECURITY_REMEDIATION", result["dependency_diff_against_base"])
+        self.assertEqual(
+            [self.MANIFEST, self.LOCK, self.WORKSPACE], result["changed_dependency_files"]
+        )
+        self.assertTrue(result["dependency_manifest_changed"])
+        self.assertTrue(result["dependency_workspace_changed"])
+        self.assertEqual(["16.4.1"], result["next_versions"])
+        self.assertEqual("next@16.4.1>sharp", result["sharp_override_selector"])
+        self.assertEqual(["0.35.5"], result["sharp_versions"])
+        self.assertEqual(475, result["lock_package_count"])
+        self.assertEqual(authorization["expected_lockfile_sha256"], result["lockfile_sha256"])
+        self.assertEqual(["8.1.6"], result["vite_versions"])
+        self.assertEqual(["4.1.12"], result["vitest_versions"])
+        self.assertEqual(["4.1.12"], result["vitest_mocker_versions"])
+
+    def test_generated_graph_is_exactly_the_owner_table(self):
+        """Every changed line is a table move, a moved integrity or a declared line."""
+
+        authorization = self.authorization()
+        # The manifest moves exactly the three pins; the workspace only renames the Sharp edge.
+        for relative, expected in (
+            (
+                self.MANIFEST,
+                [
+                    ('    "next": "16.3.8",', '    "next": "16.4.1",'),
+                    ('    "eslint-config-next": "16.3.8",', '    "eslint-config-next": "16.4.1",'),
+                    ('    "vitest": "4.1.11"', '    "vitest": "4.1.12"'),
+                ],
+            ),
+            (
+                self.WORKSPACE,
+                [('  "next@16.3.8>sharp": 0.35.5', '  "next@16.4.1>sharp": 0.35.5')],
+            ),
+        ):
+            with self.subTest(file=relative):
+                base_lines = self.base_file(relative).decode("utf-8").splitlines()
+                lines = self.target_file(relative).decode("utf-8").splitlines()
+                self.assertEqual(
+                    expected,
+                    [(old, new) for old, new in zip(base_lines, lines, strict=True) if old != new],
+                )
+        base_lines = self.base_file(self.LOCK).decode("utf-8").splitlines()
+        lines = self.target_file(self.LOCK).decode("utf-8").splitlines()
+        changed = [
+            (old, new) for old, new in zip(base_lines, lines, strict=True) if old != new
+        ]
+        self.assertEqual(102, len(changed))
+        metadata = {
+            (item["from"], item["to"]) for item in authorization["expected_lock_metadata_changes"]
+        }
+        integrities = {
+            f"    resolution: {{integrity: {value}}}"
+            for value in authorization["expected_lock_integrities"].values()
+        }
+        moves = [("vite", "8.1.5", "8.1.6")]
+        moves += [(package, "4.1.11", "4.1.12") for package in self.VITEST_FAMILY]
+        moves += [(package, "16.3.8", "16.4.1") for package in self.NEXT_FAMILY]
+
+        def moved_back(line: str) -> str:
+            for package, old, new in moves:
+                escaped = re.escape(package)
+                line = re.sub(
+                    rf"(?<![\w/.-]){escaped}@{re.escape(new)}(?=[:'\"(>]|$)",
+                    f"{package}@{old}",
+                    line,
+                )
+                line = re.sub(
+                    rf"^(\s+'?){escaped}('?: ){re.escape(new)}(?=\(|$)",
+                    rf"\g<1>{package}\g<2>{old}",
+                    line,
+                )
+            for old, new in (("4.1.11", "4.1.12"), ("16.3.8", "16.4.1")):
+                line = re.sub(
+                    rf"^(        (?:specifier|version): ){re.escape(new)}",
+                    rf"\g<1>{old}",
+                    line,
+                )
+            return line
+
+        kinds = {"move": 0, "integrity": 0, "metadata": 0, "sharp edge": 0}
+        for old, new in changed:
+            if (old, new) in metadata:
+                kinds["metadata"] += 1
+            elif new in integrities:
+                kinds["integrity"] += 1
+            elif (old, new) == ("  next@16.3.8>sharp: 0.35.5", "  next@16.4.1>sharp: 0.35.5"):
+                kinds["sharp edge"] += 1
+            else:
+                self.assertEqual(old, moved_back(new))
+                kinds["move"] += 1
+        self.assertEqual({"move": 74, "integrity": 21, "metadata": 6, "sharp edge": 1}, kinds)
+        self.assertNotIn("launch-editor", self.target_file(self.LOCK).decode("utf-8"))
+
+    def test_file_outside_allowlist_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        (root / "apps/web/next.config.ts").write_text("export default {};\n", encoding="utf-8")
+        self.assert_reason(
+            "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_workspace_only_renames_the_sharp_edge(self):
+        sharp = '  "next@16.4.1>sharp": 0.35.5\n'
+        for label, old, new, reason in (
+            (
+                "Sharp moved",
+                sharp,
+                '  "next@16.4.1>sharp": 0.35.4\n',
+                "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+            ),
+            (
+                "new vite override",
+                sharp,
+                "  vite: 8.1.6\n" + sharp,
+                "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+            ),
+            (
+                "override dropped",
+                '  "source-map-js@<1.2.2": 1.2.2\n',
+                "",
+                "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+            ),
+            # Left on next@16.3.8, the workspace is no longer a changed, required file.
+            (
+                "edge left on 16.3.8",
+                sharp,
+                '  "next@16.3.8>sharp": 0.35.5\n',
+                "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
+            ),
+        ):
+            with self.subTest(case=label):
+                root, base, authorization = self.dependency_repo()
+                self.rewrite(root / self.WORKSPACE, old, new)
+                self.assert_reason(
+                    reason, lambda: self.validate_dependency(root, base, authorization)
+                )
+
+    def test_manifest_moves_only_the_exact_pins(self):
+        for label, old, new, reason in (
+            (
+                "another dependency",
+                '"typescript": "5.9.3"',
+                '"typescript": "5.9.4"',
+                "UNAUTHORIZED_DEPENDENCY_MANIFEST_CHANGE",
+            ),
+            (
+                "a direct vite pin",
+                '"vitest": "4.1.12"',
+                '"vitest": "4.1.12",\n    "vite": "8.1.6"',
+                "UNAUTHORIZED_DEPENDENCY_MANIFEST_CHANGE",
+            ),
+            (
+                "a range instead of the pin",
+                '"vitest": "4.1.12"',
+                '"vitest": "^4.1.12"',
+                "SECURITY_REMEDIATION_VERSION_INVALID",
+            ),
+            (
+                "another vitest version",
+                '"vitest": "4.1.12"',
+                '"vitest": "4.1.13"',
+                "SECURITY_REMEDIATION_VERSION_INVALID",
+            ),
+            (
+                "another next version",
+                '"next": "16.4.1"',
+                '"next": "16.4.2"',
+                "SECURITY_REMEDIATION_VERSION_INVALID",
+            ),
+            (
+                "a direct sharp dependency",
+                '"react-dom": "19.2.7"',
+                '"react-dom": "19.2.7",\n    "sharp": "0.35.5"',
+                "UNAUTHORIZED_DEPENDENCY_MANIFEST_CHANGE",
+            ),
+            (
+                "reformatted manifest",
+                '  "private": true,\n',
+                '  "private": true ,\n',
+                "UNAUTHORIZED_DEPENDENCY_MANIFEST_CHANGE",
+            ),
+        ):
+            with self.subTest(case=label):
+                root, base, authorization = self.dependency_repo()
+                self.rewrite(root / self.MANIFEST, old, new)
+                self.assert_reason(
+                    reason, lambda: self.validate_dependency(root, base, authorization)
+                )
+
+    def test_every_dependency_file_must_change(self):
+        for relative in (self.LOCK, self.MANIFEST, self.WORKSPACE):
+            with self.subTest(unchanged=relative):
+                root, base, authorization = self.dependency_repo()
+                (root / relative).write_bytes(self.base_file(relative))
+                self.assert_reason(
+                    "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+
+    def test_lock_change_outside_the_authorized_graph_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        # Any package outside vite, vitest, @vitest/*, next and @next/* keeps its base bytes.
+        self.rewrite(root / self.LOCK, "\n  react@19.2.7:\n", "\n  react@19.2.8:\n")
+        failure = self.assert_reason(
+            "LOCKFILE_GRAPH_SCOPE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        self.assertEqual("react@19.2.8", failure.details["package"])
+
+    def test_every_moved_reference_must_follow_the_table(self):
+        for label, old, new in (
+            # The vitest snapshot keeps the vulnerable vite peer key.
+            (
+                "vitest snapshot key",
+                "  vitest@4.1.12(@types/node@26.1.1)(vite@8.1.6(@types/node@26.1.1)):",
+                "  vitest@4.1.12(@types/node@26.1.1)(vite@8.1.5(@types/node@26.1.1)):",
+            ),
+            # The importer still resolves vitest against vite 8.1.5.
+            (
+                "importer",
+                "        version: 4.1.12(@types/node@26.1.1)(vite@8.1.6(@types/node@26.1.1))",
+                "        version: 4.1.12(@types/node@26.1.1)(vite@8.1.5(@types/node@26.1.1))",
+            ),
+            # vitest keeps the vulnerable @vitest/mocker.
+            (
+                "mocker reference",
+                "      '@vitest/mocker': 4.1.12(vite@8.1.6(@types/node@26.1.1))",
+                "      '@vitest/mocker': 4.1.11(vite@8.1.6(@types/node@26.1.1))",
+            ),
+            # A committed override would add a lockfile override line.
+            (
+                "lockfile override",
+                "  source-map-js@<1.2.2: 1.2.2\n",
+                "  source-map-js@<1.2.2: 1.2.2\n  vite: 8.1.6\n",
+            ),
+            # A peer range rewritten by an override is metadata outside the graph.
+            ("peer range", "      vite: ^6.0.0 || ^7.0.0 || ^8.0.0\n", "      vite: 8.1.6\n"),
+            # The lockfile keeps the Sharp edge on next 16.3.8.
+            (
+                "lockfile Sharp edge",
+                "  next@16.4.1>sharp: 0.35.5\n",
+                "  next@16.3.8>sharp: 0.35.5\n",
+            ),
+            # eslint-config-next keeps the vulnerable-era plugin.
+            (
+                "eslint plugin reference",
+                "      '@next/eslint-plugin-next': 16.4.1(",
+                "      '@next/eslint-plugin-next': 16.3.8(",
+            ),
+        ):
+            with self.subTest(case=label):
+                root, base, authorization = self.dependency_repo()
+                self.rewrite(root / self.LOCK, old, new)
+                self.assert_reason(
+                    "LOCKFILE_GRAPH_SCOPE_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+
+    def test_metadata_lines_change_only_as_declared(self):
+        for label, old, new in (
+            (
+                "another peer value",
+                "      '@vitest/browser-webdriverio': ^4.1.11\n",
+                "      '@vitest/browser-webdriverio': 4.1.12\n",
+            ),
+            ("a peer dropped", "      '@vitest/ui': 4.1.12\n", ""),
+            (
+                "a new deprecation",
+                "\n  vitest@4.1.12:\n",
+                "\n  vitest@4.1.12:\n    deprecated: anything\n",
+            ),
+        ):
+            with self.subTest(case=label):
+                root, base, authorization = self.dependency_repo()
+                self.rewrite(root / self.LOCK, old, new)
+                self.assert_reason(
+                    "LOCKFILE_GRAPH_SCOPE_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+        # A declared metadata line the base no longer carries means a different base graph.
+        authorization = self.authorization()
+        base_lock = self.base_file(self.LOCK).decode("utf-8")
+        self.assert_reason(
+            "BASE_LOCK_GRAPH_UNEXPECTED",
+            lambda: rel000.validate_next_sharp_sourcemap_exact_lock_graph(
+                base_lock.replace(
+                    "      '@vitest/ui': 4.1.11\n", "      '@vitest/ui': 4.1.10\n", 1
+                ),
+                self.target_file(self.LOCK).decode("utf-8"),
+                authorization,
+                "vite, vitest and Next.js",
+            ),
+        )
+
+    def test_another_target_version_is_rejected(self):
+        for label, replacements in (
+            ("vite 8.1.5", (("vite@8.1.6", "vite@8.1.5"), ("vite: 8.1.6(", "vite: 8.1.5("))),
+            ("vite 8.2.4", (("vite@8.1.6", "vite@8.2.4"), ("vite: 8.1.6(", "vite: 8.2.4("))),
+            ("mocker 4.1.11", (("@vitest/mocker@4.1.12", "@vitest/mocker@4.1.11"),)),
+            ("next 16.4.2", (("  next@16.4.1", "  next@16.4.2"),)),
+        ):
+            with self.subTest(case=label):
+                root, base, authorization = self.dependency_repo()
+                path = root / self.LOCK
+                text = path.read_text(encoding="utf-8")
+                for old, new in replacements:
+                    text = text.replace(old, new)
+                path.write_text(text, encoding="utf-8")
+                self.assert_reason(
+                    "LOCKFILE_GRAPH_SCOPE_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+        root, base, authorization = self.dependency_repo()
+        authorization["expected_lock_version_replacements"]["vite"]["to"] = ["8.1.6-beta.0"]
+        self.assert_reason(
+            "PRERELEASE_DEPENDENCY_REJECTED",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        root, base, authorization = self.dependency_repo()
+        authorization["expected_direct_version_changes"]["next"]["to"] = "16.4.1-canary.1"
+        self.assert_reason(
+            "PRERELEASE_DEPENDENCY_REJECTED",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_moved_integrities_are_exactly_the_registry_ones(self):
+        for key, marker in (
+            ("vite@8.1.6", "\n  vite@8.1.6:\n    resolution: {integrity: sha512-"),
+            (
+                "@vitest/mocker@4.1.12",
+                "\n  '@vitest/mocker@4.1.12':\n    resolution: {integrity: sha512-",
+            ),
+            ("next@16.4.1", "\n  next@16.4.1:\n    resolution: {integrity: sha512-"),
+        ):
+            with self.subTest(package=key):
+                root, base, authorization = self.dependency_repo()
+                path = root / self.LOCK
+                text = path.read_text(encoding="utf-8")
+                start = text.index(marker) + len(marker)
+                path.write_text(
+                    text[:start] + ("B" if text[start] != "B" else "C") + text[start + 1 :],
+                    encoding="utf-8",
+                )
+                failure = self.assert_reason(
+                    "LOCKFILE_GENERATED_GRAPH_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+                self.assertEqual(key, failure.details["package"])
+        # The integrity of a package that does not move keeps its base bytes.
+        root, base, authorization = self.dependency_repo()
+        path = root / self.LOCK
+        text = path.read_text(encoding="utf-8")
+        marker = "\n  chai@6.2.2:\n    resolution: {integrity: sha512-"
+        start = text.index(marker) + len(marker)
+        path.write_text(
+            text[:start] + ("B" if text[start] != "B" else "C") + text[start + 1 :],
+            encoding="utf-8",
+        )
+        self.assert_reason(
+            "LOCKFILE_GRAPH_SCOPE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_lockfile_keeps_sharp_on_its_exact_target(self):
+        root, base, authorization = self.dependency_repo()
+        authorization["target_sharp_version"] = "0.35.4"
+        failure = self.assert_reason(
+            "LOCKFILE_INCONSISTENT",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        self.assertEqual(["0.35.5"], failure.details["actual"])
+
+    def test_generated_lockfile_drift_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        path = root / self.LOCK
+        path.write_bytes(path.read_bytes() + b"\n")
+        self.assert_reason(
+            "LOCKFILE_GRAPH_SCOPE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        root, base, authorization = self.dependency_repo()
+        authorization["expected_lockfile_sha256"] = "0" * 64
+        self.assert_reason(
+            "LOCKFILE_GENERATED_GRAPH_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        root, base, authorization = self.dependency_repo()
+        authorization["expected_lock_package_count"] = 476
+        self.assert_reason(
+            "LOCKFILE_PACKAGE_COUNT_CHANGED",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_base_lockfile_must_be_the_authorized_vulnerable_graph(self):
+        authorization = self.authorization()
+        base_lock = self.base_file(self.LOCK).decode("utf-8")
+        lock = self.target_file(self.LOCK).decode("utf-8")
+        rel000.validate_next_sharp_sourcemap_exact_lock_graph(
+            base_lock, lock, authorization, "vite, vitest and Next.js"
+        )
+        for old, new in (
+            ("\n  vite@8.1.5:\n", "\n  vite@8.1.4:\n"),
+            ("\n  '@vitest/spy@4.1.11':\n", "\n  '@vitest/spy@4.1.10':\n"),
+            ("\n  '@next/env@16.3.8':\n", "\n  '@next/env@16.3.7':\n"),
+        ):
+            with self.subTest(old=old):
+                self.assert_reason(
+                    "BASE_LOCK_GRAPH_UNEXPECTED",
+                    lambda: rel000.validate_next_sharp_sourcemap_exact_lock_graph(
+                        base_lock.replace(old, new, 1),
+                        lock,
+                        authorization,
+                        "vite, vitest and Next.js",
+                    ),
+                )
+
+    def test_real_audits_and_issue_are_pending_merge_with_braces_accepted(self):
+        authorization = self.authorization()
+        result = self.security()
+        self.assertEqual(rel000.SECURITY_REMEDIATION, result["mode"])
+        self.assertEqual("REMEDIATED_PENDING_MERGE", result["dependency_security_status"])
+        self.assertEqual(
+            "BLOCKED_BY_SECURITY_REMEDIATION_MERGE_AND_OWNER_DECISION",
+            result["release_candidate_status"],
+        )
+        self.assertEqual(
+            [
+                ("Issue #5", "CLOSED", 1, "REMEDIATED"),
+                ("Issue #304", "OPEN", 9, "REMEDIATED_PENDING_MERGE"),
+                ("Issue #180", "OPEN", 1, "ACCEPTED_KNOWN_ADVISORY"),
+            ],
+            [
+                (item["id"], item["state"], item["tracked_advisories"], item["remediation_status"])
+                for item in result["known_security_issues"]
+            ],
+        )
+        self.assertEqual([self.KNOWN_ADVISORY], result["remaining_advisory_ids"])
+        self.assertEqual(
+            sorted(authorization["issue_advisories"][self.ISSUE]), result["removed_advisory_ids"]
+        )
+        self.assertEqual(
+            {"Issue #304"}, {item["tracking_issue"] for item in result["remediated_advisories"]}
+        )
+        self.assertEqual(
+            [
+                {
+                    "advisory_id": self.KNOWN_ADVISORY,
+                    "package": "braces",
+                    "severity": "high",
+                    "dependency_scope": "dev",
+                    "tracking_issue": "Issue #180",
+                    "remediation_id": rel000.BRACES_KNOWN_ADVISORY_ID,
+                    "lockfile_sha256": authorization["expected_lockfile_sha256"],
+                }
+            ],
+            result["accepted_known_advisories"],
+        )
+        self.assertEqual(
+            {"total": 1, "critical": 0, "high": 1, "moderate": 0, "low": 0},
+            result["branch_totals"],
+        )
+        self.assertIsNone(result["related_security_issue"])
+        rel000.assert_redacted(result["accepted_known_advisories"])
+
+    def test_sanitized_pnpm_audit_matches_the_authorized_baseline(self):
+        """sanitize-audit turns the real pnpm 11.15.1 base audit of c84ef92 into the authorized set."""
+
+        def raw(number, advisory_id, package, severity, cwe, title, affected, patched, finding):
+            return {
+                "findings": [
+                    {
+                        "version": finding[0],
+                        "paths": finding[1],
+                        "dev": True,
+                        "optional": False,
+                        "bundled": False,
+                    }
+                ],
+                "id": number,
+                "title": title,
+                "module_name": package,
+                "vulnerable_versions": affected,
+                "patched_versions": patched,
+                "severity": severity,
+                "cwe": cwe,
+                "github_advisory_id": advisory_id,
+                "url": f"https://github.com/advisories/{advisory_id}",
+            }
+
+        vite = ("8.1.5", [".>vitest>@vitest/mocker>vite", ".>vitest>vite"])
+        mocker = ("4.1.11", [".>vitest>@vitest/mocker"])
+        vite_range = (">=8.0.0 <=8.1.5", ">=8.1.6")
+        entries = [
+            raw(
+                1240992,
+                self.KNOWN_ADVISORY,
+                "braces",
+                "high",
+                "CWE-674",
+                "braces vulnerable to stack-exhaustion denial of service through deeply "
+                "nested patterns",
+                "<=3.0.3",
+                ">=3.0.4",
+                (
+                    "3.0.3",
+                    [".>eslint-config-next>@next/eslint-plugin-next>fast-glob>micromatch>braces"],
+                ),
+            ),
+            raw(1242624, "GHSA-698v-4r3x-3vcv", "vite", "moderate", "CWE-78",
+                "launch-editor: escapeCmdArgs() omits % escaping on Windows", *vite_range, vite),
+            raw(1242653, "GHSA-r825-w8mm-5pxw", "vite", "moderate", "CWE-88",
+                "launch-editor: Editor CLI flag misinterpretation causing arbitrary command "
+                "execution for some editors", *vite_range, vite),
+            raw(1242660, "GHSA-587h-7wmj-h5pm", "vite", "high", "CWE-77",
+                "launch-editor: `fs.existsSync()` existence check can be bypassed on Windows",
+                *vite_range, vite),
+            raw(1242726, "GHSA-9jrq-w75r-8gcw", "vite", "low", "CWE-80",
+                "Vite: Cross origin script execution through Vite custom middleware",
+                *vite_range, vite),
+            raw(1242732, "GHSA-rq7h-c2jc-7f22", "vite", "moderate", "CWE-22, CWE-284",
+                "Vite: Files outside `server.fs.allow` could be served when project paths "
+                "match system paths on non-Windows machine", *vite_range, vite),
+            raw(1242767, "GHSA-qxg6-89mg-rqv8", "@vitest/mocker", "moderate",
+                "CWE-94, CWE-116, CWE-306",
+                "Vitest: Code injection via unauthenticated manual mock registration",
+                ">=2.1.0-beta.7 <4.1.12", ">=4.1.12", mocker),
+            raw(1242769, "GHSA-xp26-3454-mjgp", "@vitest/mocker", "moderate", "CWE-22",
+                "Vitest: Windows backslash traversal bypasses the @vitest/mocker redirect "
+                "allowlist fix", ">=4.1.11 <4.1.12", ">=4.1.12", mocker),
+            raw(1242816, "GHSA-2464-fhr4-w9xw", "next", "critical", "CWE-1395",
+                "Next.js: Unauthenticated Remote Code Execution in Image Optimization API "
+                "when SVG files are used", ">=16.0.0 <=16.4.0", ">=16.4.1", ("16.3.8", [".>next"])),
+            raw(1242818, "GHSA-p3m5-59mp-jv5r", "next", "high", "CWE-770",
+                "Next.js: Denial of Service in App Router using Server Actions",
+                ">=16.0.0 <=16.4.0", ">=16.4.1", ("16.3.8", [".>next"])),
+        ]
+        source = self.root / "pnpm.json"
+        source.write_text(
+            json.dumps(
+                {
+                    "advisories": {str(entry["id"]): entry for entry in entries},
+                    "metadata": {
+                        "vulnerabilities": {
+                            "info": 0,
+                            "low": 1,
+                            "moderate": 5,
+                            "high": 3,
+                            "critical": 1,
+                        },
+                        "dependencies": 75,
+                        "devDependencies": 363,
+                        "optionalDependencies": 94,
+                        "totalDependencies": 475,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        output = self.root / "base-audit.json"
+        rel000.sanitize_audit(source, output, True, 1)
+        sanitized = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(self.audit(self.base_advisories()), sanitized)
+        authorization = self.authorization()
+        self.assertEqual(authorization["expected_base_totals"], sanitized["totals"])
+        self.assertEqual(
+            authorization["expected_base_packages"],
+            {item["advisory_id"]: item["package"] for item in sanitized["advisories"]},
+        )
+
+    def by_id(self, *advisory_ids):
+        advisories = {item["advisory_id"]: item for item in self.base_advisories()}
+        return [advisories[advisory_id] for advisory_id in advisory_ids]
+
+    def test_retained_advisory_is_rejected_or_blocks(self):
+        for advisory_id in ("GHSA-587h-7wmj-h5pm", "GHSA-qxg6-89mg-rqv8", "GHSA-p3m5-59mp-jv5r"):
+            with self.subTest(advisory=advisory_id):
+                self.assert_reason(
+                    "BRANCH_AUDIT_NOT_ZERO",
+                    lambda: self.security(
+                        branch=self.audit([*self.by_id(advisory_id), self.braces_advisory()])
+                    ),
+                )
+        # The critical Next.js advisory can never stay on the branch.
+        self.assert_reason(
+            "AUDIT_CRITICAL_PRESENT",
+            lambda: self.security(
+                branch=self.audit([*self.by_id("GHSA-2464-fhr4-w9xw"), self.braces_advisory()])
+            ),
+        )
+        # A retained advisory that replaces braces in the totals still blocks the gate.
+        self.assertEqual(
+            "BLOCKED",
+            self.security(branch=self.audit(self.by_id("GHSA-587h-7wmj-h5pm")))[
+                "dependency_security_status"
+            ],
+        )
+
+    def test_base_audit_must_match_the_authorized_baseline(self):
+        # The earlier sets (K1 and K3: four, K5: eight) are not the authorized baseline.
+        for ids in (
+            ("GHSA-587h-7wmj-h5pm", "GHSA-698v-4r3x-3vcv", "GHSA-r825-w8mm-5pxw", self.KNOWN_ADVISORY),
+            tuple(
+                item["advisory_id"]
+                for item in self.base_advisories()
+                if item["package"] != "next"
+            ),
+        ):
+            with self.subTest(advisories=len(ids)):
+                self.assert_reason(
+                    "BASE_AUDIT_UNEXPECTED",
+                    lambda: self.security(base=self.audit(self.by_id(*ids))),
+                )
+        advisories = self.base_advisories()
+        next(item for item in advisories if item["advisory_id"] == "GHSA-qxg6-89mg-rqv8")[
+            "package"
+        ] = "vitest"
+        self.assert_reason(
+            "BASE_AFFECTED_PACKAGES_UNEXPECTED",
+            lambda: self.security(base=self.audit(advisories)),
+        )
+        # Swapping two severities keeps every total, so only the exact mapping catches it.
+        advisories = self.base_advisories()
+        by_id = {item["advisory_id"]: item for item in advisories}
+        by_id["GHSA-587h-7wmj-h5pm"]["severity"] = "moderate"
+        by_id["GHSA-698v-4r3x-3vcv"]["severity"] = "high"
+        self.assert_reason(
+            "BASE_ADVISORY_SEVERITIES_UNEXPECTED",
+            lambda: self.security(base=self.audit(advisories)),
+        )
+
+    def test_tracking_issue_must_be_open_exact_and_not_cite_braces(self):
+        self.assert_reason(
+            "ADDITIONAL_SECURITY_ISSUE_STATE_INVALID",
+            lambda: self.security(tracking=self.tracking(state="CLOSED")),
+        )
+        tracked = self.authorization()["issue_advisories"][self.ISSUE]
+        for ids in (
+            tracked[:3],
+            tracked[:5],
+            tracked[:7],
+            [*tracked, self.KNOWN_ADVISORY],
+            [*tracked, "GHSA-aaaa-bbbb-cccc"],
+        ):
+            with self.subTest(ids=ids):
+                self.assert_reason(
+                    "ADDITIONAL_SECURITY_TRACKING_INVALID",
+                    lambda: self.security(tracking=self.tracking(tracked=ids)),
+                )
+        root, base, _ = self.dependency_repo()
+        self.assert_reason(
+            "KNOWN_ADVISORY_ISSUE_STATE_INVALID",
+            lambda: self.accepted(
+                root, base, self.tracking(known_issues=[self.known_issue(state="CLOSED")])
+            ),
+        )
+
+    def test_base_binding_reads_the_16_3_8_graph_only_in_this_remediation(self):
+        root, base, authorization = self.dependency_repo()
+        accepted = self.accepted(root, base)
+        self.assertEqual(
+            [rel000.BRACES_KNOWN_ADVISORY_ID], [item["remediation_id"] for item in accepted]
+        )
+        self.assertEqual(authorization["expected_lockfile_sha256"], accepted[0]["lockfile_sha256"])
+        # Normal mode and any other remediation read the base against the rebound graph.
+        for remediation in ({}, self.braces()):
+            with self.subTest(remediation=remediation.get("id")):
+                self.assert_reason(
+                    "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+                    lambda: self.accepted(root, base, remediation=remediation),
+                )
+        for field, value in (
+            ("expected_lockfile_sha256", "0" * 64),
+            ("advisory_id", "GHSA-aaaa-bbbb-cccc"),
+        ):
+            with self.subTest(tampered=field):
+                tampered = copy.deepcopy(authorization)
+                tampered["known_advisory_base_binding"][field] = value
+                self.assert_reason(
+                    "KNOWN_ADVISORY_LOCK_GRAPH_CHANGED",
+                    lambda: self.accepted(root, base, remediation=tampered),
+                )
+        # The branch can never keep the base graph: it is read against the rebound one.
+        (root / self.LOCK).write_bytes(self.base_file(self.LOCK))
+        self.assert_reason("KNOWN_ADVISORY_LOCK_PATH_INVALID", lambda: self.accepted(root, base))
+
+    def test_tested_base_policy_predating_the_rebinding_still_loads(self):
+        authorization = self.authorization()
+        base_policy = json.loads(self.base_file(rel000.REMEDIATION_POLICY_PATH))
+        self.assertNotIn(
+            rel000.VITE_REMEDIATION_ID,
+            {
+                item["id"]
+                for item in [
+                    *base_policy["historical_remediations"],
+                    *base_policy["active_remediations"],
+                ]
+            },
+        )
+        braces = next(
+            item
+            for item in base_policy["active_remediations"]
+            if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+        )["accepted_known_advisory"]
+        for field in ("lock_path", "expected_lockfile_sha256"):
+            self.assertEqual(authorization["known_advisory_base_binding"][field], braces[field])
+        # The tree under test must carry the rebound graph; only a tested base may not.
+        self.assert_reason(
+            "REMEDIATION_POLICY_INVALID",
+            lambda: rel000.validate_remediation_policy(copy.deepcopy(base_policy)),
+        )
+        rel000.validate_remediation_policy(copy.deepcopy(base_policy), base_policy=True)
+        # Such a base carries exactly the 16.3.8 graph; the rebound path or another hash fails.
+        for label, changes in (
+            ("rebound path", {"lock_path": rel000.BRACES_KNOWN_ADVISORY["lock_path"]}),
+            ("other hash", {"expected_lockfile_sha256": "0" * 64}),
+        ):
+            with self.subTest(case=label):
+                value = copy.deepcopy(base_policy)
+                next(
+                    item
+                    for item in value["active_remediations"]
+                    if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+                )["accepted_known_advisory"].update(copy.deepcopy(changes))
+                self.assert_reason(
+                    "REMEDIATION_POLICY_INVALID",
+                    lambda: rel000.validate_remediation_policy(value, base_policy=True),
+                )
+        self.assertEqual(
+            ["AUTH-001-OIDC", "ADP-001-AZURE", "OBS-003-OPENTELEMETRY"],
+            [
+                item["id"]
+                for item in rel000.load_base_dependency_admissions(
+                    REPOSITORY_ROOT, authorization["authorized_base_sha"]
+                )
+            ],
+        )
+
+    def test_release_evidence_after_merge_is_clean_with_braces_on_the_new_graph(self):
+        """The push run on main tests the merged commit against itself (base = tested)."""
+
+        root, _, _ = self.dependency_repo()
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "merged"], cwd=root, check=True)
+        merged = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        result = rel000.validate_dependency_diff(
+            root, merged, rel000.NORMAL_RELEASE_EVIDENCE, None, []
+        )
+        self.assertEqual("CLEAN", result["dependency_diff_against_base"])
+        accepted = self.accepted(root, merged, remediation={})
+        self.assertEqual(
+            self.braces()["accepted_known_advisory"]["expected_lockfile_sha256"],
+            accepted[0]["lockfile_sha256"],
+        )
+        # Against the vulnerable base, normal mode rejects the three dependency files.
+        root, base, _ = self.dependency_repo()
+        failure = self.assert_reason(
+            "DEPENDENCY_FILES_CHANGED",
+            lambda: rel000.validate_dependency_diff(
+                root, base, rel000.NORMAL_RELEASE_EVIDENCE, None, []
+            ),
+        )
+        self.assertEqual([self.MANIFEST, self.LOCK, self.WORKSPACE], failure.details["files"])
+
+    def test_sharp_runtime_smoke_requires_the_0_35_5_target(self):
+        authorization = self.authorization()
+
+        def smoke(version):
+            return {
+                "result": "SHARP_RUNTIME_SMOKE_PASSED",
+                "sharp_version": version,
+                "dependency_parent": "next",
+                "node_version": "24.13.0",
+                "platform": "linux",
+                "architecture": "x64",
+                "output_format": "png",
+                "output_bytes": 95,
+            }
+
+        result = rel000.validate_sharp_runtime_smoke(
+            smoke("0.35.5"), rel000.SECURITY_REMEDIATION, authorization
+        )
+        self.assertEqual(("PASSED", "0.35.5"), (result["status"], result["sharp_version"]))
+        self.assert_reason(
+            "SHARP_RUNTIME_SMOKE_VERSION_INVALID",
+            lambda: rel000.validate_sharp_runtime_smoke(
+                smoke("0.35.4"), rel000.SECURITY_REMEDIATION, authorization
+            ),
+        )
+        self.assert_reason(
+            "SHARP_RUNTIME_SMOKE_NOT_EXECUTED",
+            lambda: rel000.validate_sharp_runtime_smoke(
+                None, rel000.SECURITY_REMEDIATION, authorization
+            ),
+        )
+
+    def test_fixture_and_both_workflows_bind_issue_branch_and_remediation(self):
+        fixture = json.loads(
+            (REPOSITORY_ROOT / "tests/fixtures/rel-000/security-tracking.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(304, fixture["remediation_issues"][rel000.VITE_REMEDIATION_ID])
+        self.assertEqual({rel000.BRACES_KNOWN_ADVISORY_ID: 180}, fixture["known_advisory_issues"])
+        for name in ("ci.yml", "pr-validation.yml"):
+            workflow = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            with self.subTest(workflow=name):
+                self.assertIn(
+                    "github.head_ref == 'fix/security-2026-14-vite' && 'SEC-2026-14-VITE'",
+                    workflow,
+                )
+
+
 class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
     """SEC-2026-12: the SignalR.Common, Cryptography.Pkcs and Cryptography.Xml advisories.
 
@@ -8838,7 +10254,8 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
         """A repository at the authorized base files, then the remediation's files on top.
 
         The web lockfile is committed unchanged, so the braces accepted known advisory can
-        be resolved against the same repository.
+        be resolved against the same repository. It is the checkout's, the graph braces is
+        bound to today (SEC-2026-14 rebound it), as BracesKnownAdvisoryTests reads it.
         """
 
         authorization = self.authorization()
@@ -8847,7 +10264,11 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
         for relative in files:
             path = root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(self.base_file(relative))
+            path.write_bytes(
+                (REPOSITORY_ROOT / relative).read_bytes()
+                if relative == "apps/web/pnpm-lock.yaml"
+                else self.base_file(relative)
+            )
         subprocess.run(["git", "init", "-q"], cwd=root, check=True)
         subprocess.run(
             ["git", "config", "user.email", "rel000@example.invalid"], cwd=root, check=True
@@ -9950,7 +11371,8 @@ class OpenApiYamlReaderRemediationPolicyTests(unittest.TestCase):
         """A repository at the authorized base files, then the remediation's files on top.
 
         The web lockfile is committed unchanged, so the braces accepted known advisory can
-        be resolved against the same repository.
+        be resolved against the same repository. It is the checkout's, the graph braces is
+        bound to today (SEC-2026-14 rebound it), as BracesKnownAdvisoryTests reads it.
         """
 
         authorization = self.authorization()
@@ -9959,7 +11381,11 @@ class OpenApiYamlReaderRemediationPolicyTests(unittest.TestCase):
         for relative in files:
             path = root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
-            path.write_bytes(self.base_file(relative))
+            path.write_bytes(
+                (REPOSITORY_ROOT / relative).read_bytes()
+                if relative == "apps/web/pnpm-lock.yaml"
+                else self.base_file(relative)
+            )
         subprocess.run(["git", "init", "-q"], cwd=root, check=True)
         subprocess.run(
             ["git", "config", "user.email", "rel000@example.invalid"], cwd=root, check=True
