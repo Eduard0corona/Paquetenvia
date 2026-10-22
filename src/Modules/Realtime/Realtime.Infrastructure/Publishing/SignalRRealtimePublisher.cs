@@ -32,7 +32,8 @@ internal sealed class SignalRRealtimePublisher(
         PublishAsync(audience.GroupName, RealtimeEventTypes.ExternalOfferChanged, message.EventType, () => operations.Clients.Group(RequireGroup(audience.GroupName)).ExternalOfferChanged(message), cancellationToken);
 
     public Task PublishOperationsNotificationStatusChangedAsync(OperationsAudience audience, RealtimeEnvelope<NotificationStatusChangedPayload> message, CancellationToken cancellationToken) =>
-        PublishAsync(audience.GroupName, RealtimeEventTypes.NotificationStatusChanged, message.EventType, () => operations.Clients.Group(RequireGroup(audience.GroupName)).NotificationStatusChanged(message), cancellationToken);
+        // NTF-RECIPIENT-NOTICES-2026-10-20: one client method carries both envelope versions (AI-12 decided amendment).
+        PublishAsync(audience.GroupName, RealtimeEventTypes.IsNotificationStatusChanged(message.EventType) ? message.EventType : RealtimeEventTypes.NotificationStatusChanged, message.EventType, () => operations.Clients.Group(RequireGroup(audience.GroupName)).NotificationStatusChanged(message), cancellationToken);
 
     public Task PublishOperationsDriverLocationUpdatedAsync(OperationsAudience audience, RealtimeEnvelope<DriverLocationUpdatedPayload> message, CancellationToken cancellationToken) =>
         PublishAsync(audience.GroupName, RealtimeEventTypes.DriverLocationUpdated, message.EventType, () => operations.Clients.Group(RequireGroup(audience.GroupName)).DriverLocationUpdated(message), cancellationToken);

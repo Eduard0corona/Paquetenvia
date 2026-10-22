@@ -396,7 +396,7 @@ internal sealed class RealtimeOutboxProcessor(
         CancellationToken cancellationToken)
     {
         const string lane = "business";
-        var eventType = RealtimeEventTypes.NotificationStatusChanged;
+        var eventType = value.EventType;
         using (telemetry.MeasurePublish(lane, eventType))
         {
             await publisher.PublishOperationsNotificationStatusChangedAsync(
@@ -661,7 +661,7 @@ internal sealed class RealtimeOutboxProcessor(
         ParsedAssignmentChanged => RealtimeEventTypes.AssignmentChanged,
         ParsedExternalOfferChanged => RealtimeEventTypes.ExternalOfferChanged,
         ParsedRouteChanged => RealtimeEventTypes.RouteChanged,
-        ParsedNotificationStatusChanged => RealtimeEventTypes.NotificationStatusChanged,
+        ParsedNotificationStatusChanged notification => notification.EventType,
         _ => throw new OutboxMessageException(RealtimeOutboxErrorCodes.UnknownTopic),
     };
 

@@ -52,12 +52,17 @@ public sealed record ExternalOfferChangedPayload(
     long CommissionCents,
     DateTimeOffset ExpiresAt);
 
+/// <param name="OrderId">NTF-RECIPIENT-NOTICES-2026-10-20 (v2): the order of a recipient notice; absent for IN_APP.</param>
+/// <param name="Notice">NTF-RECIPIENT-NOTICES-2026-10-20 (v2): TRACKING_LINK, IN_TRANSIT, DELIVERY_FAILED or DELIVERED for a
+/// recipient notice; absent for IN_APP. Never a recipient, a template parameter, a link, a token or a result code.</param>
 public sealed record NotificationStatusChangedPayload(
     Guid NotificationId,
     string Channel,
     string Status,
     int Attempts,
-    DateTimeOffset OccurredAt);
+    DateTimeOffset OccurredAt,
+    Guid? OrderId = null,
+    string? Notice = null);
 
 public sealed record PublicEtaChangedPayload(
     string PublicOrderId,
