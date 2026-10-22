@@ -379,6 +379,103 @@ override incompatible, versión vulnerable duplicada o smoke test ausente o
 fallido. La suite focal deriva su conteo de los tests descubiertos y exige que
 todos los casos descubiertos sean ejecutados y aprobados, sin fallos ni skips.
 
+### Remediación pnpm de vite, vitest y Next.js (SEC-2026-14)
+
+`SEC-2026-14-VITE` (Issue #304, rama `fix/security-2026-14-vite`, base `c84ef92`) remedia nueve
+avisos publicados del 20 al 22 de octubre de 2026:
+
+- cinco en `vite` 8.1.5 (`>=8.0.0 <8.1.6`), que sólo llega por `vitest`: `GHSA-698v-4r3x-3vcv`,
+  `GHSA-587h-7wmj-h5pm` (alto, sólo Windows) y `GHSA-r825-w8mm-5pxw` en el `launch-editor` que
+  incluye, y `GHSA-rq7h-c2jc-7f22` y `GHSA-9jrq-w75r-8gcw` (bajo) en su servidor de desarrollo;
+- dos en `@vitest/mocker` 4.1.11, moderados: `GHSA-xp26-3454-mjgp` y `GHSA-qxg6-89mg-rqv8`.
+  Sólo los corrige `@vitest/mocker` 4.1.12, que `vitest` fija exactamente;
+- dos en `next` 16.3.8 (`>=16.0.0 <16.4.1`), que corre en producción: `GHSA-2464-fhr4-w9xw`
+  (crítico, RCE en el optimizador de imágenes con SVG; su mitigación es Sharp `>=0.35.5`, que el
+  override ya fija) y `GHSA-p3m5-59mp-jv5r` (alto, DoS con Server Actions, que el web no usa).
+
+El owner decidió "Remediar con la tabla", "Incluir los 3", "Retirar en main primero", "Agregar
+vitest 4.1.12" y "Sumar next 16.4.1" (2026-10-21/22). Si salen más avisos que esta misma tabla
+corrige, se agregan sin volver a preguntar. La tabla:
+
+| Paquete | De | A | Dónde |
+|---|---|---|---|
+| `vite` | 8.1.5 | 8.1.6 | transitivo de `vitest`, sólo lockfile |
+| `vitest` | 4.1.11 | 4.1.12 | `devDependency` exacta en `apps/web/package.json` y lockfile |
+| `@vitest/expect`, `mocker`, `pretty-format`, `runner`, `snapshot`, `spy`, `utils` | 4.1.11 | 4.1.12 | transitivos fijados por `vitest`, lockfile |
+| `next` | 16.3.8 | 16.4.1 | dependencia exacta en `apps/web/package.json` y lockfile |
+| `eslint-config-next` | 16.3.8 | 16.4.1 | `devDependency` exacta en `apps/web/package.json` y lockfile |
+| `@next/env`, `@next/eslint-plugin-next` y los ocho `@next/swc-*` | 16.3.8 | 16.4.1 | transitivos de `next`, lockfile |
+| override de Sharp | `next@16.3.8>sharp` | `next@16.4.1>sharp` | `apps/web/pnpm-workspace.yaml`; Sharp sigue en 0.35.5 |
+
+- **Archivos.** `package.json` cambia tres líneas y `pnpm-workspace.yaml` una; no hay override
+  nuevo. Lo regeneró pnpm 11.15.1: para mover sólo `vite` se usó un override temporal
+  `vite: 8.1.6`, `pnpm install --lockfile-only`, se quitó y se corrió otra vez; después, los pines y
+  el override renombrado, y otra corrida. Cambian 102 líneas del lockfile:
+  - 74 claves y referencias de los veintiún paquetes movidos;
+  - sus 21 integridades;
+  - 6 líneas de metadatos de la entrada `vitest@4.1.12` (sus pares opcionales `@vitest/*`
+    declarados en 4.1.12, y `@vitest/browser-webdriverio` en `^4.1.11`);
+  - la arista de Sharp del lockfile.
+
+  Siguen 475 paquetes, ninguno nuevo.
+- **Prueba adaptada.** `next dev` 16.4 sirve todo documento con `Cache-Control: no-store` exacto
+  (16.3 usaba su propio `private, no-cache, no-store, max-age=0, must-revalidate`). La prueba de
+  navegador del dashboard (`OperationsDashboardPwaPlaywrightTests`, que usa `next dev`) exigía
+  `no-cache` en `Cache-Control`; ahora exige `no-store` ahí y `Pragma: no-cache`, que es lo que
+  documenta `obs-001-dispatch-dashboard.md`. Con `next start`, `/ops/*` sigue recibiendo
+  `Cache-Control: no-store, private` y `Pragma: no-cache`. Es el único archivo de pruebas fuera de
+  REL-000 que la autorización admite.
+- **Validador.** `validate_vite_remediation_diff` exige:
+  - el manifiesto igual a la base salvo las líneas exactas de los tres pines, cada uno en su
+    sección, y Sharp nunca directo;
+  - el workspace igual a la base salvo el override renombrado, con los overrides exactos
+    (`allowed_overrides`);
+  - el lockfile igual a la base tras los movimientos y el override renombrado, con el grafo exacto
+    de SEC-2026-11 (`validate_next_sharp_sourcemap_exact_lock_graph`);
+  - las seis líneas de metadatos declaradas (`expected_lock_metadata_changes`), cada una una sola
+    vez dentro de la entrada `vitest@4.1.12`;
+  - la integridad de cada paquete movido igual a la del registro npm (`expected_lock_integrities`);
+  - el SHA-256 del lockfile, el conteo de paquetes y Sharp 0.35.5 en su arista; el smoke de Sharp
+    es obligatorio.
+
+  Cualquier otro archivo, línea, versión o prerelease falla cerrado.
+  `expected_lock_metadata_changes` sólo puede aparecer en esta autorización, con exactamente sus
+  líneas.
+- **braces (SEC-2026-10, Issue #180).** `eslint-config-next` 16.4.1 mueve la ruta en la que está
+  aceptado, así que la remediación revincula, como SEC-2026-11, sólo las dos cabezas de la ruta
+  (16.3.8 → 16.4.1) y el `expected_lockfile_sha256` (`336b1c82…` → `3f5834c3…`). Paquete,
+  versión y forma de la ruta no cambian.
+  - Su `known_advisory_base_binding` hace que sólo su propia corrida lea la base con el grafo
+    16.3.8; el modo normal y cualquier otra remediación la leen contra el nuevo.
+  - Una política base probada anterior a SEC-2026-14 sólo carga con exactamente ese grafo 16.3.8.
+  - `known_advisory_base_binding` sólo puede aparecer en SEC-2026-11 o SEC-2026-14, activa o
+    retirada, cada una con exactamente su vinculación (`KNOWN_ADVISORY_BASE_BINDINGS`).
+    `issue_cited_known_advisories` sigue siendo sólo de SEC-2026-11.
+  - Las réplicas resuelven braces sobre el grafo de su momento: SEC-2026-11 con braces tal como lo
+    declaraba su `validated_target_sha`, y SEC-2026-12 y SEC-2026-13 con el lockfile del checkout.
+- **Orden (K4).** `main` aún mapea SEC-2026-13 en la línea `REL000_REMEDIATION_ID`, que
+  `development` ya retiró (#292), y el back-sync chocaría en esa línea. Por eso el retiro va
+  primero a `main` y la fila del decision-log y su entrada del CHANGELOG van después, en un PR
+  normal a `development`.
+
+Historia de la remediación:
+
+- **Fusión.** Entró a `main` con #305 (merge `059e2e9`), después de Foundation CI 13/13 en su
+  cabeza `325f2bb`; el árbol de ambos commits es el mismo.
+- **Retiro en `main`.** Un PR pequeño a `main` la movió a `historical_remediations` con `status`
+  `MERGED`, `tracked_pull_request` 305 y `validated_target_sha` `059e2e9`. También devolvió la
+  línea `REL000_REMEDIATION_ID` de ambos flujos y el fixture a su forma de `c84ef92`. No tocó
+  archivos normativos. Las pruebas de SEC-2026-14 reproducen ese commit como la autorización
+  activa que fue. La entrada retirada sigue declarando la tabla exacta, las líneas de metadatos
+  y la vinculación base de braces, y la política sólo carga con exactamente esos valores.
+- **Después del retiro.** El modo normal juzga el grafo fusionado como contenido de la base: un
+  cambio que no toca las dependencias web es `CLEAN`, braces queda aceptado sobre el grafo
+  revinculado y volver a mover `vite`, `vitest` o `next` falla cerrado
+  (`DEPENDENCY_FILES_CHANGED`). El back-sync `main` → `development` entra sin conflictos.
+
+Las imágenes web instalan las dependencias de desarrollo antes de `NODE_ENV=production` y copian
+`node_modules`, así que incluyen `vite` y `vitest`; `next start` en Linux nunca los carga.
+
 ## Admisión explícita de dependencias (GOV-DEPENDENCY-ADMISSION-001)
 
 Desde MVP-1 el owner admite dependencias nuevas una por una ("Admisión

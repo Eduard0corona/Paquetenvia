@@ -718,6 +718,410 @@
       "manual_lockfile_edits_allowed": false
     },
     {
+      "id": "SEC-2026-14-VITE",
+      "mode": "SECURITY_REMEDIATION",
+      "status": "MERGED",
+      "authorized_base_sha": "c84ef92ef32fb8517f7625ea7933c65940348345",
+      "authorized_source_branch": "fix/security-2026-14-vite",
+      "validated_target_sha": "059e2e9d3067663e76c37d2e619938ce2f1bc67a",
+      "tracked_pull_request": 305,
+      "tracked_issue": 304,
+      "tracked_issue_title": "SEC-2026-14: remediate vite, vitest and Next.js advisories",
+      "issue_advisories": {
+        "304": [
+          "GHSA-698v-4r3x-3vcv",
+          "GHSA-587h-7wmj-h5pm",
+          "GHSA-r825-w8mm-5pxw",
+          "GHSA-rq7h-c2jc-7f22",
+          "GHSA-9jrq-w75r-8gcw",
+          "GHSA-xp26-3454-mjgp",
+          "GHSA-qxg6-89mg-rqv8",
+          "GHSA-p3m5-59mp-jv5r",
+          "GHSA-2464-fhr4-w9xw"
+        ]
+      },
+      "expected_base_advisories": [
+        "GHSA-698v-4r3x-3vcv",
+        "GHSA-587h-7wmj-h5pm",
+        "GHSA-r825-w8mm-5pxw",
+        "GHSA-rq7h-c2jc-7f22",
+        "GHSA-9jrq-w75r-8gcw",
+        "GHSA-xp26-3454-mjgp",
+        "GHSA-qxg6-89mg-rqv8",
+        "GHSA-p3m5-59mp-jv5r",
+        "GHSA-2464-fhr4-w9xw",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "expected_base_packages": {
+        "GHSA-698v-4r3x-3vcv": "vite",
+        "GHSA-587h-7wmj-h5pm": "vite",
+        "GHSA-r825-w8mm-5pxw": "vite",
+        "GHSA-rq7h-c2jc-7f22": "vite",
+        "GHSA-9jrq-w75r-8gcw": "vite",
+        "GHSA-xp26-3454-mjgp": "@vitest/mocker",
+        "GHSA-qxg6-89mg-rqv8": "@vitest/mocker",
+        "GHSA-p3m5-59mp-jv5r": "next",
+        "GHSA-2464-fhr4-w9xw": "next",
+        "GHSA-vfj7-8cjw-p6xm": "braces"
+      },
+      "expected_base_severities": {
+        "GHSA-698v-4r3x-3vcv": "moderate",
+        "GHSA-587h-7wmj-h5pm": "high",
+        "GHSA-r825-w8mm-5pxw": "moderate",
+        "GHSA-rq7h-c2jc-7f22": "moderate",
+        "GHSA-9jrq-w75r-8gcw": "low",
+        "GHSA-xp26-3454-mjgp": "moderate",
+        "GHSA-qxg6-89mg-rqv8": "moderate",
+        "GHSA-p3m5-59mp-jv5r": "high",
+        "GHSA-2464-fhr4-w9xw": "critical",
+        "GHSA-vfj7-8cjw-p6xm": "high"
+      },
+      "expected_base_totals": {
+        "total": 10,
+        "critical": 1,
+        "high": 3,
+        "moderate": 5,
+        "low": 1
+      },
+      "expected_branch_totals": {
+        "total": 1,
+        "critical": 0,
+        "high": 1,
+        "moderate": 0,
+        "low": 0
+      },
+      "expected_cves": {
+        "GHSA-698v-4r3x-3vcv": "CVE-2026-112943",
+        "GHSA-587h-7wmj-h5pm": "CVE-2026-112942",
+        "GHSA-r825-w8mm-5pxw": "CVE-2026-112944",
+        "GHSA-rq7h-c2jc-7f22": "CVE-2026-112946",
+        "GHSA-9jrq-w75r-8gcw": "CVE-2026-112945",
+        "GHSA-xp26-3454-mjgp": "CVE-2026-112950",
+        "GHSA-qxg6-89mg-rqv8": "CVE-2026-112949",
+        "GHSA-p3m5-59mp-jv5r": "CVE-2026-94482",
+        "GHSA-2464-fhr4-w9xw": null
+      },
+      "advisory_affected_ranges": {
+        "GHSA-698v-4r3x-3vcv": ">=8.0.0 <8.1.6",
+        "GHSA-587h-7wmj-h5pm": ">=8.0.0 <8.1.6",
+        "GHSA-r825-w8mm-5pxw": ">=8.0.0 <8.1.6",
+        "GHSA-rq7h-c2jc-7f22": ">=8.0.0 <8.1.6",
+        "GHSA-9jrq-w75r-8gcw": ">=8.0.0 <8.1.6",
+        "GHSA-xp26-3454-mjgp": ">=4.1.11 <4.1.12",
+        "GHSA-qxg6-89mg-rqv8": ">=2.1.0-beta.7 <4.1.12",
+        "GHSA-p3m5-59mp-jv5r": ">=16.0.0 <16.4.1",
+        "GHSA-2464-fhr4-w9xw": ">=16.0.0 <16.4.1"
+      },
+      "first_patched_versions": {
+        "vite": "8.1.6",
+        "@vitest/mocker": "4.1.12",
+        "next": "16.4.1"
+      },
+      "allowed_direct_packages": [
+        "next",
+        "eslint-config-next",
+        "vitest"
+      ],
+      "allowed_dependency_files": [
+        "apps/web/package.json",
+        "apps/web/pnpm-lock.yaml",
+        "apps/web/pnpm-workspace.yaml"
+      ],
+      "required_dependency_files": [
+        "apps/web/package.json",
+        "apps/web/pnpm-lock.yaml",
+        "apps/web/pnpm-workspace.yaml"
+      ],
+      "allowed_non_dependency_files": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/pr-validation.yml",
+        "docs/development/rel-000-internal-release.md",
+        "tests/Paqueteria.IntegrationTests/Operations/OperationsDashboardPwaPlaywrightTests.cs",
+        "tests/fixtures/rel-000/security-tracking.json",
+        "tools/rel-000/rel000.py",
+        "tools/rel-000/security-remediation-policy.json",
+        "tools/rel-000/test_rel000.py"
+      ],
+      "expected_direct_version_changes": {
+        "next": {
+          "from": "16.3.8",
+          "to": "16.4.1"
+        },
+        "eslint-config-next": {
+          "from": "16.3.8",
+          "to": "16.4.1"
+        },
+        "vitest": {
+          "from": "4.1.11",
+          "to": "4.1.12"
+        }
+      },
+      "expected_override_changes": {
+        "next@16.3.8>sharp": {
+          "selector": "next@16.4.1>sharp",
+          "from": "0.35.5",
+          "to": "0.35.5"
+        }
+      },
+      "expected_override_additions": [],
+      "allowed_overrides": {
+        "postcss": "8.5.23",
+        "brace-expansion@<1.1.21": "1.1.21",
+        "brace-expansion@>=4.0.0 <5.0.12": "5.0.12",
+        "nanoid@>=3.0.0 <3.3.18": "3.3.18",
+        "js-yaml@>=4.0.0 <4.3.2": "4.3.2",
+        "browserslist@<=4.28.6": "4.28.7",
+        "baseline-browser-mapping@>=2.0.0 <2.11.0": "2.11.0",
+        "source-map-js@<1.2.2": "1.2.2",
+        "next@16.4.1>sharp": "0.35.5"
+      },
+      "expected_lock_version_replacements": {
+        "vite": {
+          "from": [
+            "8.1.5"
+          ],
+          "to": [
+            "8.1.6"
+          ]
+        },
+        "vitest": {
+          "from": [
+            "4.1.11"
+          ],
+          "to": [
+            "4.1.12"
+          ]
+        },
+        "@vitest/expect": {
+          "from": [
+            "4.1.11"
+          ],
+          "to": [
+            "4.1.12"
+          ]
+        },
+        "@vitest/mocker": {
+          "from": [
+            "4.1.11"
+          ],
+          "to": [
+            "4.1.12"
+          ]
+        },
+        "@vitest/pretty-format": {
+          "from": [
+            "4.1.11"
+          ],
+          "to": [
+            "4.1.12"
+          ]
+        },
+        "@vitest/runner": {
+          "from": [
+            "4.1.11"
+          ],
+          "to": [
+            "4.1.12"
+          ]
+        },
+        "@vitest/snapshot": {
+          "from": [
+            "4.1.11"
+          ],
+          "to": [
+            "4.1.12"
+          ]
+        },
+        "@vitest/spy": {
+          "from": [
+            "4.1.11"
+          ],
+          "to": [
+            "4.1.12"
+          ]
+        },
+        "@vitest/utils": {
+          "from": [
+            "4.1.11"
+          ],
+          "to": [
+            "4.1.12"
+          ]
+        },
+        "next": {
+          "from": [
+            "16.3.8"
+          ],
+          "to": [
+            "16.4.1"
+          ]
+        },
+        "eslint-config-next": {
+          "from": [
+            "16.3.8"
+          ],
+          "to": [
+            "16.4.1"
+          ]
+        },
+        "@next/env": {
+          "from": [
+            "16.3.8"
+          ],
+          "to": [
+            "16.4.1"
+          ]
+        },
+        "@next/eslint-plugin-next": {
+          "from": [
+            "16.3.8"
+          ],
+          "to": [
+            "16.4.1"
+          ]
+        },
+        "@next/swc-darwin-arm64": {
+          "from": [
+            "16.3.8"
+          ],
+          "to": [
+            "16.4.1"
+          ]
+        },
+        "@next/swc-darwin-x64": {
+          "from": [
+            "16.3.8"
+          ],
+          "to": [
+            "16.4.1"
+          ]
+        },
+        "@next/swc-linux-arm64-gnu": {
+          "from": [
+            "16.3.8"
+          ],
+          "to": [
+            "16.4.1"
+          ]
+        },
+        "@next/swc-linux-arm64-musl": {
+          "from": [
+            "16.3.8"
+          ],
+          "to": [
+            "16.4.1"
+          ]
+        },
+        "@next/swc-linux-x64-gnu": {
+          "from": [
+            "16.3.8"
+          ],
+          "to": [
+            "16.4.1"
+          ]
+        },
+        "@next/swc-linux-x64-musl": {
+          "from": [
+            "16.3.8"
+          ],
+          "to": [
+            "16.4.1"
+          ]
+        },
+        "@next/swc-win32-arm64-msvc": {
+          "from": [
+            "16.3.8"
+          ],
+          "to": [
+            "16.4.1"
+          ]
+        },
+        "@next/swc-win32-x64-msvc": {
+          "from": [
+            "16.3.8"
+          ],
+          "to": [
+            "16.4.1"
+          ]
+        }
+      },
+      "allowed_lock_metadata_additions": [],
+      "expected_lock_metadata_changes": [
+        {
+          "package": "vitest@4.1.12",
+          "from": "      '@vitest/browser-playwright': 4.1.11",
+          "to": "      '@vitest/browser-playwright': 4.1.12"
+        },
+        {
+          "package": "vitest@4.1.12",
+          "from": "      '@vitest/browser-preview': 4.1.11",
+          "to": "      '@vitest/browser-preview': 4.1.12"
+        },
+        {
+          "package": "vitest@4.1.12",
+          "from": "      '@vitest/browser-webdriverio': 4.1.11",
+          "to": "      '@vitest/browser-webdriverio': ^4.1.11"
+        },
+        {
+          "package": "vitest@4.1.12",
+          "from": "      '@vitest/coverage-istanbul': 4.1.11",
+          "to": "      '@vitest/coverage-istanbul': 4.1.12"
+        },
+        {
+          "package": "vitest@4.1.12",
+          "from": "      '@vitest/coverage-v8': 4.1.11",
+          "to": "      '@vitest/coverage-v8': 4.1.12"
+        },
+        {
+          "package": "vitest@4.1.12",
+          "from": "      '@vitest/ui': 4.1.11",
+          "to": "      '@vitest/ui': 4.1.12"
+        }
+      ],
+      "expected_lock_integrities": {
+        "vite@8.1.6": "sha512-aRAHIxx5SW5zc1sMqFwJU/t5qaFfXb5Hj0J7W0VXihu/X99+346tz6080tO1T1xVIJORX/b3zVTXGFqUXh35uw==",
+        "vitest@4.1.12": "sha512-5eWdz2yb3ajxWF3C8C4TjkXl7FGm3n2E/VlazALrQHzK7nYMSGFnCZto0bbPNl77AwkOZVLk0YnBAejUu0NiWA==",
+        "@vitest/expect@4.1.12": "sha512-vFlTt+YEu9WBpNjdGayNmlMVzrWPi1+sv853/7t2FU7hpO5gAFBKHzQmkCq5Xjpr+evegF2994LQT3hF3mRlqQ==",
+        "@vitest/mocker@4.1.12": "sha512-fKShNpKZzupWZuY0z7egydvL0sqW4INEZBEExMBMAa6izlENEVHwoXgdaTCaBZ5fwlr4xf2o1wXC83n9RpO+NA==",
+        "@vitest/pretty-format@4.1.12": "sha512-XW9O8+Mxx4VpCtkYdMJLZQQwsVryP9wk7cPKDxtXFfwSak6yRh5+2fep/Y0XF/ElBvJHq8bcYdi6aeuai0opZA==",
+        "@vitest/runner@4.1.12": "sha512-NKlVKCr5QnCe8jijdMnmkpHHU+WTqiLFR6G0pHji9uRjXK9xJl1k1nTw6F3pOOj2PDcsDt2GKQMI7wIsaT491w==",
+        "@vitest/snapshot@4.1.12": "sha512-ko1y1Qgb/slzQ9mr+b89Cuqud8WG1TKtsPD8r7ZUBdvVOGt85Af2HwCqHujrhwJq95hs/9RM7fcAPg57o1vlzw==",
+        "@vitest/spy@4.1.12": "sha512-RGq9x4JNGNTZHEJxvN0oSiJjeSCExm0n2gZKKJZHY9cX5AVA6M7VJILBT3ZJ/tJ/0J9uWT7fETV9/btoi//vSg==",
+        "@vitest/utils@4.1.12": "sha512-Q3awXrwOfEV+qc3WmO5ONyE0yO7Q1gQ9/oyHxGLZ/pl7N3NO/ZztqQwKLuwMkV+CA1JYSIeO3gkHnRDIo4AVaA==",
+        "next@16.4.1": "sha512-uc657V62E34fOI6W5NtG9IzwsPcms0Z60grz2MJGtglgD+pTFnNt4Yw2PzaU622tfX4vhrDgLZzicE2YlhI20Q==",
+        "eslint-config-next@16.4.1": "sha512-6AsojbCfRdpWkP6BIUnMBv3MH4OvtfmH9p4hSfLh8ZgsW7nfhu7DpUMNBB7leisDyyMz+YYxTc+NAdBOQfovlA==",
+        "@next/env@16.4.1": "sha512-5sUUrrSvs/2/2LnLoesybMGx12EtPB46fdZ6RhAw0XDGSPxU2LFyQBB7yuEiOFFJPKmBY6+q2jTr1/AMbnp0/g==",
+        "@next/eslint-plugin-next@16.4.1": "sha512-2io6M+wAqe7nT5mt2gEVy6FOzye2DmwhjaYCpSvHfrIKL11SXNTwSARxpPHJacRmfgSBSDnNmnEXSp0DaJ23BQ==",
+        "@next/swc-darwin-arm64@16.4.1": "sha512-U+hQ5Gj3fpzf4fveTIF3dpUFYhaSW8vHhdAnbiIomzXzg7boreYFgBqprepXFtW4sw+aTttiNmg0gew/iFNhbg==",
+        "@next/swc-darwin-x64@16.4.1": "sha512-/hqC3V1XLUjhMASf/WridKdO9FXoEgN3HBWmtKbj00MPgnltutfraWJ3bYTpCRIgEIpbjJyOVLpYgAhh/BkdcQ==",
+        "@next/swc-linux-arm64-gnu@16.4.1": "sha512-GHzncHbcaS9g95kcvTNtKQW3aCLoR+xc3Jm7qrkpk1R+D2BjMHIPyvQGRPKCdMX95BsH/421jBUK06q9tEwzjw==",
+        "@next/swc-linux-arm64-musl@16.4.1": "sha512-1SuJyDxW/PR9dHJat/ZRgcYLhuSZ+1psP4DlKb2tKIuXbjygqpLrJWRSq+onZQBv8LcmU67EIrmb6c3XTaJLjw==",
+        "@next/swc-linux-x64-gnu@16.4.1": "sha512-Istng1hMGp9TGO4lUqeKLd70MPN/OOkucVTP2Nmj+gLkwBgmPqUw8CJYBCC7nbl/B/23bBCcjCI5Hsh6hazC1A==",
+        "@next/swc-linux-x64-musl@16.4.1": "sha512-aSC9wMNiZRRFVpPkPWBzRwLQxIGm/CiQcXyFF1XNcgodb+uMxdk7aSSGGpDXCbnvZdf4itjHxpOd5h7i7zaiYw==",
+        "@next/swc-win32-arm64-msvc@16.4.1": "sha512-t/myvwFDlypMUjRvbBf8qLPyuaB0iXYYdBtwMt6DM6f+60wtGr4bSYholdPqNeV5VUXZhrpMwfza829kmhS3iA==",
+        "@next/swc-win32-x64-msvc@16.4.1": "sha512-6ICqPo9awCkrtYNPhwkx1uU7rlFWrZRrIboDHS2LU+jv088UBYQtmJ25h6pCp27/+FZjF6BQ4Te4ErugyMeuBg=="
+      },
+      "known_advisory_base_binding": {
+        "remediation_id": "SEC-2026-10-BRACES-DOS-TRACKED",
+        "advisory_id": "GHSA-vfj7-8cjw-p6xm",
+        "lockfile": "apps/web/pnpm-lock.yaml",
+        "lock_path": [
+          "eslint-config-next@16.3.8",
+          "@next/eslint-plugin-next@16.3.8",
+          "fast-glob@3.3.1",
+          "micromatch@4.0.8",
+          "braces@3.0.3"
+        ],
+        "expected_lockfile_sha256": "336b1c82c246994b45af1a0ba8c4ffa1b39c7279a827380883047c3c98b1e101"
+      },
+      "expected_lock_package_count": 475,
+      "expected_lockfile_sha256": "3f5834c346a1ad3f172fe52481acd748a9d0d05e0752d418220eb075e84c2ddd",
+      "target_sharp_version": "0.35.5",
+      "require_sharp_runtime_smoke": true,
+      "prohibited_prereleases": true,
+      "manual_lockfile_edits_allowed": false
+    },
+    {
       "id": "SEC-2026-12-SIGNALR-CRYPTOGRAPHY",
       "mode": "SECURITY_REMEDIATION",
       "status": "MERGED",
@@ -1306,14 +1710,14 @@
         "dependency_path_count": 1,
         "dependency_scope": "dev",
         "lock_path": [
-          "eslint-config-next@16.3.8",
-          "@next/eslint-plugin-next@16.3.8",
+          "eslint-config-next@16.4.1",
+          "@next/eslint-plugin-next@16.4.1",
           "fast-glob@3.3.1",
           "micromatch@4.0.8",
           "braces@3.0.3"
         ],
         "lockfile": "apps/web/pnpm-lock.yaml",
-        "expected_lockfile_sha256": "336b1c82c246994b45af1a0ba8c4ffa1b39c7279a827380883047c3c98b1e101",
+        "expected_lockfile_sha256": "3f5834c346a1ad3f172fe52481acd748a9d0d05e0752d418220eb075e84c2ddd",
         "tracked_issue": 180,
         "tracked_issue_title": "SEC-2026-10: track braces stack-exhaustion advisory until a patched release ships",
         "exit_condition": "When braces>=3.0.4 is published on npm: add the override \"braces@<3.0.4\": 3.0.4 in apps/web/pnpm-workspace.yaml, regenerate apps/web/pnpm-lock.yaml with pnpm 11.15.1, verify a zero audit, retire this accepted known advisory and close Issue #180."
