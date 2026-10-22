@@ -48,9 +48,9 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
         // organizations.pending_memberships and MDM-001's platform.master_data_deployment_gate) plus the
         // INC-001 incident evidence table, the SCL-001 key ring and their migration history lanes, the
         // SET-001 Finance history lane, the platform evolution history lane of the 2026-09-27 pilot
-        // contract deltas, the Pricing lane's MDM-001 operator reference table and the Drivers lane's VOICE-001
-        // recipient call requests.
-        Assert.Equal(59, await ScalarAsync<int>("""
+        // contract deltas, the Pricing lane's MDM-001 operator reference table, the Drivers lane's VOICE-001
+        // recipient call requests and the Notifications lane's NTF-RECIPIENT-NOTICES-2026-10-20 opt-out store.
+        Assert.Equal(60, await ScalarAsync<int>("""
             SELECT count(*)::integer
             FROM pg_class c
             JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -58,10 +58,10 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
             """, new NpgsqlParameter<string[]>("schemas", ExpectedSchemas.Where(name => name != "extensions").ToArray())));
 
         // 41 tenant tables with a policy (organizations.pending_memberships and VOICE-001's
-        // drivers.recipient_call_requests included), the two pre-tenant BFF tables forced without any policy, and
-        // MDM-001's deployment marker and operator reference table, each forced with one policy that admits only
-        // paqueteria_migrator.
-        Assert.Equal(45, await ScalarAsync<int>("""
+        // drivers.recipient_call_requests included), the two pre-tenant BFF tables and the platform-wide
+        // NTF-RECIPIENT-NOTICES-2026-10-20 opt-out store forced without any policy, and MDM-001's deployment marker and
+        // operator reference table, each forced with one policy that admits only paqueteria_migrator.
+        Assert.Equal(46, await ScalarAsync<int>("""
             SELECT count(*)::integer
             FROM pg_class c
             JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -226,7 +226,8 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
             SELECT count(*)::integer FROM information_schema.role_table_grants
             WHERE grantee='paqueteria_maintenance'
             """));
-        Assert.Equal(12, await ScalarAsync<int>("""
+        // NTF-RECIPIENT-NOTICES-2026-10-20: the outbox executor reads the opt-out store (security.is_recipient_opted_out).
+        Assert.Equal(13, await ScalarAsync<int>("""
             SELECT count(*)::integer FROM information_schema.role_table_grants
             WHERE grantee='paqueteria_outbox_executor'
             """));
