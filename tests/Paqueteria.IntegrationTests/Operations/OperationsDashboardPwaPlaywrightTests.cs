@@ -143,10 +143,16 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
             Assert.Contains(
                 requests,
                 request => request.Url.EndsWith("/api/v1/operations/queue-counts", StringComparison.Ordinal));
+            // The page is never stored (docs/development/obs-001-dispatch-dashboard.md). Next.js 16.4
+            // serves every document from `next dev` with exactly `Cache-Control: no-store`; 16.3
+            // used its own `no-cache, ..., no-store` default. The proxy still sends `Pragma: no-cache`.
             Assert.Contains(
-                "no-cache",
+                "no-store",
                 (await response.AllHeadersAsync())["cache-control"],
                 StringComparison.Ordinal);
+            Assert.Equal(
+                "no-cache",
+                (await response.AllHeadersAsync())["pragma"]);
             Assert.Equal(
                 "no-referrer",
                 (await response.AllHeadersAsync())["referrer-policy"]);

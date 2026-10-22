@@ -418,6 +418,13 @@ corrige, se agregan sin volver a preguntar. La tabla:
   - la arista de Sharp del lockfile.
 
   Siguen 475 paquetes, ninguno nuevo.
+- **Prueba adaptada.** `next dev` 16.4 sirve todo documento con `Cache-Control: no-store` exacto
+  (16.3 usaba su propio `private, no-cache, no-store, max-age=0, must-revalidate`). La prueba de
+  navegador del dashboard (`OperationsDashboardPwaPlaywrightTests`, que usa `next dev`) exigía
+  `no-cache` en `Cache-Control`; ahora exige `no-store` ahí y `Pragma: no-cache`, que es lo que
+  documenta `obs-001-dispatch-dashboard.md`. Con `next start`, `/ops/*` sigue recibiendo
+  `Cache-Control: no-store, private` y `Pragma: no-cache`. Es el único archivo de pruebas fuera de
+  REL-000 que la autorización admite.
 - **Validador.** `validate_vite_remediation_diff` exige:
   - el manifiesto igual a la base salvo las líneas exactas de los tres pines, cada uno en su
     sección, y Sharp nunca directo;

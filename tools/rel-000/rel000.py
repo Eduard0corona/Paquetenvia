@@ -553,11 +553,13 @@ VITE_LOCKFILE = "apps/web/pnpm-lock.yaml"
 VITE_WORKSPACE = "apps/web/pnpm-workspace.yaml"
 VITE_DEPENDENCY_FILES = [VITE_MANIFEST, VITE_LOCKFILE, VITE_WORKSPACE]
 # Main-direct like SEC-2026-12 and SEC-2026-13: docs/normative/** stays untouched; the
-# decision-log row and CHANGELOG entry go to development after the back-sync.
+# decision-log row and CHANGELOG entry go to development after the back-sync. The one test
+# file is the dashboard browser test, adapted to the Cache-Control that `next dev` 16.4 sends.
 VITE_NON_DEPENDENCY_FILES = [
     ".github/workflows/ci.yml",
     ".github/workflows/pr-validation.yml",
     "docs/development/rel-000-internal-release.md",
+    "tests/Paqueteria.IntegrationTests/Operations/OperationsDashboardPwaPlaywrightTests.cs",
     "tests/fixtures/rel-000/security-tracking.json",
     "tools/rel-000/rel000.py",
     "tools/rel-000/security-remediation-policy.json",

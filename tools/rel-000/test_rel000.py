@@ -8970,7 +8970,7 @@ class ViteRemediationPolicyTests(unittest.TestCase):
 
     def next_advisory(self, advisory_id: str, severity: str):
         return self.advisory(
-            advisory_id, "next", severity, "16.3.8", ">=16.0.0 <16.4.1", ">=16.4.1", 1, True
+            advisory_id, "next", severity, "16.3.8", ">=16.0.0 <=16.4.0", ">=16.4.1", 1, True
         )
 
     def braces_advisory(self):
@@ -8981,8 +8981,8 @@ class ViteRemediationPolicyTests(unittest.TestCase):
     def base_advisories(self):
         """The sanitized pnpm 11.15.1 audit of the authorized base c84ef92, field for field.
 
-        The two next entries follow sanitize-audit's shape for a direct dependency; npm's
-        audit data did not list them yet when the owner admitted them (osv.dev did).
+        npm's audit data listed the two next advisories a few hours after the owner admitted
+        them (osv.dev already did); the base audit then has all ten.
         """
 
         return [
@@ -9812,12 +9812,7 @@ class ViteRemediationPolicyTests(unittest.TestCase):
         rel000.assert_redacted(result["accepted_known_advisories"])
 
     def test_sanitized_pnpm_audit_matches_the_authorized_baseline(self):
-        """sanitize-audit turns the pnpm 11.15.1 base audit into the authorized set.
-
-        The braces, vite and @vitest/mocker entries are the real raw audit of c84ef92; the two
-        next entries take the shape npm uses for a direct dependency, since npm's audit data did
-        not list them yet when the owner admitted them.
-        """
+        """sanitize-audit turns the real pnpm 11.15.1 base audit of c84ef92 into the authorized set."""
 
         def raw(number, advisory_id, package, severity, cwe, title, affected, patched, finding):
             return {
@@ -9881,12 +9876,12 @@ class ViteRemediationPolicyTests(unittest.TestCase):
             raw(1242769, "GHSA-xp26-3454-mjgp", "@vitest/mocker", "moderate", "CWE-22",
                 "Vitest: Windows backslash traversal bypasses the @vitest/mocker redirect "
                 "allowlist fix", ">=4.1.11 <4.1.12", ">=4.1.12", mocker),
-            raw(9000001, "GHSA-p3m5-59mp-jv5r", "next", "high", "CWE-770",
-                "Next.js: Denial of Service in App Router using Server Actions",
-                ">=16.0.0 <16.4.1", ">=16.4.1", ("16.3.8", [".>next"])),
-            raw(9000002, "GHSA-2464-fhr4-w9xw", "next", "critical", "CWE-1395",
+            raw(1242816, "GHSA-2464-fhr4-w9xw", "next", "critical", "CWE-1395",
                 "Next.js: Unauthenticated Remote Code Execution in Image Optimization API "
-                "when SVG files are used", ">=16.0.0 <16.4.1", ">=16.4.1", ("16.3.8", [".>next"])),
+                "when SVG files are used", ">=16.0.0 <=16.4.0", ">=16.4.1", ("16.3.8", [".>next"])),
+            raw(1242818, "GHSA-p3m5-59mp-jv5r", "next", "high", "CWE-770",
+                "Next.js: Denial of Service in App Router using Server Actions",
+                ">=16.0.0 <=16.4.0", ">=16.4.1", ("16.3.8", [".>next"])),
         ]
         source = self.root / "pnpm.json"
         source.write_text(

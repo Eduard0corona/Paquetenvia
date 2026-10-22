@@ -1436,6 +1436,7 @@
         ".github/workflows/ci.yml",
         ".github/workflows/pr-validation.yml",
         "docs/development/rel-000-internal-release.md",
+        "tests/Paqueteria.IntegrationTests/Operations/OperationsDashboardPwaPlaywrightTests.cs",
         "tests/fixtures/rel-000/security-tracking.json",
         "tools/rel-000/rel000.py",
         "tools/rel-000/security-remediation-policy.json",
