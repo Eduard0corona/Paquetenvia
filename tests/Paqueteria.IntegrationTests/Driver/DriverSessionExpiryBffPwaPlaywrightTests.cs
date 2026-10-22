@@ -27,6 +27,7 @@ public sealed class DriverSessionExpiryBffPwaPlaywrightTests(DriverStopsBffNextS
         using var playwright = await Playwright.CreateAsync();
         await using var browser = await DriverBffSession.LaunchAsync(playwright);
         await using var context = await DriverBffSession.NewContextAsync(browser);
+        await using var trace = await PlaywrightFailureTrace.StartAsync(context, $"anotherPerson={anotherPerson}");
         var page = await context.NewPageAsync();
         var bff = await BffOrigin.InstallAsync(page, server.BaseAddress, DriverA);
 
@@ -75,6 +76,7 @@ public sealed class DriverSessionExpiryBffPwaPlaywrightTests(DriverStopsBffNextS
             Assert.Equal(new[] { queued }, bff.Backend.TransitionKeys);
             Assert.Equal(new[] { DriverBffSession.CsrfToken }, bff.TransitionCsrfTokens);
             Assert.Equal(DriverA, await ReadMarkerNamespaceAsync(page));
+            trace.Passed();
             return;
         }
 
@@ -87,6 +89,7 @@ public sealed class DriverSessionExpiryBffPwaPlaywrightTests(DriverStopsBffNextS
         Assert.DoesNotContain("Sincronización pendiente", body);
         Assert.DoesNotContain("Tu sesión venció", body);
         Assert.Equal(DriverB, await ReadMarkerNamespaceAsync(page));
+        trace.Passed();
     }
 
     [Theory]
@@ -99,6 +102,7 @@ public sealed class DriverSessionExpiryBffPwaPlaywrightTests(DriverStopsBffNextS
         using var playwright = await Playwright.CreateAsync();
         await using var browser = await DriverBffSession.LaunchAsync(playwright);
         await using var context = await DriverBffSession.NewContextAsync(browser);
+        await using var trace = await PlaywrightFailureTrace.StartAsync(context, $"anotherPerson={anotherPerson}");
         var page = await context.NewPageAsync();
         var bff = await BffOrigin.InstallAsync(page, server.BaseAddress, DriverA);
 
@@ -151,6 +155,7 @@ public sealed class DriverSessionExpiryBffPwaPlaywrightTests(DriverStopsBffNextS
             Assert.Equal(new[] { "AT_PICKUP" }, bff.Backend.TransitionTargets);
             Assert.Equal(new[] { DriverBffSession.CsrfToken }, bff.TransitionCsrfTokens);
             await page.GetByText("Sesión sin confirmar").WaitForAsync(new() { State = WaitForSelectorState.Detached });
+            trace.Passed();
             return;
         }
 
@@ -162,6 +167,7 @@ public sealed class DriverSessionExpiryBffPwaPlaywrightTests(DriverStopsBffNextS
         Assert.Equal(1, await ReadStoreCountAsync(page, "operations"));
         Assert.DoesNotContain("Sincronización pendiente", await page.Locator("body").InnerTextAsync());
         Assert.Equal(DriverB, await ReadMarkerNamespaceAsync(page));
+        trace.Passed();
     }
 
     /// <summary>
@@ -175,6 +181,7 @@ public sealed class DriverSessionExpiryBffPwaPlaywrightTests(DriverStopsBffNextS
         using var playwright = await Playwright.CreateAsync();
         await using var browser = await DriverBffSession.LaunchAsync(playwright);
         await using var context = await DriverBffSession.NewContextAsync(browser);
+        await using var trace = await PlaywrightFailureTrace.StartAsync(context);
         var page = await context.NewPageAsync();
         var bff = await BffOrigin.InstallAsync(page, server.BaseAddress, DriverA);
 
@@ -198,6 +205,7 @@ public sealed class DriverSessionExpiryBffPwaPlaywrightTests(DriverStopsBffNextS
         Assert.Equal(0, await ReadStoreCountAsync(page, "snapshots"));
         Assert.Empty(bff.Backend.TransitionTargets);
         Assert.Equal(string.Empty, await ReadMarkerNamespaceAsync(page));
+        trace.Passed();
     }
 
     private static Task<string> ReadTransitionKeyAsync(IPage page) =>

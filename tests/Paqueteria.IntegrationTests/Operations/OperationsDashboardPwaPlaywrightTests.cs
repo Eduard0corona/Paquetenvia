@@ -21,13 +21,17 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
     public async Task Real_pipeline_refreshes_isolates_reconnects_and_never_uses_external_maps()
     {
         await SeedSecondTenantOrderAsync(database.AdminConnectionString);
-        var nextPort = DriverStopsNextServer.ReservePort();
-        var nextOrigin = $"http://127.0.0.1:{nextPort}";
+        // The API allows the web origin before next starts, and the API restarts twice on the port the web was started
+        // for: both leases keep their ports until the test ends (LoopbackPortLease).
+        using var nextPort = LoopbackPortLease.Acquire();
+        var nextOrigin = $"http://127.0.0.1:{nextPort.Port}";
+        using var apiPortLease = LoopbackPortLease.Acquire();
         var recorder = new RealtimeAuthorizationRecorder();
         RealtimeKestrelWebApplicationFactory? api =
             new(
                 database.ApplicationConnectionString,
                 recorder,
+                apiPortLease.Port,
                 realtimeConnectionString: database.RealtimeConnectionString,
                 allowedOrigin: nextOrigin,
                 enableDriverApiCors: true,
@@ -38,6 +42,7 @@ public sealed class OperationsDashboardPwaPlaywrightTests(
             new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
+            apiPortLease.BeforeServerBinds();
             var apiAddress = api.Start();
             using (var apiClient = new HttpClient { BaseAddress = apiAddress })
             using (var dashboardRequest = new HttpRequestMessage(
