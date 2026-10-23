@@ -29,6 +29,34 @@
   Sin consentimiento registrado (llega con NTF-004) no se crea ningún aviso de WhatsApp. GATE-004 y GATE-007 siguen
   abiertas.
 
+## Remediación de seguridad pnpm: vite 8.1.6, vitest 4.1.12 y Next.js 16.4.1 (SEC-2026-14-PNPM-REMEDIATION-2026-10-21) — 2026-10-21
+
+- Respuestas literales del project owner (2026-10-21 y 2026-10-22, ronda K), registradas en `decision-log.md` con su
+  contexto y las opciones no elegidas: K1 "Remediar con la tabla (Recommended)", K3 "Incluir los 3 (Recommended)",
+  K4 "Retirar en main primero (Recommended)", K5 "Agregar vitest 4.1.12 (Recommended)" y K6 "Sumar next 16.4.1
+  (Recommended)".
+- La tabla corrige los 9 avisos del Issue #304:
+  - cinco en `vite` `>=8.0.0 <8.1.6`: GHSA-698v-4r3x-3vcv, GHSA-587h-7wmj-h5pm, GHSA-r825-w8mm-5pxw,
+    GHSA-rq7h-c2jc-7f22 y GHSA-9jrq-w75r-8gcw;
+  - dos en `@vitest/mocker`: GHSA-xp26-3454-mjgp y GHSA-qxg6-89mg-rqv8;
+  - dos en `next` `>=16.0.0 <16.4.1`: GHSA-2464-fhr4-w9xw (crítico) y GHSA-p3m5-59mp-jv5r (alto).
+- `apps/web/package.json`: `next` y `eslint-config-next` pasan de 16.3.8 a 16.4.1 y `vitest` de 4.1.11 a 4.1.12.
+  `apps/web/pnpm-workspace.yaml`: el override de Sharp pasa a `"next@16.4.1>sharp": 0.35.5`; Sharp sigue en 0.35.5.
+- `apps/web/pnpm-lock.yaml`, regenerado con pnpm 11.15.1, mueve exactamente 21 paquetes: `vite` a 8.1.6; `vitest` y
+  los 7 `@vitest/*` que fija a 4.1.12; `next`, `eslint-config-next` y 10 `@next/*` a 16.4.1. Sigue con 475 paquetes,
+  ninguno nuevo.
+- REL-000:
+  - la autorización `SEC-2026-14-VITE`, con un validador de grafo exacto (`validate_vite_remediation_diff`) y la
+    prueba de Sharp 0.35.5 en ejecución;
+  - el aviso conocido de braces (SEC-2026-10, Issue #180) queda revinculado a la ruta de 16.4.1 y al hash nuevo del
+    lockfile. Nota: `docs/development/rel-000-internal-release.md`.
+- La prueba Playwright del tablero de operaciones acepta el `Cache-Control: no-store` que `next dev` 16.4 envía en
+  cada documento; la página sigue sin guardarse.
+- En el orden de K4: fusionada en `main` por #305 (059e2e9), retirada a `historical_remediations` en `main` por #306
+  (9e55771) y sincronizada a `development` por #307 (11f35da). Este PR sólo agrega la fila del decision-log, esta
+  entrada y la historia del back-sync en la nota de REL-000.
+- Sin cambios en código de la aplicación, migraciones, AI-04, AI-05, AI-06, AI-12, AI-18, roles ni permisos.
+
 ## El rollback reutiliza la imagen del commit (ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21) — 2026-10-21
 
 - Respuesta literal del project owner (2026-10-21, ronda K, pregunta K2), registrada en `decision-log.md` con su
