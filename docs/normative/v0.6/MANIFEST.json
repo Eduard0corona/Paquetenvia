@@ -25,7 +25,7 @@
     {
       "path": "CANONICAL_SOURCE_OF_TRUTH.md",
       "bytes": 4696,
-      "sha256": "8086bccd8e3990e8d25307c7d228a2a2fd4545a062fac2124f4219c6e7e987d2"
+      "sha256": "b4c24a968a3f1aa26e6cd77dbfe479125d0eafb096f1e7ffd84ed0a7acbbfd93"
     },
     {
       "path": "CHANGED_FILES_SINCE_V0.5.md",
@@ -34,13 +34,13 @@
     },
     {
       "path": "CHANGELOG.md",
-      "bytes": 255249,
-      "sha256": "77697826283463c4b367ec5d69cd8693a1ed986e12d975041e51323ac73cfe1b"
+      "bytes": 255706,
+      "sha256": "7b6531380b68c75ea542f8f7a46f4ba5366edc9b917924bbfe0b3ff9aa3769e3"
     },
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "88b8cf0ed67bd93d8289fa1f2f7fb6cc82fabed22887cb640f8f262641bdff5a"
+      "sha256": "00adf02a58847d594012c124c82526293604a26a78548e42b3830bcf59c2c4c4"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
@@ -69,13 +69,13 @@
     },
     {
       "path": "database/AI-18_DATABASE_ROLE_MODEL.sql",
-      "bytes": 63474,
-      "sha256": "749edfa0bb1f5f32fcff21b4b4a02fc787844b336618616fc02e1fe49c1ed1ee"
+      "bytes": 63624,
+      "sha256": "b0df0cd3c5535e30ee47216dc149eaa99d15f2a4f4b0a344b6ffb8e2182d1853"
     },
     {
       "path": "decision-log.md",
-      "bytes": 554871,
-      "sha256": "86d2054a6c8838d6cd02cf05018790a072b5087eb0af06030305ca60fdd147a2"
+      "bytes": 557910,
+      "sha256": "e947c4cc6680ad8ffb486ca11d9323d6227aa65a6433089599d79ee1470dff58"
     },
     {
       "path": "docs/AI-14_TECH_REFERENCES.md",
@@ -339,8 +339,8 @@
     },
     {
       "path": "specs/AI-08_BACKLOG.yaml",
-      "bytes": 117718,
-      "sha256": "23d7783a3064b750c0d03cace4e18631aa4b97b04b1dc5c81672ecf29ed21a7d"
+      "bytes": 117836,
+      "sha256": "fc39fab9ab08f94de8456cb6c023d812631efb581072c577f8167aac99898b46"
     },
     {
       "path": "specs/AI-10_DECISIONS_AND_GATES.yaml",
@@ -364,8 +364,8 @@
     },
     {
       "path": "specs/AI-24_RUNTIME_HARDENING_CONTRACT.yaml",
-      "bytes": 55868,
-      "sha256": "7fef6bbbcbcb10a7e0710fb546cff6b438688f46cf73b9a7d82c0a185de10af5"
+      "bytes": 56311,
+      "sha256": "e22ff8daf8859385296e341ba1ea43c35c77b3e3b8bc00ce5c33b2d1dbca0921"
     },
     {
       "path": "tests/AI-09_ACCEPTANCE_TESTS.feature",

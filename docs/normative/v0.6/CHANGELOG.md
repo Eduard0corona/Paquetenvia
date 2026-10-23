@@ -4,13 +4,18 @@
 
 - Respuestas literales del project owner (2026-10-23, ronda L, preguntas L1 a L4), registradas en `decision-log.md` con
   su contexto, los textos de las opciones, la lista de L4 y las opciones no elegidas: "Avisos al destinatario (NTF-005): AI-24 pide topes de 8 avisos por orden y canal, y 500 al día por canal (hora de Mazatlán). Con lo que hoy declaran los contratos, el Worker no puede contar los avisos ya enviados, así que esos topes no se pueden cumplir. ¿Cómo seguimos?" Respuesta: "Función de conteo (Recommended)"; L2 "Toda la plataforma (Recommended)";
-  L3 "Destinatario inválido (Recommended)"; L4 "Aprobarlas todas (Recommended)". Es el PR-4 de la secuencia de `docs/development/ntf-recipient-notices.md`.
+  L3 "Destinatario inválido (Recommended)"; L4 "Aprobarlas todas (Recommended)"; L5 "Aceptar el conteo estricto
+  (Recommended)", preguntada después de abrir el PR. Es el PR-4 de la secuencia de `docs/development/ntf-recipient-notices.md`.
 - Paso de carril Notifications `20261023000100_AddRecipientNoticeCounts`, con ida, vuelta e ida probadas en PostgreSQL 18 y
   PostGIS 3.6: `security.read_recipient_notice_counts(uuid,uuid)`, de solo lectura, propiedad de
   `paqueteria_outbox_executor`, SECURITY DEFINER con `search_path` fijo, sin SQL dinámico ni RETURNING y con EXECUTE solo
   para `paqueteria_worker`. Solo responde bajo el `lease_token` vigente de una solicitud de envío cuyo aviso sigue
   PENDING, y devuelve solo dos números: los otros avisos de la misma orden y canal con intentos, y los otros avisos del
-  canal en toda la plataforma cuyo último intento cae en el día de hoy de America/Mazatlan (calculado en SQL). Dos
+  canal en toda la plataforma cuyo último intento cae en el día de hoy de America/Mazatlan (calculado en SQL). "Con
+  intentos" es `attempts > 0`, el conteo de `apply_notification_outcome`: incluye los avisos que terminaron FAILED antes
+  de llamar al proveedor (contacto inutilizable, sin enlace, canal apagado); una falla pasajera antes de la llamada solo
+  reprograma la solicitud y no cuenta. Así un tope se alcanza igual o antes que contando solo llamadas al proveedor (L5).
+  Dos
   índices parciales sobre los avisos; ninguna tabla, columna, fila, rol ni privilegio de tabla cambia, y el Worker sigue
   sin privilegio sobre `notifications.notifications`. AI-06 declara los dos índices byte a byte, AI-18 el paso 6 y la
   aserción 39, AI-24 `recipient_notices.caps` (decisión, alcance de cada tope y `count`) y `contact.unusable`, y AI-08

@@ -453,12 +453,16 @@ recipient_notices:
       of old notices
   caps:
     decision: NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 (L1 "Función de conteo (Recommended)", L2 "Toda la plataforma
-      (Recommended)")
+      (Recommended)", L5 "Aceptar el conteo estricto (Recommended)")
     per_order: Notifications:RecipientNotices:MaximumPerOrderAndChannel, default 8; it counts the other notices of the same
-      order and channel whose provider was called (attempts > 0)
+      order and channel with attempts > 0
     per_day: Notifications:RecipientNotices:DailyLimitPerChannel, default 500 per calendar day in America/Mazatlan, per
-      channel for the whole platform (every organization, one WhatsApp number and one e-mail sender); a notice counts once
-      its provider was called (attempts > 0), on the Mazatlan day of its last attempt
+      channel for the whole platform (every organization, one WhatsApp number and one e-mail sender); it counts the other
+      notices of the channel with attempts > 0 on the Mazatlan day of their last attempt
+    counted: attempts is the count security.apply_notification_outcome keeps (every outcome but CANCELLED adds one), so
+      it includes notices that ended FAILED before any provider call (an unusable contact, no live link, the channel
+      disabled); a transient failure before the call settles only the send request and does not count; a cap is
+      therefore reached no later than with provider calls only (L5)
     count: before any decryption or provider call the Worker asks security.read_recipient_notice_counts (AI-18 recipient
       notices step 6, the Notifications lane step of NTF-005) under the send request's lease_token, which returns only
       the two numbers; the Worker never reads notifications.notifications

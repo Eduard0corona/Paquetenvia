@@ -111,7 +111,8 @@ inalcanzable no es este caso: se reintenta.
 
 ## Riesgos residuales
 
-- `attempts > 0` cuenta también los avisos que fallaron antes de llamar al proveedor (ver arriba).
+- `attempts > 0` cuenta también los avisos que fallaron antes de llamar al proveedor (ver arriba); el owner lo aceptó
+  (L5 "Aceptar el conteo estricto (Recommended)").
 - El tope diario es de toda la plataforma: una organización con muchos avisos puede agotar el día de las demás.
 - Sin acuses (NTF-006), `SENT` solo significa aceptado por el proveedor.
 

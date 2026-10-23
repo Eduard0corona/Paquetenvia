@@ -136,7 +136,7 @@ public sealed class RecipientNoticeDeliveryPostgreSqlContractTests(PostgreSqlCon
             Assert.Null(await CountsAsync(subject.Send, Guid.NewGuid()));
             Assert.Null(await CountsAsync(Guid.NewGuid(), lease));
 
-            // Another notice of the same order and channel counts once its provider was called (attempts > 0) and not
+            // Another notice of the same order and channel counts once it has an attempt (attempts > 0) and not
             // before; a cancelled one never does.
             var sent = await ExpandAsync(admin, owner, order, await InsertOrderEventAsync(admin, owner, order, 3), publicId, "EMAIL");
             Assert.Equal((0, dayCount), await CountsAsync(subject.Send, lease));

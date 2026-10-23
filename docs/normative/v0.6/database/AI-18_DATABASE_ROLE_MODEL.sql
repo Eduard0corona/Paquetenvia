@@ -552,9 +552,11 @@ REVOKE paqueteria_realtime FROM paqueteria_app, paqueteria_worker, paqueteria_bo
 --    notifications, pg_temp, without dynamic SQL or RETURNING, EXECUTE revoked from PUBLIC and held only by
 --    paqueteria_worker. Only under the live lease_token of a notifications.send-requested row whose recipient notice is
 --    PENDING it returns one row of two integers and nothing else: order_channel_count, the other recipient notices of the
---    same owner organization, order and channel whose provider was called (attempts > 0), and day_channel_count, the other
---    recipient notices of that channel on the whole platform (every organization) whose provider was called and whose last
---    attempt falls on the current calendar day in America/Mazatlan (computed in SQL); otherwise no row. The step adds the
+--    same owner organization, order and channel with attempts > 0, and day_channel_count, the other recipient notices of
+--    that channel on the whole platform (every organization) with attempts > 0 whose last attempt falls on the current
+--    calendar day in America/Mazatlan (computed in SQL); otherwise no row. attempts is the count
+--    security.apply_notification_outcome keeps, so it includes notices that ended before any provider call (L5 "Aceptar el
+--    conteo estricto (Recommended)"). The step adds the
 --    two partial indexes AI-06 declares and no table, column, row, role or table privilege; the runtime roles still gain no
 --    table privilege (step 4). Its Down drops the function and the two indexes.
 

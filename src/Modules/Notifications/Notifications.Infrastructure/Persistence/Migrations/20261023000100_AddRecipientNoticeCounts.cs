@@ -11,8 +11,8 @@ namespace Notifications.Infrastructure.Persistence.Migrations;
 /// <list type="bullet">
 /// <item><c>security.read_recipient_notice_counts(uuid,uuid)</c>: under the live <c>lease_token</c> of a
 /// <c>notifications.send-requested</c> row whose recipient notice is PENDING, one row of two integers - the other
-/// notices of the same owner organization, order and channel whose provider was called (attempts &gt; 0), and the other
-/// notices of that channel on the whole platform whose last attempt falls on the current calendar day in
+/// notices of the same owner organization, order and channel with attempts &gt; 0, and the other notices of that
+/// channel on the whole platform with attempts &gt; 0 whose last attempt falls on the current calendar day in
 /// America/Mazatlan (computed here with AT TIME ZONE); otherwise no row. It returns no identifier, recipient, code or
 /// time. Owned by <c>paqueteria_outbox_executor</c>, SECURITY DEFINER with a pinned search_path, no dynamic SQL and
 /// no RETURNING, EXECUTE revoked from PUBLIC and held only by <c>paqueteria_worker</c>.</item>
@@ -70,7 +70,7 @@ public sealed class AddRecipientNoticeCounts : Migration
           v_day_start=v_day::timestamp AT TIME ZONE 'America/Mazatlan';
           v_day_end=(v_day+1)::timestamp AT TIME ZONE 'America/Mazatlan';
           RETURN QUERY SELECT
-            -- L2: the per-order cap counts the other notices of the same order and channel whose provider was called.
+            -- L2, L5: the per-order cap counts the other notices of the same order and channel with attempts>0.
             (SELECT count(*)::integer FROM notifications.notifications n
              WHERE n.owner_org_id=v_notification.owner_org_id AND n.order_id=v_notification.order_id
                AND n.channel=v_notification.channel AND n.recipient_kind='ORDER_DESTINATION'

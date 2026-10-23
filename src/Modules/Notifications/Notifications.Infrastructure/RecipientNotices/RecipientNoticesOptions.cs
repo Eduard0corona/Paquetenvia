@@ -29,7 +29,7 @@ public sealed class RecipientNoticesOptions
     /// <summary>The stale bound, 1 to 24 hours, counted from occurred_at without the quiet-hours wait.</summary>
     public int MaximumNoticeDelayHours { get; set; } = 12;
 
-    /// <summary>NTF-RECIPIENT-NOTICE-CAPS-2026-10-23: notices per order and channel whose provider was called.</summary>
+    /// <summary>NTF-RECIPIENT-NOTICE-CAPS-2026-10-23: notices per order and channel with attempts &gt; 0.</summary>
     public int MaximumPerOrderAndChannel { get; set; } = 8;
 
     /// <summary>NTF-RECIPIENT-NOTICE-CAPS-2026-10-23: notices per channel and Mazatlan day on the whole platform.</summary>
