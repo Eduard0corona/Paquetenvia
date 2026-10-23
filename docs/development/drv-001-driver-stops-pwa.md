@@ -323,6 +323,34 @@ pero obliga a duplicar `node_modules` de pnpm por corrida. Solo un proceso de
 prueba terminado a la fuerza (sin dispose) deja el cambio; se recupera con
 `git checkout -- apps/web/next-env.d.ts`.
 
+Puertos. Una suite que debe conocer un puerto antes de que su servidor escuche
+(el origen web que la API y el bucket permiten, el origen de la API que la
+compilación web incrusta, el puerto en el que la API se reinicia) lo arrienda con
+`LoopbackPortLease`: en Linux, un socket enlazado a `127.0.0.1:puerto` con
+`SO_REUSEADDR` que nunca escucha. El kernel no da ese puerto a ningún socket que
+pida uno cualquiera (ni a un `bind` al puerto 0 ni como puerto local de un
+`connect`), y Next.js y Kestrel, que enlazan con `SO_REUSEADDR`, sí escuchan en
+él. El arriendo dura mientras el servidor corre y entre sus reinicios, y se suelta
+al terminar. Antes se reservaba escuchando en el puerto 0 y cerrando, y el puerto
+quedaba libre mientras duraban la compilación, los contenedores o el arranque (de
+segundos a minutos) y entre los reinicios de la API: así fallaron
+`Validate public tracking` en #307 (`EADDRINUSE` de Next) y `Validate driver PWA`
+en la corrida 39443348695 (la API de OPS-005). `LoopbackPortLeaseTests` lo prueba
+con sockets confinados a ese único puerto (`IP_LOCAL_PORT_RANGE`, Linux 6.3 o
+posterior). En Windows y macOS el arriendo se suelta justo antes de que el servidor
+enlace: la ventana se reduce a su arranque, pero no se cierra.
+
+Trazas. Las suites BFF (`DriverStopsBffPwaPlaywrightTests` y
+`DriverSessionExpiryBffPwaPlaywrightTests`) graban una traza de Playwright
+(capturas, snapshots del DOM y red) y sólo la guardan si la prueba falla, en
+`TestResults/driver-stops-pwa/playwright-traces/<clase>.<prueba>.zip` bajo la raíz
+del repositorio; el job `Validate driver PWA` sube ese directorio en el artefacto
+`driver-stops-pwa-results` cuando falla. Se abre con
+`pwsh tests/Paqueteria.IntegrationTests/bin/Release/net10.0/playwright.ps1 show-trace <zip>`.
+Todo lo que esas páginas muestran o intercambian es sintético: el navegador
+responde la sesión, su token CSRF de prueba y la API, no se fija ninguna cookie y
+la traza no guarda fuentes.
+
 El job aislado `Validate driver stops PWA` instala el lockfile congelado y
 Chromium, y ejecuta toda la categoría. El aislamiento evita mezclar el proceso
 Next y sus recursos Docker con el job .NET general.

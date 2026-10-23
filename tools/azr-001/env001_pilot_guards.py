@@ -8,7 +8,7 @@ guards; they check the pilot's own owner decisions against the compiled ARM outp
 (`bicep build`) and the workflow. They never contact Azure.
 
 Commands:
-  check            evaluate every pilot guard (P00..P25)
+  check            evaluate every pilot guard (P00..P27)
   settings-check   validate deploy/azure/pilot/apps.settings.json (fails while an owner value is missing)
   observability-check  validate deploy/azure/pilot/observability.parameters.json (OBS-002 alert e-mail)
   web-check        validate deploy/azure/pilot/web.parameters.json (UI-001 accepted terms/privacy versions)
@@ -1648,6 +1648,183 @@ def guard_25_postgres_server_setting(ctx: Context) -> GuardResult:
                    "one parameter with the first server as default; outputs, alerts, credentials, jobs and drills follow it")
 
 
+# ---------------------------------------------------------------------------------------------- ENV-001 F-06 (P26)
+REVISION_IMAGE_ENV = {
+    "API_IMAGE": "${{ steps.images.outputs.api }}",
+    "WORKER_IMAGE": "${{ steps.images.outputs.worker }}",
+    "WEB_IMAGE": "${{ steps.images.outputs.web }}",
+}
+REVISION_CHECK_CALLS = (
+    f'check_revision api_revision {API_APP} "${{API_IMAGE}}"',
+    f'check_revision worker_revision {WORKER_APP} "${{WORKER_IMAGE}}"',
+    f'check_revision web_revision {WEB_APP} "${{WEB_IMAGE}}"',
+)
+# A ready revision on another image is not yet this run's revision: it is polled again within the same budget.
+REVISION_IMAGE_MISMATCH = 'if [[ "${images}" != "${image}" ]]; then'
+REVISION_IMAGE_NOT_YET = "status=\"revision ${ready} is ready but runs '${images}', not this run's image (${image})\""
+REVISION_HEALTHY = 'elif [[ "${active}" == "true" && "${health}" == "Healthy" ]]; then'
+# What the check reads and asserts; a bounded poll, and the system-log hint on every failure.
+REVISION_CHECK_FRAGMENTS = (
+    "{latest: properties.latestRevisionName, ready: properties.latestReadyRevisionName}",
+    "{active: properties.active, health: properties.healthState, images: properties.template.containers[].image}",
+    '[[ -n "${latest}" && "${latest}" == "${ready}" ]]',
+    REVISION_IMAGE_MISMATCH,
+    REVISION_IMAGE_NOT_YET,
+    REVISION_HEALTHY,
+    "polls_left=40\n",
+    "(( polls_left == 0 ))",
+    "sleep 15",
+    "az containerapp logs show --name $1 --resource-group ${PILOT_RESOURCE_GROUP} --type system",
+    '"${image##*@}" =~ ^sha256:[0-9a-f]{64}$',
+)
+SUMMARY_ENV = {
+    **REVISION_IMAGE_ENV,
+    "DBOPS_IMAGE": "${{ steps.images.outputs.dbops }}",
+    "API_REVISION": "${{ steps.revisions.outputs.api_revision }}",
+    "WORKER_REVISION": "${{ steps.revisions.outputs.worker_revision }}",
+    "WEB_REVISION": "${{ steps.revisions.outputs.web_revision }}",
+}
+
+
+def guard_26_revision_check(ctx: Context) -> GuardResult:
+    """ENV-001 F-06: in single revision mode Container Apps keeps the previous revision serving while a new one never
+    becomes ready, so a green stage 4 and smoke test can hide old code. After stage 4 and before the smoke test, one
+    unconditional step (id revisions) must check, for the API, the Worker and the Web, that the latest revision is ready,
+    runs this run's digest, and is active and Healthy, with a bounded poll and the system-log hint on failure. A ready
+    revision on another image is polled again within the same budget (right after stage 4 the control plane can still
+    report the previous revision as the latest one), never failed at once. The always-run summary lists the four
+    digests (F-05) and the serving revisions."""
+    failures: list[str] = []
+    deploy = (ctx.workflow.get("jobs", {}) or {}).get("deploy", {}) or {}
+    steps = [s for s in deploy.get("steps", []) or [] if isinstance(s, dict)]
+    run = lambda step: str(step.get("run", ""))  # noqa: E731
+    env = lambda step: step.get("env", {}) or {}  # noqa: E731
+    checks = _step_index(steps, lambda s: s.get("id") == "revisions")
+    apps = _step_index(steps, lambda s: '"${RUNNER_TEMP}/arm/apps.json"' in run(s))
+    smoke = _step_index(steps, lambda s: "Same-origin routing smoke test passed" in run(s))
+    if len(checks) != 1:
+        failures.append("one deploy step (id revisions) must check the new API, Worker and Web revisions")
+    else:
+        step = steps[checks[0]]
+        text = run(step)
+        if env(step) != REVISION_IMAGE_ENV:
+            failures.append(f"the revision check must read exactly this run's images {REVISION_IMAGE_ENV}")
+        missing = [fragment for fragment in REVISION_CHECK_FRAGMENTS if fragment not in text]
+        if missing:
+            failures.append(f"the revision check must poll, assert and hint with {missing}")
+        elif text.count(REVISION_IMAGE_MISMATCH) != 1 or text.count(REVISION_HEALTHY) != 1 or \
+                re.search(r"\breturn\b|\bfail\b|\bexit\b",
+                          text[text.index(REVISION_IMAGE_MISMATCH):text.index(REVISION_HEALTHY)]):
+            failures.append("a ready revision on another image must be polled again, not failed at once")
+        lines = [line.strip() for line in text.splitlines()]
+        if [line for line in lines if line.startswith("check_revision ")] != list(REVISION_CHECK_CALLS):
+            failures.append(f"the revision check must end with {list(REVISION_CHECK_CALLS)}")
+        if "if" in step or "continue-on-error" in step or not text.startswith("set -euo pipefail\n"):
+            failures.append("the revision check must always run, with set -euo pipefail, and fail the run")
+        if len(apps) != 1 or len(smoke) != 1 or not apps[0] < checks[0] < smoke[0]:
+            failures.append("the revision check must run after stage 4 and before the smoke test")
+    summary = [s for s in steps if "GITHUB_STEP_SUMMARY" in run(s)]
+    if len(summary) != 1 or summary[0].get("if") != "always()" \
+            or any(env(summary[0]).get(name) != value for name, value in SUMMARY_ENV.items()) \
+            or any(f"${{{name}:-" not in run(summary[0]) for name in SUMMARY_ENV):
+        failures.append("the always-run summary must list the four image digests and the serving revisions")
+    return _result(26, "new revisions serve this run's digests (ENV-001 F-06)", failures,
+                   "after stage 4 the API, Worker and Web revisions are ready, active, Healthy and on this run's digests")
+
+
+# ---------------------------------------------------------------------- ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21 (P27)
+IMAGE_STEP_ENV = {
+    "REGISTRY": "${{ steps.platform.outputs.registryName }}",
+    "REGISTRY_SERVER": "${{ steps.platform.outputs.registryServer }}",
+}
+# The images step, in this order: read the registry (a failure stops the step, also inside build()), reuse the digest
+# of an existing paquetenvia-<name>:<tested sha>, build and push only in the other branch, then lock the tag and read it
+# back (same digest, writeEnabled false) before the step reports the image.
+IMAGE_REUSE_FRAGMENTS = (
+    "shopt -s inherit_errexit\n",
+    'repositories="$(az acr repository list --name "${REGISTRY}" --only-show-errors --output json)"',
+    'tags="$(az acr repository show-tags --name "${REGISTRY}" --repository "${repository}" --only-show-errors --output json)"',
+    "found=\"$(jq -r --arg tag \"${TESTED_GIT_SHA}\" 'any(.[]; . == $tag)' <<<\"${tags}\")\"",
+    'az acr repository show --name "${REGISTRY}" --image "${repository}:${TESTED_GIT_SHA}" --only-show-errors --output json \\\n',
+    "| jq -r '.digest'\n",
+    'digest="$(tag_digest "${repository}")"',
+    'if [[ -n "${digest}" ]]; then',
+    "source=reused",
+    'echo "reusing ${REGISTRY_SERVER}/${repository}@${digest}" >&2',
+    "else",
+    "source=built",
+    'echo "building ${ref}" >&2',
+    'docker build --pull --file "${dockerfile}" --build-arg "SOURCE_SHA=${TESTED_GIT_SHA}" "$@" --tag "${ref}" . >&2',
+    'docker push "${ref}" >&2',
+    "fi",
+    'az acr repository update --name "${REGISTRY}" --image "${repository}:${TESTED_GIT_SHA}" --write-enabled false',
+    'tag="$(az acr repository show --name "${REGISTRY}" --image "${repository}:${TESTED_GIT_SHA}" --only-show-errors --output json)"',
+    "\"$(jq -r '.digest' <<<\"${tag}\")\" != \"${digest}\"",
+    "\"$(jq -r '.changeableAttributes.writeEnabled' <<<\"${tag}\")\" != \"false\"",
+    'echo "${name//-/}_source=${source}" >> "${GITHUB_OUTPUT}"',
+    'echo "${REGISTRY_SERVER}/${repository}@${digest}"',
+)
+# Output key and image name of each build() call, in order.
+IMAGE_STEP_OUTPUTS = (("api", "api"), ("worker", "worker"), ("dbops", "db-ops"), ("web", "web"))
+# Nothing in the workflow may unlock, delete, untag or import an image.
+IMAGE_TAG_FORBIDDEN = ("--write-enabled true", "--delete-enabled true", "az acr repository delete",
+                       "az acr repository untag", "az acr manifest delete", "az acr import")
+SUMMARY_SOURCE_ENV = {f"{key.upper()}_SOURCE": f"${{{{ steps.images.outputs.{key}_source }}}}" for key, _ in IMAGE_STEP_OUTPUTS}
+
+
+def guard_27_image_reuse(ctx: Context) -> GuardResult:
+    """ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21 (owner K2, "Reusar la imagen (Recommended)"): an image is built once per
+    commit. When paquetenvia-<name>:<tested sha> is already in the pilot registry, the images step reuses its digest
+    and neither builds nor pushes, so a rollback deploys the same bytes; otherwise it builds (bases unpinned) and
+    pushes. It then locks the tag (write-enabled false), so the registry refuses any later push over it, and reads it
+    back. A registry read that fails stops the step. The always-run summary says which images were reused."""
+    failures: list[str] = []
+    deploy = (ctx.workflow.get("jobs", {}) or {}).get("deploy", {}) or {}
+    steps = [s for s in deploy.get("steps", []) or [] if isinstance(s, dict)]
+    run = lambda step: str(step.get("run", ""))  # noqa: E731
+    images = _step_index(steps, lambda s: s.get("id") == "images")
+    if len(images) != 1:
+        failures.append("one deploy step (id images) must build or reuse the images")
+    else:
+        step = steps[images[0]]
+        text = run(step)
+        if (step.get("env", {}) or {}) != IMAGE_STEP_ENV:
+            failures.append(f"the images step must read exactly {IMAGE_STEP_ENV}")
+        if "if" in step or "continue-on-error" in step or not text.startswith("set -euo pipefail\n"):
+            failures.append("the images step must always run, with set -euo pipefail, and fail the run")
+        position, missing = 0, []
+        for fragment in IMAGE_REUSE_FRAGMENTS:
+            found = text.find(fragment, position)
+            if found < 0:
+                missing.append(fragment)
+            else:
+                position = found + len(fragment)
+        if missing:
+            failures.append(f"the images step must reuse an existing tag, else build and push, then lock it: {missing}")
+        for command in ("docker build", "docker push", "az acr repository update"):
+            if text.count(command) != 1 or ctx.workflow_text.count(command) != 1:
+                failures.append(f"the workflow must run {command} exactly once, in the images step")
+        position, unreported = 0, []
+        for key, name in IMAGE_STEP_OUTPUTS:
+            call = text.find(f'image="$(build {name} ', position)
+            output = text.find(f'echo "{key}=${{image}}" >> "${{GITHUB_OUTPUT}}"', max(call, position))
+            if call < 0 or output < 0:
+                unreported.append(name)
+            else:
+                position = output
+        if unreported or text.count("$(build ") != len(IMAGE_STEP_OUTPUTS):
+            failures.append(f"the images step must report each image right after its build() call: {unreported}")
+    forbidden = [command for command in IMAGE_TAG_FORBIDDEN if command in ctx.workflow_text]
+    if forbidden:
+        failures.append(f"the workflow must never unlock, delete, untag or import an image: {forbidden}")
+    summary = [s for s in steps if "GITHUB_STEP_SUMMARY" in run(s)]
+    if len(summary) != 1 or any((summary[0].get("env", {}) or {}).get(name) != value for name, value in SUMMARY_SOURCE_ENV.items()) \
+            or any(f"${{{name}:-" not in run(summary[0]) for name in SUMMARY_SOURCE_ENV):
+        failures.append("the always-run summary must say whether each image was built or reused")
+    return _result(27, "images reused by commit, tags locked (ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21)", failures,
+                   "an existing paquetenvia-<name>:<tested sha> is reused, never rebuilt, and every tag is locked")
+
+
 def guard_20_guard_tool_dependencies(ctx: Context) -> GuardResult:
     """Every job that runs a guard tool (both import PyYAML at module scope) installs the pinned PyYAML
     with actions/setup-python first, in the same job."""
@@ -1703,6 +1880,8 @@ GUARDS: tuple[Callable[[Context], GuardResult], ...] = (
     guard_23_realtime_dispatcher_credential,
     guard_24_non_root_images,
     guard_25_postgres_server_setting,
+    guard_26_revision_check,
+    guard_27_image_reuse,
 )
 
 

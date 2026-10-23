@@ -36,6 +36,30 @@ Nobody pushes directly to `main` or `development`, and nobody rebases or force-p
 
 The 11 shared jobs must be identical in both files except for orchestration keys (`needs`, `if`). This includes `timeout-minutes`, steps, `uses` and `env`. `tools/ci/test_workflow_parity.py` enforces it. Any change to a shared job goes into **both** files in the same PR.
 
+## Deploy image build smoke (ENV-001 F-05)
+
+The last step of `azr-static`, *Build and smoke-test the deploy images (no push)*, is also the last step of Foundation's `normative` job, with the same body (`SEMANTIC_STEP_OWNER` in `test_workflow_parity.py`). It catches a broken Dockerfile in CI instead of during a pilot deploy. Before it, nothing built these images; for example, both db-ops images could not run the migrator until #299.
+
+- **What it builds:** every Dockerfile under `deploy/azure`. These are the four that `deploy-azure-pilot.yml` builds and pushes (`Dockerfile.api`, `Dockerfile.worker`, `pilot/Dockerfile.db-ops`, `pilot/Dockerfile.web`) and the two DEV-SYNTHETIC ones (`Dockerfile.db-ops`, `Dockerfile.web`).
+- **How:** with the deploy's build line, `docker build --pull --file <Dockerfile> --build-arg SOURCE_SHA=<tested sha> ... .`, and the deploy's build arguments. The pilot web gets an empty `NEXT_PUBLIC_TRACKING_SUPPORT_URL`, because there is no support link while GATE-001 is open. The DEV-SYNTHETIC web gets `NEXT_PUBLIC_API_BASE_URL=https://api.example.invalid`: its Dockerfile always defines that variable, and `next.config.ts` refuses an empty or non-HTTPS value.
+- **Checks:** each image then runs with `--network none`. `id -u` must print a number other than 0. Both db-ops images must pass the migrator's `verify`, which needs no database and exits 0 only when every migration source the migrator reads is in the image.
+- **What it never does:** push, log in or contact Azure. It also removes its images when it ends.
+- **No cross-run cache:** the repository pins no cache action. Inside the step, Docker's own layer cache lets the second web build reuse the first one's `pnpm install`.
+- **When it runs:**
+  - on every Foundation run;
+  - in PR Validation, whenever `azr-static` runs. Besides the Dockerfiles (`AZURE`) and every web path (`WEB_*`), the `IMAGE_BUILD_INPUT` domain selects `azr-static` for `src/**`, `database/**`, `Paqueteria.sln`, `Directory.Build.props`, `.dockerignore`, `tools/Paqueteria.DatabaseMigrator/**` and `tools/Paqueteria.DevSeed/**`. `DEPS` and unmatched paths are `FULL`, so they run it too;
+  - not for backend paths that no image reads, such as integration tests, compose files or `tools/*.ps1`.
+- **Tests:**
+  - `ImageBuildInputTests` in `tools/ci/test_classify_changes.py` proves that every tracked file the images are built from selects `azr-static`, and that the .NET project closure and every `COPY` source stay inside those inputs;
+  - `tools/ci/test_image_build_smoke.py` keeps the list equal to the Dockerfiles in the repository and to the pilot workflow's builds, and runs the real step with a stand-in `docker`.
+- **Cost (measured on PR #303):**
+  - the step took 221 s and 162 s on the two runs, so about 3 to 4 minutes. On the first run the images took: API 48 s, Worker 28 s, pilot db-ops 36 s, DEV db-ops 36 s, pilot web 43 s, DEV web 30 s. The two DEV-SYNTHETIC images add about a minute;
+  - `azr-static` goes from about 1.6 minutes to 3.9–5.8 minutes. That is still shorter than the slowest PR Validation job (about 7 minutes), so the wall time of a run does not grow;
+  - Foundation's `normative` job (about 1 minute on the last `push`/`main` run) grows by the same 3 to 4 minutes, well inside its 15-minute timeout;
+  - the runner had 80 GB of disk free after the six builds.
+- **Rollback reuses the image (ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21):** the pilot deploy builds an image once per commit. When `paquetenvia-<image>:<tested sha>` is already in the pilot registry, it reuses that tag's digest and builds and pushes nothing, so a rollback returns to the same bytes; it locks each tag after its first push (`az acr repository update --write-enabled false`), so the registry refuses a push over it (guard P27, `docs/operations/env-001-pilot/README.md` §6.2). The bases stay unpinned, so a base patch reaches the pilot with the next commit's build.
+- **Pending owner decisions (not done here):** pinning the base images by digest, with a refresh process; image scanning. Until then CI and the deploy each `--pull` the floating base tags, so a new deploy build can use a newer base than CI tested.
+
 ## Dependency route through main (MAIN_BACKSYNC)
 
 Dependency changes (`DEPS`: `Directory.Packages.props`, `packages.lock.json` with package changes, `package.json`, `pnpm-lock.yaml`, `global.json`, `.nvmrc`, …) **never go through `development`**:
@@ -105,6 +129,10 @@ Anything unregistered still fails closed: an extra transitive package, another v
     Pilot templates are built into their own directory, and any pilot lint diagnostic, warning
     included, fails the step. `azr-static` also runs the pilot guard tests
     (`tools/azr-001/test_env001_pilot_guards.py`). The same step is in Foundation's `normative` job.
+  - `azr-static` also builds and smoke-tests the four images the pilot deploys (see *Deploy image build smoke*). The
+    deploy reuses an image its commit already pushed and locks every tag (guard P27). After stage 4 it checks that the
+    new API, Worker and Web revisions are ready, active, `Healthy` and on this run's digests (guard P26). The run
+    summary lists those digests and whether each was built or reused.
 - **Locally:** `python3 -m unittest discover -s tools/ci -p "test_*.py"`, `python3 -m unittest discover -s tools/azr-001 -p "test_*.py"`, `python3 docs/normative/v0.6/tools/validate_contracts.py`.
 
 ## Workflow conventions

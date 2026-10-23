@@ -1,5 +1,32 @@
 # Changelog
 
+## El rollback reutiliza la imagen del commit (ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21) — 2026-10-21
+
+- Respuesta literal del project owner (2026-10-21, ronda K, pregunta K2), registrada en `decision-log.md` con su
+  contexto y las opciones no elegidas: "Despliegue (F-05): un rollback hoy reconstruye la imagen con las bases del día, no vuelve a los mismos bytes. ¿Qué hacemos?" Respuesta: "Reusar la imagen (Recommended)" ("Si la imagen de ese commit ya está en el registro, el despliegue la reutiliza en vez de reconstruirla: el rollback vuelve a los mismos bytes. Las bases (.NET, Node) siguen sin fijar para que cada build nuevo reciba parches.").
+- El paso de imágenes del despliegue del piloto (*Build or reuse the images by digest*) busca, para cada una de las
+  cuatro imágenes, la etiqueta `paquetenvia-<imagen>:<tested_git_sha>` en el registro del piloto. Si existe (una
+  corrida anterior de ese commit la subió), reutiliza su digest y no construye ni sube nada (`reusing ...`), así que
+  un rollback vuelve a los mismos bytes; si no existe, construye y sube como antes (`building ...`). Todo lo que viene
+  después (jobs de la etapa 3, apps de la etapa 4, comprobación de revisiones y resumen) sigue usando el digest.
+- La etiqueta nunca se reemplaza en silencio: tras subirla, y también al reutilizar una anterior a esta decisión, el
+  paso la bloquea con `az acr repository update --write-enabled false` y la vuelve a leer (mismo digest y
+  `writeEnabled` falso). Desde entonces el registro rechaza cualquier push sobre ella y su borrado, hasta que alguien
+  la desbloquee a propósito. Se eligió el bloqueo, y no solo una comprobación antes del push, porque lo hace cumplir el
+  registro para cualquiera y también impide borrar la etiqueta; no hace falta un rol nuevo: el *Contributor* del
+  desplegador ya tiene acceso completo al plano de datos del registro en el modo *RBAC Registry Permissions*.
+- Falla cerrado: una lectura del registro o un bloqueo que falla detiene el paso antes de construir
+  (`shopt -s inherit_errexit`; antes, un build fallido dejaba el paso en verde con salidas vacías). El resumen del run
+  dice, por imagen, si se construyó o se reutilizó.
+- Las bases (.NET, Node) siguen sin fijar por digest para que cada build nuevo reciba parches: un parche de la base, y
+  un cambio de `PILOT_TRACKING_SUPPORT_URL` (compilado en la imagen web), llegan al piloto con el siguiente commit, no
+  al volver a correr un commit ya desplegado. Fijar las bases, su proceso de actualización y el escaneo de imágenes
+  siguen pendientes.
+- Guarda P27 y pruebas del paso con un `az` y un `docker` simulados (etiqueta existente reutilizada sin build ni push;
+  etiqueta ausente construida, subida, bloqueada y releída; push sobre una etiqueta bloqueada rechazado; lectura del
+  registro fallida sin build). AI-08 ENV-001 gana un criterio DECIDED y una prueba requerida. README §6.2, §6.3,
+  §6.7, §8 y §9, guía del owner (nota de `PILOT_TRACKING_SUPPORT_URL` y Run 3) y `docs/development/branching-and-ci.md`.
+
 ## Avisos al destinatario: carril de notificaciones para WhatsApp y correo (NTF-RECIPIENT-NOTICES-2026-10-20, AI-08 NTF-003) — 2026-10-20
 
 - Aplica la parte NTF-003 de la decisión ya registrada `NTF-RECIPIENT-NOTICES-2026-10-20` (E4 "Los 4 del plan

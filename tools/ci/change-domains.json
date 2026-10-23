@@ -313,6 +313,21 @@
       ]
     },
     {
+      "name": "IMAGE_BUILD_INPUT",
+      "patterns": [
+        "src/**",
+        "database/**",
+        "Paqueteria.sln",
+        "Directory.Build.props",
+        ".dockerignore",
+        "tools/Paqueteria.DatabaseMigrator/**",
+        "tools/Paqueteria.DevSeed/**"
+      ],
+      "jobs": [
+        "azr-static"
+      ]
+    },
+    {
       "name": "TESTS_DOTNET_ONLY",
       "patterns": [
         "tests/Paqueteria.UnitTests/**",

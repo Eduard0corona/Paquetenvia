@@ -49,6 +49,8 @@ public sealed class PlatformEndToEndFixture : IAsyncLifetime
     private const string TelemetryConnectionStringVariable = "TelemetryExport__ConnectionString";
 
     private readonly Dictionary<string, string?> _previousEnvironment = new(StringComparer.Ordinal);
+    private LoopbackPortLease? _apiPort;
+    private LoopbackPortLease? _webPort;
     private LoopbackTlsTunnel? _storageTunnel;
     private DriverStopsNextServer? _web;
     private TraceHeaderCaptureServer? _ingestion;
@@ -57,22 +59,23 @@ public sealed class PlatformEndToEndFixture : IAsyncLifetime
     {
         // Started before any host of the suite exists, so every outgoing request of this process is seen.
         _ = OutboundHttpRequests.Instance;
-        ApiPort = DriverStopsNextServer.ReservePort();
-        do
-        {
-            WebPort = DriverStopsNextServer.ReservePort();
-        }
-        while (WebPort == ApiPort);
     }
 
     internal PostgreSqlSecurityWebApplicationFactory Database { get; } = new();
 
     internal CorsCapableS3Fixture Storage { get; } = new();
 
-    /// <summary>The API listens here on loopback TLS in every test; the web build has this origin inlined.</summary>
-    internal int ApiPort { get; }
+    /// <summary>
+    /// The API listens here on loopback TLS in every test; the web build has this origin inlined. Leased for the whole
+    /// suite (<see cref="LoopbackPortLease"/>), so nothing else takes the port between one test's API and the next.
+    /// </summary>
+    internal LoopbackPortLease ApiPortLease =>
+        _apiPort ?? throw new InvalidOperationException("The fixture is not initialized.");
 
-    internal int WebPort { get; }
+    internal int ApiPort => ApiPortLease.Port;
+
+    internal int WebPort =>
+        _webPort?.Port ?? throw new InvalidOperationException("The fixture is not initialized.");
 
     internal string ApiOrigin => $"https://127.0.0.1:{ApiPort}";
 
@@ -112,6 +115,9 @@ public sealed class PlatformEndToEndFixture : IAsyncLifetime
         }
 
         await Task.WhenAll(Database.InitializeAsync(), Storage.InitializeAsync());
+        // Leased once the containers run: Docker picks host ports itself and can bind one next to a lease.
+        _apiPort = LoopbackPortLease.Acquire();
+        _webPort = LoopbackPortLease.Acquire();
         _storageTunnel = LoopbackTlsTunnel.Start(
             new Uri(Storage.Endpoint),
             RealtimeKestrelWebApplicationFactory.LoopbackCertificate);
@@ -119,7 +125,7 @@ public sealed class PlatformEndToEndFixture : IAsyncLifetime
         await SeedAsync();
         _web = await DriverStopsNextServer.StartProductionAsync(
             ApiOrigin,
-            WebPort,
+            _webPort,
             connectSources: StorageOrigin,
             runtimeEnvironment: new Dictionary<string, string>
             {
@@ -148,6 +154,8 @@ public sealed class PlatformEndToEndFixture : IAsyncLifetime
         await Run(async () => await Storage.DisposeAsync());
         await Run(async () => await Database.DisposeAsync());
         if (_ingestion is not null) await Run(_ingestion.DisposeAsync);
+        _webPort?.Dispose();
+        _apiPort?.Dispose();
         foreach (var (name, value) in _previousEnvironment)
         {
             Environment.SetEnvironmentVariable(name, value);

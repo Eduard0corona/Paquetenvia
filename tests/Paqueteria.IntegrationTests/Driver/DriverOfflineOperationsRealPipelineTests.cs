@@ -27,8 +27,9 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
     {
         var assignment = await database.CreateDriverAudienceOutboxScenarioAsync(
             available: false);
-        var nextPort = DriverStopsNextServer.ReservePort();
-        var nextOrigin = $"http://127.0.0.1:{nextPort}";
+        // The API and the bucket allow the web origin before next starts; the lease keeps its port until the test ends.
+        using var nextPort = LoopbackPortLease.Acquire();
+        var nextOrigin = $"http://127.0.0.1:{nextPort.Port}";
         // The deployable artifact requires an HTTPS API origin and HTTPS signed
         // upload URLs. The API listens on loopback TLS; the storage container
         // speaks plain HTTP, so browser uploads are presigned for a loopback
