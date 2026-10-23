@@ -53,7 +53,7 @@ public sealed partial class CrossSchemaWriteCatalogTests
 
         // Notifications reads the consent through the Orders reader; it never writes an Orders table.
         var notifications = sources.Where(source => source.File.StartsWith("src/Modules/Notifications/", StringComparison.Ordinal));
-        Assert.Empty(Scan(notifications).Where(write => write.Target.StartsWith("orders.", StringComparison.Ordinal)));
+        Assert.DoesNotContain(Scan(notifications), write => write.Target.StartsWith("orders.", StringComparison.Ordinal));
     }
 
     [GeneratedRegex(@"\bINSERT\s+INTO\s+orders\s*\.\s*recipient_notice_consents\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
