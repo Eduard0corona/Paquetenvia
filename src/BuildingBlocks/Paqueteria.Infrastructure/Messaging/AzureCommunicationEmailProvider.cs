@@ -47,7 +47,8 @@ internal sealed class AzureCommunicationEmailProvider(
             return Log(new(MessagingOutcome.PermanentFailure, MessagingResultCodes.TemplateNotConfigured), null);
         }
 
-        if (!MessagingHttp.AreParametersValid(request.Parameters, template.ParameterCount))
+        if (!MessagingHttp.AreParametersValid(request.Parameters, template.ParameterCount) ||
+            !MessagingHttp.AreExtrasValid(request))
         {
             return Log(new(MessagingOutcome.PermanentFailure, MessagingResultCodes.TemplateParametersInvalid), null);
         }
@@ -71,6 +72,16 @@ internal sealed class AzureCommunicationEmailProvider(
             },
             ["userEngagementTrackingDisabled"] = true,
         };
+        // AI-24 recipient_notices.templates.email.headers: the one-click unsubscribe of this notification (RFC 8058).
+        if (request.OneClickUnsubscribeUrl is { } unsubscribe)
+        {
+            body["headers"] = new JsonObject
+            {
+                ["List-Unsubscribe"] = "<" + unsubscribe + ">",
+                ["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click",
+            };
+        }
+
         // Absolute, never relative: "emails:send" would otherwise parse as a URI scheme.
         var uri = new Uri(
             $"{acs.Endpoint.TrimEnd('/')}/emails:send?api-version={Uri.EscapeDataString(acs.ApiVersion)}",

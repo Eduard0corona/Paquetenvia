@@ -58,7 +58,29 @@ public sealed record MessagingRequest(
     string TemplateKey,
     IReadOnlyList<string> Parameters)
 {
-    /// <summary>Recipient and parameters are personal data and never appear here.</summary>
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-24 <c>recipient_notices.templates.whatsapp.url_button</c>; AI-08 NTF-005):
+    /// the dynamic suffix of the template's URL button, the first button ("Ver seguimiento"). It is the public tracking
+    /// token, so it is never logged. WhatsApp only.
+    /// </summary>
+    public string? UrlButtonSuffix { get; init; }
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-24 <c>recipient_notices.templates.whatsapp.quick_reply_button</c>): the
+    /// payload Meta returns when the recipient taps the template's quick reply, the second button ("No recibir avisos").
+    /// A fixed upper-case code, never personal data. WhatsApp only.
+    /// </summary>
+    public string? QuickReplyPayload { get; init; }
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-24 <c>recipient_notices.templates.email.headers</c>): the one-click
+    /// unsubscribe URL of this notification, sent as <c>List-Unsubscribe</c> with
+    /// <c>List-Unsubscribe-Post: List-Unsubscribe=One-Click</c> (RFC 8058). It carries a token, so it is never logged.
+    /// E-mail only.
+    /// </summary>
+    public string? OneClickUnsubscribeUrl { get; init; }
+
+    /// <summary>Recipient, parameters, button suffix and unsubscribe URL are never printed here.</summary>
     public override string ToString() => $"MessagingRequest {{ Channel = {Channel}, TemplateKey = {TemplateKey} }}";
 }
 

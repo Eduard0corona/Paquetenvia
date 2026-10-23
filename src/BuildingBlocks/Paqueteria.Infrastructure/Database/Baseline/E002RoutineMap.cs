@@ -176,6 +176,16 @@ public static class E002RoutineMap
         new("security.is_recipient_opted_out(text,bytea[])", "paqueteria_outbox_executor", ["paqueteria_worker"]),
     ];
 
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 (AI-08 NTF-005): the Notifications lane migration
+    /// 20261023000100_AddRecipientNoticeCounts installs the read-only count of the recipient notice caps, owned by
+    /// paqueteria_outbox_executor and executable only by paqueteria_worker. It follows the recipient notice lane step.
+    /// </summary>
+    private static readonly E002RoutineEntry[] RecipientNoticeCountEntries =
+    [
+        new("security.read_recipient_notice_counts(uuid,uuid)", "paqueteria_outbox_executor", ["paqueteria_worker"]),
+    ];
+
     /// <summary>The published NTF-001 settle, dropped by the recipient notice lane step.</summary>
     public const string PublishedApplyOutcomeSignature =
         "security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,timestamp with time zone,timestamp with time zone)";
@@ -204,6 +214,7 @@ public static class E002RoutineMap
             OperatorOutboxEntries.Length != 2 || OperatorOutboxEntries.Sum(entry => 1 + entry.Grantees.Count) != 4 ||
             OrderAutoCloseEntries.Length != 1 || OrderAutoCloseEntries.Sum(entry => 1 + entry.Grantees.Count) != 2 ||
             RecipientNoticeEntries.Length != 4 || RecipientNoticeEntries.Sum(entry => 1 + entry.Grantees.Count) != 8 ||
+            RecipientNoticeCountEntries.Length != 1 || RecipientNoticeCountEntries.Sum(entry => 1 + entry.Grantees.Count) != 2 ||
             Ntf001Entries.Count(entry => entry.Signature == PublishedApplyOutcomeSignature) != 1 ||
             RealtimeDispatcherRoutines.Count != 6 ||
             RealtimeDispatcherRoutines.Any(signature => AppliedEntries.All(entry => entry.Signature != signature)))
@@ -225,7 +236,8 @@ public static class E002RoutineMap
         bool operatorOutboxApplied = false,
         bool orderAutoCloseApplied = false,
         bool realtimeDispatcherApplied = false,
-        bool recipientNoticeLaneApplied = false)
+        bool recipientNoticeLaneApplied = false,
+        bool recipientNoticeCountsApplied = false)
     {
         IReadOnlyList<E002RoutineEntry> entries = state switch
         {
@@ -296,6 +308,16 @@ public static class E002RoutineMap
                 .Concat(RecipientNoticeEntries);
         }
 
+        if (recipientNoticeCountsApplied)
+        {
+            if (state == E002RoutineMapState.Pending || !recipientNoticeLaneApplied)
+            {
+                throw new InvalidOperationException("E002_ROUTINE_MAP_TRANSITION_CONTEXT_INVALID");
+            }
+
+            selected = selected.Concat(RecipientNoticeCountEntries);
+        }
+
         if (realtimeDispatcherApplied)
         {
             if (state == E002RoutineMapState.Pending)
@@ -324,7 +346,8 @@ public static class E002RoutineMap
         bool operatorOutboxApplied = false,
         bool orderAutoCloseApplied = false,
         bool realtimeDispatcherApplied = false,
-        bool recipientNoticeLaneApplied = false)
+        bool recipientNoticeLaneApplied = false,
+        bool recipientNoticeCountsApplied = false)
     {
         var prefix = state switch
         {
@@ -346,6 +369,7 @@ public static class E002RoutineMap
             (orderAutoCloseApplied ? "_PLUS_ORDAUTOCLOSE" : string.Empty) +
             (realtimeDispatcherApplied ? "_PLUS_RTMAPIROLE" : string.Empty) +
             (recipientNoticeLaneApplied ? "_PLUS_NTFRECIPIENT" : string.Empty) +
+            (recipientNoticeCountsApplied ? "_PLUS_NTFCAPS" : string.Empty) +
             "_V1";
     }
 }

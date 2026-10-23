@@ -30,6 +30,12 @@ public static class E002NotificationStateReader
     /// </summary>
     public const string RecipientNoticeLaneMigrationId = "20261020000100_AddRecipientNoticeLane";
 
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 (AI-08 NTF-005): adds <c>security.read_recipient_notice_counts</c>, owned by
+    /// <c>paqueteria_outbox_executor</c> and executable only by <c>paqueteria_worker</c>, and two partial indexes.
+    /// </summary>
+    public const string RecipientNoticeCountsMigrationId = "20261023000100_AddRecipientNoticeCounts";
+
     private static readonly string[] ExpectedHistory =
     [
         Ntf001MigrationId,
@@ -45,6 +51,7 @@ public static class E002NotificationStateReader
         // expand_order_created_notifications bodies.
         "20261013000200_CarryOutboxTraceContext",
         RecipientNoticeLaneMigrationId,
+        RecipientNoticeCountsMigrationId,
     ];
 
     public static async Task<E002NotificationState> ReadAsync(
@@ -142,6 +149,16 @@ public static class E002NotificationStateReader
         NpgsqlTransaction? transaction = null,
         CancellationToken cancellationToken = default) =>
         IsRecordedAsync(connection, transaction, RecipientNoticeLaneMigrationId, cancellationToken);
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-CAPS-2026-10-23: whether the recipient notice count step is recorded. Recorded history, not the
+    /// catalog, decides, so a recorded step whose routine is missing fails the map.
+    /// </summary>
+    public static Task<bool> IsRecipientNoticeCountsAppliedAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction = null,
+        CancellationToken cancellationToken = default) =>
+        IsRecordedAsync(connection, transaction, RecipientNoticeCountsMigrationId, cancellationToken);
 
     private static async Task<bool> IsRecordedAsync(
         NpgsqlConnection connection,

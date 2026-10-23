@@ -36,8 +36,10 @@ public sealed class NotificationsArchitectureTests
             .Order(StringComparer.Ordinal)
             .ToArray();
 
+        // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-005): Orders.Application publishes the recipient notice readers and
+        // the public status map the validity at send uses.
         Assert.Equal(
-            ["Identity.Application", "Notifications.Domain", "Organizations.Application", "Paqueteria.Application"],
+            ["Identity.Application", "Notifications.Domain", "Orders.Application", "Organizations.Application", "Paqueteria.Application"],
             references);
         Assert.DoesNotContain(references, value => value.EndsWith(".Infrastructure", StringComparison.Ordinal));
     }

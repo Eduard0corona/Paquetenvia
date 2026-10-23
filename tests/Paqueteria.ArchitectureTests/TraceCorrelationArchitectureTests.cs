@@ -32,6 +32,8 @@ public sealed partial class TraceCorrelationArchitectureTests
                 "the key and cryptography clients, built with options through Configure, which ends in WithoutDistributedTracing",
             ["src/BuildingBlocks/Paqueteria.Infrastructure/Security/Pii/RecipientNoticeKey.cs"] =
                 "the recipient-notice key client (NTF-002), a key client only, built with options through WithoutDistributedTracing",
+            ["src/BuildingBlocks/Paqueteria.Infrastructure/Security/Pii/RecipientNoticeKeyOpener.cs"] =
+                "the Worker's unwrap-only recipient-notice cryptography client (NTF-005), built with options through Configure, which ends in WithoutDistributedTracing",
             ["src/Modules/Custody/Custody.Infrastructure/ProofStorage/AzureBlobProofGateway.cs"] =
                 "the Blob service client, built with CreateClientOptions, which ends in WithoutDistributedTracing",
             ["src/Modules/Custody/Custody.Infrastructure/ProofStorage/AzureBlobProofObjectStorage.cs"] =

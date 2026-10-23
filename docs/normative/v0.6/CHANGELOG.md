@@ -1,5 +1,39 @@
 # Changelog
 
+## Avisos al destinatario: entrega en el Worker y topes (NTF-RECIPIENT-NOTICE-CAPS-2026-10-23, AI-08 NTF-005) — 2026-10-23
+
+- Respuestas literales del project owner (2026-10-23, ronda L, preguntas L1 a L4), registradas en `decision-log.md` con
+  su contexto, los textos de las opciones, la lista de L4 y las opciones no elegidas: "Avisos al destinatario (NTF-005): AI-24 pide topes de 8 avisos por orden y canal, y 500 al día por canal (hora de Mazatlán). Con lo que hoy declaran los contratos, el Worker no puede contar los avisos ya enviados, así que esos topes no se pueden cumplir. ¿Cómo seguimos?" Respuesta: "Función de conteo (Recommended)"; L2 "Toda la plataforma (Recommended)";
+  L3 "Destinatario inválido (Recommended)"; L4 "Aprobarlas todas (Recommended)"; L5 "Aceptar el conteo estricto
+  (Recommended)", preguntada después de abrir el PR. Es el PR-4 de la secuencia de `docs/development/ntf-recipient-notices.md`.
+- Paso de carril Notifications `20261023000100_AddRecipientNoticeCounts`, con ida, vuelta e ida probadas en PostgreSQL 18 y
+  PostGIS 3.6: `security.read_recipient_notice_counts(uuid,uuid)`, de solo lectura, propiedad de
+  `paqueteria_outbox_executor`, SECURITY DEFINER con `search_path` fijo, sin SQL dinámico ni RETURNING y con EXECUTE solo
+  para `paqueteria_worker`. Solo responde bajo el `lease_token` vigente de una solicitud de envío cuyo aviso sigue
+  PENDING, y devuelve solo dos números: los otros avisos de la misma orden y canal con intentos, y los otros avisos del
+  canal en toda la plataforma cuyo último intento cae en el día de hoy de America/Mazatlan (calculado en SQL). "Con
+  intentos" es `attempts > 0`, el conteo de `apply_notification_outcome`: incluye los avisos que terminaron FAILED antes
+  de llamar al proveedor (contacto inutilizable, sin enlace, canal apagado); una falla pasajera antes de la llamada solo
+  reprograma la solicitud y no cuenta. Así un tope se alcanza igual o antes que contando solo llamadas al proveedor (L5).
+  Dos
+  índices parciales sobre los avisos; ninguna tabla, columna, fila, rol ni privilegio de tabla cambia, y el Worker sigue
+  sin privilegio sobre `notifications.notifications`. AI-06 declara los dos índices byte a byte, AI-18 el paso 6 y la
+  aserción 39, AI-24 `recipient_notices.caps` (decisión, alcance de cada tope y `count`) y `contact.unusable`, y AI-08
+  NTF-005 un criterio DECIDED y una prueba de contrato.
+- El Worker consume `orders.recipient-notice-requested` y `notifications.send-requested` de los avisos: lee la orden y su
+  enlace activo bajo RLS, deriva el enlace en memoria y lo compara con el hash guardado, abre la copia del contacto solo
+  con la llave de avisos (solo unwrap), revisa horario (08:00:00 sí sale, 21:00:00 ya no), vigencia, topes y bajas antes
+  de llamar al proveedor, y nunca llama al proveedor con una transacción abierta. Un contacto inutilizable termina FAILED
+  con `MESSAGING_RECIPIENT_INVALID` (L3); avisos apagados, `MESSAGING_CHANNEL_DISABLED`; sin enlace,
+  `TRACKING_LINK_UNAVAILABLE`.
+- Adaptadores: la plantilla de WhatsApp lleva el botón URL (índice 0, sufijo = token) y la respuesta rápida "No recibir
+  avisos" (índice 1); el correo lleva `List-Unsubscribe` y `List-Unsubscribe-Post` de un clic. Textos exactamente los de
+  AI-24, comparados por una prueba.
+- Todo sigue apagado: `Notifications:RecipientNotices:Enabled` falso, proveedores Disabled; el Worker no arranca con un
+  proveedor real en Development, Testing o DEV_SYNTHETIC, ni sin los identificadores de decisión de GATE-004 y GATE-007.
+  Sin consentimiento registrado (llega con NTF-004) no se crea ningún aviso de WhatsApp. GATE-004 y GATE-007 siguen
+  abiertas.
+
 ## Remediación de seguridad pnpm: vite 8.1.6, vitest 4.1.12 y Next.js 16.4.1 (SEC-2026-14-PNPM-REMEDIATION-2026-10-21) — 2026-10-21
 
 - Respuestas literales del project owner (2026-10-21 y 2026-10-22, ronda K), registradas en `decision-log.md` con su

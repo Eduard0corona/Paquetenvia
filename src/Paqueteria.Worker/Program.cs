@@ -3,8 +3,10 @@ using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Custody.Infrastructure;
 using Dispatch.Infrastructure.Lifecycle;
 using Identity.Infrastructure.Notifications;
+using Locations.Infrastructure.RecipientNotices;
 using Notifications.Infrastructure;
 using Orders.Infrastructure;
+using Orders.Infrastructure.RecipientNotices;
 using Organizations.Infrastructure.Notifications;
 using Paqueteria.Infrastructure.Database.Outbox.Retention;
 using Paqueteria.Infrastructure.Cloud;
@@ -39,6 +41,11 @@ builder.Services.AddIdentityNotificationAudienceReader(builder.Configuration);
 builder.Services.AddNotificationsInfrastructure(builder.Configuration);
 // GATE-004-CHANNELS: WhatsApp (Meta Cloud API) and email (ACS) adapters; every channel Disabled by default.
 builder.Services.AddPaqueteriaMessaging(builder.Configuration, builder.Environment);
+// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-005): the readers recipient notices use under FORCE RLS - the order, its
+// active tracking link (derived in memory with the Worker's link key ring) and the notice copies of its destination.
+// Recipient notices stay off unless Notifications:RecipientNotices:Enabled.
+builder.Services.AddOrdersRecipientNoticeReaders(builder.Configuration, builder.Environment);
+builder.Services.AddLocationsRecipientNoticeContactReader(builder.Configuration);
 builder.Services.AddOrdersClaimWindowFinalization(builder.Configuration);
 // ORD-AUTO-CLOSE-2026-10-10: closes DELIVERED orders whose CLOSED guards hold; off unless Orders:AutoClose:Enabled.
 builder.Services.AddOrdersAutoClose(builder.Configuration);

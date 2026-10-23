@@ -4,6 +4,7 @@ using Microsoft.Extensions.Options;
 using Notifications.Application.Audience;
 using Notifications.Application.Dispatching;
 using Notifications.Infrastructure.Delivery;
+using Notifications.Infrastructure.RecipientNotices;
 using Npgsql;
 using Paqueteria.Infrastructure.Observability;
 
@@ -15,7 +16,8 @@ internal sealed class NotificationsOutboxProcessor(
     ISyntheticInAppProvider provider,
     IOptions<NotificationsOptions> options,
     OutboxLaneMonitor lanes,
-    ILogger<NotificationsOutboxProcessor> logger)
+    ILogger<NotificationsOutboxProcessor> logger,
+    IRecipientNoticeLane? recipientNotices = null)
 {
     public async Task ProcessOwnedAsync(
         ClaimedNotificationOutboxMessage message,
@@ -30,6 +32,10 @@ internal sealed class NotificationsOutboxProcessor(
                     return;
                 case NotificationOutboxTopics.SendRequested:
                     await ProcessSendRequestAsync(message, cancellationToken);
+                    return;
+                case NotificationOutboxTopics.RecipientNoticeRequested when recipientNotices is not null:
+                    // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-005): the consumer of the ORD-002 request row.
+                    await recipientNotices.ExpandAsync(message, cancellationToken);
                     return;
                 default:
                     await SettleAsync(message, "DEAD", NotificationErrorCodes.UnknownTopic, null, cancellationToken);
@@ -125,10 +131,7 @@ internal sealed class NotificationsOutboxProcessor(
         }
 
         var delivery = await store.ReadDeliveryAsync(notificationId, message.OwnerOrganizationId, cancellationToken);
-        // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-003): the lane stores WhatsApp and e-mail recipient notices, but
-        // only AI-08 NTF-005 sends them; until then this processor sends IN_APP only.
-        if (delivery is null || delivery.Status != "PENDING" || delivery.Channel != NotificationTemplate.Channel ||
-            delivery.TemplateBody is null)
+        if (delivery is null || delivery.Status != "PENDING")
         {
             await SettleAsync(message, "DEAD", NotificationErrorCodes.InvalidPayload, null, cancellationToken);
             return;
@@ -146,6 +149,21 @@ internal sealed class NotificationsOutboxProcessor(
             }
 
             LogOutcome("MAX_ATTEMPTS", NotificationErrorCodes.MaxAttemptsExhausted);
+            return;
+        }
+
+        // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-005): a WhatsApp or e-mail recipient notice goes to its sender, which
+        // ends every path that cannot send with the AI-24 code that names it (switch off or provider Disabled:
+        // MESSAGING_CHANNEL_DISABLED); a real provider without its gate decisions never starts.
+        if (delivery.RecipientKind == RecipientNoticeKinds.OrderDestination && recipientNotices is not null)
+        {
+            await recipientNotices.SendAsync(message, delivery, cancellationToken);
+            return;
+        }
+
+        if (delivery.Channel != NotificationTemplate.Channel || delivery.TemplateBody is null)
+        {
+            await SettleAsync(message, "DEAD", NotificationErrorCodes.InvalidPayload, null, cancellationToken);
             return;
         }
 

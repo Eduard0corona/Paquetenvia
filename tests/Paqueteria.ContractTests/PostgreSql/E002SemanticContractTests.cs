@@ -54,14 +54,15 @@ public sealed class E002SemanticContractTests(PostgreSqlContractFixture fixture)
                 // routines, owner + paqueteria_app. ORD-AUTO-CLOSE-2026-10-10 adds the Orders auto-close step: one
                 // discovery routine, owner + Worker. NTF-RECIPIENT-NOTICES-2026-10-20 adds the Notifications recipient
                 // notice step: four routines, owner + Worker, in place of the published 8-argument settle.
+                // NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 adds the Notifications count step: one routine, owner + Worker.
                 Assert.Equal(
-                    "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_PLUS_RTMAPIROLE_PLUS_NTFRECIPIENT_V1",
+                    "ROUTINE_MAP_AI18_PLUS_NTF001_APPLIED_PLUS_LIF001_PLUS_D8DISPATCH_PLUS_OPS003_PLUS_REG001_PLUS_BFFSESSION_PLUS_BFFPURGE_PLUS_REG002_PLUS_MDM001_PLUS_DSPOPOUTBOX_PLUS_ORDAUTOCLOSE_PLUS_RTMAPIROLE_PLUS_NTFRECIPIENT_PLUS_NTFCAPS_V1",
                     applied.RoutineMap);
-                Assert.Equal(54, applied.ControlledIdentities);
+                Assert.Equal(55, applied.ControlledIdentities);
                 // RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the Notifications lane also grants paqueteria_realtime
                 // EXECUTE on the six realtime and location lease-token routines (no new routine); the recipient notice
-                // step nets three routines of two rows each.
-                Assert.Equal(112, applied.NormalizedExecuteRows);
+                // step nets three routines of two rows each, and the count step one more of two rows.
+                Assert.Equal(114, applied.NormalizedExecuteRows);
             }
 
             Assert.All(await new ModuleMigrationCoordinator().AssertAsync(connectionString,
