@@ -227,7 +227,9 @@ public sealed class OrderHttpWebApplicationFactory : WebApplicationFactory<Progr
                 command.Acceptance.AcceptanceChannel,
                 command.CodExpectedCents,
                 command.ServiceWindow?.From.ToString("O"),
-                command.ServiceWindow?.To.ToString("O"));
+                command.ServiceWindow?.To.ToString("O"),
+                // NTF-RECIPIENT-NOTICES-2026-10-20: the WhatsApp consent box, part of the request when ticked.
+                command.WhatsAppConsentVersion);
             lock (gate)
             {
                 if (responses.TryGetValue((command.OrganizationId, command.IdempotencyKey), out var stored))

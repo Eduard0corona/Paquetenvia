@@ -39,7 +39,8 @@ public sealed class RecipientNoticeWorkerCompositionTests
         Assert.Equal("RecipientNoticeProcessor", worker.Services.GetRequiredService<IRecipientNoticeLane>().GetType().Name);
         Assert.Equal("PostgreSqlRecipientNoticeOrderReader", worker.Services.GetRequiredService<IRecipientNoticeOrderReader>().GetType().Name);
         Assert.Equal("PostgreSqlRecipientNoticeContactReader", worker.Services.GetRequiredService<IRecipientNoticeContactReader>().GetType().Name);
-        Assert.Equal("UnrecordedRecipientNoticeConsentReader", worker.Services.GetRequiredService<IRecipientNoticeConsentReader>().GetType().Name);
+        // AI-08 NTF-004 (NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 N3 choice 7): the consent is read from orders.recipient_notice_consents.
+        Assert.Equal("PostgreSqlRecipientNoticeConsentReader", worker.Services.GetRequiredService<IRecipientNoticeConsentReader>().GetType().Name);
         Assert.Equal("MessagingProviderRouter", worker.Services.GetRequiredService<IMessagingProvider>().GetType().Name);
         var links = worker.Services.GetRequiredService<IRecipientNoticeTrackingLinks>();
         Assert.Equal("RecipientNoticeTrackingLinks", links.GetType().Name);

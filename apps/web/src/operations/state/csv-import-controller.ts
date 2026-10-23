@@ -181,8 +181,10 @@ export class CsvImportController extends ExternalStore<CsvImportState> {
   /**
    * @param restrictedGoodsAcknowledged ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the dispatcher ticked that no
    * shipment in the file contains prohibited goods; without it nothing is sent.
+   * @param recipientWhatsAppConsent NTF-RECIPIENT-NOTICES-2026-10-20 (AI-07 csv_order_import.recipient_notices): the
+   * optional WhatsApp consent box of the file; unticked, nothing about it is sent.
    */
-  public async commit(restrictedGoodsAcknowledged: boolean): Promise<void> {
+  public async commit(restrictedGoodsAcknowledged: boolean, recipientWhatsAppConsent = false): Promise<void> {
     const api = this.api;
     const file = this.file;
     const state = this.getSnapshot();
@@ -194,11 +196,22 @@ export class CsvImportController extends ExternalStore<CsvImportState> {
       return;
     }
     const generation = this.generation;
-    // The batch key follows the previewed digest: a retry of the same batch reuses it.
-    const submission = this.pending.prepare(commitScope, preview.content_digest, () => preview.content_digest);
+    // The batch key follows the previewed digest and the consent box: a retry of the same batch reuses it, and the
+    // other answer to the box is another batch for the server, so it gets another key.
+    const submission = this.pending.prepare(
+      commitScope,
+      JSON.stringify([preview.content_digest, recipientWhatsAppConsent]),
+      () => preview.content_digest,
+    );
     this.update({ busy: true, errors: [], message: null, stepUpHref: null });
     try {
-      const result = await api.commit(file, submission.payload, submission.key, this.controller?.signal);
+      const result = await api.commit(
+        file,
+        submission.payload,
+        submission.key,
+        this.controller?.signal,
+        recipientWhatsAppConsent,
+      );
       if (generation !== this.generation) return;
       this.pending.settle(commitScope);
       if (result.kind === "committed") {

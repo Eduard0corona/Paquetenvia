@@ -128,8 +128,8 @@ Cada consumer implementa idempotencia, lease/locking, retries, dead-letter/revie
 
 **Decidido** (`D8-DISPATCH-OUTBOX-CLOSURE`, project owner, 2026-09-26): Dispatch
 cierra sus asignaciones reaccionando por outbox a los cambios de estado de la
-orden, con consistencia eventual. No se agrega un sexto coordinador
-transaccional ni un flujo atómico nuevo entre módulos.
+orden, con consistencia eventual. No se agrega un coordinador transaccional
+nuevo ni un flujo atómico nuevo entre módulos.
 
 Correspondencia del PR borrador #90 (`AssignmentLifecyclePolicy`), aprobada con
 `D8-OUTBOX-LANE-DISPATCH` (2026-09-27, "Apruebo 2" y "Aprobado todo"):
@@ -181,7 +181,8 @@ solo en las cinco transiciones de AI-24 `recipient_notices.notices`, igual que
 `D8-OUTBOX-LANE-DISPATCH`; `security.resolve_outbox_consumer` lo enruta al lane
 `NOTIFICATIONS`. La expansión, el envío, los acuses y las bajas escriben solo
 filas de Notifications más el outbox y la auditoría compartidos, y leen Orders y
-Locations bajo RLS: no hay sexto flujo atómico ni coordinador nuevo. Toda llamada
+Locations bajo RLS: siguen los seis flujos de §4, sin flujo atómico nuevo ni
+coordinador nuevo (`NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23`, N1). Toda llamada
 al proveedor ocurre sin transacción abierta (leer, confirmar, llamar y liquidar
 con `lease_token`), como en NTF-001 y VOICE-001.
 
@@ -362,4 +363,4 @@ Desde `TRK-002-AUTO-LINK` los enlaces de las órdenes no se generan con `CreateT
 `TrackingLinkTokenDerivation.DeriveToken(key, keyVersion, orderId, generation)`: Base64URL sin padding de
 HMAC-SHA256 sobre `paquetenvia-trk-v1|{key_version}|{order_id}|{generation}` (AI-24 `tracking_token.derivation`).
 `HashToken` no cambia. La emisión del primer enlace dentro de `quote_snapshot_to_order` es una escritura interna de
-Orders en ese flujo, no un sexto flujo cross-module.
+Orders en ese flujo, no un flujo cross-module nuevo.

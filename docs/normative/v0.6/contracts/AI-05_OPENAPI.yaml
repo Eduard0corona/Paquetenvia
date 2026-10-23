@@ -4204,6 +4204,32 @@ components:
             member, is rejected with 409 before any order is created. It is stored on the order, returned as
             Order.service_window and is part of the Idempotency-Key request hash, so replaying a key with another
             window is a conflict.
+        recipient_notices:
+          type:
+          - object
+          - 'null'
+          additionalProperties: false
+          required:
+          - whatsapp_consent_attested
+          properties:
+            whatsapp_consent_attested:
+              type: boolean
+            whatsapp_consent_version:
+              type: string
+              const: NTF-RECIPIENT-WHATSAPP-CONSENT-V1
+          description: >-
+            NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-004; x-pilot-contract-deltas NTF-RECIPIENT-NOTICES, part NTF-004;
+            AI-24 recipient_notices.consent) - the optional WhatsApp consent box of "Nueva orden" ("El destinatario
+            aceptó recibir avisos de su envío por WhatsApp", unticked by default). Absent or null, or
+            whatsapp_consent_attested false without whatsapp_consent_version, records nothing and the order gets no
+            WhatsApp notice (an e-mail notice still, when the destination has an e-mail). whatsapp_consent_attested true
+            requires whatsapp_consent_version NTF-RECIPIENT-WHATSAPP-CONSENT-V1, the only accepted version; any other
+            shape (another member, a version with false, true without the version or another version) is the uniform
+            409 INVALID_REQUEST before any order is created. Ticked, orders.recipient_notice_consents gets one row (the
+            order, WHATSAPP, the version, the creating actor and the server time) in the createOrder transaction, the
+            ORDER_CREATED audit entry records only the boolean whatsapp_consent_attested, and the version enters the
+            Idempotency-Key request hash; unticked, the hash stays byte-identical to a request without the field. It is
+            never returned, and no phone, e-mail or name is part of it.
     Order:
       type: object
       required:
@@ -5771,6 +5797,28 @@ components:
             in the file, that none contains prohibited goods. Exactly one field with the value true; absent, repeated
             or any other value is the uniform 409 CONFLICT before the batch is reserved or any order is created.
             Every created order records it as POST /orders does.
+        recipient_whatsapp_consent_attested:
+          type: string
+          enum:
+          - 'true'
+          - 'false'
+          description: >-
+            NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-004; x-pilot-contract-deltas NTF-RECIPIENT-NOTICES, part NTF-004;
+            AI-07 csv_order_import.recipient_notices) - the one optional WhatsApp consent box of the commit, for the
+            recipient of every row of the file. Absent or false (without recipient_whatsapp_consent_version) records
+            nothing and those orders get no WhatsApp notice. true requires recipient_whatsapp_consent_version, and every
+            created order then records its own consent row as POST /orders does (the creating actor and the server
+            time). A repeated field, any other value, true without the version or a version without true is the uniform
+            409 CONFLICT before the batch is reserved or any order is created. Ticked, it is part of the batch
+            fingerprint and of each row's ORD-001 request hash, so replaying the batch Idempotency-Key with the other
+            answer is IDEMPOTENCY_CONFLICT; unticked, both stay unchanged. previewOrderCsv is unchanged.
+        recipient_whatsapp_consent_version:
+          type: string
+          enum:
+          - NTF-RECIPIENT-WHATSAPP-CONSENT-V1
+          description: >-
+            NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-004) - required, once, with recipient_whatsapp_consent_attested
+            true and absent otherwise; NTF-RECIPIENT-WHATSAPP-CONSENT-V1 is the only accepted value.
     CsvImportRowError:
       type: object
       required:
@@ -8309,9 +8357,15 @@ x-pilot-contract-deltas:
       DestinationAddressInput on createQuote, RecipientEmailPolicy, the e-mail in the quote input hash only when present,
       the Locations lane step 20261020000100_AddRecipientNoticeContact with its AI-06 DDL and baseline assertions, the
       wrap-only recipient-notice sealer (Locations:NoticeKeyProtector, Disabled by default and in the pilot, so no notice
-      copy is written until AI-08 NTF-008 wires the key) and the wizard field; every other part is pending - nothing
-      else below is served or accepted yet; each part is published in this file together with its code and tests by the
-      AI-08 item it names; GATE-004 and GATE-007 stay open and every switch stays off
+      copy is written until AI-08 NTF-008 wires the key) and the wizard field; part NTF-004 shipped by
+      feat/ntf-004-recipient-notice-producer together with its code and tests - CreateOrderRequest.recipient_notices on
+      createOrder and the CsvImportCommitRequest fields recipient_whatsapp_consent_attested and
+      recipient_whatsapp_consent_version on commitOrderCsv, the Orders lane step 20261023000200_AddRecipientNoticeConsents
+      (orders.recipient_notice_consents, append-only under FORCE RLS) with its AI-06 and AI-18 declarations and baseline
+      assertions, the ORD-002 producer of orders.recipient-notice-requested (RecipientNoticeRequestPolicy) and the two
+      consent boxes (NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23); every other part is pending - nothing else below is
+      served or accepted yet; each part is published in this file together with its code and tests by the AI-08 item it
+      names; GATE-004 and GATE-007 stay open and every switch stays off
     delta: recipient notices (TRACKING_LINK, IN_TRANSIT, DELIVERY_FAILED and DELIVERED) to the delivery recipient by
       WhatsApp and by e-mail; the parts below add an optional recipient e-mail, the WhatsApp consent, the dispatcher
       list and stop operations, the provider webhooks and the e-mail unsubscribe; every error keeps
@@ -8333,14 +8387,16 @@ x-pilot-contract-deltas:
         whatsapp_consent_attested (boolean) and whatsapp_consent_version (const NTF-RECIPIENT-WHATSAPP-CONSENT-V1,
         required when whatsapp_consent_attested is true and absent otherwise); absent or false records nothing; any other
         shape is the uniform 409 INVALID_REQUEST before any order is created; it is part of the Idempotency-Key request
-        hash; when true, orders.recipient_notice_consents gets one row (order, WHATSAPP, version, the actor, the server
-        time) in the createOrder transaction and the ORDER_CREATED audit entry records the boolean only
+        hash (only when true, NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 N3 choice 3); when true, orders.recipient_notice_consents
+        gets one row (order, WHATSAPP, version, the actor, the server time) in the createOrder transaction and the
+        ORDER_CREATED audit entry records the boolean only
     - item: NTF-004
       operation: commitOrderCsv
       change: CsvImportCommitRequest gains the optional form fields recipient_whatsapp_consent_attested (true or false)
         and recipient_whatsapp_consent_version (NTF-RECIPIENT-WHATSAPP-CONSENT-V1, required with true); the attestation
         covers every row of the batch, is recorded for each created order as on createOrder and is part of the batch
-        fingerprint; previewOrderCsv is unchanged
+        fingerprint (only when true, NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 N3 choice 3); any other shape is the uniform
+        409 CONFLICT before the batch is reserved (N3 choice 5); previewOrderCsv is unchanged
     - item: NTF-006
       operation: verifyMetaWhatsAppWebhook
       method_path: GET /messaging/whatsapp/webhook

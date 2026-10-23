@@ -24,7 +24,9 @@ public sealed partial class OutboxTraceContextArchitectureTests
         ["src/Modules/Dispatch/Dispatch.Infrastructure/ExternalOffers/PostgreSqlExternalOfferService.cs"] = 1,
         ["src/Modules/Dispatch/Dispatch.Infrastructure/Lifecycle/PostgreSqlAssignmentLifecycleReactor.cs"] = 1,
         ["src/Modules/Drivers/Drivers.Infrastructure/Locations/PostgreSqlDriverLocationIngestionService.cs"] = 1,
-        ["src/Modules/Orders/Orders.Infrastructure/Orders/PostgreSqlOrderTransitionService.cs"] = 3,
+        // orders.status-changed, orders.timeline-event-added, the D8 Dispatch reaction and (NTF-RECIPIENT-NOTICES-2026-10-20,
+        // AI-08 NTF-004) orders.recipient-notice-requested.
+        ["src/Modules/Orders/Orders.Infrastructure/Orders/PostgreSqlOrderTransitionService.cs"] = 4,
         ["src/Modules/Orders/Orders.Infrastructure/Orders/QuoteSnapshotToOrderCoordinator.cs"] = 1,
         ["src/Modules/Routing/Routing.Infrastructure/Routes/PostgreSqlRouteService.Persistence.cs"] = 1,
     };

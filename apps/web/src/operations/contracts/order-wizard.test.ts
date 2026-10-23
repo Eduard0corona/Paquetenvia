@@ -140,6 +140,7 @@ describe("wizard steps (UI-PHASE3-ORDER-WIZARD-2026-10-10)", () => {
       codAmount: "150.50",
       serviceWindowFrom: "",
       serviceWindowTo: "",
+      recipientWhatsAppConsent: false,
     });
   });
 

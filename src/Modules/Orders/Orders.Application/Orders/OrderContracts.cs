@@ -15,6 +15,12 @@ public sealed record OrderAcceptanceInput(
 /// dispatcher attestation, not part of the customer's legal acceptance, so OrderAcceptanceCanonicalForm v1 is
 /// unchanged; it is recorded in the append-only ORDER_CREATED order event and its audit entry.
 /// </param>
+/// <param name="WhatsAppConsentVersion">
+/// NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P1; AI-08 NTF-004): the WhatsApp consent box. <see langword="null"/> means not
+/// ticked and records nothing; ticked it is <see cref="RecipientNoticeConsentPolicy.Version"/> and any other value is the
+/// uniform conflict before any effect. It enters the request hash only when ticked, so every existing fingerprint stays
+/// byte-identical (NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 N3 choice 3).
+/// </param>
 public sealed record CreateOrderCommand(
     Guid ActorId,
     Guid OrganizationId,
@@ -25,7 +31,8 @@ public sealed record CreateOrderCommand(
     string? RequestId,
     long CodExpectedCents = 0,
     bool RestrictedGoodsAcknowledged = false,
-    OrderServiceWindow? ServiceWindow = null);
+    OrderServiceWindow? ServiceWindow = null,
+    string? WhatsAppConsentVersion = null);
 
 /// <summary>
 /// ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: the delivery window the dispatcher committed to, as two UTC instants.

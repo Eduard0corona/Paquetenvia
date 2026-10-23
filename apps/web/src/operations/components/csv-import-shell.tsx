@@ -1,9 +1,12 @@
 "use client";
 
 import Link from "next/link";
+import { recipientWhatsAppConsentText } from "../contracts/create-order";
 import {
   csvCodColumn,
   csvFileErrorLabels,
+  csvRecipientConsentField,
+  csvRecipientConsentHint,
   csvHeader,
   csvRowErrorLabels,
   csvRowOutcomeLabels,
@@ -150,27 +153,72 @@ function PreviewReport({
         </table>
       )}
       {committable && state.canCommit && (
-        <form
-          className="opsForm"
-          autoComplete="off"
-          onSubmit={(event) => {
-            event.preventDefault();
-            const data = new FormData(event.currentTarget);
-            void controller.commit(data.get("restricted_goods_acknowledged") === "on");
-          }}
-        >
-          <label className="opsCheckbox">
-            <input type="checkbox" name="restricted_goods_acknowledged" required /> Confirmo que ningún envío del
-            archivo contiene artículos prohibidos
-          </label>
-          <div className="opsFormActions">
-            <button className="btn btnPrimary" type="submit" disabled={state.busy || waiting}>
-              {state.busy ? "Confirmando…" : `Confirmar lote de ${preview.valid_rows} orden(es)`}
-            </button>
-          </div>
-        </form>
+        // A new file (another digest) starts from unticked boxes.
+        <CsvCommitForm
+          key={`commit-${preview.content_digest}`}
+          validRows={preview.valid_rows}
+          state={state}
+          waiting={waiting}
+          controller={controller}
+        />
       )}
     </>
+  );
+}
+
+/**
+ * The commit form: the required prohibited-goods confirmation (ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02) and the one
+ * optional WhatsApp consent box of the file (NTF-RECIPIENT-NOTICES-2026-10-20; AI-07 csv_order_import.recipient_notices),
+ * unticked by default, labelled exactly with the AI-24 consent text and followed by the fixed note of
+ * NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 (N2).
+ */
+export function CsvCommitForm({
+  validRows,
+  state,
+  waiting,
+  controller,
+}: {
+  readonly validRows: number;
+  readonly state: Pick<CsvImportState, "busy">;
+  /** SEC-004: the server's wait for the CSV budget is running. */
+  readonly waiting: boolean;
+  readonly controller: Pick<CsvImportController, "commit">;
+}) {
+  return (
+    <form
+      className="opsForm"
+      autoComplete="off"
+      onSubmit={(event) => {
+        event.preventDefault();
+        const data = new FormData(event.currentTarget);
+        void controller.commit(
+          data.get("restricted_goods_acknowledged") === "on",
+          data.get(csvRecipientConsentField) === "on",
+        );
+      }}
+    >
+      <label className="opsCheckbox">
+        <input type="checkbox" name="restricted_goods_acknowledged" required /> Confirmo que ningún envío del
+        archivo contiene artículos prohibidos
+      </label>
+      <div className="field">
+        <label className="opsCheckbox" htmlFor="csv-recipient-whatsapp-consent">
+          <input
+            id="csv-recipient-whatsapp-consent"
+            type="checkbox"
+            name={csvRecipientConsentField}
+            aria-describedby="csv-recipient-whatsapp-consent-hint"
+          />{" "}
+          {recipientWhatsAppConsentText}
+        </label>
+        <p id="csv-recipient-whatsapp-consent-hint" className="fieldHint">{csvRecipientConsentHint}</p>
+      </div>
+      <div className="opsFormActions">
+        <button className="btn btnPrimary" type="submit" disabled={state.busy || waiting}>
+          {state.busy ? "Confirmando…" : `Confirmar lote de ${validRows} orden(es)`}
+        </button>
+      </div>
+    </form>
   );
 }
 

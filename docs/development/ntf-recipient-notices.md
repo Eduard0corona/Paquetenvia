@@ -10,7 +10,10 @@ Locations y el sellado con la llave de avisos solo para envolver, apagado por om
 ([`ntf-002-recipient-contact.md`](ntf-002-recipient-contact.md)); con AI-08 NTF-003 (PR-2), el carril de notificaciones
 ([`ntf-003-notifications-lane.md`](ntf-003-notifications-lane.md)); con AI-08 NTF-005 (PR-4), la entrega en el Worker y
 la función de conteo de los topes ([`ntf-005-recipient-notice-delivery.md`](ntf-005-recipient-notice-delivery.md),
-`NTF-RECIPIENT-NOTICE-CAPS-2026-10-23`). Nada se envía ni está encendido.** GATE-004 y
+`NTF-RECIPIENT-NOTICE-CAPS-2026-10-23`); con AI-08 NTF-004 (PR-3), el productor en ORD-002, la casilla de WhatsApp en
+"Nueva orden" y en la carga CSV y la tabla de permisos que lee el Worker
+([`ntf-004-recipient-notice-producer.md`](ntf-004-recipient-notice-producer.md), `NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23`).
+Nada se envía ni está encendido.** GATE-004 y
 GATE-007 siguen abiertas; solo el cambio que registre sus filas de resolución enciende los avisos.
 
 ## Arquitectura
@@ -32,7 +35,7 @@ Transacción ORD-002 (organización dueña, ya existe)          Worker (carril N
 Webhooks de la API (Meta, Event Grid de ACS, baja del correo) ── firmados ──► funciones SECURITY DEFINER
 ```
 
-- **Sin sexto flujo.** Orders escribe una fila más de outbox en la misma transacción de ORD-002, con un topic propio y
+- **Sin flujo nuevo** (siguen los seis de AI-13 §4). Orders escribe una fila más de outbox en la misma transacción de ORD-002, con un topic propio y
   un solo consumidor, como `D8-OUTBOX-LANE-DISPATCH` (AI-13 §7.2). Expansión, envío, acuses y bajas escriben solo filas
   de Notifications más el outbox y la auditoría compartidos, y leen Orders y Locations bajo RLS.
 - **Sin transacción abierta durante la llamada al proveedor**: leer, confirmar, llamar y liquidar con `lease_token`,
@@ -113,7 +116,7 @@ SEC-2026-13 (back-sync #286): hasta entonces fallan al restaurar con NU1903.
 | PR-1 | NTF-002 | `DestinationAddressInput.email` y `RecipientEmailPolicy`; hash de la cotización solo con correo; columnas de Locations y su DDL en AI-06; protector de la llave de avisos; campo del asistente; `docs/legal` | carril Locations; el `Down` se niega con valores | sí (sin datos reales antes de GATE-007) |
 | PR-2 | NTF-003 | Carril Notifications: plantillas, columnas, estados, almacén de bajas, `resolve_outbox_consumer`, funciones v2; parser de tiempo real y AI-12 v2 | carril Notifications; el `Down` se niega con filas externas o bajas | sí (inerte, sin productor) |
 | PR-4 | NTF-005 | Envío en el Worker: rutas por canal, expansión, horario, caducidad, topes, lectores, descifrado en memoria, enlace, bajas, botón URL y respuesta rápida, correo con `List-Unsubscribe`, ids de decisión al iniciar | carril Notifications `20261023000100_AddRecipientNoticeCounts` (función de conteo de los topes y dos índices, L1; el `Down` solo los quita) | sí (todo apagado) |
-| PR-3 | NTF-004 | `RecipientNoticeRequestPolicy`, INSERT en ORD-002, permiso de WhatsApp en `createOrder` y CSV, tabla de permisos, casillas | carril Orders (append-only; el `Down` se niega con filas) | sí, después de PR-4 |
+| PR-3 | NTF-004 | `RecipientNoticeRequestPolicy`, INSERT en ORD-002, permiso de WhatsApp en `createOrder` y CSV, tabla de permisos, casillas | carril Orders `20261023000200_AddRecipientNoticeConsents` (append-only; el `Down` se niega con filas) | sí, después de PR-4 |
 | PR-5 | NTF-006 | Webhooks de Meta y Event Grid, acuses, bajas, respuesta automática, baja por correo y su página, rol `paqueteria_notification_receipt_executor` con su DDL en AI-18 | carril Notifications (acuses) | sí (cargas firmadas falsas) |
 | PR-6 | NTF-007 | `listOrderRecipientNotices`, `stopOrderRecipientNotices`, panel y tiempo real | ninguna | sí |
 | PR-7 | NTF-008 | `apps.bicep` (secretos y roles del Worker y la API sobre la llave de avisos, rol de ACS, Event Grid, URLs), guardas del piloto, guía del owner | ninguna | solo después de que el owner cree secretos y recursos |
@@ -162,8 +165,9 @@ Orden: PR-0 → (PR-1 ∥ PR-2) → PR-4 → PR-3 → PR-5 → PR-6 → PR-7 →
 - Los cuatro textos de WhatsApp y los cuatro cuerpos y asuntos de correo (AI-24 `recipient_notices.templates`), antes
   de mandarlos a Meta. La ronda F (E4-P14) corrigió los dos puntos señalados: "No se pudo entregar" ya no empieza con
   "Hoy", y el correo, que no tiene botones, dice "en el enlace de abajo" en lugar de "con el botón Ver seguimiento".
-- La casilla de la carga CSV usa el texto aprobado para todo el archivo; su redacción para varios destinatarios se
-  revisa en PR-3.
+- La casilla de la carga CSV usa el texto aprobado para todo el archivo; en PR-3 el owner eligió el mismo texto (versión
+  V1) con la nota fija "Aplica a todas las filas de este archivo. Márcala solo si cada destinatario lo aceptó."
+  (`NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23`, N2).
 - La página de baja del correo y sus mensajes se revisan en PR-5.
 
 ## Costos (estimación del plan, 2026-10-19)

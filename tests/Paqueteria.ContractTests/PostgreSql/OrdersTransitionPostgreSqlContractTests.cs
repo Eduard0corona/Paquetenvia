@@ -173,7 +173,25 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                       AND x.topic='dispatch.order-status-reaction-requested' AND x.status='PENDING'),
                   (SELECT payload::text FROM platform.outbox_events x
                     WHERE x.aggregate_id=o.id AND x.aggregate_version=@version
-                      AND x.topic='dispatch.order-status-reaction-requested')
+                      AND x.topic='dispatch.order-status-reaction-requested'),
+                  (SELECT count(*) FROM platform.outbox_events x
+                    WHERE x.aggregate_id=o.id AND x.aggregate_version=@version
+                      AND x.topic='orders.recipient-notice-requested'),
+                  (SELECT count(*) FROM platform.outbox_events x
+                    JOIN orders.order_events e ON e.order_id=o.id AND e.aggregate_version=@version
+                    WHERE x.aggregate_id=o.id AND x.aggregate_version=@version
+                      AND x.topic='orders.recipient-notice-requested' AND x.aggregate_type='Order'
+                      AND x.owner_org_id=o.owner_org_id
+                      AND x.tenant_context=jsonb_build_object('organization_ids',jsonb_build_array(o.owner_org_id::text))
+                      AND x.priority=50 AND x.status='PENDING' AND x.attempts=0
+                      AND x.available_at=e.occurred_at AND x.created_at=e.occurred_at
+                      AND x.locked_at IS NULL AND x.locked_by IS NULL AND x.lease_token IS NULL
+                      AND x.lease_expires_at IS NULL AND x.last_error IS NULL AND x.processed_at IS NULL
+                      AND (x.payload->>'order_event_id')::uuid=e.id
+                      AND (x.payload->>'occurred_at')::timestamptz=e.occurred_at),
+                  (SELECT payload::text FROM platform.outbox_events x
+                    WHERE x.aggregate_id=o.id AND x.aggregate_version=@version
+                      AND x.topic='orders.recipient-notice-requested')
                 FROM orders.orders o WHERE o.id=@order;
                 """);
             verify.Parameters.AddWithValue("order", scenario.OrderId);
@@ -205,7 +223,33 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                 Assert.Equal(7, reaction.RootElement.EnumerateObject().Count());
             }
 
-            foreach (var ordinal in new[] { 9, 10, 11 })
+            // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-004; AI-24 recipient_notices.producer): exactly the five AI-24
+            // triggers add one orders.recipient-notice-requested row, in this same transaction, with every value the
+            // application supplied (the order event it names, its instant, priority 50, the owner as the only tenant) and
+            // ids only in its recipient-notice-requested-v1 payload; AT_PICKUP -> FAILED_ATTEMPT and the rest add none.
+            var notice = RecipientNoticeRequestPolicy.NoticeFor(source, target);
+            Assert.Equal(notice is null ? 0L : 1L, reader.GetInt64(14));
+            Assert.Equal(notice is null ? 0L : 1L, reader.GetInt64(15));
+            if (notice is not null)
+            {
+                using var request = System.Text.Json.JsonDocument.Parse(reader.GetString(16));
+                Assert.Equal(
+                    ["notice", "occurred_at", "order_event_id", "order_id", "schema_version"],
+                    request.RootElement.EnumerateObject().Select(property => property.Name).Order(StringComparer.Ordinal));
+                Assert.Equal(RecipientNoticeRequestPolicy.SchemaVersion, request.RootElement.GetProperty("schema_version").GetString());
+                Assert.Equal(notice, request.RootElement.GetProperty("notice").GetString());
+                Assert.Equal(scenario.OrderId, request.RootElement.GetProperty("order_id").GetGuid());
+                Assert.Matches(
+                    "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}[.][0-9]{6}Z$",
+                    request.RootElement.GetProperty("occurred_at").GetString());
+                Assert.DoesNotContain(scenario.PublicOrderId, reader.GetString(16), StringComparison.Ordinal);
+            }
+            else
+            {
+                Assert.True(reader.IsDBNull(16));
+            }
+
+            foreach (var ordinal in notice is null ? new[] { 9, 10, 11 } : new[] { 9, 10, 11, 16 })
             {
                 var json = reader.GetString(ordinal);
                 Assert.DoesNotContain("hidden@example.test", json, StringComparison.OrdinalIgnoreCase);
@@ -434,7 +478,10 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                 original with { ActorId = otherActor.UserId, MfaSatisfied = false },
                 CancellationToken.None));
 
-        await AssertArtifactCountsAsync(scenario, 2, 4, 2, 2);
+        // NTF-RECIPIENT-NOTICES-2026-10-20: DRAFT -> CONFIRMED also wrote its one recipient notice request row; the
+        // replays wrote nothing.
+        await AssertArtifactCountsAsync(scenario, 2, 5, 2, 2);
+        Assert.Equal(1L, await RecipientNoticeRequestCountAsync(scenario));
     }
 
     [PostgreSqlContractFact]
@@ -557,7 +604,8 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
         await InsertAssignmentAsync(prohibited, prohibited.UserId);
         await Assert.ThrowsAsync<OrderTransitionForbiddenException>(() =>
             prohibitedScope.Service.TransitionAsync(prohibitedCommand, CancellationToken.None));
-        await AssertArtifactCountsAsync(prohibited, 1, 2, 1, 1);
+        // The confirmation's recipient notice request row is the third outbox row (NTF-004).
+        await AssertArtifactCountsAsync(prohibited, 1, 3, 1, 1);
     }
 
     [PostgreSqlContractFact]
@@ -619,6 +667,66 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
                     CancellationToken.None));
             await AssertNoTransitionArtifactsAsync(scenario, OrderStatus.Draft);
         }
+    }
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-004 required PostgreSQL tests; AI-24 recipient_notices.producer and
+    /// idempotency): the request row of DRAFT -> CONFIRMED is part of the ORD-002 transaction. A failure at any later
+    /// stage rolls it back with the order update, the event, the other outbox rows and the audit; a successful transition
+    /// writes it once with no RETURNING (paqueteria_app holds no SELECT on the outbox, so a RETURNING could not run); and
+    /// a completed replay of the same command writes no second row.
+    /// </summary>
+    [PostgreSqlContractFact]
+    [Trait("Category", "PostgreSqlContract")]
+    public async Task Recipient_notice_request_row_commits_and_rolls_back_with_its_transition_and_is_never_replayed()
+    {
+        foreach (var stage in new[]
+                 {
+                     OrderTransitionStage.RecipientNoticeOutboxInserted,
+                     OrderTransitionStage.AuditInserted,
+                     OrderTransitionStage.BeforeIdempotencyCompletion,
+                 })
+        {
+            await using var failed = new SyntheticOrderScenario(fixture);
+            await failed.InitializeAsync();
+            await PrepareConfirmationAsync(failed);
+            await using var failing = CreateScope(failureInjector: new ThrowAtTransitionStage(stage));
+            await Assert.ThrowsAsync<InjectedTransitionFailure>(() => failing.Service.TransitionAsync(
+                Command(failed, OrderStatus.Confirmed, 1, $"ord002-ntf004-rollback-{(int)stage:D2}-0001",
+                    """{"restricted_goods_acknowledged":true}"""),
+                CancellationToken.None));
+            await AssertNoTransitionArtifactsAsync(failed, OrderStatus.Draft);
+            Assert.Equal(0L, await RecipientNoticeRequestCountAsync(failed));
+        }
+
+        await using var scenario = new SyntheticOrderScenario(fixture);
+        await scenario.InitializeAsync();
+        await PrepareConfirmationAsync(scenario);
+        await using var scope = CreateScope();
+        var command = Command(scenario, OrderStatus.Confirmed, 1, "ord002-ntf004-request-0001",
+            """{"restricted_goods_acknowledged":true}""");
+        var confirmed = await scope.Service.TransitionAsync(command, CancellationToken.None);
+        Assert.Equal(confirmed, await scope.Service.TransitionAsync(command, CancellationToken.None));
+        await using var second = CreateScope();
+        Assert.Equal(confirmed, await second.Service.TransitionAsync(command, CancellationToken.None));
+        Assert.Equal(1L, await RecipientNoticeRequestCountAsync(scenario));
+        await AssertArtifactCountsAsync(scenario, 1, 3, 1, 1);
+
+        // The runtime role that wrote the row cannot read the outbox, so no RETURNING ever ran; nor is one in the source.
+        await using (var privilege = fixture.AdminDataSource.CreateCommand(
+            "SELECT has_table_privilege('paqueteria_app','platform.outbox_events','SELECT')"))
+        {
+            Assert.False((bool)(await privilege.ExecuteScalarAsync())!);
+        }
+
+        var source = File.ReadAllText(Path.Combine(
+            Paqueteria.ContractTests.Support.RepositoryPaths.Root,
+            "src", "Modules", "Orders", "Orders.Infrastructure", "Orders", "PostgreSqlOrderTransitionService.cs"));
+        var producer = source[source.IndexOf("private async Task InsertRecipientNoticeOutboxAsync(", StringComparison.Ordinal)..];
+        producer = producer[..producer.IndexOf("private async Task<DriverAudienceCandidate?>", StringComparison.Ordinal)];
+        Assert.Contains("INSERT INTO platform.outbox_events(", producer, StringComparison.Ordinal);
+        Assert.DoesNotContain("RETURNING", producer, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("OutboxTraceContextColumn.Parameter()", producer, StringComparison.Ordinal);
     }
 
     [PostgreSqlContractFact]
@@ -1451,6 +1559,14 @@ public sealed class OrdersTransitionPostgreSqlContractTests(PostgreSqlContractFi
         Assert.Equal(outbox, reader.GetInt64(1));
         Assert.Equal(audit, reader.GetInt64(2));
         Assert.Equal(idempotency, reader.GetInt64(3));
+    }
+
+    private async Task<long> RecipientNoticeRequestCountAsync(SyntheticOrderScenario scenario)
+    {
+        await using var command = fixture.AdminDataSource.CreateCommand(
+            "SELECT count(*) FROM platform.outbox_events WHERE aggregate_id=@order AND topic='orders.recipient-notice-requested'");
+        command.Parameters.AddWithValue("order", scenario.OrderId);
+        return (long)(await command.ExecuteScalarAsync())!;
     }
 
     private async Task<DateTimeOffset?> FinalizedAtAsync(SyntheticOrderScenario scenario)

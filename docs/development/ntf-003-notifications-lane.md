@@ -4,9 +4,11 @@ Decisión: `NTF-RECIPIENT-NOTICES-2026-10-20` (ya registrada; sin pregunta nueva
 PR-2. Contrato: AI-06 y AI-18 (contrato declarado del paso NTF-003, ahora instalado), AI-12 `NotificationStatusChanged` v2,
 AI-24 `recipient_notices`.
 
-**Estado: instalado e inerte.** Ningún productor escribe `orders.recipient-notice-requested` (NTF-004) y ningún
-interruptor se enciende. Desde NTF-005 el Worker consume esa fila y envía WhatsApp y correo, apagado por omisión
-([`ntf-005-recipient-notice-delivery.md`](ntf-005-recipient-notice-delivery.md)).
+**Estado: instalado; ningún interruptor se enciende.** Desde NTF-005 el Worker consume `orders.recipient-notice-requested`
+y envía WhatsApp y correo, apagado por omisión ([`ntf-005-recipient-notice-delivery.md`](ntf-005-recipient-notice-delivery.md)),
+y desde NTF-004 la transición ORD-002 escribe esa fila en las cinco transiciones de AI-24
+([`ntf-004-recipient-notice-producer.md`](ntf-004-recipient-notice-producer.md)); con los avisos apagados cada fila
+termina `RECIPIENT_NOTICES_DISABLED`.
 
 ## Qué instala el paso `20261020000100_AddRecipientNoticeLane`
 

@@ -341,6 +341,7 @@ recipient_notices:
   decisions:
   - NTF-RECIPIENT-NOTICES-2026-10-20
   - NTF-RECIPIENT-NOTICE-CAPS-2026-10-23
+  - NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23
   - GATE-004-CHANNELS
   - NTF-EMAIL-ACS-PILOT-2026-10-11
   - NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02
@@ -352,10 +353,12 @@ recipient_notices:
     (the optional recipient e-mail, the Locations contact columns and the API's wrap-only recipient-notice sealer,
     Locations:NoticeKeyProtector Disabled by default and in the pilot, so no notice copy is written yet), AI-08 NTF-003
     (the Notifications lane step) and AI-08 NTF-005 (the Worker consumer and sender, the count function of the caps, the
-    readers, the unwrap-only notice key and the adapters' buttons and headers), with every switch off and every
-    provider Disabled; nothing is configured or enabled. AI-08 NTF-004 and NTF-006 to NTF-008 deliver the rest, each item
-    with its own code and tests; only a later change that records the GATE-004 and GATE-007 resolution rows turns it on.
-    GATE-004 and GATE-007 stay open
+    readers, the unwrap-only notice key and the adapters' buttons and headers) and AI-08 NTF-004 (the ORD-002 producer
+    of orders.recipient-notice-requested, the WhatsApp consent box on createOrder and the CSV-001 commit and the Orders
+    lane table orders.recipient_notice_consents the Worker reads; NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23, N1 to N3),
+    with every switch off and every provider Disabled; nothing is configured or enabled. AI-08 NTF-006 to NTF-008
+    deliver the rest, each item with its own code and tests; only a later change that records the GATE-004 and GATE-007
+    resolution rows turns it on. GATE-004 and GATE-007 stay open
   adr: docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md
   audience: the delivery recipient of the order only, reached at the contact of its destination location; never the
     sender or its business (E4-P13, out of this work until BUS-001), a driver or a dispatcher
@@ -385,7 +388,8 @@ recipient_notices:
   not_notified: every other AI-04 transition, RESCHEDULED, RETURNING, RETURNED and CANCELLED included (E4, "Los 4 del
     plan"); no new order state or order event exists for notices
   producer:
-    pattern: D8-OUTBOX-LANE-DISPATCH (AI-13 section 7.2); no sixth cross-module flow and no new coordinator
+    pattern: D8-OUTBOX-LANE-DISPATCH (AI-13 section 7.2); the six AI-13 section 4 flows stay, with no new cross-module
+      flow and no new coordinator (NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23, N1)
     where: the ORD-002 transition transaction of the owner organization (PostgreSqlOrderTransitionService), after the
       order event and in the same transaction as it and its audit row; DELIVERED keeps running inside
       proof_custody_to_order_transition
@@ -428,8 +432,10 @@ recipient_notices:
     text: El destinatario aceptó recibir avisos de su envío por WhatsApp
     version: NTF-RECIPIENT-WHATSAPP-CONSENT-V1
     capture: an optional box, unticked by default, on "Nueva orden" (AI-07 create_order.recipient_notices) sent with
-      createOrder, and one box for the whole file on the CSV-001 commit (AI-07 csv_order_import.recipient_notices); the
-      AI-05 x-pilot-contract-deltas entry NTF-RECIPIENT-NOTICES has the request shapes
+      createOrder, and one box for the whole file on the CSV-001 commit (AI-07 csv_order_import.recipient_notices) with the
+      same text and version and a fixed note (NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23, N2 "Mismo texto y una nota
+      (Recommended)"); the version is a constant of the web, not a deployment setting (N3 choice 1); the AI-05
+      x-pilot-contract-deltas entry NTF-RECIPIENT-NOTICES has the request shapes
     record: orders.recipient_notice_consents (Orders lane, NTF-004; declared in AI-06), append-only, RLS by owner_org_id
       - order, channel WHATSAPP, consent version, attested_by (the creating actor) and attested_at (server time),
       written in the createOrder transaction (quote_snapshot_to_order) or the CSV-001 row create; no row when the box
