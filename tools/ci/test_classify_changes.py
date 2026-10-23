@@ -375,20 +375,29 @@ class ImageBuildInputTests(unittest.TestCase):
 
     def test_every_copied_repository_path_is_an_input(self):
         for dockerfile in DEPLOY_DOCKERFILES:
-            sources = [instruction.split()[1:-1] for instruction in dockerfile_instructions(dockerfile)
+            instructions = dockerfile_instructions(dockerfile)
+            # Named stages of this Dockerfile: `COPY --from=` may only read one of them, never another image.
+            stages = {match[1] for match in (re.match(r"^FROM\s+\S+\s+AS\s+(\S+)$", line, re.IGNORECASE)
+                                             for line in instructions) if match}
+            sources = [instruction.split()[1:-1] for instruction in instructions
                        if instruction.split()[0].upper() == "COPY"]
             self.assertTrue(sources, dockerfile)
             for source in sources:
                 with self.subTest(dockerfile=dockerfile, source=source):
-                    if source[0] == "--from=build":
+                    if source[0].startswith("--from="):
+                        self.assertIn(source[0].removeprefix("--from="), stages)
+                        self.assertEqual(2, len(source), source)
                         path = source[1]
                         if path.startswith("/src/"):  # a repository file the .NET build stage holds
                             self.assertTrue(is_image_build_input(path.removeprefix("/src/")), path)
                         else:  # a build output of that stage
                             self.assertRegex(path, r"^/(out|app)(/|$)")
-                    else:
-                        self.assertEqual(1, len(source), source)
+                    elif len(source) == 1:
                         self.assertIn(source[0], (".", "apps/web"))
+                    else:  # single repository files, such as the web manifests of the production-dependencies stage
+                        for path in source:
+                            self.assertTrue((REPOSITORY_ROOT / path).is_file(), path)
+                            self.assertTrue(is_image_build_input(path), path)
 
     def test_the_dotnet_project_closure_is_an_input(self):
         seen: set[str] = set()

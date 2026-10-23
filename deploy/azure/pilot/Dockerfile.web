@@ -15,6 +15,16 @@ ENV NEXT_PUBLIC_TRACKING_BRAND_NAME=${NEXT_PUBLIC_TRACKING_BRAND_NAME}
 ENV NEXT_PUBLIC_TRACKING_SUPPORT_URL=${NEXT_PUBLIC_TRACKING_SUPPORT_URL}
 RUN pnpm build
 
+# Production dependencies only, for the final stage. `pnpm build` above needs the devDependencies (TypeScript, the
+# ESLint config, the types); `next start` loads none of them: it transpiles next.config.ts with the SWC binary that
+# `next` ships as an optional dependency (@next/swc-linux-x64-gnu), not with TypeScript. This stage sees only the
+# manifest, the lockfile and the workspace settings, so no package that only a devDependency brings (vite, vitest,
+# eslint, typescript, ...) reaches the image. The CI image smoke fails if one does (docs/development/branching-and-ci.md).
+FROM node:24-bookworm-slim AS prod-deps
+WORKDIR /app
+COPY apps/web/package.json apps/web/pnpm-lock.yaml apps/web/pnpm-workspace.yaml ./
+RUN corepack enable && corepack prepare pnpm@11.15.1 --activate && pnpm install --prod --frozen-lockfile
+
 FROM node:24-bookworm-slim
 ARG SOURCE_SHA
 LABEL org.opencontainers.image.revision=${SOURCE_SHA}
@@ -22,7 +32,7 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_PUBLIC_AUTH_MODE=bff
 COPY --from=build /app/.next ./.next
-COPY --from=build /app/node_modules ./node_modules
+COPY --from=prod-deps /app/node_modules ./node_modules
 COPY --from=build /app/package.json ./package.json
 COPY --from=build /app/public ./public
 COPY --from=build /app/next.config.ts ./next.config.ts

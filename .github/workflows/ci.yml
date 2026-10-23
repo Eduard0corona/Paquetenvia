@@ -141,8 +141,10 @@ jobs:
       # build arguments as deploy-azure-pilot.yml (the pilot web without a support link while GATE-001 is open), so a
       # broken Dockerfile fails here and not during a deploy. Each image must run as a non-root uid, and each db-ops image
       # must pass the migrator's `verify` (it needs no database: every migration source the migrator reads is in the
-      # image). Nothing is pushed and Azure is never contacted. tools/ci/test_image_build_smoke.py keeps this list equal
-      # to the Dockerfiles under deploy/azure and to the images the pilot workflow builds.
+      # image). Each web image must ship the production dependencies of apps/web and nothing else (its pnpm store is read
+      # against the lockfile by tools/ci/web_image_dependencies.py), and `next start` must serve GET / with 200, offline
+      # and as the image's own user. Nothing is pushed and Azure is never contacted. tools/ci/test_image_build_smoke.py
+      # keeps this list equal to the Dockerfiles under deploy/azure and to the images the pilot workflow builds.
       - name: Build and smoke-test the deploy images (no push)
         shell: bash
         run: |
@@ -150,7 +152,30 @@ jobs:
           source_sha="$(git rev-parse HEAD)"
           built=()
           trap 'if [[ ${#built[@]} -gt 0 ]]; then docker image rm --force "${built[@]}" > /dev/null || true; fi' EXIT
-          # smoke NAME DOCKERFILE verify|no-verify [docker build arguments...]
+          # The web start check runs in the image, offline, as its user: it calls nextStart (next/dist/cli/next-start, the
+          # function `next start` runs), whose promise resolves once the server listens and its handlers are ready, then
+          # sends one GET / and exits 0 only on 200. No polling: a server that cannot start exits non-zero, and one that
+          # is not ready within 120 s fails. The image's own command, node_modules/.bin/next, must be executable.
+          start_probe='const fs = require("node:fs");
+          fs.accessSync("node_modules/.bin/next", fs.constants.X_OK);
+          setTimeout(() => { console.error("next start was not ready within 120 s"); process.exit(1); }, 120000).unref();
+          process.env.NEXT_RUNTIME = "nodejs";
+          require("next/dist/cli/next-start").nextStart({ port: 3000 })
+            .then(() => fetch("http://127.0.0.1:3000/"))
+            .then((response) => { console.log(`GET / answered ${response.status}`); process.exit(response.status === 200 ? 0 : 1); },
+              (error) => { console.error(error); process.exit(1); });'
+          # web_check NAME DOCKERFILE IMAGE: every package in the image's pnpm store is in the production graph of
+          # apps/web/pnpm-lock.yaml and every production dependency is there; then the start check.
+          web_check() {
+            local name="$1" dockerfile="$2" image="$3"
+            docker run --rm --network none --entrypoint ls "${image}" -1A /app/node_modules/.pnpm \
+              | python ./tools/ci/web_image_dependencies.py --name "${name}" --dockerfile "${dockerfile}"
+            if ! docker run --rm --network none --entrypoint node "${image}" -e "${start_probe}"; then
+              echo "::error file=${dockerfile}::${name}: next start did not serve GET / with 200"
+              return 1
+            fi
+          }
+          # smoke NAME DOCKERFILE verify|web|no-verify [docker build arguments...]
           smoke() {
             local name="$1" dockerfile="$2" check="$3" started="${SECONDS}" image uid
             shift 3
@@ -164,17 +189,18 @@ jobs:
               echo "::error file=${dockerfile}::${name} runs as uid '${uid}'; every deploy image must run as a non-root user"
               return 1
             fi
-            if [[ "${check}" == verify ]]; then
-              docker run --rm --network none "${image}" verify
-            fi
+            case "${check}" in
+              verify) docker run --rm --network none "${image}" verify ;;
+              web) web_check "${name}" "${dockerfile}" "${image}" ;;
+            esac
             echo "${name}: ${dockerfile} built and checked in $((SECONDS - started)) s (uid ${uid})"
           }
           smoke pilot-api deploy/azure/Dockerfile.api no-verify
           smoke pilot-worker deploy/azure/Dockerfile.worker no-verify
           smoke pilot-db-ops deploy/azure/pilot/Dockerfile.db-ops verify
           smoke dev-db-ops deploy/azure/Dockerfile.db-ops verify
-          smoke pilot-web deploy/azure/pilot/Dockerfile.web no-verify --build-arg "NEXT_PUBLIC_TRACKING_SUPPORT_URL="
-          smoke dev-web deploy/azure/Dockerfile.web no-verify --build-arg "NEXT_PUBLIC_API_BASE_URL=https://api.example.invalid"
+          smoke pilot-web deploy/azure/pilot/Dockerfile.web web --build-arg "NEXT_PUBLIC_TRACKING_SUPPORT_URL="
+          smoke dev-web deploy/azure/Dockerfile.web web --build-arg "NEXT_PUBLIC_API_BASE_URL=https://api.example.invalid"
           echo "${#built[@]} images built and checked in ${SECONDS} s"
           df -h / | tail -n 1
 
