@@ -1,6 +1,7 @@
 using System.Net.Http.Json;
 using Identity.Infrastructure.Mock;
 using Microsoft.Playwright;
+using Paqueteria.IntegrationTests.Driver;
 using Paqueteria.IntegrationTests.Security;
 using Realtime.Application.Dispatching;
 
@@ -20,11 +21,16 @@ public sealed class RealtimeOutboxPlaywrightTests(
         var recorder = new RealtimeAuthorizationRecorder();
         var failureInjector = new OneShotRealtimeOutboxFailureInjector(
             RealtimeOutboxLane.Business);
+        // The host restarts on its port while the page stays open: the lease keeps the port until the test ends, so
+        // nothing else takes it between the stop and the restart (LoopbackPortLease).
+        using var apiPort = LoopbackPortLease.Acquire();
         var initialHost = new RealtimeKestrelWebApplicationFactory(
             database.ApplicationConnectionString,
             recorder,
+            apiPort.Port,
             realtimeConnectionString: database.RealtimeConnectionString,
             failureInjector: failureInjector);
+        apiPort.BeforeServerBinds();
         var baseAddress = initialHost.Start();
         using (var healthClient = new HttpClient { BaseAddress = baseAddress })
         using (var healthResponse = await healthClient.GetAsync("/health/ready"))
@@ -292,7 +298,6 @@ public sealed class RealtimeOutboxPlaywrightTests(
             await page.Locator("body").TextContentAsync() ?? string.Empty,
             StringComparison.OrdinalIgnoreCase);
 
-        var port = baseAddress.Port;
         await initialHost.DisposeAsync();
         await page.WaitForFunctionAsync(
             "() => document.querySelector('#lifecycle').textContent === 'Reconnecting'");
@@ -301,8 +306,9 @@ public sealed class RealtimeOutboxPlaywrightTests(
         await using var restoredHost = new RealtimeKestrelWebApplicationFactory(
             database.ApplicationConnectionString,
             recorder,
-            port,
+            apiPort.Port,
             database.RealtimeConnectionString);
+        apiPort.BeforeServerBinds();
         Assert.Equal(baseAddress, restoredHost.Start());
         await page.WaitForFunctionAsync(
             "() => document.querySelector('#lifecycle').textContent === 'Reconnecting,Reconnected'",

@@ -166,7 +166,10 @@ No se agregan pantallas ni integración productiva.
 `RealtimeReconnectKestrelTests` ejecuta `Paqueteria.Api` sobre Kestrel en un
 puerto efímero y conecta `Microsoft.AspNetCore.SignalR.Client` por WebSockets.
 El test detiene el host, observa `Reconnecting`, reinicia Kestrel en la misma
-dirección y observa `Reconnected`. El mismo contador instrumentado envuelve al
+dirección y observa `Reconnected`. El puerto se arrienda con `LoopbackPortLease`
+hasta que termina la prueba, así que nada lo toma entre la detención y el
+reinicio (ver «Puertos» en `drv-001-driver-stops-pwa.md`). El mismo contador
+instrumentado envuelve al
 authorizer PostgreSQL real y demuestra una autorización inicial y una nueva
 autorización después de reconectar. La recepción posterior en
 `org:{organization_id}` prueba que `OnConnectedAsync` recuperó el grupo; una
