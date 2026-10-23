@@ -810,10 +810,10 @@ class NonRootImageTests(unittest.TestCase):
 
     def test_workflow_must_build_exactly_the_checked_images(self):
         extra = self.workflow.replace(
-            '          echo "api=$(build api deploy/azure/Dockerfile.api)" >> "${GITHUB_OUTPUT}"\n',
-            '          echo "api=$(build api deploy/azure/Dockerfile.api)" >> "${GITHUB_OUTPUT}"\n'
-            '          echo "tool=$(build tool deploy/azure/Dockerfile.tool)" >> "${GITHUB_OUTPUT}"\n', 1)
-        missing = self.workflow.replace('          echo "worker=$(build worker deploy/azure/Dockerfile.worker)" >> "${GITHUB_OUTPUT}"\n', "", 1)
+            '          image="$(build api deploy/azure/Dockerfile.api)"\n',
+            '          image="$(build api deploy/azure/Dockerfile.api)"\n'
+            '          image="$(build tool deploy/azure/Dockerfile.tool)"\n', 1)
+        missing = self.workflow.replace('          image="$(build worker deploy/azure/Dockerfile.worker)"\n', "", 1)
         for case, workflow in (("fifth image", extra), ("worker not built", missing)):
             with self.subTest(case=case):
                 self.assertNotEqual(self.workflow, workflow)
@@ -1194,6 +1194,485 @@ class WorkflowAppRestartTests(WorkflowStepHarness):
         index = names.index(self.step["name"])
         self.assertTrue(names[index - 1].startswith("Stage 3 - "), names[index - 1])
         self.assertTrue(names[index + 1].startswith("Stage 4 - "), names[index + 1])
+
+
+# A stand-in for the Azure CLI as the revision check calls it. $AZ_STATE/revisions.json holds, per app, the
+# [latestRevisionName, latestReadyRevisionName] pairs that successive `az containerapp show` calls return, and per
+# "<app>/<revision>" the {active, health, images} states that successive `az containerapp revision show` calls return;
+# the last item of each list repeats. Only the step's two queries are answered; every call is logged to $AZ_STATE/calls.
+FAKE_AZ_REVISIONS = r'''#!/usr/bin/env python3
+import json, os, sys
+state = os.environ["AZ_STATE"]
+args = sys.argv[1:]
+def opt(name):
+    return args[args.index(name) + 1] if name in args else None
+with open(os.path.join(state, "calls"), "a", encoding="utf-8") as log:
+    log.write(" ".join(args[:3] if args[1] == "revision" else args[:2]) + " " + (opt("--name") or "") + " " + (opt("--revision") or "") + "\n")
+path = os.path.join(state, "revisions.json")
+data = json.load(open(path, encoding="utf-8"))
+counts = data.setdefault("counts", {})
+def next_item(key, items):
+    index = counts.get(key, 0)
+    counts[key] = index + 1
+    json.dump(data, open(path, "w", encoding="utf-8"))
+    return items[min(index, len(items) - 1)]
+if opt("--resource-group") != "rg-pv-pilot" or opt("-o") != "json":
+    print("unexpected resource group or output", file=sys.stderr); sys.exit(8)
+if args[:2] == ["containerapp", "show"] and opt("--query") == "{latest: properties.latestRevisionName, ready: properties.latestReadyRevisionName}":
+    latest, ready = next_item(opt("--name"), data["apps"][opt("--name")])
+    print(json.dumps({"latest": latest, "ready": ready}, indent=2))
+elif args[:3] == ["containerapp", "revision", "show"] and opt("--query") == (
+        "{active: properties.active, health: properties.healthState, images: properties.template.containers[].image}"):
+    key = opt("--name") + "/" + opt("--revision")
+    print(json.dumps(next_item(key, data["revisions"][key]), indent=2))
+else:
+    print("unexpected az call: " + " ".join(args), file=sys.stderr); sys.exit(9)
+'''
+
+
+class WorkflowRevisionCheckTests(WorkflowStepHarness):
+    """ENV-001 F-06: after stage 4 each of the API, the Worker and the Web must reach a latest revision that is ready,
+    runs this run's digest, is active and Healthy. The poll is bounded (40 polls 15 s apart for the three apps
+    together); a ready revision on another image is polled again within that budget, because right after stage 4 the
+    control plane can still report the previous revision as the latest one. A failure names the app and the revision
+    and points to its system log; nothing secret is read."""
+
+    APPS = (guards.API_APP, guards.WORKER_APP, guards.WEB_APP)
+    REGISTRY = "crpvpilotabcdefghijklm.azurecr.io"
+
+    def setUp(self):
+        super().setUp()
+        self.step = workflow_step(lambda s: s.get("id") == "revisions")
+        (self.root / "bin" / "az").write_text(FAKE_AZ_REVISIONS, encoding="utf-8")
+        sleep = self.root / "bin" / "sleep"
+        sleep.write_text('#!/bin/sh\necho "sleep $*" >> "${AZ_STATE}/calls"\n', encoding="utf-8")
+        sleep.chmod(0o755)
+        self.images = {app: f"{self.REGISTRY}/paquetenvia-{app.split('-')[-1]}@sha256:{digit * 64}"
+                       for app, digit in zip(self.APPS, "abc")}
+
+    def healthy(self, app: str, **changes) -> dict:
+        return {"active": True, "health": "Healthy", "images": [self.images[app]], **changes}
+
+    def run_check(self, apps: dict | None = None, revisions: dict | None = None, **env: str) -> subprocess.CompletedProcess:
+        """Every app ready on the first poll with a healthy revision `<app>--new`, unless `apps`/`revisions` say otherwise."""
+        state = {"apps": {app: [[f"{app}--new", f"{app}--new"]] for app in self.APPS},
+                 "revisions": {f"{app}/{app}--new": [self.healthy(app)] for app in self.APPS}}
+        state["apps"].update(apps or {})
+        state["revisions"].update(revisions or {})
+        (self.state / "revisions.json").write_text(json.dumps(state), encoding="utf-8")
+        (self.state / "calls").write_text("", encoding="utf-8")
+        images = {"API_IMAGE": self.images[guards.API_APP], "WORKER_IMAGE": self.images[guards.WORKER_APP],
+                  "WEB_IMAGE": self.images[guards.WEB_APP]}
+        images.update(env)
+        return self.run_step(self.step, **images)
+
+    def calls(self) -> list[str]:
+        return [line.strip() for line in (self.state / "calls").read_text(encoding="utf-8").splitlines()]
+
+    def sleeps(self) -> int:
+        return sum(1 for line in self.calls() if line == "sleep 15")
+
+    def assert_failed(self, result: subprocess.CompletedProcess, app: str, message: str) -> None:
+        self.assertNotEqual(0, result.returncode)
+        errors = [line for line in result.stdout.splitlines() if line.startswith("::error::")]
+        self.assertEqual(1, len(errors), result.stdout)
+        self.assertTrue(errors[0].startswith(f"::error::{app}: "), errors[0])
+        self.assertIn(message, errors[0])
+        self.assertIn(f"az containerapp logs show --name {app} --resource-group rg-pv-pilot --type system", errors[0])
+
+    def test_the_step_reads_only_this_runs_images_and_runs_after_stage_4_and_before_the_smoke_test(self):
+        self.assertEqual(guards.REVISION_IMAGE_ENV, self.step["env"])
+        names = [s.get("name", "") for s in guards.load_yaml(REPO_ROOT / guards.PILOT_WORKFLOW)["jobs"]["deploy"]["steps"]]
+        index = names.index(self.step["name"])
+        self.assertLess(next(i for i, name in enumerate(names) if name.startswith("Stage 4 - ")), index)
+        self.assertEqual("Smoke test same-origin routing", names[index + 1])
+
+    def test_revisions_ready_on_the_first_poll_pass(self):
+        result = self.run_check()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(0, self.sleeps())
+        self.assertEqual({"api_revision": f"{guards.API_APP}--new", "worker_revision": f"{guards.WORKER_APP}--new",
+                          "web_revision": f"{guards.WEB_APP}--new"}, self.outputs())
+        for app in self.APPS:
+            self.assertIn(f"{app}: revision {app}--new is ready, active and Healthy, and runs {self.images[app]}", result.stdout)
+        self.assertNotIn("::error::", result.stdout)
+
+    def test_revisions_that_become_ready_after_some_polls_pass(self):
+        api, worker = guards.API_APP, guards.WORKER_APP
+        result = self.run_check(apps={api: [[f"{api}--new", f"{api}--old"]] * 3 + [[f"{api}--new", f"{api}--new"]],
+                                      worker: [[f"{worker}--new", None]] * 2 + [[f"{worker}--new", f"{worker}--new"]]})
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(5, self.sleeps())
+        self.assertIn(f"{api}: latest revision {api}--new is not ready (latest ready revision: {api}--old); polling again in 15 s",
+                      result.stdout)
+        self.assertIn(f"{worker}: latest revision {worker}--new is not ready (latest ready revision: none); polling again",
+                      result.stdout)
+        self.assertEqual(f"{api}--new", self.outputs()["api_revision"])
+        # A revision is only read once it is the latest ready one.
+        self.assertNotIn(f"containerapp revision show {api} {api}--old", self.calls())
+
+    def test_a_revision_that_never_becomes_ready_fails_with_the_system_log_hint(self):
+        api = guards.API_APP
+        result = self.run_check(apps={api: [[f"{api}--new", f"{api}--old"]]})
+        self.assert_failed(result, api, f"latest revision {api}--new is not ready (latest ready revision: {api}--old) "
+                                        "after about 10 minutes; the previous revision, if any, is still serving.")
+        self.assertEqual(40, self.sleeps())
+        self.assertEqual(41, self.calls().count(f"containerapp show {api}"))
+        # The run stops at the first app that fails; nothing is reported as serving.
+        self.assertFalse(any(guards.WORKER_APP in line for line in self.calls()))
+        self.assertEqual({}, self.outputs())
+
+    def test_a_first_deploy_that_never_becomes_ready_fails(self):
+        web = guards.WEB_APP
+        result = self.run_check(apps={web: [[f"{web}--first", None]]})
+        self.assert_failed(result, web, f"latest revision {web}--first is not ready (latest ready revision: none) after about 10 minutes")
+        self.assertEqual({"api_revision", "worker_revision"}, set(self.outputs()))
+
+    def test_the_three_apps_share_one_poll_budget(self):
+        api, worker = guards.API_APP, guards.WORKER_APP
+        result = self.run_check(apps={api: [[f"{api}--new", f"{api}--old"]] * 30 + [[f"{api}--new", f"{api}--new"]],
+                                      worker: [[f"{worker}--new", f"{worker}--old"]]})
+        self.assert_failed(result, worker, f"latest revision {worker}--new is not ready")
+        self.assertEqual(40, self.sleeps())
+        # Polls spent waiting for this run's image count against the same budget.
+        result = self.run_check(revisions={f"{api}/{api}--new": [self.healthy(api, images=[self.old_image(api)])] * 30 + [self.healthy(api)],
+                                           f"{worker}/{worker}--new": [self.healthy(worker, images=[self.old_image(worker)])]})
+        self.assert_failed(result, worker, f"revision {worker}--new is ready but runs '{self.old_image(worker)}'")
+        self.assertEqual(40, self.sleeps())
+
+    def old_image(self, app: str) -> str:
+        return f"{self.REGISTRY}/paquetenvia-{app.split('-')[-1]}@sha256:{'d' * 64}"
+
+    def test_a_ready_revision_on_another_image_is_polled_again_until_this_runs_image_serves(self):
+        api, worker = guards.API_APP, guards.WORKER_APP
+        with self.subTest(case="the previous revision is still reported as latest and ready, then the new one"):
+            result = self.run_check(apps={api: [[f"{api}--old", f"{api}--old"]] * 2 + [[f"{api}--new", f"{api}--new"]]},
+                                    revisions={f"{api}/{api}--old": [self.healthy(api, images=[self.old_image(api)])]})
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(2, self.sleeps())
+            self.assertIn(f"{api}: revision {api}--old is ready but runs '{self.old_image(api)}', not this run's image "
+                          f"({self.images[api]}); polling again in 15 s", result.stdout)
+            self.assertEqual(f"{api}--new", self.outputs()["api_revision"])
+            self.assertNotIn("::error::", result.stdout)
+        with self.subTest(case="another image, then this run's image"):
+            result = self.run_check(revisions={f"{worker}/{worker}--new": [self.healthy(worker, images=[self.old_image(worker)])] * 3
+                                               + [self.healthy(worker)]})
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(3, self.sleeps())
+            self.assertEqual(f"{worker}--new", self.outputs()["worker_revision"])
+            self.assertNotIn("::error::", result.stdout)
+
+    def test_a_ready_revision_on_another_image_until_the_budget_ends_fails_naming_both_images(self):
+        api, worker = guards.API_APP, guards.WORKER_APP
+        old = self.old_image(worker)
+        for images, shown in (([old], old), ([], ""), ([self.images[worker], old], f"{self.images[worker]} {old}")):
+            with self.subTest(images=images):
+                result = self.run_check(revisions={f"{worker}/{worker}--new": [self.healthy(worker, images=images)]})
+                self.assert_failed(result, worker, f"revision {worker}--new is ready but runs '{shown}', not this run's image "
+                                                   f"({self.images[worker]}) after about 10 minutes; the previous revision, "
+                                                   "if any, is still serving.")
+                self.assertEqual(40, self.sleeps())
+                self.assertNotIn("worker_revision", self.outputs())
+        with self.subTest(case="the previous revision is reported as latest and ready until the end"):
+            result = self.run_check(apps={api: [[f"{api}--old", f"{api}--old"]]},
+                                    revisions={f"{api}/{api}--old": [self.healthy(api, images=[self.old_image(api)])]})
+            self.assert_failed(result, api, f"revision {api}--old is ready but runs '{self.old_image(api)}', not this run's image "
+                                            f"({self.images[api]}) after about 10 minutes")
+            self.assertEqual(40, self.sleeps())
+            self.assertEqual({}, self.outputs())
+
+    def test_an_unhealthy_or_inactive_revision_fails(self):
+        web = guards.WEB_APP
+        for changes, status in (({"health": "Unhealthy"}, "active=true, healthState=Unhealthy"),
+                                ({"health": "None"}, "active=true, healthState=None"),
+                                ({"health": None}, "active=true, healthState=none"),
+                                ({"active": False}, "active=false, healthState=Healthy")):
+            with self.subTest(changes=changes):
+                result = self.run_check(revisions={f"{web}/{web}--new": [self.healthy(web, **changes)]})
+                self.assert_failed(result, web, f"revision {web}--new is ready but {status} after about 10 minutes")
+                self.assertEqual(40, self.sleeps())
+                self.assertNotIn("web_revision", self.outputs())
+
+    def test_a_revision_the_start_step_reactivated_passes_once_its_replicas_are_healthy(self):
+        # Real restore (README §6.4): the start step activated the stopped revision before stage 4. When stage 4 creates
+        # no new revision, the reactivated one is still the latest ready revision, and becomes Healthy once its
+        # replicas pass their probes.
+        api = guards.API_APP
+        result = self.run_check(apps={api: [[f"{api}--old", f"{api}--old"]]},
+                                revisions={f"{api}/{api}--old": [self.healthy(api, health="None"), self.healthy(api, health="Unhealthy"),
+                                                                 self.healthy(api)]})
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(2, self.sleeps())
+        self.assertEqual(f"{api}--old", self.outputs()["api_revision"])
+
+    def test_after_a_real_restore_the_new_revision_replaces_the_reactivated_one(self):
+        # Real restore (README §6.4): stage 4 puts the apps back in single revision mode with this run's images; the
+        # reactivated revision serves until the new one is ready, and only the new one is accepted.
+        result = self.run_check(apps={app: [[f"{app}--new", f"{app}--old"]] * 2 + [[f"{app}--new", f"{app}--new"]]
+                                      for app in (guards.API_APP, guards.WORKER_APP)})
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(4, self.sleeps())
+        self.assertEqual({f"{app}--new" for app in self.APPS}, set(self.outputs().values()))
+        self.assertFalse(any(line.endswith("--old") and "revision show" in line for line in self.calls()))
+
+    def test_an_image_that_is_not_digest_pinned_fails_before_reading_azure(self):
+        for image in (f"{self.REGISTRY}/paquetenvia-api:{'a' * 40}", "", f"{self.REGISTRY}/paquetenvia-api@sha256:{'A' * 64}"):
+            with self.subTest(image=image):
+                result = self.run_check(API_IMAGE=image)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(f"::error::{guards.API_APP}: this run has no digest-pinned image for it", result.stdout)
+                self.assertEqual([], self.calls())
+
+
+# A stand-in for the Azure CLI and the Docker CLI as the images step calls them, sharing one registry:
+# $AZ_STATE/registry.json maps each repository to its tags, {tag: {"digest", "writeEnabled"}}. A tag listed in "hidden"
+# exists but is not listed yet (it appeared after the step looked). FAKE_AZ_FAIL makes one `az acr repository`
+# subcommand fail; FAKE_LOCK_IGNORED makes the lock a no-op; FAKE_BUILD_FAIL names a Dockerfile whose build fails;
+# FAKE_PUSH_DRIFT makes the registry keep another digest than the pushed one. Every call is logged to $AZ_STATE/calls
+# as a JSON array whose first item is "az" or "docker". Only the step's exact calls are answered.
+FAKE_REGISTRY_CLI = r'''#!/usr/bin/env python3
+import hashlib, json, os, sys
+state = os.environ["AZ_STATE"]
+tool = os.path.basename(sys.argv[0])
+args = sys.argv[1:]
+with open(os.path.join(state, "calls"), "a", encoding="utf-8") as log:
+    log.write(json.dumps([tool] + args) + "\n")
+path = os.path.join(state, "registry.json")
+data = json.load(open(path, encoding="utf-8"))
+repositories = data.setdefault("repositories", {})
+hidden = set(data.get("hidden", []))
+def save():
+    json.dump(data, open(path, "w", encoding="utf-8"))
+def fail(message, code=1):
+    print(message, file=sys.stderr); sys.exit(code)
+def visible(repository):
+    return [tag for tag in repositories.get(repository, {}) if f"{repository}:{tag}" not in hidden]
+REGISTRY, SERVER = os.environ["REGISTRY"], os.environ["REGISTRY_SERVER"]
+QUIET = ["--only-show-errors", "--output", "json"]
+if tool == "az":
+    if args == ["acr", "login", "--name", REGISTRY, "--only-show-errors"]:
+        sys.exit(0)
+    if args[:2] != ["acr", "repository"]:
+        fail("unexpected az call: " + " ".join(args), 9)
+    command = args[2]
+    if os.environ.get("FAKE_AZ_FAIL") == command:
+        fail(f"ERROR: az acr repository {command} failed (stand-in)")
+    if args[2:] == ["list", "--name", REGISTRY] + QUIET:
+        print(json.dumps([name for name in repositories if visible(name)]))
+    elif args[2:5] == ["show-tags", "--name", REGISTRY] and args[5] == "--repository" and args[7:] == QUIET:
+        if not visible(args[6]):
+            fail("ERROR: Error: repository name not known to registry.")
+        print(json.dumps(visible(args[6])))
+    elif args[2:5] in (["show", "--name", REGISTRY], ["update", "--name", REGISTRY]) and args[5] == "--image":
+        repository, tag = args[6].split(":", 1)
+        item = repositories.get(repository, {}).get(tag)
+        if item is None:
+            fail("ERROR: Error: the specified tag does not exist.")
+        if command == "show" and args[7:] == QUIET:
+            print(json.dumps({"name": tag, "digest": item["digest"], "signed": False,
+                              "changeableAttributes": {"deleteEnabled": True, "listEnabled": True, "readEnabled": True,
+                                                       "writeEnabled": item["writeEnabled"]}}, indent=2))
+        elif command == "update" and args[7:] == ["--write-enabled", "false", "--only-show-errors", "--output", "none"]:
+            if not os.environ.get("FAKE_LOCK_IGNORED"):
+                item["writeEnabled"] = False
+                save()
+        else:
+            fail("unexpected az call: " + " ".join(args), 9)
+    else:
+        fail("unexpected az call: " + " ".join(args), 9)
+elif tool == "docker":
+    local = data.setdefault("local", {})
+    if args[0] == "build":
+        dockerfile = args[args.index("--file") + 1]
+        if dockerfile in os.environ.get("FAKE_BUILD_FAIL", "").split(","):
+            fail(f"build of {dockerfile} failed (stand-in)")
+        ref = args[args.index("--tag") + 1]
+        local[ref] = "sha256:" + hashlib.sha256(json.dumps(args).encode()).hexdigest()
+        save()
+    elif args[0] == "push" and len(args) == 2:
+        ref = args[1]
+        repository, tag = ref[len(SERVER) + 1:].split(":", 1)
+        existing = repositories.get(repository, {}).get(tag)
+        if existing is not None and not existing["writeEnabled"]:
+            fail("denied: The operation is disallowed on this registry, repository or image.")
+        digest = local[ref]
+        if os.environ.get("FAKE_PUSH_DRIFT"):
+            digest = "sha256:" + "e" * 64
+        repositories.setdefault(repository, {})[tag] = {"digest": digest, "writeEnabled": True}
+        data.setdefault("pushed", []).append(ref)
+        save()
+    elif args[:3] == ["inspect", "--format", "{{index .RepoDigests 0}}"] and len(args) == 4:
+        ref = args[3]
+        if ref not in data.get("pushed", []):
+            fail(f"Error: {ref} has no repository digest")
+        print(ref.rsplit(":", 1)[0] + "@" + local[ref])
+    else:
+        fail("unexpected docker call: " + " ".join(args), 9)
+'''
+
+
+class WorkflowImageStepTests(WorkflowStepHarness):
+    """ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21 (owner K2): when paquetenvia-<name>:<tested sha> is already in the pilot
+    registry the images step reuses its digest, with no build and no push, so a rollback deploys the same bytes; a
+    missing tag is built from the floating bases and pushed. Every tag is then locked (write-enabled false), so the
+    registry refuses a later push over it, and read back. A registry read or a build that fails stops the step."""
+
+    REGISTRY = "pvpilotabcdefghijklm"
+    SERVER = "pvpilotabcdefghijklm.azurecr.io"
+    SHA = "0123456789abcdef0123456789abcdef01234567"
+    OTHER_SHA = "fedcba9876543210fedcba9876543210fedcba98"
+    IMAGES = (("api", "api", "deploy/azure/Dockerfile.api"), ("worker", "worker", "deploy/azure/Dockerfile.worker"),
+              ("dbops", "db-ops", "deploy/azure/pilot/Dockerfile.db-ops"), ("web", "web", "deploy/azure/pilot/Dockerfile.web"))
+
+    def setUp(self):
+        super().setUp()
+        self.step = workflow_step(lambda s: s.get("id") == "images")
+        for tool in ("az", "docker"):
+            (self.root / "bin" / tool).write_text(FAKE_REGISTRY_CLI, encoding="utf-8")
+            (self.root / "bin" / tool).chmod(0o755)
+        git = self.root / "bin" / "git"
+        git.write_text('#!/bin/sh\n[ "$*" = "rev-parse HEAD" ] && echo "${FAKE_HEAD}" && exit 0\nexit 9\n', encoding="utf-8")
+        git.chmod(0o755)
+
+    @staticmethod
+    def digest(digit: str) -> str:
+        return "sha256:" + digit * 64
+
+    def run_images(self, repositories: dict | None = None, hidden: tuple[str, ...] = (), **env: str) -> subprocess.CompletedProcess:
+        state = {"repositories": repositories or {}, "hidden": list(hidden)}
+        (self.state / "registry.json").write_text(json.dumps(state), encoding="utf-8")
+        (self.state / "calls").write_text("", encoding="utf-8")
+        environment = {"REGISTRY": self.REGISTRY, "REGISTRY_SERVER": self.SERVER, "TESTED_GIT_SHA": self.SHA,
+                       "FAKE_HEAD": self.SHA, "PILOT_TRACKING_SUPPORT_URL": ""}
+        environment.update(env)
+        return self.run_step(self.step, **environment)
+
+    def registry(self) -> dict:
+        return json.loads((self.state / "registry.json").read_text(encoding="utf-8"))
+
+    def calls(self, tool: str) -> list[list[str]]:
+        lines = (self.state / "calls").read_text(encoding="utf-8").splitlines()
+        return [call[1:] for call in map(json.loads, lines) if call[0] == tool]
+
+    def tag(self, digest: str, locked: bool = False) -> dict:
+        return {"digest": digest, "writeEnabled": not locked}
+
+    def every_image(self, locked: bool = False) -> dict:
+        return {f"paquetenvia-{name}": {self.SHA: self.tag(self.digest(digit), locked)}
+                for (_, name, _), digit in zip(self.IMAGES, "abcd")}
+
+    def test_images_already_in_the_registry_are_reused_without_a_build_or_a_push(self):
+        for locked in (True, False):  # False: a tag pushed before this decision is locked on reuse
+            with self.subTest(locked=locked):
+                result = self.run_images(self.every_image(locked))
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertEqual([], self.calls("docker"))
+                outputs = self.outputs()
+                for (key, name, _), digit in zip(self.IMAGES, "abcd"):
+                    reference = f"{self.SERVER}/paquetenvia-{name}@{self.digest(digit)}"
+                    self.assertEqual(reference, outputs[key])
+                    self.assertEqual("reused", outputs[f"{key}_source"])
+                    self.assertIn(f"reusing {reference}\n", result.stderr)
+                    self.assertNotIn(f"building {self.SERVER}/paquetenvia-{name}", result.stderr)
+                    self.assertEqual(self.tag(self.digest(digit), locked=True),
+                                     self.registry()["repositories"][f"paquetenvia-{name}"][self.SHA])
+                self.assertNotIn("::error::", result.stdout + result.stderr)
+
+    def test_a_missing_image_is_built_on_floating_bases_pushed_and_locked(self):
+        result = self.run_images(PILOT_TRACKING_SUPPORT_URL="https://soporte.example.invalid/ayuda")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        builds = [call for call in self.calls("docker") if call[0] == "build"]
+        self.assertEqual([dockerfile for _, _, dockerfile in self.IMAGES], [call[call.index("--file") + 1] for call in builds])
+        for call in builds:
+            self.assertEqual(["build", "--pull"], call[:2])
+            self.assertIn(f"SOURCE_SHA={self.SHA}", call)
+        self.assertIn("NEXT_PUBLIC_TRACKING_SUPPORT_URL=https://soporte.example.invalid/ayuda", builds[-1])
+        registry, outputs = self.registry(), self.outputs()
+        self.assertEqual([f"{self.SERVER}/paquetenvia-{name}:{self.SHA}" for _, name, _ in self.IMAGES], registry["pushed"])
+        for key, name, _ in self.IMAGES:
+            ref = f"{self.SERVER}/paquetenvia-{name}:{self.SHA}"
+            pushed = registry["local"][ref]
+            self.assertEqual(f"{self.SERVER}/paquetenvia-{name}@{pushed}", outputs[key])
+            self.assertEqual("built", outputs[f"{key}_source"])
+            self.assertIn(f"building {ref}\n", result.stderr)
+            self.assertEqual(self.tag(pushed, locked=True), registry["repositories"][f"paquetenvia-{name}"][self.SHA])
+        # An empty registry has nothing to list tags of; each tag is locked and read back right after its own push.
+        sequence = [(call[0], call[3] if call[0] == "az" and call[2] == "repository" else call[2] if call[0] == "az" else call[1])
+                    for call in map(json.loads, (self.state / "calls").read_text(encoding="utf-8").splitlines())]
+        self.assertEqual([("az", "login"), ("az", "list")]
+                         + [("docker", "build"), ("docker", "push"), ("docker", "inspect"), ("az", "update"), ("az", "show")] * 4,
+                         sequence)
+
+    def test_only_the_images_of_this_commit_that_are_missing_are_built(self):
+        repositories = {"paquetenvia-api": {self.OTHER_SHA: self.tag(self.digest("1"), locked=True)},
+                        "paquetenvia-worker": {self.OTHER_SHA: self.tag(self.digest("2"), locked=True),
+                                               self.SHA: self.tag(self.digest("b"), locked=True)},
+                        "paquetenvia-web": {self.SHA: self.tag(self.digest("d"), locked=True)}}
+        result = self.run_images(repositories)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        outputs = self.outputs()
+        self.assertEqual({"api": "built", "worker": "reused", "dbops": "built", "web": "reused"},
+                         {key: outputs[f"{key}_source"] for key, _, _ in self.IMAGES})
+        self.assertEqual([f"{self.SERVER}/paquetenvia-api:{self.SHA}", f"{self.SERVER}/paquetenvia-db-ops:{self.SHA}"],
+                         self.registry()["pushed"])
+        self.assertEqual(f"{self.SERVER}/paquetenvia-worker@{self.digest('b')}", outputs["worker"])
+        # The other commit's image is untouched.
+        self.assertEqual(self.tag(self.digest("1"), locked=True), self.registry()["repositories"]["paquetenvia-api"][self.OTHER_SHA])
+
+    def test_a_push_over_an_existing_tag_is_refused(self):
+        # The tag appeared after the step looked (it is not listed yet), so the step builds; the registry refuses the
+        # push over the locked tag, and the step stops without reporting the image.
+        api = {self.SHA: self.tag(self.digest("a"), locked=True)}
+        for hidden, repositories in ((f"paquetenvia-api:{self.SHA}", {"paquetenvia-api": api}),
+                                     (f"paquetenvia-api:{self.SHA}", {"paquetenvia-api": {**api, self.OTHER_SHA: self.tag(self.digest("1"))}})):
+            with self.subTest(repositories=sorted(repositories["paquetenvia-api"])):
+                result = self.run_images(repositories, hidden=(hidden,))
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("denied: The operation is disallowed on this registry, repository or image.", result.stderr)
+                self.assertEqual(self.tag(self.digest("a"), locked=True), self.registry()["repositories"]["paquetenvia-api"][self.SHA])
+                self.assertEqual({}, self.outputs())
+                self.assertEqual([], [call for call in self.calls("az") if call[2:3] == ["update"]])
+
+    def test_a_tag_that_does_not_read_back_locked_on_the_digest_stops_the_step(self):
+        for env in ({"FAKE_LOCK_IGNORED": "1"}, {"FAKE_PUSH_DRIFT": "1"}):
+            with self.subTest(env=env):
+                result = self.run_images(**env)
+                self.assertNotEqual(0, result.returncode)
+                pushed = self.registry()["local"][f"{self.SERVER}/paquetenvia-api:{self.SHA}"]
+                self.assertIn(f"::error::tag paquetenvia-api:{self.SHA} is not locked on {pushed} (README §6.7)", result.stderr)
+                self.assertEqual({}, self.outputs())
+        # A reused tag that does not lock stops the step too.
+        result = self.run_images(self.every_image(), FAKE_LOCK_IGNORED="1")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(f"::error::tag paquetenvia-api:{self.SHA} is not locked on {self.digest('a')}", result.stderr)
+        self.assertEqual([], self.calls("docker"))
+
+    def test_a_registry_read_that_fails_stops_the_step_before_any_build(self):
+        for command in ("list", "show-tags", "show"):
+            with self.subTest(command=command):
+                result = self.run_images(self.every_image(locked=True), FAKE_AZ_FAIL=command)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(f"az acr repository {command} failed (stand-in)", result.stderr)
+                self.assertEqual([], self.calls("docker"))
+                self.assertEqual({}, self.outputs())
+
+    def test_a_failed_build_stops_the_step(self):
+        # build() runs inside a command substitution; inherit_errexit makes its failure fail the step.
+        result = self.run_images(self.every_image(locked=True) | {"paquetenvia-web": {}},
+                                 FAKE_BUILD_FAIL="deploy/azure/pilot/Dockerfile.web")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("build of deploy/azure/pilot/Dockerfile.web failed (stand-in)", result.stderr)
+        self.assertNotIn("push", [call[0] for call in self.calls("docker")])
+        outputs = self.outputs()
+        self.assertNotIn("web", outputs)
+        self.assertNotIn("web_source", outputs)
+        self.assertEqual("reused", outputs["dbops_source"])
+
+    def test_a_checkout_other_than_tested_git_sha_stops_before_the_registry(self):
+        result = self.run_images(FAKE_HEAD=self.OTHER_SHA)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("::error::checkout is not tested_git_sha", result.stdout)
+        self.assertEqual([], self.calls("az") + self.calls("docker"))
 
 
 # A stand-in for the Azure CLI as restore-drill.sh calls it. Servers are files in $AZ_STATE/servers; every call is
@@ -2233,6 +2712,88 @@ class TemplateGuardTests(unittest.TestCase):
                 ctx = self.context()
                 ctx.repo_root = root
                 self.assertFalse(guards.guard_25_postgres_server_setting(ctx).passed, old)
+
+    def test_p26_revision_check_fails_closed(self):
+        text = (REPO_ROOT / guards.PILOT_WORKFLOW).read_text(encoding="utf-8")
+        mutations = {
+            "no revision step": (("        id: revisions\n", "        id: other\n"), "one deploy step (id revisions)"),
+            "another app's image": (("WEB_IMAGE: ${{ steps.images.outputs.web }}\n        run: |\n          set -euo pipefail\n          polls_left",
+                                     "WEB_IMAGE: ${{ steps.images.outputs.api }}\n        run: |\n          set -euo pipefail\n          polls_left"),
+                                    "must read exactly this run's images"),
+            "latest never compared with ready": (('[[ -n "${latest}" && "${latest}" == "${ready}" ]]', '[[ -n "${latest}" ]]'),
+                                                 "must poll, assert and hint"),
+            "image not compared": (('[[ "${images}" != "${image}" ]]', '[[ -z "${images}" ]]'), "must poll, assert and hint"),
+            "health not asserted": (('[[ "${active}" == "true" && "${health}" == "Healthy" ]]', '[[ "${active}" == "true" ]]'),
+                                    "must poll, assert and hint"),
+            "unbounded poll": (("polls_left=40\n", "polls_left=4000\n"), "must poll, assert and hint"),
+            "no system-log hint": (("--type system (README §6.7)", "(README §6.7)"), "must poll, assert and hint"),
+            "an app left unchecked": (('          check_revision web_revision ca-pv-pilot-web "${WEB_IMAGE}"\n', ""), "must end with"),
+            "allowed to fail": (("        id: revisions\n", "        id: revisions\n        continue-on-error: true\n"),
+                                "must always run"),
+            "conditional": (("        id: revisions\n", "        id: revisions\n        if: success()\n"), "must always run"),
+            "summary only on success": (("      - name: Summary and DNS records for the owner\n        if: always()\n",
+                                         "      - name: Summary and DNS records for the owner\n"), "always-run summary"),
+            "summary without the db-ops digest": (("| \\`${DBOPS_IMAGE:-none}\\` |", "| |"), "always-run summary"),
+            "another image fails at once": ((guards.REVISION_IMAGE_NOT_YET + "\n",
+                                             guards.REVISION_IMAGE_NOT_YET + "\n                  return 1\n"),
+                                            "polled again, not failed at once"),
+            "another image fails the app": ((guards.REVISION_IMAGE_NOT_YET + "\n",
+                                             guards.REVISION_IMAGE_NOT_YET + '\n                  fail "${app}" "${status}."\n'),
+                                            "polled again, not failed at once"),
+            "summary without the serving revision": (("API_REVISION: ${{ steps.revisions.outputs.api_revision }}",
+                                                      "API_REVISION: ${{ steps.revisions.outputs.worker_revision }}"),
+                                                     "always-run summary"),
+        }
+        for name, ((old, new), fragment) in mutations.items():
+            with self.subTest(name=name):
+                self.assertEqual(1, text.count(old), old)
+                self.assert_fails(26, self.context(workflow_text=text.replace(old, new, 1)), fragment)
+        # The check must come after stage 4 and before the smoke test.
+        check = text[text.index("      # ENV-001 F-06: a successful stage 4"):text.index("      - name: Smoke test same-origin routing")]
+        summary = "      - name: Summary and DNS records for the owner\n"
+        stage_4 = "      - name: Stage 4 - "
+        for moved in (text.replace(check, "", 1).replace(summary, check + summary, 1),
+                      text.replace(check, "", 1).replace(stage_4, check + stage_4, 1)):
+            self.assertNotEqual(text, moved)
+            self.assert_fails(26, self.context(workflow_text=moved), "after stage 4 and before the smoke test")
+
+    def test_p27_image_reuse_and_tag_lock_fail_closed(self):
+        text = (REPO_ROOT / guards.PILOT_WORKFLOW).read_text(encoding="utf-8")
+        reuse = "must reuse an existing tag, else build and push, then lock it"
+        push_block = ('              docker push "${ref}" >&2\n'
+                      '              digest="$(docker inspect --format \'{{index .RepoDigests 0}}\' "${ref}")"\n'
+                      '              digest="${digest##*@}"\n'
+                      '            fi\n')
+        mutations = {
+            "no images step": (("        id: images\n", "        id: other\n"), "one deploy step (id images)"),
+            "the reuse branch never taken": (('            if [[ -n "${digest}" ]]; then\n', "            if false; then\n"), reuse),
+            "no tag lookup": (('--repository "${repository}" --only-show-errors --output json)"', '--repository "${repository}")"'), reuse),
+            "build failures ignored": (("          shopt -s inherit_errexit\n", ""), reuse),
+            "push in both branches": ((push_block, push_block.replace('              docker push "${ref}" >&2\n', "")
+                                       .replace("            fi\n", '            fi\n            docker push "${ref}" >&2\n')), reuse),
+            "tag not locked": (("--write-enabled false \\\n", "\\\n"), reuse),
+            "lock not read back": ((".changeableAttributes.writeEnabled", ".changeableAttributes.readEnabled"), reuse),
+            "source not reported": (('echo "${name//-/}_source=${source}" >> "${GITHUB_OUTPUT}"', 'true'), reuse),
+            "a second push": (('          echo "web=${image}" >> "${GITHUB_OUTPUT}"\n',
+                               '          echo "web=${image}" >> "${GITHUB_OUTPUT}"\n          docker push "${REGISTRY_SERVER}/x:y"\n'),
+                              "docker push exactly once"),
+            "an unlock": (('          echo "web=${image}" >> "${GITHUB_OUTPUT}"\n',
+                           '          echo "web=${image}" >> "${GITHUB_OUTPUT}"\n'
+                           '          az acr repository update --name "${REGISTRY}" --image "x:y" --write-enabled true\n'),
+                          "az acr repository update exactly once"),
+            "a deletion": (('          echo "web=${image}" >> "${GITHUB_OUTPUT}"\n',
+                            '          echo "web=${image}" >> "${GITHUB_OUTPUT}"\n          az acr repository delete --name "${REGISTRY}" --image "x:y" --yes\n'),
+                           "never unlock, delete, untag or import"),
+            "web not reported": (('          echo "web=${image}" >> "${GITHUB_OUTPUT}"\n', ""), "right after its build() call"),
+            "registry from elsewhere": (("          REGISTRY: ${{ steps.platform.outputs.registryName }}\n", "          REGISTRY: other\n"),
+                                        "the images step must read exactly"),
+            "allowed to fail": (("        id: images\n", "        id: images\n        continue-on-error: true\n"), "must always run"),
+            "summary without the sources": (("${WEB_SOURCE:-no image}", "no image"), "built or reused"),
+        }
+        for name, ((old, new), fragment) in mutations.items():
+            with self.subTest(name=name):
+                self.assertEqual(1, text.count(old), old)
+                self.assert_fails(27, self.context(workflow_text=text.replace(old, new, 1)), fragment)
 
     def restored_server(self, **changes):
         """A restored server as `az resource show --api-version 2024-08-01` describes it (ARM GET)."""

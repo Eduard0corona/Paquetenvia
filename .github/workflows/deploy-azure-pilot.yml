@@ -462,7 +462,13 @@ jobs:
           VAULT: ${{ steps.security.outputs.vaultName }}
         run: bash deploy/azure/pilot/kv-firewall.sh close "${VAULT:-}"
 
-      - name: Build and push images by digest (deployed_git_sha = tested_git_sha)
+      # ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21: an image is built once per commit. When paquetenvia-<name>:<tested_git_sha>
+      # is already in the registry (an earlier run of this commit pushed it), the run reuses its digest and builds and
+      # pushes nothing, so a rollback deploys the same bytes. Otherwise it builds on the floating bases (still unpinned,
+      # so every new build gets their patches) and pushes. Then the tag is locked (write-enabled false): the registry
+      # refuses any later push over it, and its deletion, until someone deliberately unlocks it. Every later step uses
+      # the digest, never the tag. A registry read that fails stops the run; it never leads to a build.
+      - name: Build or reuse the images by digest (deployed_git_sha = tested_git_sha)
         id: images
         shell: bash
         env:
@@ -470,30 +476,67 @@ jobs:
           REGISTRY_SERVER: ${{ steps.platform.outputs.registryServer }}
         run: |
           set -euo pipefail
+          # build() runs inside command substitutions: any failing command in it must still fail the step.
+          shopt -s inherit_errexit
           [[ "$(git rev-parse HEAD)" == "${TESTED_GIT_SHA}" ]] || { echo "::error::checkout is not tested_git_sha"; exit 1; }
           az acr login --name "${REGISTRY}" --only-show-errors
           # GATE-001-TRACKING-SUPPORT-LINK-2026-10-11: no support link by default while GATE-001 is open (the host shows
           # the commercial name); an empty value makes public tracking point the recipient to the channel the link came by.
+          # The link is compiled into the web image, so a reused web image keeps the link it was built with.
           support_url="${PILOT_TRACKING_SUPPORT_URL:-}"
+          repositories="$(az acr repository list --name "${REGISTRY}" --only-show-errors --output json)"
+          # tag_digest REPOSITORY: the digest of REPOSITORY:<tested_git_sha>, or nothing when that tag does not exist.
+          tag_digest() {
+            local repository="$1" found tags
+            found="$(jq -r --arg repository "${repository}" 'any(.[]; . == $repository)' <<<"${repositories}")"
+            [[ "${found}" == "true" ]] || return 0
+            tags="$(az acr repository show-tags --name "${REGISTRY}" --repository "${repository}" --only-show-errors --output json)"
+            found="$(jq -r --arg tag "${TESTED_GIT_SHA}" 'any(.[]; . == $tag)' <<<"${tags}")"
+            [[ "${found}" == "true" ]] || return 0
+            az acr repository show --name "${REGISTRY}" --image "${repository}:${TESTED_GIT_SHA}" --only-show-errors --output json \
+              | jq -r '.digest'
+          }
+          # build NAME DOCKERFILE [BUILD ARGS...]: prints <registry>/paquetenvia-NAME@<digest> and sets the step output
+          # <NAME without '-'>_source to reused or built.
           build() {
             local name="$1" dockerfile="$2"; shift 2
-            local ref="${REGISTRY_SERVER}/paquetenvia-${name}:${TESTED_GIT_SHA}"
-            docker build --pull --file "${dockerfile}" --build-arg "SOURCE_SHA=${TESTED_GIT_SHA}" "$@" --tag "${ref}" . >&2
-            docker push "${ref}" >&2
-            local digest
-            digest="$(docker inspect --format '{{index .RepoDigests 0}}' "${ref}")"
-            digest="${digest##*@}"
-            [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::image ${name} has no immutable digest"; exit 1; }
-            echo "${REGISTRY_SERVER}/paquetenvia-${name}@${digest}"
+            local repository="paquetenvia-${name}" ref="${REGISTRY_SERVER}/paquetenvia-${name}:${TESTED_GIT_SHA}"
+            local digest source tag
+            digest="$(tag_digest "${repository}")"
+            if [[ -n "${digest}" ]]; then
+              source=reused
+              echo "reusing ${REGISTRY_SERVER}/${repository}@${digest}" >&2
+            else
+              source=built
+              echo "building ${ref}" >&2
+              docker build --pull --file "${dockerfile}" --build-arg "SOURCE_SHA=${TESTED_GIT_SHA}" "$@" --tag "${ref}" . >&2
+              docker push "${ref}" >&2
+              digest="$(docker inspect --format '{{index .RepoDigests 0}}' "${ref}")"
+              digest="${digest##*@}"
+            fi
+            [[ "${digest}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::image ${name} has no immutable digest" >&2; exit 1; }
+            az acr repository update --name "${REGISTRY}" --image "${repository}:${TESTED_GIT_SHA}" --write-enabled false \
+              --only-show-errors --output none
+            tag="$(az acr repository show --name "${REGISTRY}" --image "${repository}:${TESTED_GIT_SHA}" --only-show-errors --output json)"
+            if [[ "$(jq -r '.digest' <<<"${tag}")" != "${digest}" || "$(jq -r '.changeableAttributes.writeEnabled' <<<"${tag}")" != "false" ]]; then
+              echo "::error::tag ${repository}:${TESTED_GIT_SHA} is not locked on ${digest} (README §6.7)" >&2
+              exit 1
+            fi
+            echo "${name//-/}_source=${source}" >> "${GITHUB_OUTPUT}"
+            echo "${REGISTRY_SERVER}/${repository}@${digest}"
           }
-          echo "api=$(build api deploy/azure/Dockerfile.api)" >> "${GITHUB_OUTPUT}"
-          echo "worker=$(build worker deploy/azure/Dockerfile.worker)" >> "${GITHUB_OUTPUT}"
-          echo "dbops=$(build db-ops deploy/azure/pilot/Dockerfile.db-ops)" >> "${GITHUB_OUTPUT}"
+          image="$(build api deploy/azure/Dockerfile.api)"
+          echo "api=${image}" >> "${GITHUB_OUTPUT}"
+          image="$(build worker deploy/azure/Dockerfile.worker)"
+          echo "worker=${image}" >> "${GITHUB_OUTPUT}"
+          image="$(build db-ops deploy/azure/pilot/Dockerfile.db-ops)"
+          echo "dbops=${image}" >> "${GITHUB_OUTPUT}"
           # AUTH-001 BFF web build: same origin, NEXT_PUBLIC_API_BASE_URL never defined (see the Dockerfile header).
           # GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10: no NEXT_PUBLIC_TRACKING_BRAND_NAME while GATE-001 is open,
           # so public tracking shows the neutral heading "Seguimiento de envío" (next.config.ts refuses the brand).
-          echo "web=$(build web deploy/azure/pilot/Dockerfile.web \
-            --build-arg "NEXT_PUBLIC_TRACKING_SUPPORT_URL=${support_url}")" >> "${GITHUB_OUTPUT}"
+          image="$(build web deploy/azure/pilot/Dockerfile.web \
+            --build-arg "NEXT_PUBLIC_TRACKING_SUPPORT_URL=${support_url}")"
+          echo "web=${image}" >> "${GITHUB_OUTPUT}"
 
       - name: Stage 3 - migration, runtime-login and verify jobs (jobs.bicep), then run them
         shell: bash
@@ -593,6 +636,69 @@ jobs:
             --parameters "@deploy/azure/pilot/observability.parameters.json" "postgresServerName=${POSTGRES_NAME}" \
             --only-show-errors --output none
 
+      # ENV-001 F-06: a successful stage 4 does not mean the new code serves. In single revision mode Container Apps
+      # keeps the previous revision serving until the new one is ready, and keeps it serving if the new one never
+      # becomes ready, so the smoke test below would pass on old code. Each app must reach a latest revision that is
+      # ready, runs this run's digest, is active and Healthy. Up to 40 polls 15 s apart (about 10 minutes) for the three
+      # apps together; a ready revision on another image is polled again too, because right after stage 4 the control
+      # plane can still report the previous revision as the latest one, and so is health, because a revision the start
+      # step above re-activated (README §6.4 step 5) is ready again before its replicas pass their probes. Nothing
+      # secret is read or printed.
+      - name: Check that the new API, Worker and Web revisions serve this run's images
+        id: revisions
+        shell: bash
+        env:
+          API_IMAGE: ${{ steps.images.outputs.api }}
+          WORKER_IMAGE: ${{ steps.images.outputs.worker }}
+          WEB_IMAGE: ${{ steps.images.outputs.web }}
+        run: |
+          set -euo pipefail
+          polls_left=40
+          # fail APP MESSAGE: one annotation with the revision and where to read why it did not start.
+          fail() {
+            echo "::error::$1: $2 Read its system log: az containerapp logs show --name $1 --resource-group ${PILOT_RESOURCE_GROUP} --type system (README §6.7)."
+          }
+          # check_revision OUTPUT APP IMAGE
+          check_revision() {
+            local output="$1" app="$2" image="$3" state latest ready revision images active health status
+            [[ "${image##*@}" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "::error::${app}: this run has no digest-pinned image for it"; return 1; }
+            while true; do
+              state="$(az containerapp show --name "${app}" --resource-group "${PILOT_RESOURCE_GROUP}" \
+                --query "{latest: properties.latestRevisionName, ready: properties.latestReadyRevisionName}" -o json)"
+              latest="$(jq -r '.latest // ""' <<<"${state}")"
+              ready="$(jq -r '.ready // ""' <<<"${state}")"
+              if [[ -n "${latest}" && "${latest}" == "${ready}" ]]; then
+                revision="$(az containerapp revision show --name "${app}" --resource-group "${PILOT_RESOURCE_GROUP}" --revision "${ready}" \
+                  --query "{active: properties.active, health: properties.healthState, images: properties.template.containers[].image}" -o json)"
+                images="$(jq -r '(.images // []) | join(" ")' <<<"${revision}")"
+                active="$(jq -r '.active // false' <<<"${revision}")"
+                health="$(jq -r '.health // ""' <<<"${revision}")"
+                if [[ "${images}" != "${image}" ]]; then
+                  # Not yet this run's revision: right after stage 4 the previous one can still be reported as latest.
+                  status="revision ${ready} is ready but runs '${images}', not this run's image (${image})"
+                elif [[ "${active}" == "true" && "${health}" == "Healthy" ]]; then
+                  echo "${app}: revision ${ready} is ready, active and Healthy, and runs ${image}"
+                  echo "${output}=${ready}" >> "${GITHUB_OUTPUT}"
+                  return 0
+                else
+                  status="revision ${ready} is ready but active=${active}, healthState=${health:-none}"
+                fi
+              else
+                status="latest revision ${latest:-none} is not ready (latest ready revision: ${ready:-none})"
+              fi
+              if (( polls_left == 0 )); then
+                fail "${app}" "${status} after about 10 minutes; the previous revision, if any, is still serving."
+                return 1
+              fi
+              polls_left=$((polls_left - 1))
+              echo "${app}: ${status}; polling again in 15 s"
+              sleep 15
+            done
+          }
+          check_revision api_revision ca-pv-pilot-api "${API_IMAGE}"
+          check_revision worker_revision ca-pv-pilot-worker "${WORKER_IMAGE}"
+          check_revision web_revision ca-pv-pilot-web "${WEB_IMAGE}"
+
       - name: Smoke test same-origin routing
         shell: bash
         env:
@@ -622,6 +728,17 @@ jobs:
           VERIFICATION_ID: ${{ steps.platform.outputs.customDomainVerificationId }}
           ROUTE_FQDN: ${{ steps.apps.outputs.routeFqdn }}
           POSTGRES_NAME: ${{ steps.platform.outputs.postgresName }}
+          API_IMAGE: ${{ steps.images.outputs.api }}
+          WORKER_IMAGE: ${{ steps.images.outputs.worker }}
+          DBOPS_IMAGE: ${{ steps.images.outputs.dbops }}
+          WEB_IMAGE: ${{ steps.images.outputs.web }}
+          API_REVISION: ${{ steps.revisions.outputs.api_revision }}
+          WORKER_REVISION: ${{ steps.revisions.outputs.worker_revision }}
+          WEB_REVISION: ${{ steps.revisions.outputs.web_revision }}
+          API_SOURCE: ${{ steps.images.outputs.api_source }}
+          WORKER_SOURCE: ${{ steps.images.outputs.worker_source }}
+          DBOPS_SOURCE: ${{ steps.images.outputs.dbops_source }}
+          WEB_SOURCE: ${{ steps.images.outputs.web_source }}
         run: |
           {
             echo "## ENV-001 pilot deployment"
@@ -629,6 +746,17 @@ jobs:
             echo "- PostgreSQL server: \`${POSTGRES_NAME:-not deployed}\`"
             echo "- route FQDN: \`${ROUTE_FQDN:-not deployed}\`"
             echo "- custom domain phase: \`${CUSTOM_DOMAIN_PHASE}\`"
+            echo ""
+            # ENV-001 F-05/F-06: the digests this run deploys, whether each was built now or reused from an earlier run
+            # of this commit (ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21), and the revision of each app that is ready,
+            # active, Healthy and runs its digest (empty when the check did not pass).
+            echo "### Images deployed by this run"
+            echo "| Image | Digest | Built or reused | Serving revision |"
+            echo "|---|---|---|---|"
+            echo "| API | \`${API_IMAGE:-none}\` | ${API_SOURCE:-no image} | \`${API_REVISION:-not verified}\` |"
+            echo "| Worker | \`${WORKER_IMAGE:-none}\` | ${WORKER_SOURCE:-no image} | \`${WORKER_REVISION:-not verified}\` |"
+            echo "| Web | \`${WEB_IMAGE:-none}\` | ${WEB_SOURCE:-no image} | \`${WEB_REVISION:-not verified}\` |"
+            echo "| DB ops (migrate, logins and verify jobs) | \`${DBOPS_IMAGE:-none}\` | ${DBOPS_SOURCE:-no image} | job image, no revision |"
             echo ""
             echo "### DNS records for ${PILOT_HOST} (create at the DNS host, then re-run with custom_domain_phase=bind)"
             echo "| Type | Host | Value |"

@@ -119,8 +119,8 @@ y el nombre de cada valor que falta. El formato, para cada tipo de vehículo (`M
 
 No hay valores por defecto: son reglas de negocio tuyas y el repo no las inventa. Van por PR → `development`
 → `main` como cualquier cambio del archivo (README §4, "Driver eligibility rules"). Sin este alto, un deploy
-fallaría solo en el smoke test (`/auth/session is not served by the API`) o dejaría sirviendo la revisión
-anterior.
+fallaría solo después de Stage 4, en la comprobación de revisiones (la revisión nueva de la API nunca queda lista,
+README §6.1 paso 5), con la revisión anterior, si la hay, todavía sirviendo.
 
 > **Versiones de términos y aviso de privacidad (bloquea el deploy):** `PAQUETERIA_TERMS_VERSION` y
 > `PAQUETERIA_PRIVACY_VERSION` del contenedor web ya están cableados en `apps.bicep`. Sus valores van en
@@ -305,7 +305,9 @@ En la misma pantalla del environment → *Environment variables → Add variable
 | `PILOT_POSTGRES_SERVER_NAME` | No | **No la crees ahora.** Vacía (o sin crear) significa el primer servidor de la base. Solo se llena después de una restauración real, con el nombre que imprime el comando (paso 7.7) | vacía, o el nombre del primer servidor seguido de partes `-` en minúsculas y números (máximo 63 caracteres), y el servidor debe existir |
 
 Nota: `PILOT_TRACKING_SUPPORT_URL` se compila dentro de la imagen web como
-`NEXT_PUBLIC_TRACKING_SUPPORT_URL` (build-arg del workflow). Cambiarla requiere un nuevo run.
+`NEXT_PUBLIC_TRACKING_SUPPORT_URL` (build-arg del workflow). Cambiarla requiere un commit nuevo: un run de un commit
+cuya imagen web ya está en el registro la reutiliza, con el enlace con el que se compiló
+(ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21, README §6.2).
 
 ### 3.3 Alternativa con GitHub CLI (bootstrap.md §6)
 
@@ -705,11 +707,15 @@ Del *Summary* del run copia la IP estática y el `asuid` (paso 4).
 ### 7.4 Run 2 (`none`) y Run 3 (`bind`)
 
 - **Run 2:** mismos inputs, `custom_domain_phase=none`. Debe terminar en verde: imágenes por digest,
-  jobs `job-pv-pilot-migrate`, `-logins` y `-verify`, apps, Stage 5 (alertas OBS-002) y el smoke test
-  sobre el FQDN de la ruta (`/` → 200, `/auth/session` → JSON, `/auth/backchannel-logout` →
-  `invalid_request`).
+  jobs `job-pv-pilot-migrate`, `-logins` y `-verify`, apps, Stage 5 (alertas OBS-002), la comprobación de que la
+  revisión nueva de la API, el Worker y la Web está lista, activa, `Healthy` y corre el digest de este run, y el smoke
+  test sobre el FQDN de la ruta (`/` → 200, `/auth/session` → JSON, `/auth/backchannel-logout` →
+  `invalid_request`). El *Summary* del run lista los cuatro digests que despliega, si cada uno se construyó en ese
+  run o se reutilizó, y la revisión que sirve cada app.
 - **Run 3:** cuando el DNS ya resuelva, mismos inputs con `custom_domain_phase=bind`. Desde aquí, **usa
-  siempre `bind`**: con `none` se desvincula el apex (README §6.2).
+  siempre `bind`**: con `none` se desvincula el apex (README §6.2). Como es el mismo commit, el *Summary* dice
+  `reused` en las cuatro imágenes: el despliegue reutiliza las del Run 2 en vez de reconstruirlas, y un rollback a un
+  commit ya desplegado vuelve a sus mismos bytes (README §6.2 y §6.3).
 
   Si el DNS ya propagó antes del Run 2, puedes hacer el Run 2 directamente con `bind`. El repo describe
   la secuencia none → bind.

@@ -14,7 +14,7 @@ files (`deploy/azure/*.bicep`, `deploy-core.ps1`, `deploy-azure-dev.yml`) or gua
 | OBS-002 alert e-mail (owner) | `deploy/azure/pilot/observability.parameters.json` |
 | Accepted terms and privacy versions for the web (owner, UI-001) | `deploy/azure/pilot/web.parameters.json` |
 | Deployment workflow | `.github/workflows/deploy-azure-pilot.yml` (`workflow_dispatch`, GitHub Environment `azure-pilot`) |
-| Static guards | `tools/azr-001/env001_pilot_guards.py` (26 guards) and `test_env001_pilot_guards.py` |
+| Static guards | `tools/azr-001/env001_pilot_guards.py` (28 guards) and `test_env001_pilot_guards.py` |
 | Restore drill and real restore | `deploy/azure/pilot/restore-drill.sh` (§6.4) |
 | One-time bootstrap (owner) | [`bootstrap.md`](bootstrap.md) |
 
@@ -34,6 +34,7 @@ lists what could only be checked statically.
 | ADP-001-POD-BLOB-DEFENDER | Storage account (Entra-only, no anonymous or shared-key access), private container `proofs`, Defender for Storage on-upload malware scanning, RBAC from the ADP-001 table |
 | ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20 | Blob and container soft delete 30 days on the proof storage, versioning off: a deleted or overwritten photo can be recovered for 30 days (§6.4, guard P12) |
 | OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20 | The PostgreSQL server is one setting, the `azure-pilot` variable `PILOT_POSTGRES_SERVER_NAME` (empty = the first server). After a real restore the owner sets it to the restored server and re-runs the workflow; migrations, API, Worker, alerts and drills follow it, and the original server stays untouched with its backups until the owner deletes it (§6.4, guard P25) |
+| ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21 | An image is built once per commit: when `paquetenvia-<image>:<tested_git_sha>` is already in the registry, the run reuses its digest and builds and pushes nothing, so a rollback deploys the same bytes. The tag is locked after its first push, so the registry refuses a push over it. The bases (.NET, Node) stay unpinned: a new commit gets a new build with their patches (§6.2, §6.3, guard P27) |
 | GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20 | The driver eligibility rules per vehicle type (per-order capacity and required documents) in `apps.settings.json` (§4 "Driver eligibility rules"); GATE-010 stays open |
 | ADP-001-PII-KEYVAULT-ENVELOPE | Key Vault RSA-3072 `pii-kek` (wrap/unwrap only). The API alone has *Key Vault Crypto Service Encryption User* on it. |
 | SCL-001 / ENV-001 Data Protection KEK | Key Vault RSA-3072 `dataprotection-kek`. API and Worker have *Crypto Service Encryption User*, and the workloads get `DataProtection__KeyEncryption__*`. |
@@ -364,8 +365,9 @@ any rule goes missing it stops with
 `STOP_FOR_OWNER_DECISION: driver eligibility rules for vehicle type <TYPE> are missing: ...`, naming each missing
 setting, so **the pilot deploy stops before touching Azure** until all five vehicle types are complete again. It
 applies the API's rules to every entry present and accepts only the exact names above. Guard P17 (`check`) refuses an
-invalid entry but not a missing one. Without this stop, a deploy would fail only at the smoke test (`/auth/session is
-not served by the API`) or leave the earlier revision serving. `PilotApiStartupConfigurationTests` starts the pilot API
+invalid entry but not a missing one. Without this stop, a deploy would fail only after stage 4, at the revision check
+(the new API revision never becomes ready, §6.1 step 5), with the earlier revision, if any, still serving.
+`PilotApiStartupConfigurationTests` starts the pilot API
 with the file as it is, checks that Drivers, Routing, Dispatch and Orders bind exactly its entries, and pins the two
 start failures without them (`MissingEligibilityStartFailures`); `test_env001_pilot_guards.py` pins the approved
 values.
@@ -501,6 +503,20 @@ Two further caveats:
    and head SHA.
 5. Actions → *Deploy Azure PILOT* → Run workflow on `main`: `tested_git_sha=<head SHA>`,
    `foundation_run_id=<run id>`, `custom_domain_phase=none`.
+
+   A green run proves more than "the templates deployed" (ENV-001 F-05, F-06):
+   - The images it builds come from the same Dockerfiles that CI builds and smoke-tests on every PR that touches
+     them (`docs/development/branching-and-ci.md`, *Deploy image build smoke*). An image of this commit that an
+     earlier run already pushed is reused instead (§6.2).
+   - After stage 4, the step *Check that the new API, Worker and Web revisions serve this run's images* waits, for
+     each app, until its latest revision is ready, runs this run's digest and is active and `Healthy` (at
+     most about 10 minutes for the three apps). A ready revision on another image counts as not ready yet, because
+     right after stage 4 Container Apps can still report the previous revision as the latest one. Container Apps keeps
+     the previous revision serving while a new one never becomes ready, so without this step a run could stay green
+     on old code. If it fails, the error names the app and the revision and gives the
+     `az containerapp logs show ... --type system` command (§6.7).
+   - The run summary lists the four digests it deploys (API, Worker, Web, DB ops), whether each was built by this run
+     or reused, and the revision that serves each app.
 6. The first run creates the vault, then stops with *"lacks authcenter-paquetenvia-client-secret"*. The
    workflow requires four owner secrets and reports the first one missing. Write all four straight into
    the vault (§6.6) and run again:
@@ -619,14 +635,50 @@ workflow:
 - redeploys the five templates idempotently (stage 5 is the OBS-002 alerts, §10) on the PostgreSQL server named by
   `PILOT_POSTGRES_SERVER_NAME` (empty: the first server);
 - keeps every generated secret (a runtime credential only while its host is that server);
-- rebuilds the images from `tested_git_sha` and deploys them by digest;
+- reuses each image of `tested_git_sha` that is already in the registry, and builds and pushes only the missing ones
+  (ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21, below); deploys them by digest and lists the four digests, and whether
+  each was built or reused, in the run summary;
 - runs pending migrations, re-applies the runtime logins and runs `assert`;
+- checks that the new API, Worker and Web revisions are ready, active, `Healthy` and on those digests (§6.1 step 5),
+  and fails otherwise, even while the previous revision still answers;
 - smoke-tests the route.
+
+The run summary is where to read what each run deployed. A digest there is `<registry>/paquetenvia-<image>@sha256:...`.
+
+**One image per commit (ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21).** The tag `paquetenvia-<image>:<tested_git_sha>`
+names the commit. For each of the four images the images step looks for that tag in the pilot registry
+(`az acr repository list`, `show-tags`, `show`):
+
+- **The tag exists** (an earlier run of this commit pushed it): the run logs `reusing <registry>/paquetenvia-<image>@<digest>`
+  and deploys that digest. It builds and pushes nothing, so every run of a commit deploys the same bytes.
+- **The tag does not exist:** the run logs `building <registry>/paquetenvia-<image>:<tested_git_sha>`, builds it with
+  `docker build --pull` on the current bases and pushes it.
+
+Either way the run then locks the tag (`az acr repository update --image paquetenvia-<image>:<tested_git_sha>
+--write-enabled false`) and reads it back: it must name the digest the run deploys and have `writeEnabled` false.
+From then on the registry refuses any push over that tag, and its deletion, until someone deliberately unlocks it
+(Microsoft Learn, *Lock a container image*). A registry read or a lock that fails stops the run; it never leads to a
+build over an existing tag. Every later step still uses the digest, never the tag.
+
+Consequences:
+
+- The bases (`mcr.microsoft.com/dotnet/sdk:10.0.101`, `mcr.microsoft.com/dotnet/aspnet:10.0` and
+  `node:24-bookworm-slim`) stay unpinned by digest, so every new build gets their patches. A patch reaches the pilot only through a build, that is, with a **new commit**: a run of a commit whose
+  images are already in the registry reuses them.
+- The same holds for what the web image compiles in: a changed `PILOT_TRACKING_SUPPORT_URL` takes effect with the next
+  commit, not on a re-run of the same commit.
+- To delete an old image (the Basic registry includes 10 GiB), unlock its tag first with
+  `az acr repository update --name <registry> --image paquetenvia-<image>:<sha> --write-enabled true --delete-enabled true`.
+  A later run of that commit then builds it again from the bases of the day.
 
 ### 6.3 Rollback
 
-- **Application:** dispatch again with an earlier certified SHA and its Foundation run id. Container
-  Apps run in single-revision mode, so the earlier digests replace the current ones.
+- **Application:** dispatch again with an earlier certified SHA and its Foundation run id. When that SHA was deployed
+  before, its images are still in the registry, so the run reuses them and returns to the same bytes: the summary
+  says `reused`, with the same digests as that earlier run's summary (§6.2). Only an image that is not there (a commit
+  never deployed, or an image someone unlocked and deleted) is built again, on the bases of the day. In single
+  revision mode the new revisions replace the current ones only once they are ready; if they never are, the revision
+  check fails the run and the current revisions keep serving. A base image patch needs a new commit (§6.2).
 - **Database:** migrations are forward-only in the pilot. An application rollback is only safe while
   the older code still works with the newer schema; every lane is additive, see each lane's rollback
   notes. For data loss or a bad migration, use a point-in-time restore (§6.4). The template tooling
@@ -896,6 +948,25 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
 
 ### 6.7 Troubleshooting
 
+- **The revision check failed** (*Check that the new API, Worker and Web revisions serve this run's images*):
+  - *"latest revision ... is not ready ... after about 10 minutes"*: the new revision never passed its probes, and the
+    previous revision, if any, still serves. Read why with the command in the error,
+    `az containerapp logs show --name <app> --resource-group <rg> --type system`, then the app's console logs (below).
+    A setting or secret the app refuses to start without shows up there.
+  - *"... is ready but active=..., healthState=..."*: the revision started but is inactive or not `Healthy` after the
+    wait. `az containerapp revision list -n <app> -g <rg> -o table` shows every revision with its state.
+  - *"... is ready but runs '...', not this run's image (...) after about 10 minutes"*: for the whole wait the latest
+    ready revision ran another image (the error names the revision, the image it runs and this run's image), so stage
+    4 did not apply this run's image. Read the stage 4 output and run the workflow again.
+- **The images step failed:**
+  - *"tag paquetenvia-<image>:<sha> is not locked on sha256:..."*: after the push (or on reuse) the tag did not read
+    back on the digest this run deploys with `writeEnabled` false. Do not unlock anything; read the tag with
+    `az acr repository show --name <registry> --image paquetenvia-<image>:<sha>` and compare its digest with the run
+    log (§6.2).
+  - *`docker push` is refused (`denied: ...`)*: the tag already exists and is locked, so the registry refused to
+    replace it (it appeared after the step looked). Run the workflow again; it then reuses that tag.
+  - An `az acr repository` read that fails stops the step before any build: check the registry name and the
+    deployer's role (bootstrap step 5).
 - **Job console logs:** Log Analytics →
   `ContainerAppConsoleLogs_CL | where ContainerJobName_s startswith "job-pv-pilot" | order by TimeGenerated desc`.
 - **App logs:** `ContainerAppConsoleLogs_CL | where ContainerAppName_s == "ca-pv-pilot-api"`. The logs
@@ -1010,7 +1081,10 @@ Details, format and error codes: `docs/development/mdm-001-master-data-loader.md
     access, and the rule is always removed.
   - Guard P13 fails if the vault is not deny-by-default or if the workflow stops closing its rule.
 - **ACR:** public endpoint with Entra RBAC only. The GitHub-hosted runner pushes images, and ACR Basic
-  has no network rules.
+  has no network rules. It pushes an image only when its tag `paquetenvia-<image>:<sha>` does not exist yet, and
+  locks the tag right after (`--write-enabled false`), so no run can replace the bytes a commit's tag names
+  (ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21, §6.2). The deployer's *Contributor* already covers that lock: on a
+  registry in *RBAC Registry Permissions* mode it has full data plane access, the same access the push needs.
 - **Deployer:** *Contributor* plus *Role Based Access Control Administrator* on the resource group
   only, constrained by an ABAC condition to the seven roles the templates assign (see bootstrap).
   The templates never assign Owner, Contributor, User Access Administrator, Storage Blob Data Owner or
@@ -1020,7 +1094,7 @@ Details, format and error codes: `docs/development/mdm-001-master-data-loader.md
 
 ## 8. Static guards (`tools/azr-001/env001_pilot_guards.py`)
 
-The 26 guards (P00–P25) run on the compiled ARM output, the workflow, the pilot Dockerfiles and the restore drill
+The 28 guards (P00–P27) run on the compiled ARM output, the workflow, the pilot Dockerfiles and the restore drill
 script:
 
 - **Resources:** only authorized resource types and exactly six workloads. Redis, Azure SignalR,
@@ -1122,6 +1196,31 @@ script:
   `deploy/`, `.github/`, `tools/` and the operations and development docs: the name prefix appears only in the two
   defaults, the guards' prefix constant and the drill script's check, and every docs line that names the server also
   names `PILOT_POSTGRES_SERVER_NAME`.
+- **Revision check and image digests (P26, ENV-001 F-05/F-06):** after stage 4 and before the smoke test, one
+  unconditional step (`id: revisions`) reads this run's three images from `steps.images.outputs` and, for
+  `ca-pv-pilot-api`, `ca-pv-pilot-worker` and `ca-pv-pilot-web` in that order, polls `latestRevisionName` against
+  `latestReadyRevisionName` (`polls_left=40`, `sleep 15`), then requires the ready revision's
+  `template.containers[].image` to equal this run's digest and the revision to be `active` and `Healthy`. A ready
+  revision on another image is polled again within the same budget, never failed at once; every failure carries the
+  `az containerapp logs show ... --type system` hint. The always-run summary step reads the four image
+  outputs and the three serving revisions. The unit tests also run the step with a stand-in `az`: ready on the first
+  poll, ready after some polls, never ready, a first deploy never ready, one poll budget for the three apps, a ready
+  revision on another image that is then replaced by this run's (passes) or stays until the wait ends (fails, naming
+  the revision, the image it runs and this run's image), unhealthy or inactive, a revision the start step re-activated
+  after a real restore, the new revision that replaces it, and an image without a digest.
+- **One image per commit, locked tags (P27, ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21):** the unconditional images
+  step (`id: images`, `shopt -s inherit_errexit`, so a failure inside `build()` fails it) lists the registry's
+  repositories and the tags of `paquetenvia-<image>`; when the tag `<tested_git_sha>` exists it reuses that tag's
+  digest (`reusing ...`), otherwise (`building ...`) it runs the one `docker build --pull` and the one `docker push`.
+  Then it locks the tag with the workflow's one `az acr repository update ... --write-enabled false` and reads it back
+  (same digest, `writeEnabled` false), and reports each image right after its `build()` call, with
+  `<image>_source` = `reused` or `built`, which the always-run summary shows. Nothing in the workflow unlocks,
+  deletes, untags or imports an image. The unit tests run the step with a stand-in `az` and `docker` sharing one
+  registry: every tag present (locked or not) is reused with no build or push and ends locked; an empty registry
+  builds and pushes the four images, each locked and read back right after its push; only the missing images of the
+  commit are built; a push over an existing locked tag is refused and stops the step; a tag that does not read back
+  locked on the digest stops it; a failing registry read stops it before any build; a failed build stops it; a
+  checkout other than `tested_git_sha` stops it before the registry.
 
 The unit tests compile the real templates whenever the pinned Bicep CLI is present (the azr-static CI
 job installs it). They mutate the ARM output to prove that each guard fails closed.
@@ -1134,7 +1233,7 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
 **Verified without Azure:**
 
 - `bicep build` and `bicep lint` pass with the pinned v0.47.16, with no warnings.
-- 26/26 pilot guards (P00–P25) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
+- 28/28 pilot guards (P00–P27) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
   tooling tests. The gitleaks scan was not re-run for OBS-002.
 - The SCL-007 PostgreSQL connection and resource alerts build and lint with no diagnostic, and P21 pins them.
 - The OBS-002 alert and workbook queries parse and type-check offline (Kusto language service).
@@ -1151,6 +1250,10 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
   image. That run used a local `postgres` superuser, so it did not use `--azure-ownership-bridge`.
   `DbOpsImageArchitectureTests` fails if a file the migrator reads is not copied into every
   `deploy/**/Dockerfile.db-ops*`.
+- ENV-001 F-05: CI builds every Dockerfile under `deploy/azure` (the four pilot images and the two DEV-SYNTHETIC
+  ones) with the pilot workflow's build arguments, checks that none runs as uid 0 and that both db-ops images pass
+  `verify`, on every PR that touches a file those images are built from and on every Foundation run
+  (`docs/development/branching-and-ci.md`, *Deploy image build smoke*).
 
 **Unverified until the first real deployment:**
 
@@ -1195,6 +1298,27 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
     scope change only for metric rules based on logs);
   - `az containerapp revision set-mode`, `deactivate` and `activate` on the API and Worker, and `apps.bicep` putting
     them back in single revision mode.
+- ENV-001 F-06 revision check, checked against Microsoft Learn (*Revisions*: in single revision mode "the existing
+  active revision isn't deactivated until the new revision is ready") and the ARM reference (`latestRevisionName`,
+  `latestReadyRevisionName`, revision `active`, `healthState` Healthy/Unhealthy/None, `template.containers[].image`),
+  never against Azure:
+  - that `latestRevisionName` names the new revision once stage 4's `az deployment group create` returns (the check
+    tolerates the previous revision still being reported as latest and ready: it waits within the same budget), and
+    that the revision's `template.containers[].image` is the exact `<registry>/paquetenvia-<image>@sha256:...` string
+    stage 4 passed;
+  - what `latestReadyRevisionName` and `healthState` show right after the start step re-activates a revision stopped
+    for a real restore (§6.4 step 5). The check tolerates a transient `None` or `Unhealthy` within its wait, so either
+    behaviour passes once the replicas are healthy;
+  - that the Web, which has no explicit probes, reports `Healthy` through the default probes Container Apps adds.
+- ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21 image reuse and tag lock, checked against Microsoft Learn (*Lock a
+  container image*: `az acr repository update --image <repo>:<tag> --write-enabled false` locks a tag "so that it
+  can't be deleted or updated", `az acr repository show --image <repo>:<tag>` shows its attributes; *Azure Container
+  Registry roles directory reference*: in *RBAC Registry Permissions* mode *Contributor* has the same full data plane
+  access as *Owner*, including "repository, image, digest, and tag locking") and the Azure CLI source (`show` of a tag
+  returns its `digest` and `changeableAttributes`), never against Azure:
+  - the exact text a refused push prints, and that the pilot registry is in *RBAC Registry Permissions* mode (in the
+    ABAC mode *Contributor* has no data plane access, and the existing push would already fail);
+  - the output of `az acr repository list` and `show-tags` on a registry with no repository yet.
 - OBS-003:
   - ARM acceptance of the workspace-based component;
   - that the exporter reaches the Mexico Central ingestion endpoint from inside the VNet, and the real volume
