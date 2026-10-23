@@ -512,8 +512,8 @@ Two further caveats:
      with every dependency, then copies `node_modules` from a stage that runs `pnpm install --prod --frozen-lockfile`
      on the manifest, the lockfile and `pnpm-workspace.yaml` alone, so `vite`, `vitest`, ESLint and TypeScript are not
      in it. The CI smoke fails if the image's pnpm store holds a package outside the lockfile's production graph, and
-     it starts the image without a network and requires `GET /` to answer 200. The one devDependency left is
-     `@types/node` (type declarations), which `sharp` links as an optional peer.
+     it runs `next start` in the image without a network and requires `GET /` to answer 200. The one devDependency left
+     is `@types/node` (type declarations), which `sharp` links as an optional peer.
    - After stage 4, the step *Check that the new API, Worker and Web revisions serve this run's images* waits, for
      each app, until its latest revision is ready, runs this run's digest and is active and `Healthy` (at
      most about 10 minutes for the three apps). A ready revision on another image counts as not ready yet, because

@@ -339,7 +339,7 @@ jobs:
       # broken Dockerfile fails here and not during a deploy. Each image must run as a non-root uid, and each db-ops image
       # must pass the migrator's `verify` (it needs no database: every migration source the migrator reads is in the
       # image). Each web image must ship the production dependencies of apps/web and nothing else (its pnpm store is read
-      # against the lockfile by tools/ci/web_image_dependencies.py), and `next start` must answer GET / with 200, offline
+      # against the lockfile by tools/ci/web_image_dependencies.py), and `next start` must serve GET / with 200, offline
       # and as the image's own user. Nothing is pushed and Azure is never contacted. tools/ci/test_image_build_smoke.py
       # keeps this list equal to the Dockerfiles under deploy/azure and to the images the pilot workflow builds.
       - name: Build and smoke-test the deploy images (no push)
@@ -348,31 +348,29 @@ jobs:
           set -euo pipefail
           source_sha="$(git rev-parse HEAD)"
           built=()
-          container=""
-          trap 'if [[ -n "${container}" ]]; then docker rm --force "${container}" > /dev/null || true; fi; if [[ ${#built[@]} -gt 0 ]]; then docker image rm --force "${built[@]}" > /dev/null || true; fi' EXIT
+          trap 'if [[ ${#built[@]} -gt 0 ]]; then docker image rm --force "${built[@]}" > /dev/null || true; fi' EXIT
+          # The web start check runs in the image, offline, as its user: it calls nextStart (next/dist/cli/next-start, the
+          # function `next start` runs), whose promise resolves once the server listens and its handlers are ready, then
+          # sends one GET / and exits 0 only on 200. No polling: a server that cannot start exits non-zero, and one that
+          # is not ready within 120 s fails. The image's own command, node_modules/.bin/next, must be executable.
+          start_probe='const fs = require("node:fs");
+          fs.accessSync("node_modules/.bin/next", fs.constants.X_OK);
+          setTimeout(() => { console.error("next start was not ready within 120 s"); process.exit(1); }, 120000).unref();
+          process.env.NEXT_RUNTIME = "nodejs";
+          require("next/dist/cli/next-start").nextStart({ port: 3000 })
+            .then(() => fetch("http://127.0.0.1:3000/"))
+            .then((response) => { console.log(`GET / answered ${response.status}`); process.exit(response.status === 200 ? 0 : 1); },
+              (error) => { console.error(error); process.exit(1); });'
           # web_check NAME DOCKERFILE IMAGE: every package in the image's pnpm store is in the production graph of
-          # apps/web/pnpm-lock.yaml and every production dependency is there; then `next start` answers GET / with 200,
-          # without a network, as the image's own user (a server that exits fails at once, one that never answers in 60 s).
+          # apps/web/pnpm-lock.yaml and every production dependency is there; then the start check.
           web_check() {
-            local name="$1" dockerfile="$2" image="$3" attempt
+            local name="$1" dockerfile="$2" image="$3"
             docker run --rm --network none --entrypoint ls "${image}" -1A /app/node_modules/.pnpm \
               | python ./tools/ci/web_image_dependencies.py --name "${name}" --dockerfile "${dockerfile}"
-            container="$(docker run --detach --network none "${image}")"
-            for attempt in $(seq 1 60); do
-              if docker exec "${container}" node -e 'fetch("http://127.0.0.1:3000/").then((response) => process.exit(response.status === 200 ? 0 : 1), () => process.exit(1))'; then
-                echo "${name}: next start answered GET / with 200 (attempt ${attempt})"
-                docker rm --force "${container}" > /dev/null
-                container=""
-                return 0
-              fi
-              if [[ "$(docker inspect --format '{{.State.Running}}' "${container}")" != true ]]; then
-                break
-              fi
-              sleep 1
-            done
-            docker logs "${container}" || true
-            echo "::error file=${dockerfile}::${name}: next start did not answer GET / with 200"
-            return 1
+            if ! docker run --rm --network none --entrypoint node "${image}" -e "${start_probe}"; then
+              echo "::error file=${dockerfile}::${name}: next start did not serve GET / with 200"
+              return 1
+            fi
           }
           # smoke NAME DOCKERFILE verify|web|no-verify [docker build arguments...]
           smoke() {
