@@ -18,8 +18,9 @@ public sealed class PublicTrackingPwaPlaywrightTests(
     [Trait("Category", "PublicTrackingPwa")]
     public async Task Real_api_signalr_next_and_chromium_render_without_persisting_or_logging_token()
     {
-        var nextPort = DriverStopsNextServer.ReservePort();
-        var nextOrigin = $"http://127.0.0.1:{nextPort}";
+        // The API allows the web origin before next starts; the lease keeps its port until the test ends.
+        using var nextPort = LoopbackPortLease.Acquire();
+        var nextOrigin = $"http://127.0.0.1:{nextPort.Port}";
         var recorder = new RealtimeAuthorizationRecorder();
         await using var api = new RealtimeKestrelWebApplicationFactory(
             database.ApplicationConnectionString,
