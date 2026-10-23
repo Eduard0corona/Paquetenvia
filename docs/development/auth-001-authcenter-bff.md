@@ -173,8 +173,8 @@ implementado en §14.3: un 403 de `PrivilegedMfa` sin `mfa` en `amr` lleva el c�
   las rewrites al evaluar la configuración en `next dev`/`next build` (quedan en el routes
   manifest). Sin la variable no se agregan rewrites (caso del ingress, que es el del piloto).
 - La lógica de rewrites vive **dentro** de `next.config.ts`, sin imports relativos: la imagen de
-  runtime (`deploy/azure/Dockerfile.web`) solo copia `.next`, `node_modules`, `public`,
-  `package.json` y `next.config.ts`, y `next start` evalúa la configuración. Una prueba
+  runtime (`deploy/azure/Dockerfile.web`) solo copia `.next`, `node_modules` (sólo dependencias de
+  producción), `public`, `package.json` y `next.config.ts`, y `next start` evalúa la configuración. Una prueba
   (`src/lib/api-proxy.test.ts`) verifica que el único import sea `next`.
 - `deploy/azure/Dockerfile.web` declara `NEXT_PUBLIC_AUTH_MODE` como `ARG`/`ENV` de build
   (guarda AZR-001 G06). Sin valor, la web queda en el modo previo.
