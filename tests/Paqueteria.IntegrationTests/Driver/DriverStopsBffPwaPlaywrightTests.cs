@@ -43,6 +43,7 @@ public sealed class DriverStopsBffPwaPlaywrightTests(DriverStopsBffNextServerFix
         using var playwright = await Playwright.CreateAsync();
         await using var browser = await DriverBffSession.LaunchAsync(playwright);
         await using var context = await DriverBffSession.NewContextAsync(browser);
+        await using var trace = await PlaywrightFailureTrace.StartAsync(context);
         var page = await context.NewPageAsync();
         await DriverBffSession.BlockUnfulfilledAsync(page, server.BaseAddress);
         await DriverOrganizationRoles.RouteAsync(page);
@@ -107,6 +108,7 @@ public sealed class DriverStopsBffPwaPlaywrightTests(DriverStopsBffNextServerFix
         {
             await context.SetOfflineAsync(false);
         }
+        trace.Passed();
     }
 
     [Fact]
@@ -116,6 +118,7 @@ public sealed class DriverStopsBffPwaPlaywrightTests(DriverStopsBffNextServerFix
         using var playwright = await Playwright.CreateAsync();
         await using var browser = await DriverBffSession.LaunchAsync(playwright);
         await using var context = await DriverBffSession.NewContextAsync(browser);
+        await using var trace = await PlaywrightFailureTrace.StartAsync(context);
         var page = await context.NewPageAsync();
         await DriverBffSession.BlockUnfulfilledAsync(page, server.BaseAddress);
         var signedIn = false;
@@ -169,6 +172,7 @@ public sealed class DriverStopsBffPwaPlaywrightTests(DriverStopsBffNextServerFix
         var again = page.GetByRole(AriaRole.Link, new() { Name = "Iniciar sesión" });
         await again.WaitForAsync();
         Assert.Equal("/login?return_url=%2Fdriver%2Fstops", await again.GetAttributeAsync("href"));
+        trace.Passed();
     }
 
     private static Task RouteStopsAsync(IPage page) =>

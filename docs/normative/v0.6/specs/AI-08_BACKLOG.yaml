@@ -1464,11 +1464,13 @@ items:
   - restore drill evidence is current before pilot start
   - 'DECIDED PILOT-SAME-ORIGIN-ROUTING: the Azure ingress sends /api, /hubs, /auth and /signin-authcenter to the API'
   - 'DECIDED OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20 (project owner, "Que el despliegue lo siga (Recommended)"): after a real restore the pilot follows the restored PostgreSQL server - the server is one setting, the azure-pilot variable PILOT_POSTGRES_SERVER_NAME (empty = the first server, the unchanged template default), validated before Azure; a named server must exist and be adoptable in place before stage 2; the migration connection, the runtime credentials and logins (regenerated when their host is not the server in service), the jobs, the SCL-007 alerts and restore-drill.sh follow it; the original server is never deleted by the deployment and keeps its backups until the owner deletes it (env-001 README section 6.4)'
+  - 'DECIDED ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21 (project owner, "Reusar la imagen (Recommended)"): the pilot deploy builds an image once per commit - when paquetenvia-<name>:<tested_git_sha> is already in the pilot registry it reuses that digest and builds and pushes nothing, so a rollback deploys the same bytes; otherwise it builds on the unpinned bases (a base patch reaches the pilot with the next commit) and pushes; each tag is then locked (az acr repository update --write-enabled false) and read back, so the registry refuses a push over it; a failing registry read or lock stops the run before any build; every later step uses the digest (env-001 README section 6.2)'
   required_tests:
   - migrator Clean and Applied paths on the pilot database
   - restore drill
   - readiness checks green with production adapters enabled
   - pilot static guard and workflow step tests - PILOT_POSTGRES_SERVER_NAME format and default, the server named only through the setting, adoption refused for a missing or unadoptable server, kept runtime credentials regenerated on a host change without printing a secret, failing closed on every drift
+  - pilot images step tests - an existing paquetenvia-<name>:<tested_git_sha> reused with no build or push, a missing one built, pushed, locked and read back, a push over an existing locked tag refused, a failing registry read stopping the step before any build, and guard P27 keeping the reuse branch
   approval_gate: owner_technology_operations
 - id: ADP-001
   decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)

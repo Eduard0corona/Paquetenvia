@@ -13,8 +13,9 @@ public sealed class DriverStopsRealtimePlaywrightTests(
     [Trait("Category", "DriverStopsPwa")]
     public async Task Real_DriverHub_signal_debounces_and_resynchronizes_from_REST()
     {
-        var nextPort = DriverStopsNextServer.ReservePort();
-        var nextOrigin = $"http://127.0.0.1:{nextPort}";
+        // The API allows the web origin before next starts; the lease keeps its port until the test ends.
+        using var nextPort = LoopbackPortLease.Acquire();
+        var nextOrigin = $"http://127.0.0.1:{nextPort.Port}";
         var recorder = new RealtimeAuthorizationRecorder();
         var scenario = await database.CreateDriverAudienceOutboxScenarioAsync(
             available: false);

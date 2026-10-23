@@ -334,6 +334,47 @@ jobs:
       - name: Run AZR-001 §28 static guards
         run: python ./tools/azr-001/azr001_static_guards.py check --arm-dir "${RUNNER_TEMP}/azr001-arm"
 
+      # ENV-001 F-05: build every image the Azure deploy workflows build, from the same Dockerfiles, build context and
+      # build arguments as deploy-azure-pilot.yml (the pilot web without a support link while GATE-001 is open), so a
+      # broken Dockerfile fails here and not during a deploy. Each image must run as a non-root uid, and each db-ops image
+      # must pass the migrator's `verify` (it needs no database: every migration source the migrator reads is in the
+      # image). Nothing is pushed and Azure is never contacted. tools/ci/test_image_build_smoke.py keeps this list equal
+      # to the Dockerfiles under deploy/azure and to the images the pilot workflow builds.
+      - name: Build and smoke-test the deploy images (no push)
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_sha="$(git rev-parse HEAD)"
+          built=()
+          trap 'if [[ ${#built[@]} -gt 0 ]]; then docker image rm --force "${built[@]}" > /dev/null || true; fi' EXIT
+          # smoke NAME DOCKERFILE verify|no-verify [docker build arguments...]
+          smoke() {
+            local name="$1" dockerfile="$2" check="$3" started="${SECONDS}" image uid
+            shift 3
+            image="pv-image-smoke-${name}:${source_sha}"
+            echo "::group::docker build ${dockerfile}"
+            docker build --pull --file "${dockerfile}" --build-arg "SOURCE_SHA=${source_sha}" "$@" --tag "${image}" .
+            echo "::endgroup::"
+            built+=("${image}")
+            uid="$(docker run --rm --network none --entrypoint id "${image}" -u)"
+            if [[ ! "${uid}" =~ ^[0-9]+$ || "${uid}" == 0 ]]; then
+              echo "::error file=${dockerfile}::${name} runs as uid '${uid}'; every deploy image must run as a non-root user"
+              return 1
+            fi
+            if [[ "${check}" == verify ]]; then
+              docker run --rm --network none "${image}" verify
+            fi
+            echo "${name}: ${dockerfile} built and checked in $((SECONDS - started)) s (uid ${uid})"
+          }
+          smoke pilot-api deploy/azure/Dockerfile.api no-verify
+          smoke pilot-worker deploy/azure/Dockerfile.worker no-verify
+          smoke pilot-db-ops deploy/azure/pilot/Dockerfile.db-ops verify
+          smoke dev-db-ops deploy/azure/Dockerfile.db-ops verify
+          smoke pilot-web deploy/azure/pilot/Dockerfile.web no-verify --build-arg "NEXT_PUBLIC_TRACKING_SUPPORT_URL="
+          smoke dev-web deploy/azure/Dockerfile.web no-verify --build-arg "NEXT_PUBLIC_API_BASE_URL=https://api.example.invalid"
+          echo "${#built[@]} images built and checked in ${SECONDS} s"
+          df -h / | tail -n 1
+
   dotnet:
     name: Build and test .NET
     needs: classify
