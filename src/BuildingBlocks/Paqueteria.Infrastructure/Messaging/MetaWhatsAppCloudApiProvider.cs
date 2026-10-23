@@ -59,7 +59,8 @@ internal sealed class MetaWhatsAppCloudApiProvider(
             return Log(new(MessagingOutcome.PermanentFailure, MessagingResultCodes.TemplateNotConfigured), null);
         }
 
-        if (!MessagingHttp.AreParametersValid(request.Parameters, template.ParameterCount))
+        if (!MessagingHttp.AreParametersValid(request.Parameters, template.ParameterCount) ||
+            !MessagingHttp.AreExtrasValid(request))
         {
             return Log(new(MessagingOutcome.PermanentFailure, MessagingResultCodes.TemplateParametersInvalid), null);
         }
@@ -75,7 +76,7 @@ internal sealed class MetaWhatsAppCloudApiProvider(
             ["recipient_type"] = "individual",
             ["to"] = to,
             ["type"] = "template",
-            ["template"] = BuildTemplate(template, request.Parameters),
+            ["template"] = BuildTemplate(template, request),
         };
         var uri = new Uri(
             $"{meta.BaseUri.TrimEnd('/')}/{Uri.EscapeDataString(meta.ApiVersion)}/{Uri.EscapeDataString(meta.PhoneNumberId)}/messages",
@@ -149,25 +150,56 @@ internal sealed class MetaWhatsAppCloudApiProvider(
         };
     }
 
-    private static JsonObject BuildTemplate(WhatsAppTemplateOptions template, IReadOnlyList<string> parameters)
+    /// <summary>
+    /// The template object of a send: the body parameters and, for a recipient notice (AI-24
+    /// <c>recipient_notices.templates.whatsapp</c>, NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 L4 choice 9), the URL button
+    /// "Ver seguimiento" as the first button (index 0, its dynamic suffix) and the quick reply "No recibir avisos" as the
+    /// second (index 1, its payload). The approved template must declare the buttons in that order.
+    /// </summary>
+    internal static JsonObject BuildTemplate(WhatsAppTemplateOptions template, MessagingRequest request)
     {
         var result = new JsonObject
         {
             ["name"] = template.Name,
             ["language"] = new JsonObject { ["code"] = template.LanguageCode },
         };
-        if (parameters.Count > 0)
+        var components = new JsonArray();
+        if (request.Parameters.Count > 0)
         {
             var values = new JsonArray();
-            foreach (var parameter in parameters)
+            foreach (var parameter in request.Parameters)
             {
                 values.Add(new JsonObject { ["type"] = "text", ["text"] = parameter });
             }
 
-            result["components"] = new JsonArray
+            components.Add(new JsonObject { ["type"] = "body", ["parameters"] = values });
+        }
+
+        if (request.UrlButtonSuffix is { } suffix)
+        {
+            components.Add(new JsonObject
             {
-                new JsonObject { ["type"] = "body", ["parameters"] = values },
-            };
+                ["type"] = "button",
+                ["sub_type"] = "url",
+                ["index"] = "0",
+                ["parameters"] = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = suffix } },
+            });
+        }
+
+        if (request.QuickReplyPayload is { } payload)
+        {
+            components.Add(new JsonObject
+            {
+                ["type"] = "button",
+                ["sub_type"] = "quick_reply",
+                ["index"] = "1",
+                ["parameters"] = new JsonArray { new JsonObject { ["type"] = "payload", ["payload"] = payload } },
+            });
+        }
+
+        if (components.Count > 0)
+        {
+            result["components"] = components;
         }
 
         return result;

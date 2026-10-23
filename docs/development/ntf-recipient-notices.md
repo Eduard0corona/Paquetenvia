@@ -7,7 +7,10 @@ AI-24 `recipient_notices`. Ítems de backlog: AI-08 NTF-002 a NTF-008, más las 
 
 **Estado: contratos (PR-0) y, con AI-08 NTF-002 (PR-1), el correo opcional del destinatario, las columnas de
 Locations y el sellado con la llave de avisos solo para envolver, apagado por omisión y en el piloto
-([`ntf-002-recipient-contact.md`](ntf-002-recipient-contact.md)). Nada se envía ni está encendido.** GATE-004 y
+([`ntf-002-recipient-contact.md`](ntf-002-recipient-contact.md)); con AI-08 NTF-003 (PR-2), el carril de notificaciones
+([`ntf-003-notifications-lane.md`](ntf-003-notifications-lane.md)); con AI-08 NTF-005 (PR-4), la entrega en el Worker y
+la función de conteo de los topes ([`ntf-005-recipient-notice-delivery.md`](ntf-005-recipient-notice-delivery.md),
+`NTF-RECIPIENT-NOTICE-CAPS-2026-10-23`). Nada se envía ni está encendido.** GATE-004 y
 GATE-007 siguen abiertas; solo el cambio que registre sus filas de resolución enciende los avisos.
 
 ## Arquitectura
@@ -57,7 +60,7 @@ el motivo (E4-P5). Cada mensaje lleva solo el número de guía y el enlace de se
 - Correo solo si el destino tiene correo (campo opcional nuevo en "Dónde"). Con los dos, se mandan los dos (E4-P11).
 - De 8:00 a 21:00 hora de `America/Mazatlan`; lo de fuera espera a las 8:00 y se manda solo si sigue aplicando
   (E4-P10). Un aviso de más de 12 h (sin contar esa espera) no se manda. Topes: 8 por orden y canal, 500 por canal al
-  día.
+  día en toda la plataforma, contados con `security.read_recipient_notice_counts` (`NTF-RECIPIENT-NOTICE-CAPS-2026-10-23`).
 
 ### Datos personales y llaves
 
@@ -109,7 +112,7 @@ SEC-2026-13 (back-sync #286): hasta entonces fallan al restaurar con NU1903.
 | PR-0 | docs | Este cambio: fila de decisión, contratos, ADR, CHANGELOG, integridad | ninguna | sí |
 | PR-1 | NTF-002 | `DestinationAddressInput.email` y `RecipientEmailPolicy`; hash de la cotización solo con correo; columnas de Locations y su DDL en AI-06; protector de la llave de avisos; campo del asistente; `docs/legal` | carril Locations; el `Down` se niega con valores | sí (sin datos reales antes de GATE-007) |
 | PR-2 | NTF-003 | Carril Notifications: plantillas, columnas, estados, almacén de bajas, `resolve_outbox_consumer`, funciones v2; parser de tiempo real y AI-12 v2 | carril Notifications; el `Down` se niega con filas externas o bajas | sí (inerte, sin productor) |
-| PR-4 | NTF-005 | Envío en el Worker: rutas por canal, expansión, horario, caducidad, topes, lectores, descifrado en memoria, enlace, bajas, botón URL y respuesta rápida, correo con `List-Unsubscribe`, ids de decisión al iniciar | ninguna | sí (todo apagado) |
+| PR-4 | NTF-005 | Envío en el Worker: rutas por canal, expansión, horario, caducidad, topes, lectores, descifrado en memoria, enlace, bajas, botón URL y respuesta rápida, correo con `List-Unsubscribe`, ids de decisión al iniciar | carril Notifications `20261023000100_AddRecipientNoticeCounts` (función de conteo de los topes y dos índices, L1; el `Down` solo los quita) | sí (todo apagado) |
 | PR-3 | NTF-004 | `RecipientNoticeRequestPolicy`, INSERT en ORD-002, permiso de WhatsApp en `createOrder` y CSV, tabla de permisos, casillas | carril Orders (append-only; el `Down` se niega con filas) | sí, después de PR-4 |
 | PR-5 | NTF-006 | Webhooks de Meta y Event Grid, acuses, bajas, respuesta automática, baja por correo y su página, rol `paqueteria_notification_receipt_executor` con su DDL en AI-18 | carril Notifications (acuses) | sí (cargas firmadas falsas) |
 | PR-6 | NTF-007 | `listOrderRecipientNotices`, `stopOrderRecipientNotices`, panel y tiempo real | ninguna | sí |

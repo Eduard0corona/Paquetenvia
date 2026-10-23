@@ -401,6 +401,11 @@ public sealed class RecipientNoticeLanePostgreSqlContractTests(PostgreSqlContrac
     [InlineData(21, 30, 1)]
     [InlineData(6, 0, 0)]
     [InlineData(10, 0, -1)]
+    // The two boundaries. AI-24 recipient_notices.quiet_hours.window: "messages leave only from 08:00 (inclusive) to
+    // 21:00 (exclusive) local time". 08:00:00 is inside the window, so the notice leaves at once; 21:00:00 is outside
+    // it, so the notice waits for 08:00 the next day.
+    [InlineData(8, 0, -1)]
+    [InlineData(21, 0, 1)]
     public async Task Expansion_holds_a_notice_outside_the_quiet_hours_window_until_its_next_start(int hour, int minute, int dayOffset)
     {
         await using var admin = await fixture.AdminDataSource.OpenConnectionAsync();

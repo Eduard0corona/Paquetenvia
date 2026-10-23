@@ -74,7 +74,7 @@ internal abstract class SyntheticMessagingProvider : IMessagingChannelProvider
             return Result(MessagingOutcome.PermanentFailure, MessagingResultCodes.TemplateNotConfigured);
         }
 
-        if (!MessagingHttp.AreParametersValid(request.Parameters, parameterCount))
+        if (!MessagingHttp.AreParametersValid(request.Parameters, parameterCount) || !MessagingHttp.AreExtrasValid(request))
         {
             return Result(MessagingOutcome.PermanentFailure, MessagingResultCodes.TemplateParametersInvalid);
         }

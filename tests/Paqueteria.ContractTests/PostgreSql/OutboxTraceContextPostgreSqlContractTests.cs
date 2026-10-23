@@ -530,11 +530,15 @@ public sealed class OutboxTraceContextPostgreSqlContractTests(PostgreSqlContract
         var ids = context.GetService<IMigrationsAssembly>().Migrations.Keys.Order(StringComparer.Ordinal).ToArray();
         var index = Array.IndexOf(ids, migrationId);
         Assert.True(index > 0, $"{migrationId} must follow an earlier step of its lane");
-        // Only the DP-INDEXES-ORDERS-DISPATCH-2026-10-20 read-index step (Dispatch) and the NTF-RECIPIENT-NOTICES-2026-10-20
-        // recipient notice lane step (Notifications) may follow the OBS-003 steps: rolling back to the previous step reverts
-        // them first; the read-index step touches no outbox object, grant or function, and the recipient notice step keeps
-        // the trace context of every row it writes and restores the OBS-003 emitter on its way down.
-        Assert.All(ids[(index + 1)..], later => Assert.Contains(later, new[] { AddAssignmentReadIndexes.MigrationId, AddRecipientNoticeLane.MigrationId }));
+        // Only the DP-INDEXES-ORDERS-DISPATCH-2026-10-20 read-index step (Dispatch), the NTF-RECIPIENT-NOTICES-2026-10-20
+        // recipient notice lane step and the NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 count step (Notifications) may follow the
+        // OBS-003 steps: rolling back to the previous step reverts them first; the read-index and count steps touch no
+        // outbox writer, and the recipient notice step keeps the trace context of every row it writes and restores the
+        // OBS-003 emitter on its way down.
+        Assert.All(ids[(index + 1)..], later => Assert.Contains(later, new[]
+        {
+            AddAssignmentReadIndexes.MigrationId, AddRecipientNoticeLane.MigrationId, AddRecipientNoticeCounts.MigrationId,
+        }));
         return ids[index - 1];
     }
 

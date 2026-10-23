@@ -16,5 +16,6 @@
     <ProjectReference Include="..\Modules\Organizations\Organizations.Infrastructure\Organizations.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Notifications\Notifications.Infrastructure\Notifications.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Dispatch\Dispatch.Infrastructure\Dispatch.Infrastructure.csproj" />
+    <ProjectReference Include="..\Modules\Locations\Locations.Infrastructure\Locations.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

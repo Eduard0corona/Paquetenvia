@@ -852,6 +852,11 @@ public sealed class DatabaseBaselineAssertions
                 ('security.is_recipient_opted_out(text,bytea[])')) recipient(signature)
               WHERE (SELECT installed FROM recipient_lane)
               UNION ALL
+              -- NTF-RECIPIENT-NOTICE-CAPS-2026-10-23: the Notifications lane step 20261023000100_AddRecipientNoticeCounts
+              -- installs the read-only count of the recipient notice caps after the recipient notice lane step.
+              SELECT 'security.read_recipient_notice_counts(uuid,uuid)','paqueteria_outbox_executor'
+              WHERE to_regprocedure('security.read_recipient_notice_counts(uuid,uuid)') IS NOT NULL
+              UNION ALL
               -- ADR-034: installed by the Orders LIF-001 lane after the baseline.
               SELECT 'security.finalize_expired_orders(integer)','paqueteria_lifecycle_executor'
               WHERE to_regprocedure('security.finalize_expired_orders(integer)') IS NOT NULL
@@ -2759,6 +2764,16 @@ public sealed class DatabaseBaselineAssertions
                 "security.cancel_notification(uuid,uuid,uuid,integer,text,timestamp with time zone)",
                 "security.is_recipient_opted_out(text,bytea[])",
             ];
+        }
+
+        if (ntfInstalled && await ScalarAsync<bool>(
+                connection,
+                transaction,
+                "SELECT to_regprocedure('security.read_recipient_notice_counts(uuid,uuid)') IS NOT NULL",
+                cancellationToken).ConfigureAwait(false))
+        {
+            // NTF-RECIPIENT-NOTICE-CAPS-2026-10-23: the count of the caps; EXECUTE for paqueteria_worker only.
+            workerFunctions = [.. workerFunctions, "security.read_recipient_notice_counts(uuid,uuid)"];
         }
 
         if (dispatchLaneInstalled)

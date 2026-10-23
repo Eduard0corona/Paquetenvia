@@ -239,8 +239,10 @@ public sealed class NotificationsMigrationGuardPostgreSqlTests
         Assert.Equal("UNROUTED", await ScalarTextAsync(connection,
             "SELECT security.resolve_outbox_consumer('orders.recipient-notice-requested')"));
 
+        // NTF-RECIPIENT-NOTICE-CAPS-2026-10-23: the later count step has its own Up, Down and Up test below; this one
+        // stops at the recipient notice lane step.
         await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
-        await migrator.MigrateAsync();
+        await migrator.MigrateAsync(AddRecipientNoticeLane.MigrationId);
         await ExecuteAsync(connection, "RESET ROLE");
         var installed = await NotificationsCatalogAsync(connection);
         Assert.NotEqual(published, installed);
@@ -338,10 +340,89 @@ public sealed class NotificationsMigrationGuardPostgreSqlTests
             "SELECT security.resolve_outbox_consumer('orders.recipient-notice-requested')"));
 
         await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
-        await migrator.MigrateAsync();
+        await migrator.MigrateAsync(AddRecipientNoticeLane.MigrationId);
         await ExecuteAsync(connection, "RESET ROLE");
         Assert.Equal(installed, await NotificationsCatalogAsync(connection));
         Assert.Equal(9, await TemplateCountAsync(connection, owner));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Recipient_notice_count_step_up_down_up_adds_only_the_count_function_and_its_indexes()
+    {
+        // NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 (L1 "Función de conteo (Recommended)"; AI-08 NTF-005):
+        // 20261023000100_AddRecipientNoticeCounts. Up adds security.read_recipient_notice_counts and its two partial
+        // indexes and nothing else; Down restores the recipient notice lane catalog exactly, even with recipient notice
+        // rows present (no row needs the step); Up again reproduces the same catalog.
+        var password = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
+        await using var container = new PostgreSqlBuilder(Image)
+            .WithDatabase("paqueteria_ntf005_counts")
+            .WithUsername("postgres")
+            .WithPassword(password)
+            .WithCleanUp(true)
+            .Build();
+        await container.StartAsync();
+        var connectionString = container.GetConnectionString();
+        var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+        await new DatabaseBaselineDeployer().ApplyAsync(baseline, connectionString);
+
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
+        await using var context = CreateNotificationsContext(connection);
+        var migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync(AddRecipientNoticeLane.MigrationId);
+        await ExecuteAsync(connection, "RESET ROLE");
+        var lane = await NotificationsCatalogAsync(connection);
+        Assert.True(await ScalarBooleanAsync(connection,
+            $"SELECT to_regprocedure('{AddRecipientNoticeCounts.CountsSignature}') IS NULL"));
+
+        await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
+        await migrator.MigrateAsync();
+        await ExecuteAsync(connection, "RESET ROLE");
+        var counts = await NotificationsCatalogAsync(connection);
+        var added = counts.Except(lane).ToArray();
+        Assert.Empty(lane.Except(counts));
+        Assert.Equal(3, added.Length);
+        Assert.Contains(added, line => line.StartsWith(
+            "routine security.read_recipient_notice_counts(uuid,uuid) owner=paqueteria_outbox_executor definer=true " +
+            "config=search_path=pg_catalog, platform, notifications, pg_temp result=TABLE(order_channel_count integer, day_channel_count integer)",
+            StringComparison.Ordinal) && line.EndsWith(
+            "acl=paqueteria_outbox_executor:EXECUTE:false,paqueteria_worker:EXECUTE:false", StringComparison.Ordinal));
+        Assert.Contains(
+            "index notifications CREATE INDEX notifications_recipient_order_channel_idx ON notifications.notifications USING btree (owner_org_id, order_id, channel) WHERE (recipient_kind = 'ORDER_DESTINATION'::text)",
+            added);
+        Assert.Contains(
+            "index notifications CREATE INDEX notifications_recipient_attempt_day_idx ON notifications.notifications USING btree (channel, last_attempt_at) WHERE ((recipient_kind = 'ORDER_DESTINATION'::text) AND (attempts > 0))",
+            added);
+        Assert.True(await ScalarBooleanAsync(connection,
+            $"SELECT EXISTS (SELECT 1 FROM platform.__ef_migrations_history_notifications WHERE \"MigrationId\"='{AddRecipientNoticeCounts.MigrationId}')"));
+        Assert.False(await ScalarBooleanAsync(connection,
+            "SELECT has_table_privilege('paqueteria_worker','notifications.notifications','SELECT') " +
+            $"OR has_function_privilege('paqueteria_app','{AddRecipientNoticeCounts.CountsSignature}','EXECUTE') " +
+            "OR has_schema_privilege('paqueteria_outbox_executor','security','CREATE')"));
+
+        // No row needs the step: a recipient notice that was attempted does not block its rollback.
+        var owner = await RecipientNoticeSeed.InsertOrganizationAsync(connection, "NTF-005 Counts");
+        var (order, orderEvent, _) = await RecipientNoticeSeed.InsertOrderAsync(connection, owner);
+        await ExecuteAsync(connection,
+            $$"""
+            INSERT INTO notifications.notifications(
+              id,owner_org_id,order_id,order_event_id,recipient_kind,channel,status,attempts,version,
+              template_key,template_version,variables_snapshot,source_event_id,last_attempt_at,created_at,updated_at)
+            VALUES(gen_random_uuid(),'{{owner}}','{{order}}','{{orderEvent}}','ORDER_DESTINATION','EMAIL','FAILED',1,2,
+              'recipient.delivered',1,'{"order_public_id":"ORD_x"}'::jsonb,gen_random_uuid(),clock_timestamp(),
+              clock_timestamp(),clock_timestamp())
+            """);
+
+        await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
+        await migrator.MigrateAsync(AddRecipientNoticeLane.MigrationId);
+        await ExecuteAsync(connection, "RESET ROLE");
+        Assert.Equal(lane, await NotificationsCatalogAsync(connection));
+
+        await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
+        await migrator.MigrateAsync();
+        await ExecuteAsync(connection, "RESET ROLE");
+        Assert.Equal(counts, await NotificationsCatalogAsync(connection));
     }
 
     /// <summary>

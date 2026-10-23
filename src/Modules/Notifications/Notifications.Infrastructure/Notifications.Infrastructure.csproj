@@ -7,6 +7,7 @@
     <ProjectReference Include="../Notifications.Domain/Notifications.Domain.csproj" />
     <ProjectReference Include="../../Identity/Identity.Application/Identity.Application.csproj" />
     <ProjectReference Include="../../Organizations/Organizations.Application/Organizations.Application.csproj" />
+    <ProjectReference Include="../../Orders/Orders.Application/Orders.Application.csproj" />
     <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Application/Paqueteria.Application.csproj" />
     <ProjectReference Include="../../../BuildingBlocks/Paqueteria.Infrastructure/Paqueteria.Infrastructure.csproj" />
   </ItemGroup>
