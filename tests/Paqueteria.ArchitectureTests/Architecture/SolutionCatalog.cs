@@ -212,7 +212,10 @@ internal static class SolutionCatalog
         typeof(Notifications.Application.AssemblyReference).Assembly,
         "src/Modules/Notifications/Notifications.Application/Notifications.Application.csproj",
         "Notifications",
-        ["Notifications.Domain", "Identity.Application", "Organizations.Application", "Paqueteria.Application"]);
+        [
+            "Notifications.Domain", "Identity.Application", "Organizations.Application", "Orders.Application",
+            "Paqueteria.Application",
+        ]);
 
     internal static readonly ProjectComponent NotificationsInfrastructure = Component(
         "Notifications.Infrastructure",
@@ -222,7 +225,7 @@ internal static class SolutionCatalog
         "Notifications",
         [
             "Notifications.Application", "Notifications.Domain", "Identity.Application",
-            "Organizations.Application", "Paqueteria.Application", "Paqueteria.Infrastructure",
+            "Organizations.Application", "Orders.Application", "Paqueteria.Application", "Paqueteria.Infrastructure",
         ]);
 
     internal static readonly IReadOnlyList<ModuleDefinition> Modules =
@@ -285,6 +288,7 @@ internal static class SolutionCatalog
             "Organizations.Infrastructure",
             "Notifications.Infrastructure",
             "Dispatch.Infrastructure",
+            "Locations.Infrastructure",
         ]);
 
     internal static IReadOnlyList<ProjectComponent> All { get; } =

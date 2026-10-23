@@ -734,6 +734,14 @@ CREATE TABLE notifications.notifications (
 --     contact hash, the sender number sealed under the recipient-notice key until the one reply attempt (then erased),
 --     received_at, the reply status and its code; at most one automatic reply per contact hash in 24 hours, and one
 --     opt-out confirmation only for the message that records the WhatsApp opt-out of its hash, outside that limit.
+-- NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 (project owner: L1 "Función de conteo (Recommended)" and L2 "Toda la plataforma
+-- (Recommended)"; AI-24 recipient_notices.caps). Installed by the Notifications lane step
+-- 20261023000100_AddRecipientNoticeCounts of AI-08 NTF-005, which holds the DDL (Up, Down and Up again tested on
+-- PostgreSQL; its Down drops only what it adds). Two partial indexes on recipient notices serve the read-only count
+-- function security.read_recipient_notice_counts that AI-18 declares (per order and channel, and per channel and
+-- America/Mazatlan day of the last attempt for the whole platform); no table, column or constraint changes:
+--   CREATE INDEX notifications_recipient_order_channel_idx ON notifications.notifications(owner_org_id,order_id,channel) WHERE recipient_kind='ORDER_DESTINATION';
+--   CREATE INDEX notifications_recipient_attempt_day_idx ON notifications.notifications(channel,last_attempt_at) WHERE recipient_kind='ORDER_DESTINATION' AND attempts>0;
 -- The WhatsApp consent record (E4-P1, AI-08 NTF-004) belongs to the Orders lane: orders.recipient_notice_consents,
 -- append-only, row security by owner_org_id, with order_id, owner_org_id, channel WHATSAPP, consent_version,
 -- attested_by and attested_at; at most one row per order and channel, written in the transaction that creates the order.

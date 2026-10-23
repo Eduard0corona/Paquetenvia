@@ -340,18 +340,22 @@ voice_bridge:
 recipient_notices:
   decisions:
   - NTF-RECIPIENT-NOTICES-2026-10-20
+  - NTF-RECIPIENT-NOTICE-CAPS-2026-10-23
   - GATE-004-CHANNELS
   - NTF-EMAIL-ACS-PILOT-2026-10-11
   - NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02
   - NTF-WHATSAPP-STALE-LEASE-FAILS-2026-10-03
   - TRK-002-AUTO-LINK
   - GATE-001-NEUTRAL-PUBLIC-BRAND-2026-10-10
-  status: DECIDED by the project owner on 2026-10-19 and 2026-10-20 (E4 and E4-P1 to E4-P17). AI-08 NTF-002 is
-    implemented (the optional recipient e-mail, the Locations contact columns and the API's wrap-only recipient-notice
-    sealer, Locations:NoticeKeyProtector Disabled by default and in the pilot, so no notice copy is written yet); nothing
-    else is implemented, configured or enabled. AI-08 NTF-003 to NTF-008 deliver the rest, each item with its own code
-    and tests; only a later change that records the GATE-004 and GATE-007 resolution rows turns it on. GATE-004 and
-    GATE-007 stay open
+  status: DECIDED by the project owner on 2026-10-19 and 2026-10-20 (E4 and E4-P1 to E4-P17), and the caps and the
+    unusable-contact code on 2026-10-23 (NTF-RECIPIENT-NOTICE-CAPS-2026-10-23, L1 to L4). AI-08 NTF-002 is implemented
+    (the optional recipient e-mail, the Locations contact columns and the API's wrap-only recipient-notice sealer,
+    Locations:NoticeKeyProtector Disabled by default and in the pilot, so no notice copy is written yet), AI-08 NTF-003
+    (the Notifications lane step) and AI-08 NTF-005 (the Worker consumer and sender, the count function of the caps, the
+    readers, the unwrap-only notice key and the adapters' buttons and headers), with every switch off and every
+    provider Disabled; nothing is configured or enabled. AI-08 NTF-004 and NTF-006 to NTF-008 deliver the rest, each item
+    with its own code and tests; only a later change that records the GATE-004 and GATE-007 resolution rows turns it on.
+    GATE-004 and GATE-007 stay open
   adr: docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md
   audience: the delivery recipient of the order only, reached at the contact of its destination location; never the
     sender or its business (E4-P13, out of this work until BUS-001), a driver or a dispatcher
@@ -448,8 +452,20 @@ recipient_notices:
     send: a send request past the bound ends CANCELLED with NOTICE_STALE; after an outage the Worker never sends a burst
       of old notices
   caps:
-    per_order: Notifications:RecipientNotices:MaximumPerOrderAndChannel, default 8
-    per_day: Notifications:RecipientNotices:DailyLimitPerChannel, default 500 per calendar day in America/Mazatlan
+    decision: NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 (L1 "Función de conteo (Recommended)", L2 "Toda la plataforma
+      (Recommended)", L5 "Aceptar el conteo estricto (Recommended)")
+    per_order: Notifications:RecipientNotices:MaximumPerOrderAndChannel, default 8; it counts the other notices of the same
+      order and channel with attempts > 0
+    per_day: Notifications:RecipientNotices:DailyLimitPerChannel, default 500 per calendar day in America/Mazatlan, per
+      channel for the whole platform (every organization, one WhatsApp number and one e-mail sender); it counts the other
+      notices of the channel with attempts > 0 on the Mazatlan day of their last attempt
+    counted: attempts is the count security.apply_notification_outcome keeps (every outcome but CANCELLED adds one), so
+      it includes notices that ended FAILED before any provider call (an unusable contact, no live link, the channel
+      disabled); a transient failure before the call settles only the send request and does not count; a cap is
+      therefore reached no later than with provider calls only (L5)
+    count: before any decryption or provider call the Worker asks security.read_recipient_notice_counts (AI-18 recipient
+      notices step 6, the Notifications lane step of NTF-005) under the send request's lease_token, which returns only
+      the two numbers; the Worker never reads notifications.notifications
     reached: CANCELLED with NOTICE_LIMIT_REACHED and one operational log line with allowlisted dimensions only
   validity:
     check: at send time, before any decryption or provider call, from the current order status read under RLS and the
@@ -486,6 +502,9 @@ recipient_notices:
       (MexicanPhonePolicy to E.164 +52, the e-mail policy) and wrapped in MessagingRecipient, whose ToString is
       [redacted]; they go out of scope right after the provider call
     never: in logs, outbox payloads, Notification rows, status events, audit, realtime events, metrics or traces
+    unusable: NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 (L3 "Destinatario inválido (Recommended)") - a notice whose contact
+      cannot be used when it is sent (the notice copy of its channel is gone, altered, or under a key version the Worker
+      cannot open) ends FAILED with MESSAGING_RECIPIENT_INVALID, permanent, with no provider call
     synthetic: CI and DEV_SYNTHETIC never decrypt; the placeholders +520000000002 (as VOICE-001) and
       destinatario@example.invalid are used
   tracking_link:

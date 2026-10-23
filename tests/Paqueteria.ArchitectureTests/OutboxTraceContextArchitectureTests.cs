@@ -186,15 +186,15 @@ public sealed partial class OutboxTraceContextArchitectureTests
         Assert.Contains("NEW.created_at,NEW.trace_parent)", latest["platform.protect_location_outbox_content"], StringComparison.Ordinal);
 
         // The migrator applies both steps. The Notifications one is followed only by the NTF-RECIPIENT-NOTICES-2026-10-20
-        // recipient notice lane step and the Dispatch one only by the DP-INDEXES-ORDERS-DISPATCH-2026-10-20 read-index step;
-        // each keeps its own source rule.
+        // recipient notice lane step and the NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 count step, and the Dispatch one only by
+        // the DP-INDEXES-ORDERS-DISPATCH-2026-10-20 read-index step; each keeps its own source rule.
         var coordinator = File.ReadAllText(TestRepository.GetPath("tools/Paqueteria.DatabaseMigrator/ModuleMigrationCoordinator.cs"));
         Assert.Contains("(\"Dispatch\", \"__ef_migrations_history_dispatch\", AddAssignmentReadIndexes.MigrationId,", coordinator, StringComparison.Ordinal);
         Assert.Contains(
             "AddOutboxTraceContext.MigrationId,\n            \"src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20261013000100_AddOutboxTraceContext.cs\",\n            IsOutboxTraceContextDispatchSource);",
             coordinator.ReplaceLineEndings("\n"),
             StringComparison.Ordinal);
-        Assert.Contains("(\"Notifications\", \"__ef_migrations_history_notifications\", AddRecipientNoticeLane.MigrationId,", coordinator, StringComparison.Ordinal);
+        Assert.Contains("(\"Notifications\", \"__ef_migrations_history_notifications\", AddRecipientNoticeCounts.MigrationId,", coordinator, StringComparison.Ordinal);
         Assert.Contains(
             "CarryOutboxTraceContext.MigrationId,\n            \"src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261013000200_CarryOutboxTraceContext.cs\",\n            IsNotificationsTraceContextSource);",
             coordinator.ReplaceLineEndings("\n"),

@@ -81,6 +81,8 @@ public sealed class E002SemanticAssertions
             .IsRealtimeDispatcherRoleAppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         var recipientNoticeLaneApplied = await E002NotificationStateReader
             .IsRecipientNoticeLaneAppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        var recipientNoticeCountsApplied = await E002NotificationStateReader
+            .IsRecipientNoticeCountsAppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         await AssertSchemaAclAsync(connection, transaction, "security",
             await SecurityAclAsync(connection, transaction, realtimeDispatcherApplied, cancellationToken)
                 .ConfigureAwait(false), violations,
@@ -88,7 +90,8 @@ public sealed class E002SemanticAssertions
         var (identities, aclRows) = await AssertRoutineMapCoreAsync(
             connection, transaction, mapState, lif001Applied, dispatchLaneApplied, ops003Applied, reg001Applied,
             bffSessionApplied, bffPurgeApplied, reg002Applied, mdm001Applied, operatorOutboxApplied,
-            orderAutoCloseApplied, realtimeDispatcherApplied, recipientNoticeLaneApplied, violations, cancellationToken)
+            orderAutoCloseApplied, realtimeDispatcherApplied, recipientNoticeLaneApplied, recipientNoticeCountsApplied,
+            violations, cancellationToken)
             .ConfigureAwait(false);
         await AssertSecurityDefinerAsync(connection, transaction, violations, cancellationToken).ConfigureAwait(false);
         if (violations.Count != 0)
@@ -101,7 +104,7 @@ public sealed class E002SemanticAssertions
             E002RoutineMap.Name(
                 mapState, lif001Applied, dispatchLaneApplied, ops003Applied, reg001Applied, bffSessionApplied, bffPurgeApplied,
                 reg002Applied, mdm001Applied, operatorOutboxApplied, orderAutoCloseApplied, realtimeDispatcherApplied,
-                recipientNoticeLaneApplied),
+                recipientNoticeLaneApplied, recipientNoticeCountsApplied),
             identities,
             aclRows);
     }
@@ -144,7 +147,7 @@ public sealed class E002SemanticAssertions
         await AssertRoutineMapCoreAsync(connection, transaction, E002RoutineMapState.Ntf001TargetApplied,
             lif001Applied, dispatchLaneApplied: false, ops003Applied, reg001Applied, bffSessionApplied, bffPurgeApplied,
             reg002Applied, mdm001Applied, operatorOutboxApplied, orderAutoCloseApplied, realtimeDispatcherApplied: false,
-            recipientNoticeLaneApplied: false, violations, cancellationToken)
+            recipientNoticeLaneApplied: false, recipientNoticeCountsApplied: false, violations, cancellationToken)
             .ConfigureAwait(false);
         if (violations.Count != 0)
         {
@@ -360,12 +363,13 @@ public sealed class E002SemanticAssertions
         bool lif001Applied, bool dispatchLaneApplied, bool ops003Applied, bool reg001Applied, bool bffSessionApplied,
         bool bffPurgeApplied, bool reg002Applied, bool mdm001Applied, bool operatorOutboxApplied,
         bool orderAutoCloseApplied, bool realtimeDispatcherApplied, bool recipientNoticeLaneApplied,
+        bool recipientNoticeCountsApplied,
         ICollection<string> violations, CancellationToken cancellationToken)
     {
         var map = E002RoutineMap.Select(
             mapState, lif001Applied, dispatchLaneApplied, ops003Applied, reg001Applied, bffSessionApplied, bffPurgeApplied,
             reg002Applied, mdm001Applied, operatorOutboxApplied, orderAutoCloseApplied, realtimeDispatcherApplied,
-            recipientNoticeLaneApplied);
+            recipientNoticeLaneApplied, recipientNoticeCountsApplied);
         var expectedOids = new HashSet<uint>();
         var totalRows = 0;
         foreach (var routine in map)

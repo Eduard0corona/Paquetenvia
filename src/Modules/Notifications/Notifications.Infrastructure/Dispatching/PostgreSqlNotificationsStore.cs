@@ -30,6 +30,25 @@ internal sealed record NotificationDelivery(
     public const string OwnerOrganizationUser = "OWNER_ORG_USER";
 }
 
+/// <summary>The recipient kinds of <c>notifications.notifications</c> (NTF-003 <c>notifications_recipient_kind_check</c>).</summary>
+internal static class RecipientNoticeKinds
+{
+    public const string OwnerOrganizationUser = NotificationDelivery.OwnerOrganizationUser;
+    public const string OrderDestination = "ORDER_DESTINATION";
+}
+
+/// <summary>
+/// NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 (L1, L2): the two numbers of the caps for one send request, from
+/// <c>security.read_recipient_notice_counts</c>.
+/// </summary>
+internal sealed record RecipientNoticeCounts(int OrderChannelCount, int DayChannelCount);
+
+/// <summary>
+/// The database clock and America/Mazatlan wall-clock values a recipient notice send needs, converted in SQL with
+/// <c>AT TIME ZONE</c> so the container needs no time-zone data (AI-24 <c>recipient_notices.quiet_hours</c>).
+/// </summary>
+internal sealed record RecipientNoticeClock(DateTimeOffset NowUtc, DateTime NowLocal, DateTime OccurredLocal);
+
 internal interface INotificationsStore
 {
     Task<IReadOnlyList<ClaimedNotificationOutboxMessage>> ClaimNotificationsAsync(string workerId, int batchSize, TimeSpan lease, CancellationToken cancellationToken);
@@ -44,8 +63,39 @@ internal interface INotificationsStore
     Task<string?> ResolveConsumerAsync(string topic, CancellationToken cancellationToken);
 }
 
+/// <summary>
+/// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-005): the recipient notice functions of the lane, each in its own short
+/// transaction under <c>paqueteria_worker</c>; nothing here reads a Notifications table directly.
+/// </summary>
+internal interface IRecipientNoticeStore
+{
+    /// <summary>NTF-005: <c>security.expand_recipient_notice_request</c> under the source row's lease.</summary>
+    Task<string> ExpandRecipientNoticeAsync(ClaimedNotificationOutboxMessage source, bool enabled, TimeSpan maximumDelay, TimeOnly windowStart, TimeOnly windowEnd, string? publicId, IReadOnlyList<string> channels, CancellationToken cancellationToken);
+
+    /// <summary>NTF-005: <c>security.read_recipient_notice_counts</c>; null when the lease is lost or the notice moved on.</summary>
+    Task<RecipientNoticeCounts?> ReadRecipientNoticeCountsAsync(ClaimedNotificationOutboxMessage request, CancellationToken cancellationToken);
+
+    /// <summary>NTF-005: <c>security.is_recipient_opted_out</c> with one keyed hash per configured key version.</summary>
+    Task<bool> IsRecipientOptedOutAsync(string channel, IReadOnlyList<byte[]> contactHashes, CancellationToken cancellationToken);
+
+    /// <summary>NTF-005: <c>security.cancel_notification</c> under the send request's lease.</summary>
+    Task<bool> CancelNotificationAsync(ClaimedNotificationOutboxMessage request, NotificationDelivery delivery, string code, DateTimeOffset occurredAt, CancellationToken cancellationToken);
+
+    /// <summary>NTF-005: <c>security.apply_notification_outcome</c> v2 with the provider reference of an accepted send.</summary>
+    Task<bool> ApplyRecipientOutcomeAsync(ClaimedNotificationOutboxMessage request, NotificationDelivery delivery, string outcome, string code, string? providerReference, DateTimeOffset attemptedAt, DateTimeOffset? availableAt, CancellationToken cancellationToken);
+
+    /// <summary>NTF-005: the database now and the America/Mazatlan wall clock of now and of <paramref name="occurredAt"/>.</summary>
+    Task<RecipientNoticeClock> ReadRecipientNoticeClockAsync(DateTimeOffset occurredAt, CancellationToken cancellationToken);
+
+    /// <summary>NTF-005: the America/Mazatlan wall clock of an instant.</summary>
+    Task<DateTime> ToMazatlanLocalAsync(DateTimeOffset instant, CancellationToken cancellationToken);
+
+    /// <summary>NTF-005: the instant of an America/Mazatlan wall-clock value.</summary>
+    Task<DateTimeOffset> FromMazatlanLocalAsync(DateTime local, CancellationToken cancellationToken);
+}
+
 internal sealed class PostgreSqlNotificationsStore(NotificationsWorkerConnectionFactory connections)
-    : INotificationsStore
+    : INotificationsStore, IRecipientNoticeStore
 {
     public Task<IReadOnlyList<ClaimedNotificationOutboxMessage>> ClaimNotificationsAsync(
         string workerId,
@@ -240,6 +290,181 @@ internal sealed class PostgreSqlNotificationsStore(NotificationsWorkerConnection
         return result;
     }
 
+    public async Task<string> ExpandRecipientNoticeAsync(
+        ClaimedNotificationOutboxMessage source,
+        bool enabled,
+        TimeSpan maximumDelay,
+        TimeOnly windowStart,
+        TimeOnly windowEnd,
+        string? publicId,
+        IReadOnlyList<string> channels,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = await OpenWorkerScopeAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            "SELECT security.expand_recipient_notice_request(@source_id,@lease_token,@enabled,@maximum_delay,@window_start,@window_end,@public_id,@channels);",
+            scope.Connection,
+            scope.Transaction);
+        command.Parameters.Add(P("source_id", NpgsqlDbType.Uuid, source.Id));
+        command.Parameters.Add(P("lease_token", NpgsqlDbType.Uuid, source.LeaseToken));
+        command.Parameters.Add(P("enabled", NpgsqlDbType.Boolean, enabled));
+        command.Parameters.Add(P("maximum_delay", NpgsqlDbType.Interval, enabled ? maximumDelay : null));
+        command.Parameters.Add(P("window_start", NpgsqlDbType.Time, enabled ? windowStart : null));
+        command.Parameters.Add(P("window_end", NpgsqlDbType.Time, enabled ? windowEnd : null));
+        command.Parameters.Add(P("public_id", NpgsqlDbType.Text, publicId));
+        command.Parameters.Add(P("channels", NpgsqlDbType.Array | NpgsqlDbType.Text, enabled ? channels.ToArray() : null));
+        var result = Convert.ToString(
+            await command.ExecuteScalarAsync(cancellationToken),
+            System.Globalization.CultureInfo.InvariantCulture) ?? NotificationErrorCodes.LeaseLost;
+        await scope.Transaction.CommitAsync(cancellationToken);
+        return result;
+    }
+
+    public async Task<RecipientNoticeCounts?> ReadRecipientNoticeCountsAsync(
+        ClaimedNotificationOutboxMessage request,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = await OpenWorkerScopeAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            "SELECT order_channel_count,day_channel_count FROM security.read_recipient_notice_counts(@outbox_id,@lease_token);",
+            scope.Connection,
+            scope.Transaction);
+        command.Parameters.Add(P("outbox_id", NpgsqlDbType.Uuid, request.Id));
+        command.Parameters.Add(P("lease_token", NpgsqlDbType.Uuid, request.LeaseToken));
+        RecipientNoticeCounts? result = null;
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            if (await reader.ReadAsync(cancellationToken))
+            {
+                result = new RecipientNoticeCounts(reader.GetInt32(0), reader.GetInt32(1));
+            }
+        }
+
+        await scope.Transaction.CommitAsync(cancellationToken);
+        return result;
+    }
+
+    public async Task<bool> IsRecipientOptedOutAsync(
+        string channel,
+        IReadOnlyList<byte[]> contactHashes,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = await OpenWorkerScopeAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            "SELECT security.is_recipient_opted_out(@channel,@hashes);",
+            scope.Connection,
+            scope.Transaction);
+        command.Parameters.Add(P("channel", NpgsqlDbType.Text, channel));
+        command.Parameters.Add(P("hashes", NpgsqlDbType.Array | NpgsqlDbType.Bytea, contactHashes.ToArray()));
+        var result = await command.ExecuteScalarAsync(cancellationToken) is true;
+        await scope.Transaction.CommitAsync(cancellationToken);
+        return result;
+    }
+
+    public async Task<bool> CancelNotificationAsync(
+        ClaimedNotificationOutboxMessage request,
+        NotificationDelivery delivery,
+        string code,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = await OpenWorkerScopeAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            "SELECT security.cancel_notification(@outbox_id,@lease_token,@notification_id,@expected_version,@code,@occurred_at);",
+            scope.Connection,
+            scope.Transaction);
+        command.Parameters.Add(P("outbox_id", NpgsqlDbType.Uuid, request.Id));
+        command.Parameters.Add(P("lease_token", NpgsqlDbType.Uuid, request.LeaseToken));
+        command.Parameters.Add(P("notification_id", NpgsqlDbType.Uuid, delivery.NotificationId));
+        command.Parameters.Add(P("expected_version", NpgsqlDbType.Integer, delivery.Version));
+        command.Parameters.Add(P("code", NpgsqlDbType.Text, code));
+        command.Parameters.Add(P("occurred_at", NpgsqlDbType.TimestampTz, occurredAt));
+        var result = await command.ExecuteScalarAsync(cancellationToken) is true;
+        await scope.Transaction.CommitAsync(cancellationToken);
+        return result;
+    }
+
+    public Task<bool> ApplyRecipientOutcomeAsync(
+        ClaimedNotificationOutboxMessage request,
+        NotificationDelivery delivery,
+        string outcome,
+        string code,
+        string? providerReference,
+        DateTimeOffset attemptedAt,
+        DateTimeOffset? availableAt,
+        CancellationToken cancellationToken) =>
+        ExecuteCasAsync(
+            "security.apply_notification_outcome",
+            request,
+            delivery,
+            outcome,
+            code,
+            attemptedAt,
+            availableAt,
+            cancellationToken,
+            providerReference);
+
+    public async Task<RecipientNoticeClock> ReadRecipientNoticeClockAsync(
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = await OpenWorkerScopeAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            """
+            SELECT now_utc, now_utc AT TIME ZONE 'America/Mazatlan', @occurred_at AT TIME ZONE 'America/Mazatlan'
+            FROM (SELECT clock_timestamp() AS now_utc) clock;
+            """,
+            scope.Connection,
+            scope.Transaction);
+        command.Parameters.Add(P("occurred_at", NpgsqlDbType.TimestampTz, occurredAt));
+        RecipientNoticeClock result;
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            await reader.ReadAsync(cancellationToken);
+            result = new RecipientNoticeClock(
+                reader.GetFieldValue<DateTimeOffset>(0),
+                DateTime.SpecifyKind(reader.GetDateTime(1), DateTimeKind.Unspecified),
+                DateTime.SpecifyKind(reader.GetDateTime(2), DateTimeKind.Unspecified));
+        }
+
+        await scope.Transaction.CommitAsync(cancellationToken);
+        return result;
+    }
+
+    public async Task<DateTime> ToMazatlanLocalAsync(DateTimeOffset instant, CancellationToken cancellationToken)
+    {
+        await using var scope = await OpenWorkerScopeAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            "SELECT @instant AT TIME ZONE 'America/Mazatlan';",
+            scope.Connection,
+            scope.Transaction);
+        command.Parameters.Add(P("instant", NpgsqlDbType.TimestampTz, instant));
+        var result = DateTime.SpecifyKind(
+            (DateTime)(await command.ExecuteScalarAsync(cancellationToken))!,
+            DateTimeKind.Unspecified);
+        await scope.Transaction.CommitAsync(cancellationToken);
+        return result;
+    }
+
+    public async Task<DateTimeOffset> FromMazatlanLocalAsync(DateTime local, CancellationToken cancellationToken)
+    {
+        await using var scope = await OpenWorkerScopeAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            "SELECT @local AT TIME ZONE 'America/Mazatlan';",
+            scope.Connection,
+            scope.Transaction);
+        command.Parameters.Add(P("local", NpgsqlDbType.Timestamp, DateTime.SpecifyKind(local, DateTimeKind.Unspecified)));
+        DateTimeOffset result;
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            await reader.ReadAsync(cancellationToken);
+            result = reader.GetFieldValue<DateTimeOffset>(0);
+        }
+
+        await scope.Transaction.CommitAsync(cancellationToken);
+        return result;
+    }
+
     private async Task<bool> ExecuteCasAsync(
         string function,
         ClaimedNotificationOutboxMessage request,
@@ -248,11 +473,12 @@ internal sealed class PostgreSqlNotificationsStore(NotificationsWorkerConnection
         string code,
         DateTimeOffset occurredAt,
         DateTimeOffset? availableAt,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        string? providerReference = null)
     {
         await using var scope = await OpenWorkerScopeAsync(cancellationToken);
         // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-003): apply_notification_outcome v2 takes the provider reference;
-        // the synthetic IN_APP provider has none.
+        // the synthetic IN_APP provider has none, a recipient notice passes the reference of an accepted send (NTF-005).
         var sql = outcome is null
             ? $"SELECT {function}(@outbox_id,@lease_token,@notification_id,@expected_version,@occurred_at);"
             : $"SELECT {function}(@outbox_id,@lease_token,@notification_id,@expected_version,@outcome,@code,@provider_reference,@occurred_at,@available_at);";
@@ -265,7 +491,7 @@ internal sealed class PostgreSqlNotificationsStore(NotificationsWorkerConnection
         {
             command.Parameters.Add(P("outcome", NpgsqlDbType.Text, outcome));
             command.Parameters.Add(P("code", NpgsqlDbType.Text, code));
-            command.Parameters.Add(P("provider_reference", NpgsqlDbType.Text, null));
+            command.Parameters.Add(P("provider_reference", NpgsqlDbType.Text, providerReference));
             command.Parameters.Add(P("available_at", NpgsqlDbType.TimestampTz, availableAt));
         }
 

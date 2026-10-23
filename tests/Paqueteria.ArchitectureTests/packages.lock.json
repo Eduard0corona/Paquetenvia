@@ -721,6 +721,7 @@
         "dependencies": {
           "Identity.Application": "[1.0.0, )",
           "Notifications.Domain": "[1.0.0, )",
+          "Orders.Application": "[1.0.0, )",
           "Organizations.Application": "[1.0.0, )",
           "Paqueteria.Application": "[1.0.0, )"
         }
@@ -735,9 +736,11 @@
         "type": "Project",
         "dependencies": {
           "Identity.Application": "[1.0.0, )",
+          "Locations.Application": "[1.0.0, )",
           "Notifications.Application": "[1.0.0, )",
           "Notifications.Domain": "[1.0.0, )",
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Orders.Application": "[1.0.0, )",
           "Organizations.Application": "[1.0.0, )",
           "Paqueteria.Application": "[1.0.0, )",
           "Paqueteria.Infrastructure": "[1.0.0, )"
@@ -891,6 +894,7 @@
           "Custody.Infrastructure": "[1.0.0, )",
           "Dispatch.Infrastructure": "[1.0.0, )",
           "Identity.Infrastructure": "[1.0.0, )",
+          "Locations.Infrastructure": "[1.0.0, )",
           "Notifications.Infrastructure": "[1.0.0, )",
           "OpenTelemetry.Extensions.Hosting": "[1.19.1, )",
           "Orders.Infrastructure": "[1.0.0, )",

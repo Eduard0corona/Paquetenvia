@@ -502,8 +502,8 @@ REVOKE paqueteria_realtime FROM paqueteria_app, paqueteria_worker, paqueteria_bo
 -- Recipient notices (NTF-RECIPIENT-NOTICES-2026-10-20, project owner: E4 "Los 4 del plan (Recommended)", E4-P2 "Llave
 -- propia para avisos (Recommended)", E4-P8 "Las tres vías (Recommended)" and E4-P9 "Respuesta automática
 -- (Recommended)"; docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md; AI-24 recipient_notices). Each named lane step changes
--- nothing in this baseline: it lands together with its baseline assertions. Step 1 is installed; steps 2 and 3 are
--- declared contract, not installed yet.
+-- nothing in this baseline: it lands together with its baseline assertions. Steps 1 and 6 are installed; steps 2 and 3
+-- are declared contract, not installed yet.
 -- 1. Notifications lane step 20261020000100_AddRecipientNoticeLane of AI-08 NTF-003 (installed).
 --    security.resolve_outbox_consumer(text) gains the branch orders.recipient-notice-requested -> NOTIFICATIONS. New or
 --    replaced functions, each owned by paqueteria_outbox_executor, SECURITY DEFINER with a pinned search_path that starts
@@ -545,6 +545,20 @@ REVOKE paqueteria_realtime FROM paqueteria_app, paqueteria_worker, paqueteria_bo
 --    and it never reaches the PII key (the recipient-notice key is a Key Vault matter, not a database one).
 -- 5. Each step verifies its exact EXECUTE set, owners, SECURITY DEFINER, search_path and column privileges against the
 --    catalog; its Down drops only its functions and refuses while rows that need the new shape exist.
+-- 6. Notifications lane step 20261023000100_AddRecipientNoticeCounts of AI-08 NTF-005 (installed;
+--    NTF-RECIPIENT-NOTICE-CAPS-2026-10-23, project owner: L1 "Función de conteo (Recommended)" and L2 "Toda la plataforma
+--    (Recommended)"; AI-24 recipient_notices.caps). security.read_recipient_notice_counts(uuid,uuid) (send request id and
+--    its lease_token), owned by paqueteria_outbox_executor, SECURITY DEFINER with search_path pg_catalog, platform,
+--    notifications, pg_temp, without dynamic SQL or RETURNING, EXECUTE revoked from PUBLIC and held only by
+--    paqueteria_worker. Only under the live lease_token of a notifications.send-requested row whose recipient notice is
+--    PENDING it returns one row of two integers and nothing else: order_channel_count, the other recipient notices of the
+--    same owner organization, order and channel with attempts > 0, and day_channel_count, the other recipient notices of
+--    that channel on the whole platform (every organization) with attempts > 0 whose last attempt falls on the current
+--    calendar day in America/Mazatlan (computed in SQL); otherwise no row. attempts is the count
+--    security.apply_notification_outcome keeps, so it includes notices that ended before any provider call (L5 "Aceptar el
+--    conteo estricto (Recommended)"). The step adds the
+--    two partial indexes AI-06 declares and no table, column, row, role or table privilege; the runtime roles still gain no
+--    table privilege (step 4). Its Down drops the function and the two indexes.
 
 -- Mandatory deployment assertions:
 -- 1. API login SET ROLE paqueteria_app; Worker login SET ROLE paqueteria_worker. The API's realtime dispatcher login
@@ -586,3 +600,4 @@ REVOKE paqueteria_realtime FROM paqueteria_app, paqueteria_worker, paqueteria_bo
 -- 36. once that step is recorded, paqueteria_realtime holds exactly USAGE on schemas security, orders, dispatch, drivers, identity, organizations and routes, EXECUTE on the six lease-token functions above and SELECT on the 53 columns above, none grantable: no table-wide grant, no INSERT, UPDATE or DELETE, no privilege on either outbox table, no USAGE on platform, no CREATE anywhere and no EXECUTE beyond PUBLIC on any other security, platform, notifications or extensions routine; every column it reads is also readable by paqueteria_app.
 -- 37. the role cannot bypass RLS: every table it reads has ENABLE and FORCE ROW LEVEL SECURITY, so, exactly like paqueteria_app, it reads only the rows the tenant policies admit for the context its own transaction sets: rows of the organizations in app.current_org_ids and, on identity.users and organizations.organization_memberships, also the rows of the user named in app.current_user_id (security.app_current_user(), a setting the session controls). With both settings empty it reads no row; the dispatchers set app.current_user_id empty and exactly one organization in app.current_org_ids, so they read only that organization's rows. Only its two claim functions return rows of every tenant, as described above.
 -- 38. once the Notifications lane step 20261020000100_AddRecipientNoticeLane (NTF-RECIPIENT-NOTICES-2026-10-20) is recorded, security.expand_recipient_notice_request(uuid,uuid,boolean,interval,time,time,text,text[]), security.read_notification_delivery(uuid,uuid), security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,text,timestamptz,timestamptz), security.cancel_notification(uuid,uuid,uuid,integer,text,timestamptz) and security.is_recipient_opted_out(text,bytea[]) are owned by paqueteria_outbox_executor, SECURITY DEFINER with a pinned search_path, and only paqueteria_worker may EXECUTE them; the published 8-argument security.apply_notification_outcome is absent; notifications.recipient_opt_outs has ENABLE and FORCE ROW LEVEL SECURITY with no policy, paqueteria_app, paqueteria_worker, paqueteria_realtime and paqueteria_bootstrap hold no privilege on it and paqueteria_outbox_executor holds SELECT only. Its rollback restores the published routines and grants exactly.
+-- 39. once the Notifications lane step 20261023000100_AddRecipientNoticeCounts (NTF-RECIPIENT-NOTICE-CAPS-2026-10-23) is recorded, security.read_recipient_notice_counts(uuid,uuid) is owned by paqueteria_outbox_executor, SECURITY DEFINER with search_path=pg_catalog, platform, notifications, pg_temp, contains no dynamic SQL and no RETURNING, returns at most one row of two integers and only under a live send-request lease_token, and only paqueteria_worker may EXECUTE it; paqueteria_worker still holds no privilege on notifications.notifications. Its rollback drops the function and its two indexes.

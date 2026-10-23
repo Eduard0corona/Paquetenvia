@@ -61,8 +61,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20261011000100_AllowDispatchDecidedNextAction.cs"),
         ("Finance", "__ef_migrations_history_finance", EnforceSettlementLedgerIntegrity.MigrationId,
             "src/Modules/Finance/Finance.Infrastructure/Persistence/Migrations/20260925000100_EnforceSettlementLedgerIntegrity.cs"),
-        ("Notifications", "__ef_migrations_history_notifications", AddRecipientNoticeLane.MigrationId,
-            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261020000100_AddRecipientNoticeLane.cs"),
+        ("Notifications", "__ef_migrations_history_notifications", AddRecipientNoticeCounts.MigrationId,
+            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261023000100_AddRecipientNoticeCounts.cs"),
         ("DataProtection", PlatformDataProtectionSchema.MigrationsHistoryTable,
             AddDistributedDataProtectionKeyRing.MigrationId,
             "src/BuildingBlocks/Paqueteria.Infrastructure/DataProtection/Migrations/20260922000100_AddDistributedDataProtectionKeyRing.cs"),
@@ -104,12 +104,11 @@ internal sealed class ModuleMigrationCoordinator
                 // America/Mazatlan only); its rollback restores the previous function. No grant, table, role or
                 // row is added, dropped, deleted or rewritten.
                 "Pricing" => IsMazatlanTimeZoneLoaderSource(source),
-                // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-003): the lane's latest step evolves the Notifications tables
-                // for recipient notices, adds the opt-out store and the v2 functions, and replaces three published bodies
-                // by reviewed edits; its rollback refuses while any row needs the new shape and otherwise restores the
-                // published functions, columns, constraints and grants. OBS-003-OUTBOX-TRACE-CONTEXT,
-                // RTM-API-REALTIME-DISPATCHER-ROLE and the earlier steps are verified below with their own rules.
-                "Notifications" => IsRecipientNoticeLaneSource(source),
+                // NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 (AI-08 NTF-005): the lane's latest step adds one read-only count
+                // function and two partial indexes; its rollback drops only those. NTF-RECIPIENT-NOTICES-2026-10-20,
+                // OBS-003-OUTBOX-TRACE-CONTEXT, RTM-API-REALTIME-DISPATCHER-ROLE and the earlier steps are verified below
+                // with their own rules.
+                "Notifications" => IsRecipientNoticeCountsSource(source),
                 // SET-001: the settlement ledger is append-only, so the lane only ever adds guards to
                 // the canonical tables and its rollback fails closed.
                 "Finance" =>
@@ -316,6 +315,12 @@ internal sealed class ModuleMigrationCoordinator
             root,
             FailStaleWhatsAppNotificationLeases.MigrationId,
             "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261003000100_FailStaleWhatsAppNotificationLeases.cs");
+        VerifyLaneSource(
+            root,
+            "Notifications",
+            AddRecipientNoticeLane.MigrationId,
+            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261020000100_AddRecipientNoticeLane.cs",
+            IsRecipientNoticeLaneSource);
         VerifyLaneSource(
             root,
             "Notifications",
@@ -580,6 +585,7 @@ internal sealed class ModuleMigrationCoordinator
                     AddRealtimeDispatcherRole.MigrationId,
                     CarryOutboxTraceContext.MigrationId,
                     AddRecipientNoticeLane.MigrationId,
+                    AddRecipientNoticeCounts.MigrationId,
                 ],
             "Identity" =>
                 [AdoptCanonicalIdentityBaseline.MigrationId, AddBffSessionStore.MigrationId],
@@ -880,6 +886,35 @@ internal sealed class ModuleMigrationCoordinator
         !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("WITH GRANT OPTION", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("TO paqueteria_app", StringComparison.Ordinal) &&
+        !source.Contains("GRANT INSERT", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("GRANT UPDATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 (Notifications lane, AI-08 NTF-005): one read-only SECURITY DEFINER
+    /// count function and two partial indexes; its rollback drops only those. No table, column, constraint, row or role is
+    /// added, dropped, deleted or rewritten, and no runtime role gains a table privilege.</summary>
+    private static bool IsRecipientNoticeCountsSource(string source) =>
+        source.Contains(AddRecipientNoticeCounts.DecisionId, StringComparison.Ordinal) &&
+        source.Contains("NTF-001 rollback blocked", StringComparison.Ordinal) &&
+        source.Contains("GRANT EXECUTE ON FUNCTION security.read_recipient_notice_counts(uuid,uuid) TO paqueteria_worker;", StringComparison.Ordinal) &&
+        source.Split("DROP FUNCTION", StringSplitOptions.None).Length - 1 == 1 &&
+        source.Split("DROP INDEX", StringSplitOptions.None).Length - 1 == 2 &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE ", StringComparison.Ordinal) &&
+        !source.Contains("INSERT INTO", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("ALTER TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("POLICY", StringComparison.Ordinal) &&
+        !source.Contains("BYPASSRLS", StringComparison.Ordinal) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("WITH GRANT OPTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TO paqueteria_app", StringComparison.Ordinal) &&
+        !source.Contains("GRANT SELECT", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("GRANT INSERT", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("GRANT UPDATE", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
