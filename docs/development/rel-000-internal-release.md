@@ -515,8 +515,14 @@ Historia de la remediación:
   revinculado y volver a mover `vite`, `vitest` o `next` falla cerrado
   (`DEPENDENCY_FILES_CHANGED`). El back-sync `main` → `development` entra sin conflictos.
 
-Las imágenes web instalan las dependencias de desarrollo antes de `NODE_ENV=production` y copian
-`node_modules`, así que incluyen `vite` y `vitest`; `next start` en Linux nunca los carga.
+Las imágenes web ya no incluyen `vite`, `vitest` ni otra herramienta de desarrollo. La etapa de
+build sigue instalando todo (`next build` necesita TypeScript y los tipos), pero la etapa final
+copia `node_modules` de una etapa `prod-deps` que sólo ve `package.json`, `pnpm-lock.yaml` y
+`pnpm-workspace.yaml` y corre `pnpm install --prod --frozen-lockfile`. El smoke de imágenes de CI
+(`docs/development/branching-and-ci.md`) lee el almacén de pnpm de cada imagen web contra el lockfile
+y falla si tiene un paquete fuera del grafo de producción. La única `devDependency` que queda es
+`@types/node` 26.1.1 (sólo declaraciones de tipos, con su `undici-types`): `sharp` 0.35.5 la declara
+como peer opcional y el lockfile la resuelve a la versión de desarrollo. `next start` no la carga.
 
 ## Admisión explícita de dependencias (GOV-DEPENDENCY-ADMISSION-001)
 

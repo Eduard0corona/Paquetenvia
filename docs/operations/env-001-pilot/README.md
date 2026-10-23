@@ -508,6 +508,12 @@ Two further caveats:
    - The images it builds come from the same Dockerfiles that CI builds and smoke-tests on every PR that touches
      them (`docs/development/branching-and-ci.md`, *Deploy image build smoke*). An image of this commit that an
      earlier run already pushed is reused instead (§6.2).
+   - The web image carries the production dependencies of `apps/web` only. `deploy/azure/pilot/Dockerfile.web` builds
+     with every dependency, then copies `node_modules` from a stage that runs `pnpm install --prod --frozen-lockfile`
+     on the manifest, the lockfile and `pnpm-workspace.yaml` alone, so `vite`, `vitest`, ESLint and TypeScript are not
+     in it. The CI smoke fails if the image's pnpm store holds a package outside the lockfile's production graph, and
+     it starts the image without a network and requires `GET /` to answer 200. The one devDependency left is
+     `@types/node` (type declarations), which `sharp` links as an optional peer.
    - After stage 4, the step *Check that the new API, Worker and Web revisions serve this run's images* waits, for
      each app, until its latest revision is ready, runs this run's digest and is active and `Healthy` (at
      most about 10 minutes for the three apps). A ready revision on another image counts as not ready yet, because
@@ -1253,7 +1259,8 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
 - ENV-001 F-05: CI builds every Dockerfile under `deploy/azure` (the four pilot images and the two DEV-SYNTHETIC
   ones) with the pilot workflow's build arguments, checks that none runs as uid 0 and that both db-ops images pass
   `verify`, on every PR that touches a file those images are built from and on every Foundation run
-  (`docs/development/branching-and-ci.md`, *Deploy image build smoke*).
+  (`docs/development/branching-and-ci.md`, *Deploy image build smoke*). Both web images must also ship only the
+  production dependencies of `apps/web` and answer `GET /` with 200 from `next start`, offline, as `node`.
 
 **Unverified until the first real deployment:**
 
