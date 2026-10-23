@@ -504,7 +504,8 @@ Historia de la remediación:
 
 - **Fusión.** Entró a `main` con #305 (merge `059e2e9`), después de Foundation CI 13/13 en su
   cabeza `325f2bb`; el árbol de ambos commits es el mismo.
-- **Retiro en `main`.** Un PR pequeño a `main` la movió a `historical_remediations` con `status`
+- **Retiro en `main`.** Un PR pequeño a `main` (#306, merge `9e55771`) la movió a
+  `historical_remediations` con `status`
   `MERGED`, `tracked_pull_request` 305 y `validated_target_sha` `059e2e9`. También devolvió la
   línea `REL000_REMEDIATION_ID` de ambos flujos y el fixture a su forma de `c84ef92`. No tocó
   archivos normativos. Las pruebas de SEC-2026-14 reproducen ese commit como la autorización
@@ -514,6 +515,13 @@ Historia de la remediación:
   cambio que no toca las dependencias web es `CLEAN`, braces queda aceptado sobre el grafo
   revinculado y volver a mover `vite`, `vitest` o `next` falla cerrado
   (`DEPENDENCY_FILES_CHANGED`). El back-sync `main` → `development` entra sin conflictos.
+- **Back-sync.** Llegó a `development` con #307 (merge `11f35da`). Su PR Validation tuvo el plan
+  `MAIN_BACKSYNC:CERTIFIED_MAIN_HEAD`; REL-000 no era requerido. El primer intento falló en dos pruebas
+  Playwright ajenas al diff, con el mismo código en `main` y en `development`: la carrera de puertos de
+  `DriverStopsNextServer.ReservePort()` y la prueba BFF de ida y vuelta sin conexión. La única
+  re-ejecución pasó.
+- **Registro.** La fila `SEC-2026-14-PNPM-REMEDIATION-2026-10-21` del decision-log entró después, en un
+  PR normal a `development`.
 
 Las imágenes web ya no incluyen `vite`, `vitest` ni otra herramienta de desarrollo. La etapa de
 build sigue instalando todo (`next build` necesita TypeScript y los tipos), pero la etapa final
