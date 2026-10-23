@@ -331,7 +331,10 @@ compilación web incrusta, el puerto en el que la API se reinicia) lo arrienda c
 pida uno cualquiera (ni a un `bind` al puerto 0 ni como puerto local de un
 `connect`), y Next.js y Kestrel, que enlazan con `SO_REUSEADDR`, sí escuchan en
 él. El arriendo dura mientras el servidor corre y entre sus reinicios, y se suelta
-al terminar. Antes se reservaba escuchando en el puerto 0 y cerrando, y el puerto
+al terminar. También lo arriendan las pruebas de reconexión de tiempo real
+(`RealtimeReconnectKestrelTests` y `RealtimeOutboxPlaywrightTests`), cuyo host
+se reinicia en el puerto en el que arrancó.
+Antes se reservaba escuchando en el puerto 0 y cerrando, y el puerto
 quedaba libre mientras duraban la compilación, los contenedores o el arranque (de
 segundos a minutos) y entre los reinicios de la API: así fallaron
 `Validate public tracking` en #307 (`EADDRINUSE` de Next) y `Validate driver PWA`
