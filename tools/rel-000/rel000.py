@@ -10491,6 +10491,69 @@ def replay_execution_provenance(args: argparse.Namespace) -> dict[str, Any]:
     return result
 
 
+# A failed audit command is reported with the tool's own error code and summary, but never
+# with a URL (registry path, query string or userinfo, also as an npmrc-style
+# //host/:_authToken key), a credential-shaped value, an email, an identifier or a long
+# opaque string.
+AUDIT_TOOL_ERROR_CODE_WORDS = re.compile(r"[A-Z]{1,16}(?:_[A-Z0-9]{1,16}){2,}")
+AUDIT_TOOL_ERROR_REDACTIONS = (
+    (re.compile(r"(?:[A-Za-z][A-Za-z0-9+.-]*:)?//[^\s'\"()<>\[\]]+"), "<url>"),
+    (re.compile(r"(?i)\b(bearer|basic)\s+\S+"), r"\1 <redacted>"),
+    (
+        re.compile(
+            r"(?i)\b([\w.-]*(?:token|auth|password|passwd|secret|credential|key)[\w.-]*)"
+            r"(\s*[=:]\s*)\S+"
+        ),
+        r"\1\2<redacted>",
+    ),
+    (re.compile(r"\b[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}\b", re.IGNORECASE), "<email>"),
+    (
+        re.compile(
+            r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", re.IGNORECASE
+        ),
+        "<id>",
+    ),
+    (re.compile(r"AKIA[0-9A-Z]{16}"), "<redacted>"),
+    # Any other long opaque run (a token, key or digest, with or without digits) is redacted.
+    # Only an UPPER_SNAKE tool error code made of short words, such as
+    # ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS, is kept.
+    (
+        re.compile(r"[A-Za-z0-9+/_=-]{32,}"),
+        lambda match: (
+            match.group(0)
+            if AUDIT_TOOL_ERROR_CODE_WORDS.fullmatch(match.group(0))
+            else "<redacted>"
+        ),
+    ),
+)
+
+
+def _audit_tool_error_text(value: Any, limit: int) -> str | None:
+    if isinstance(value, bool) or not isinstance(value, (str, int)):
+        return None
+    text = " ".join("".join(ch if ch.isprintable() else " " for ch in str(value)).split())
+    for pattern, replacement in AUDIT_TOOL_ERROR_REDACTIONS:
+        text = pattern.sub(replacement, text)
+    if any(pattern.search(text) for pattern in FORBIDDEN_TEXT_PATTERNS):
+        return "<redacted>"
+    return text[:limit] or None
+
+
+def fail_audit_command(tool: str, input_name: str, code: Any, summary: Any) -> None:
+    """Fail closed on an audit command that reported its own failure instead of a report."""
+
+    tool_code = _audit_tool_error_text(code, 80) or "UNKNOWN"
+    tool_summary = _audit_tool_error_text(summary, 240) or "no summary"
+    fail(
+        "AUDIT_COMMAND_FAILED",
+        f"The {tool} audit {input_name} failed instead of reporting: "
+        f"{tool_code}: {tool_summary}",
+        input=input_name,
+        tool_error_code=tool_code,
+        tool_error_summary=tool_summary,
+    )
+
+
 def sanitize_audit(
     input_path: Path,
     output_path: Path,
@@ -10501,6 +10564,32 @@ def sanitize_audit(
     raw = load_json(input_path)
     if not isinstance(raw, dict):
         fail("AUDIT_PARSE_FAILED", "The dependency audit JSON root must be an object.")
+    # `pnpm audit --json` exits 1 both when it lists advisories and when the audit itself
+    # fails (a registry timeout or an unreachable endpoint), and in the second case it writes
+    # only {"error": {"code": ..., "message": ...}}. Reading that as a report would turn a
+    # failed audit into a clean one, so an error object, an unrecognised report and an exit
+    # code of 1 without any listed advisory all fail closed.
+    input_name = input_path.name
+    if "error" in raw:
+        error = raw["error"]
+        if isinstance(error, dict):
+            fail_audit_command(
+                "pnpm",
+                input_name,
+                error.get("code"),
+                error.get("summary") or error.get("message") or error.get("detail"),
+            )
+        fail_audit_command("pnpm", input_name, None, error)
+    if (
+        ("advisories" in raw and not isinstance(raw["advisories"], dict))
+        or ("vulnerabilities" in raw and not isinstance(raw["vulnerabilities"], dict))
+        or ("advisories" not in raw and "vulnerabilities" not in raw)
+    ):
+        fail(
+            "AUDIT_REPORT_UNRECOGNIZED",
+            f"The pnpm audit {input_name} is not a recognised audit report.",
+            input=input_name,
+        )
     advisories: list[dict[str, Any]] = []
     legacy = raw.get("advisories") if isinstance(raw, dict) else None
     if isinstance(legacy, dict):
@@ -10586,11 +10675,38 @@ def sanitize_audit(
                         ),
                     }
                 )
+    # The exit code is pnpm's own: NuGet findings never explain it.
+    if command_exit_code == 1 and not advisories:
+        fail(
+            "AUDIT_EXIT_CODE_INCONSISTENT",
+            f"The pnpm audit {input_name} exited 1 but lists no advisory.",
+            input=input_name,
+            exit_code=command_exit_code,
+        )
     for nuget_path in nuget_input_paths or []:
         nuget = load_json(nuget_path)
         projects = nuget.get("projects") if isinstance(nuget, dict) else None
-        if nuget.get("version") != 1 or not isinstance(projects, list):
+        if (
+            not isinstance(nuget, dict)
+            or nuget.get("version") != 1
+            or not isinstance(projects, list)
+        ):
             fail("AUDIT_PARSE_FAILED", "The NuGet audit JSON is invalid.", file=nuget_path.name)
+        # `dotnet package list --vulnerable --format json` reports a command failure it can
+        # still render as JSON (for example a rejected package source) as an error-level
+        # problem next to a project without frameworks, which would otherwise read as clean.
+        problems = nuget.get("problems", [])
+        if not isinstance(problems, list) or not all(isinstance(item, dict) for item in problems):
+            fail(
+                "AUDIT_PARSE_FAILED", "The NuGet audit problems are invalid.", file=nuget_path.name
+            )
+        for problem in problems:
+            if str(problem.get("level") or "").lower() == "error":
+                text = problem.get("text")
+                code = re.search(r"\bNU\d{4}\b", text) if isinstance(text, str) else None
+                fail_audit_command(
+                    "NuGet", nuget_path.name, code.group(0) if code else "error", text
+                )
         for project in projects:
             for framework in project.get("frameworks") or []:
                 for collection, dependency_kind in (
