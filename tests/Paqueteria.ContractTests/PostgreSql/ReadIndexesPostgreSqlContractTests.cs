@@ -1,3 +1,4 @@
+using System.Reflection;
 using System.Text.RegularExpressions;
 using Dispatch.Infrastructure.Persistence;
 using Dispatch.Infrastructure.Persistence.Migrations;
@@ -29,13 +30,25 @@ public sealed partial class ReadIndexesPostgreSqlContractTests(PostgreSqlContrac
         [.. AddOrderReadIndexes.Indexes, .. AddAssignmentReadIndexes.Indexes];
 
     [PostgreSqlContractFact]
-    public void Both_lanes_carry_the_read_index_step_last()
+    public void Both_lanes_carry_the_read_index_step_in_place()
     {
         var verified = ModuleMigrationCoordinator.VerifySources();
-        Assert.Equal(AddOrderReadIndexes.MigrationId, Assert.Single(verified, state => state.Module == "Orders").MigrationId);
         Assert.Equal(
             AddAssignmentReadIndexes.MigrationId,
             Assert.Single(verified, state => state.Module == "Dispatch").MigrationId);
+        // AI-08 NTF-004 follows the read-index step in Orders (its consent table); the read-index step keeps its own
+        // source rule and is the step right before it.
+        Assert.Equal(
+            AddRecipientNoticeConsents.MigrationId,
+            Assert.Single(verified, state => state.Module == "Orders").MigrationId);
+        Assert.Equal(
+            [AddOrderReadIndexes.MigrationId, AddRecipientNoticeConsents.MigrationId],
+            typeof(AddOrderReadIndexes).Assembly.GetTypes()
+                .Where(type => type.GetCustomAttribute<DbContextAttribute>()?.ContextType == typeof(OrdersDbContext))
+                .Select(type => type.GetCustomAttribute<MigrationAttribute>()?.Id)
+                .OfType<string>()
+                .Order(StringComparer.Ordinal)
+                .TakeLast(2));
     }
 
     [PostgreSqlContractFact]
@@ -102,8 +115,9 @@ public sealed partial class ReadIndexesPostgreSqlContractTests(PostgreSqlContrac
 
             Assert.DoesNotContain("orders_updated_at_idx", after.PriceReview, StringComparison.Ordinal);
 
-            // Down, as the migrator, newest step of each lane only: the indexes go, every other object stays, both
-            // lanes are pending and the canonical baseline still holds.
+            // Down, as the migrator, to the step before the read indexes (in Orders that also rolls back the later NTF-004
+            // consent step, which holds no consent here): the indexes go, every other object stays, both lanes are pending
+            // and the canonical baseline still holds.
             await MigrateAsMigratorAsync(connection, CreateOrdersContext(connection), AddOrderAutoCloseDiscovery.MigrationId);
             await MigrateAsMigratorAsync(connection, CreateDispatchContext(connection), AddOutboxTraceContext.MigrationId);
             Assert.Empty(await DefinitionsAsync(connection));

@@ -57,12 +57,17 @@ public static class CsvOrderImportIdempotency
     {
         ArgumentException.ThrowIfNullOrWhiteSpace(identity.ContentDigest);
         ArgumentOutOfRangeException.ThrowIfNegative(identity.RowCount);
-        return string.Join(
+        var preImage = string.Join(
             '\n',
             BatchScope,
             identity.OrganizationId.ToString("D", CultureInfo.InvariantCulture),
             identity.ContentDigest,
             identity.RowCount.ToString(CultureInfo.InvariantCulture));
+        // NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 (N3 choice 3): the WhatsApp consent box joins the batch only when
+        // ticked, so replaying the key with the other answer is a conflict and every unticked pre-image is unchanged.
+        return identity.WhatsAppConsentVersion is { } consentVersion
+            ? string.Join('\n', preImage, "recipient_whatsapp_consent_version", consentVersion)
+            : preImage;
     }
 
     public static string DeriveRowKey(

@@ -38,9 +38,10 @@ public interface IRecipientNoticeOrderReader
 }
 
 /// <summary>
-/// AI-24 <c>recipient_notices.consent</c> (E4-P1): whether the order recorded the WhatsApp consent box. The record is
-/// <c>orders.recipient_notice_consents</c>, which AI-08 NTF-004 creates; until then no order has one, so no WhatsApp
-/// notice is ever created (NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 L4 choice 1). E-mail is unaffected.
+/// AI-24 <c>recipient_notices.consent</c> (E4-P1): whether the order recorded the WhatsApp consent box, read from
+/// <c>orders.recipient_notice_consents</c> (AI-08 NTF-004) in a short tenant transaction of the owner organization under
+/// FORCE RLS (NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 N3 choice 7). Without that row no WhatsApp notice is created;
+/// e-mail is unaffected.
 /// </summary>
 public interface IRecipientNoticeConsentReader
 {
@@ -51,8 +52,9 @@ public interface IRecipientNoticeConsentReader
 }
 
 /// <summary>
-/// The NTF-005 consent reader: <c>orders.recipient_notice_consents</c> does not exist before AI-08 NTF-004, so no
-/// consent is recorded for any order and the answer is always <see langword="false"/> (fail closed).
+/// The fallback of a host that does not compose the Orders readers (NTF-005): no consent can be read, so the answer is
+/// always <see langword="false"/> (fail closed) and no WhatsApp notice is created. The Worker replaces it with the
+/// PostgreSQL reader of AI-08 NTF-004.
 /// </summary>
 public sealed class UnrecordedRecipientNoticeConsentReader : IRecipientNoticeConsentReader
 {

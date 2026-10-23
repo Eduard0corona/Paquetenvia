@@ -29,6 +29,7 @@ public enum OrderCreationStage
     OrderInserted,
     PackageItemsInserted,
     AcceptanceInserted,
+    RecipientNoticeConsentInserted,
     EventInserted,
     OutboxInserted,
     AuditInserted,
@@ -313,6 +314,14 @@ public sealed class QuoteSnapshotToOrderCoordinator(
                 writer.WriteString("service_window_to", OrderServiceWindowPolicy.Format(window.To));
             }
 
+            // NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 (N3 choice 3): the WhatsApp consent box is part of the request
+            // only when ticked, so replaying a key with the other answer is IDEMPOTENCY_CONFLICT while every fingerprint
+            // computed before the box existed (and every unticked one) stays byte-identical.
+            if (command.WhatsAppConsentVersion is { } consentVersion)
+            {
+                writer.WriteString("recipient_whatsapp_consent_version", consentVersion);
+            }
+
             writer.WriteEndObject();
         }
 
@@ -438,6 +447,22 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             cancellationToken);
         await failureInjector.OnStageAsync(OrderCreationStage.AcceptanceInserted, cancellationToken);
 
+        // NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P1; AI-24 recipient_notices.consent.record): a ticked box records who
+        // attested it and when, once, in this transaction; an unticked one records nothing.
+        if (command.WhatsAppConsentVersion is { } whatsAppConsentVersion)
+        {
+            await InsertRecipientNoticeConsentAsync(
+                connection,
+                transaction,
+                order,
+                whatsAppConsentVersion,
+                command.ActorId,
+                now,
+                cancellationToken);
+        }
+
+        await failureInjector.OnStageAsync(OrderCreationStage.RecipientNoticeConsentInserted, cancellationToken);
+
         await InsertInitialEventAsync(
             connection,
             transaction,
@@ -469,6 +494,8 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             restricted_goods_acknowledged = command.RestrictedGoodsAcknowledged,
             service_window_from = order.ServiceWindowFrom,
             service_window_to = order.ServiceWindowTo,
+            // NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 (N3 choice 4): only whether the WhatsApp box was ticked.
+            whatsapp_consent_attested = command.WhatsAppConsentVersion is not null,
             request_id = command.RequestId,
         }, JsonOptions);
         await auditWriter.WriteAsync(
@@ -790,6 +817,7 @@ public sealed class QuoteSnapshotToOrderCoordinator(
             !OrderInputPolicy.IsCodExpectedCents(command.CodExpectedCents) ||
             !command.RestrictedGoodsAcknowledged ||
             (command.ServiceWindow is not null && !OrderServiceWindowPolicy.IsWellFormed(command.ServiceWindow)) ||
+            !RecipientNoticeConsentPolicy.IsAcceptable(command.WhatsAppConsentVersion) ||
             command.Acceptance is null ||
             !OrderAcceptanceInputPolicy.IsValid(
                 command.Acceptance.TermsVersion,
@@ -1133,6 +1161,39 @@ public sealed class QuoteSnapshotToOrderCoordinator(
         command.Parameters.Add(P("schema", NpgsqlDbType.Text, OrderAcceptanceCanonicalizer.SchemaVersion));
         command.Parameters.Add(P("hash", NpgsqlDbType.Bytea, evidenceHash));
         RequireOne(await command.ExecuteNonQueryAsync(cancellationToken), "The order acceptance was not inserted.");
+    }
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-24 <c>recipient_notices.consent.record</c>; AI-06 and AI-18 recipient notices
+    /// step 2): one append-only row of <c>orders.recipient_notice_consents</c> - the order, its owner organization, the
+    /// channel WHATSAPP, the consent version, the creating actor and the server time - with every value supplied and no
+    /// RETURNING. An Orders-internal write of the quote_snapshot_to_order flow (AI-13 §4, flow 1), not a new flow. No
+    /// phone, e-mail or name is ever part of it.
+    /// </summary>
+    private async Task InsertRecipientNoticeConsentAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Order order,
+        string consentVersion,
+        Guid actorId,
+        DateTimeOffset attestedAt,
+        CancellationToken cancellationToken)
+    {
+        await using var command = CreateCommand(
+            connection,
+            transaction,
+            """
+            INSERT INTO orders.recipient_notice_consents(
+              order_id,owner_org_id,channel,consent_version,attested_by,attested_at)
+            VALUES (@order,@owner,@channel,@version,@actor,@attested)
+            """);
+        command.Parameters.Add(P("order", NpgsqlDbType.Uuid, order.Id));
+        command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, order.OwnerOrganizationId));
+        command.Parameters.Add(P("channel", NpgsqlDbType.Text, RecipientNoticeConsentPolicy.Channel));
+        command.Parameters.Add(P("version", NpgsqlDbType.Text, consentVersion));
+        command.Parameters.Add(P("actor", NpgsqlDbType.Uuid, actorId));
+        command.Parameters.Add(P("attested", NpgsqlDbType.TimestampTz, attestedAt));
+        RequireOne(await command.ExecuteNonQueryAsync(cancellationToken), "The recipient notice consent was not inserted.");
     }
 
     private async Task InsertInitialEventAsync(

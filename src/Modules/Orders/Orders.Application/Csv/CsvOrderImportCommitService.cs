@@ -28,7 +28,8 @@ public sealed class CsvOrderImportCommitService(
             command.OrganizationId,
             command.IdempotencyKey,
             command.ContentDigest,
-            command.Rows.Count);
+            command.Rows.Count,
+            command.WhatsAppConsentVersion);
         if (await batches.ReserveOrReplayAsync(identity, cancellationToken) is { } replay)
         {
             return replay;
@@ -73,7 +74,8 @@ public sealed class CsvOrderImportCommitService(
                         row.AcceptanceChannel),
                     command.RequestId,
                     row.CodExpectedCents,
-                    command.RestrictedGoodsAcknowledged),
+                    command.RestrictedGoodsAcknowledged,
+                    WhatsAppConsentVersion: command.WhatsAppConsentVersion),
                 cancellationToken);
             return new CsvOrderImportRowOutcome(
                 row.RowNumber,

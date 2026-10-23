@@ -6,8 +6,9 @@ Decisiones: `NTF-RECIPIENT-NOTICES-2026-10-20` y `NTF-RECIPIENT-NOTICE-CAPS-2026
 PR-4. Contrato: AI-24 `recipient_notices`, AI-06 y AI-18 (paso 6 de avisos y aserción 39), AI-08 NTF-005.
 
 **Estado: implementado y apagado.** `Notifications:RecipientNotices:Enabled` es falso y todos los proveedores están en
-`Disabled`; ningún productor escribe todavía `orders.recipient-notice-requested` (NTF-004). GATE-004 y GATE-007 siguen
-abiertas: nada llega a un cliente real.
+`Disabled`. Desde NTF-004 la transición ORD-002 escribe `orders.recipient-notice-requested` y el Worker lee el permiso de
+WhatsApp de `orders.recipient_notice_consents` ([`ntf-004-recipient-notice-producer.md`](ntf-004-recipient-notice-producer.md)).
+GATE-004 y GATE-007 siguen abiertas: nada llega a un cliente real.
 
 ## Flujo en el Worker
 
@@ -59,7 +60,9 @@ inalcanzable no es este caso: se reintenta.
 ## Decisiones técnicas aprobadas (L4)
 
 1. `UnrecordedRecipientNoticeConsentReader` responde "sin permiso" para toda orden hasta que NTF-004 cree
-   `orders.recipient_notice_consents`: no se crea ningún aviso de WhatsApp; el correo no cambia.
+   `orders.recipient_notice_consents`: no se crea ningún aviso de WhatsApp; el correo no cambia. Aplicado por NTF-004: el
+   Worker compone `PostgreSqlRecipientNoticeConsentReader`, que lee esa tabla bajo RLS; el lector anterior queda solo como
+   respaldo (falla cerrado) de un host sin los lectores de Orders.
 2. `RecipientNoticeQuietHours`: 08:00:00 ya sale y 21:00:00 ya no (AI-24 `quiet_hours.window`, "from 08:00 (inclusive)
    to 21:00 (exclusive)"). La conversión de zona horaria se hace en SQL (`AT TIME ZONE`).
 3. Fallas pasajeras antes del proveedor: `RETRY` con espera, sin intento.

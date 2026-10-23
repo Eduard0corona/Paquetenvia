@@ -968,10 +968,10 @@ screen_contracts:
         same shipment it sends the same Idempotency-Key, and a changed shipment gets a new one
     # NTF-RECIPIENT-NOTICES-2026-10-20 (project owner, E4 "Los 4 del plan (Recommended)": "se agrega como campo
     # opcional en la nueva orden"; E4-P1 "Casilla en la orden (Recommended)"): AI-08 NTF-002 built the e-mail field;
-    # NTF-004 builds the consent box.
+    # AI-08 NTF-004 built the consent box (NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23).
     recipient_notices:
       decision: NTF-RECIPIENT-NOTICES-2026-10-20
-      status: DECIDED; email implemented (AI-08 NTF-002), consent not implemented (AI-08 NTF-004)
+      status: DECIDED; email implemented (AI-08 NTF-002), consent implemented (AI-08 NTF-004)
       email: step "Dónde", destination only - an optional field "Correo del destinatario (opcional)"; trimmed and
         checked like createQuote before "Siguiente", with one es-MX message next to the field that never repeats the
         value; sent as destination.email only when typed; never on the origin; kept in memory only like the rest of the
@@ -979,8 +979,9 @@ screen_contracts:
         never returns it)
       consent: step "Confirmar" - an optional checkbox "El destinatario aceptó recibir avisos de su envío por
         WhatsApp", unticked by default and never required to confirm; ticked, createOrder carries recipient_notices with
-        whatsapp_consent_attested true and the consent version from configuration; unticked, nothing is sent and the
-        order gets no WhatsApp notice (e-mail still, when there is one)
+        whatsapp_consent_attested true and the consent version NTF-RECIPIENT-WHATSAPP-CONSENT-V1, a constant of the web
+        (NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23, N3 choice 1); unticked, nothing is sent and the order gets no WhatsApp
+        notice (e-mail still, when there is one)
   driver_stop:
     offline_cache:
     - assigned stop minimum data
@@ -1506,15 +1507,18 @@ screen_contracts:
       rule: the common message counts down; "Previsualizar" and "Confirmar" are both disabled and re-enable
         themselves; the file, the report and the prohibited-goods tick stay and nothing is sent by itself; a commit
         pressed again sends the same batch Idempotency-Key (the 429 came before the handler)
-    # NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P1 "Casilla en la orden (Recommended)"): decided, not built yet (AI-08
-    # NTF-004).
+    # NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P1 "Casilla en la orden (Recommended)"): built by AI-08 NTF-004
+    # (NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23).
     recipient_notices:
       decision: NTF-RECIPIENT-NOTICES-2026-10-20
-      status: DECIDED, not implemented (AI-08 NTF-004)
+      status: DECIDED, implemented (AI-08 NTF-004)
       consent: an optional checkbox before "Confirmar", unticked by default, that attests the approved consent text for
-        the recipient of every row of the file (its wording for a whole file is reviewed by the owner in the NTF-004
-        change); ticked, the commit sends recipient_whatsapp_consent_attested true and the consent version; unticked,
-        nothing is sent and those orders get no WhatsApp notice; a new file clears it
+        the recipient of every row of the file; ticked, the commit sends recipient_whatsapp_consent_attested true and the
+        consent version; unticked, nothing is sent and those orders get no WhatsApp notice; a new file clears it
+      wording: 'NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 (project owner, N2 "Mismo texto y una nota (Recommended)") - the
+        box reads exactly the AI-24 consent text "El destinatario aceptó recibir avisos de su envío por WhatsApp", version
+        NTF-RECIPIENT-WHATSAPP-CONSENT-V1, identical to "Nueva orden", with this fixed note below it: "Aplica a todas las
+        filas de este archivo. Márcala solo si cada destinatario lo aceptó."'
   incident_desk:
     release: MVP-1
     route: /ops/incidents

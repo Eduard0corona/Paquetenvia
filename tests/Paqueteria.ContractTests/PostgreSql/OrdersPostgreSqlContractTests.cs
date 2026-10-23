@@ -565,6 +565,7 @@ public sealed class OrdersPostgreSqlContractTests(PostgreSqlContractFixture fixt
                 Orders.Infrastructure.Persistence.Migrations.AddOrderServiceWindow.MigrationId,
                 Orders.Infrastructure.Persistence.Migrations.AddOrderAutoCloseDiscovery.MigrationId,
                 Orders.Infrastructure.Persistence.Migrations.AddOrderReadIndexes.MigrationId,
+                Orders.Infrastructure.Persistence.Migrations.AddRecipientNoticeConsents.MigrationId,
             ],
             await context.Database.GetAppliedMigrationsAsync());
 

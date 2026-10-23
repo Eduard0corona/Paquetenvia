@@ -393,7 +393,7 @@ Característica: Ventana de reclamación
     Y no se modifican OrderEvents ni Proofs
 
 Característica: Lista blanca transaccional
-  Escenario: Aparece un sexto coordinador cross-module
+  Escenario: Aparece un coordinador cross-module nuevo
     Dado un nuevo flujo que comparte transacción entre módulos
     Y no está en transaction_coordinator_allowlist
     Cuando se ejecutan ArchitectureTests
