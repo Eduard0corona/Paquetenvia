@@ -10,4 +10,5 @@ overrides:
   "browserslist@<=4.28.6": 4.28.7
   "baseline-browser-mapping@>=2.0.0 <2.11.0": 2.11.0
   "source-map-js@<1.2.2": 1.2.2
+  "zod@<4.6.6": 4.6.6
   "next@16.4.1>sharp": 0.35.5

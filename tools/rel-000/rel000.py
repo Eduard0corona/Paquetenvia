@@ -683,11 +683,86 @@ VITE_KNOWN_ADVISORY_BASE_BINDING = {
     ],
     "expected_lockfile_sha256": "336b1c82c246994b45af1a0ba8c4ffa1b39c7279a827380883047c3c98b1e101",
 }
+ZOD_REMEDIATION_ID = "SEC-2026-15-ZOD"
+ZOD_ISSUE = 315
+ZOD_ISSUE_TITLE = "SEC-2026-15: remediate zod advisory GHSA-mrhx-c7xc-m3w5 (CVE-2023-54404)"
+# The advisory SEC-2026-15 remediates (owner decision "Remediar con la tabla", 2026-10-24):
+# zod <4.6.6 can exhaust memory validating large arrays. zod 4.4.3 is reached only through
+# the lint tooling (eslint-config-next -> eslint-plugin-react-hooks 7.1.1, and its
+# zod-validation-error 4.0.2). advisory -> (affected package, severity, CVE).
+ZOD_ADVISORIES = {
+    "GHSA-mrhx-c7xc-m3w5": ("zod", "high", "CVE-2023-54404"),
+}
+ZOD_ADVISORY_AFFECTED_RANGES = {"GHSA-mrhx-c7xc-m3w5": "<4.6.6"}
+ZOD_FIRST_PATCHED_VERSIONS = {"zod": "4.6.6"}
+# The manifest does not change: zod is transitive and the table adds only an override.
+ZOD_DEPENDENCY_FILES = [VITE_LOCKFILE, VITE_WORKSPACE]
+# Main-direct like SEC-2026-14: docs/normative/** stays untouched; the decision-log row and
+# CHANGELOG entry go to development after the back-sync.
+ZOD_NON_DEPENDENCY_FILES = [
+    ".github/workflows/ci.yml",
+    ".github/workflows/pr-validation.yml",
+    "docs/development/rel-000-internal-release.md",
+    "tests/fixtures/rel-000/security-tracking.json",
+    "tools/rel-000/rel000.py",
+    "tools/rel-000/security-remediation-policy.json",
+    "tools/rel-000/test_rel000.py",
+]
+# The one new override sits right before the Sharp edge, as SEC-2026-11 placed source-map-js;
+# every other override keeps its base bytes.
+ZOD_OVERRIDE_ADDITIONS = [{"selector": "zod@<4.6.6", "to": "4.6.6", "before": "next@16.4.1>sharp"}]
+ZOD_ALLOWED_OVERRIDES = {
+    "postcss": "8.5.23",
+    "brace-expansion@<1.1.21": "1.1.21",
+    "brace-expansion@>=4.0.0 <5.0.12": "5.0.12",
+    "nanoid@>=3.0.0 <3.3.18": "3.3.18",
+    "js-yaml@>=4.0.0 <4.3.2": "4.3.2",
+    "browserslist@<=4.28.6": "4.28.7",
+    "baseline-browser-mapping@>=2.0.0 <2.11.0": "2.11.0",
+    "source-map-js@<1.2.2": "1.2.2",
+    "zod@<4.6.6": "4.6.6",
+    "next@16.4.1>sharp": "0.35.5",
+}
+ZOD_TARGET_SHARP_VERSION = "0.35.5"
+# Exact SEC-2026-15 graph (the owner's table): zod 4.4.3 -> 4.6.6, its package and snapshot
+# keys and every reference; no other package moves, and none is added or removed.
+ZOD_LOCK_VERSION_REPLACEMENTS = {"zod": {"from": ["4.4.3"], "to": ["4.6.6"]}}
+ZOD_LOCK_INTEGRITIES = {
+    "zod@4.6.6": "sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA==",
+}
+# pnpm applies the override to peer ranges too, so the peer range the lockfile records for
+# zod-validation-error@4.0.2 becomes the override target. That one line is the only metadata
+# that changes; the package itself declares the same range, and nothing else moves.
+ZOD_LOCK_METADATA_CHANGES = [
+    {
+        "package": "zod-validation-error@4.0.2",
+        "from": "      zod: ^3.25.0 || ^4.0.0",
+        "to": "      zod: 4.6.6",
+    }
+]
+# Regenerating the lockfile changes the bytes the braces accepted known advisory is pinned
+# to (its package, version and path do not change), so SEC-2026-15 rebinds the hash, as
+# SEC-2026-11 and SEC-2026-14 did. Only this remediation's own run reads its authorized base
+# against the previous bytes.
+ZOD_KNOWN_ADVISORY_BASE_BINDING = {
+    "remediation_id": BRACES_KNOWN_ADVISORY_ID,
+    "advisory_id": BRACES_KNOWN_ADVISORY["advisory_id"],
+    "lockfile": BRACES_KNOWN_ADVISORY["lockfile"],
+    "lock_path": list(BRACES_KNOWN_ADVISORY["lock_path"]),
+    "expected_lockfile_sha256": "3f5834c346a1ad3f172fe52481acd748a9d0d05e0752d418220eb075e84c2ddd",
+}
 # The only authorizations that may rebind a known advisory, active or retired, each with
 # exactly its own base binding.
 KNOWN_ADVISORY_BASE_BINDINGS = {
     NEXT_SHARP_SOURCEMAP_REMEDIATION_ID: NEXT_SHARP_SOURCEMAP_KNOWN_ADVISORY_BASE_BINDING,
     VITE_REMEDIATION_ID: VITE_KNOWN_ADVISORY_BASE_BINDING,
+    ZOD_REMEDIATION_ID: ZOD_KNOWN_ADVISORY_BASE_BINDING,
+}
+# The only authorizations that may change lockfile metadata lines of a package, active or
+# retired, each with exactly its own lines.
+LOCK_METADATA_CHANGES = {
+    VITE_REMEDIATION_ID: VITE_LOCK_METADATA_CHANGES,
+    ZOD_REMEDIATION_ID: ZOD_LOCK_METADATA_CHANGES,
 }
 EXPECTED_MVP0_P0_COUNT = 29
 FIN001_EXPECTED_DEPENDENCIES = {"DSP-002", "EXT-001", "RTE-001"}
@@ -1728,6 +1803,60 @@ def validate_remediation_policy(policy: Any, *, base_policy: bool = False) -> di
                     "The vite, vitest and Next.js remediation authorization is incomplete or "
                     "inconsistent.",
                 )
+        if authorization.get("id") == ZOD_REMEDIATION_ID:
+            tracked_ids = list(ZOD_ADVISORIES)
+            # The braces advisory that SEC-2026-10 accepts was withdrawn upstream on
+            # 2026-10-23, so npm's audit no longer reports it: the base set is zod alone.
+            if (
+                authorization.get("tracked_issue") != ZOD_ISSUE
+                or authorization.get("tracked_issue_title") != ZOD_ISSUE_TITLE
+                or "related_tracked_issue" in authorization
+                or authorization.get("issue_advisories") != {str(ZOD_ISSUE): tracked_ids}
+                or authorization.get("expected_base_advisories") != tracked_ids
+                or authorization.get("expected_base_packages")
+                != {advisory_id: package for advisory_id, (package, _, _) in ZOD_ADVISORIES.items()}
+                or authorization.get("expected_base_severities")
+                != {
+                    advisory_id: severity
+                    for advisory_id, (_, severity, _) in ZOD_ADVISORIES.items()
+                }
+                or authorization.get("expected_base_totals")
+                != {"total": 1, "critical": 0, "high": 1, "moderate": 0, "low": 0}
+                or authorization.get("expected_branch_totals")
+                != {"total": 0, "critical": 0, "high": 0, "moderate": 0, "low": 0}
+                or authorization.get("expected_cves")
+                != {advisory_id: cve for advisory_id, (_, _, cve) in ZOD_ADVISORIES.items()}
+                or authorization.get("advisory_affected_ranges") != ZOD_ADVISORY_AFFECTED_RANGES
+                or authorization.get("first_patched_versions") != ZOD_FIRST_PATCHED_VERSIONS
+                or authorization.get("allowed_direct_packages") != []
+                or authorization.get("allowed_dependency_files") != ZOD_DEPENDENCY_FILES
+                or authorization.get("required_dependency_files") != ZOD_DEPENDENCY_FILES
+                or authorization.get("allowed_non_dependency_files") != ZOD_NON_DEPENDENCY_FILES
+                or authorization.get("expected_direct_version_changes") != {}
+                or authorization.get("expected_override_changes") != {}
+                or authorization.get("expected_override_additions") != ZOD_OVERRIDE_ADDITIONS
+                or authorization.get("allowed_overrides") != ZOD_ALLOWED_OVERRIDES
+                or authorization.get("expected_lock_version_replacements")
+                != ZOD_LOCK_VERSION_REPLACEMENTS
+                or authorization.get("allowed_lock_metadata_additions") != []
+                or authorization.get("expected_lock_metadata_changes") != ZOD_LOCK_METADATA_CHANGES
+                or authorization.get("expected_lock_integrities") != ZOD_LOCK_INTEGRITIES
+                or authorization.get("known_advisory_base_binding")
+                != ZOD_KNOWN_ADVISORY_BASE_BINDING
+                or authorization.get("expected_lock_package_count") != 475
+                or re.fullmatch(
+                    r"[0-9a-f]{64}", str(authorization.get("expected_lockfile_sha256", ""))
+                )
+                is None
+                or authorization.get("require_sharp_runtime_smoke") is not True
+                or authorization.get("target_sharp_version") != ZOD_TARGET_SHARP_VERSION
+                or authorization.get("prohibited_prereleases") is not True
+                or authorization.get("manual_lockfile_edits_allowed") is not False
+            ):
+                fail(
+                    "REMEDIATION_POLICY_INVALID",
+                    "The zod remediation authorization is incomplete or inconsistent.",
+                )
     # An accepted known advisory exists only under its own exact authorization.
     for authorization in [*historical, *active]:
         if "accepted_known_advisory" in authorization and authorization.get("id") != (
@@ -1747,25 +1876,25 @@ def validate_remediation_policy(policy: Any, *, base_policy: bool = False) -> di
                 "REMEDIATION_POLICY_INVALID",
                 "Only the exact SEC-2026-11 authorization may cite a known advisory.",
             )
-        # Changing lockfile metadata lines of a moved package exists only under the exact
-        # SEC-2026-14 authorization, active or retired, and only with its own exact lines.
-        if "expected_lock_metadata_changes" in authorization and (
-            authorization.get("id") != VITE_REMEDIATION_ID
-            or authorization.get("expected_lock_metadata_changes") != VITE_LOCK_METADATA_CHANGES
-        ):
+        # Changing lockfile metadata lines of a package exists only under the exact SEC-2026-14
+        # or SEC-2026-15 authorization, active or retired, each with its own exact lines.
+        if "expected_lock_metadata_changes" in authorization and authorization.get(
+            "expected_lock_metadata_changes"
+        ) != LOCK_METADATA_CHANGES.get(str(authorization.get("id"))):
             fail(
                 "REMEDIATION_POLICY_INVALID",
-                "Only the exact SEC-2026-14 authorization may change lockfile metadata lines.",
+                "Only the exact SEC-2026-14 or SEC-2026-15 authorization may change lockfile "
+                "metadata lines, each with its own lines.",
             )
-        # Rebinding an accepted graph exists only under the exact SEC-2026-11 or SEC-2026-14
-        # authorization, active or retired, and only with its own exact base binding.
+        # Rebinding an accepted graph exists only under the exact SEC-2026-11, SEC-2026-14 or
+        # SEC-2026-15 authorization, active or retired, and only with its own exact binding.
         if "known_advisory_base_binding" in authorization and authorization.get(
             "known_advisory_base_binding"
         ) != KNOWN_ADVISORY_BASE_BINDINGS.get(str(authorization.get("id"))):
             fail(
                 "REMEDIATION_POLICY_INVALID",
-                "Only the exact SEC-2026-11 or SEC-2026-14 authorization may rebind a known "
-                "advisory, each with its own base binding.",
+                "Only the exact SEC-2026-11, SEC-2026-14 or SEC-2026-15 authorization may "
+                "rebind a known advisory, each with its own base binding.",
             )
         # A NuGet graph moved through the security route exists only under the exact
         # SEC-2026-12 or SEC-2026-13 authorization, active or retired, and only with its own
@@ -7290,9 +7419,11 @@ def _next_og_expected_lock_lines(
         for package, old, new in moves:
             escaped = re.escape(package)
             # Package keys, snapshot keys and dependency references for exactly this
-            # package and version; any other package keeps its base bytes.
+            # package and version; any other package keeps its base bytes. A reference may
+            # also close a peer suffix, as in zod-validation-error@4.0.2(zod@4.6.6)
+            # (SEC-2026-15).
             value = re.sub(
-                rf"(^|[\s'\"(]){escaped}@{re.escape(old)}(?=[:'\"(]|$)",
+                rf"(^|[\s'\"(]){escaped}@{re.escape(old)}(?=[:'\"()]|$)",
                 lambda match, package=package, new=new: f"{match.group(1)}{package}@{new}",
                 value,
             )
@@ -7894,8 +8025,8 @@ def _next_sharp_sourcemap_expected_lock_lines(
                 override=addition["selector"],
             )
         expected.insert(anchors[0], f"  {addition['selector']}: {addition['to']}")
-    # SEC-2026-14 only (the loader rejects the field elsewhere): exact metadata lines of a
-    # moved package's own block change in place, each exactly once.
+    # SEC-2026-14 and SEC-2026-15 only (the loader rejects the field elsewhere): exact
+    # metadata lines of a package's own block change in place, each exactly once.
     for change in authorization.get("expected_lock_metadata_changes") or []:
         starts = [
             index
@@ -7945,8 +8076,9 @@ def validate_next_sharp_sourcemap_exact_lock_graph(
     define-properties@1.2.1 or array.prototype.flat@1.3.3). Every substitution is anchored
     on an exact package name, so those packages must keep their base bytes.
 
-    SEC-2026-14 reuses it with its own moves (vite only) and no override change; ``graph``
-    only names the authorized graph in the failure message.
+    SEC-2026-14 reuses it with its own moves (vite only) and no override change, and
+    SEC-2026-15 with zod alone and its new override; ``graph`` only names the authorized
+    graph in the failure message.
     """
 
     replacements = authorization["expected_lock_version_replacements"]
@@ -8442,6 +8574,191 @@ def validate_vite_remediation_diff(
     }
 
 
+def validate_zod_remediation_diff(
+    repository_root: Path,
+    base_main_sha: str,
+    all_changed: list[str],
+    changed_dependency_files: list[str],
+    authorization: dict[str, Any],
+) -> dict[str, Any]:
+    """SEC-2026-15: prove the web tree is the base plus only the owner's exact table.
+
+    The manifest keeps its base bytes. The workspace gains only the new zod override, right
+    before its anchor, and keeps every other line. Every lockfile line must equal the base
+    line after the zod move (package key, snapshot keys and each reference), the same
+    override inserted in the lockfile's overrides and the declared peer-range line of the
+    zod-validation-error@4.0.2 entry. The only other admitted difference is the moved
+    package's registry integrity, which must be exactly the declared one.
+    """
+
+    allowed_all = set(authorization["allowed_dependency_files"]) | set(
+        authorization["allowed_non_dependency_files"]
+    )
+    unexpected = sorted(set(all_changed) - allowed_all)
+    if unexpected:
+        fail(
+            "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+            "The zod remediation changed a file outside its exact authorization.",
+            files=unexpected,
+        )
+    required = set(authorization["required_dependency_files"])
+    if set(changed_dependency_files) != required:
+        fail(
+            "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
+            "The zod remediation dependency files do not match the exact authorization.",
+            expected=sorted(required),
+            actual=changed_dependency_files,
+        )
+    if authorization["allowed_direct_packages"] or authorization["expected_direct_version_changes"]:
+        fail(
+            "SECURITY_REMEDIATION_DIRECT_SCOPE_INVALID",
+            "The zod remediation authorizes no direct dependency change.",
+        )
+    replacements = authorization["expected_lock_version_replacements"]
+    override_additions = authorization["expected_override_additions"]
+    for package, versions in [
+        *((package, replacement["to"]) for package, replacement in replacements.items()),
+        *((addition["selector"], [addition["to"]]) for addition in override_additions),
+    ]:
+        if any(_semver_tuple(version) is None for version in versions):
+            fail(
+                "PRERELEASE_DEPENDENCY_REJECTED",
+                "Prerelease dependency versions are forbidden.",
+                package=package,
+            )
+
+    # The manifest is not an authorized dependency file, so validate_dependency_diff already
+    # rejects any change to it; compare the bytes too, so this check never depends on that.
+    base_manifest = run_git(repository_root, "show", f"{base_main_sha}:{VITE_MANIFEST}")
+    current_manifest = (repository_root / VITE_MANIFEST).read_text(encoding="utf-8")
+    if current_manifest.splitlines() != base_manifest.splitlines():
+        fail(
+            "UNAUTHORIZED_DEPENDENCY_MANIFEST_CHANGE",
+            "The zod remediation must not change the web manifest.",
+        )
+
+    # Git output is stripped, so the workspace is compared line by line: each new override
+    # sits right before its anchor and every other line keeps its base bytes.
+    base_workspace = run_git(repository_root, "show", f"{base_main_sha}:{VITE_WORKSPACE}")
+    current_workspace = (repository_root / VITE_WORKSPACE).read_text(encoding="utf-8")
+    base_overrides = _workspace_overrides(base_workspace)
+    if any(addition["selector"] in base_overrides for addition in override_additions):
+        fail(
+            "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+            "A base override differs from its exact authorization.",
+        )
+    expected_workspace = base_workspace.splitlines()
+    for addition in override_additions:
+        anchors = [
+            index
+            for index, line in enumerate(expected_workspace)
+            if line.startswith(f'  "{addition["before"]}": ')
+        ]
+        if len(anchors) != 1:
+            fail(
+                "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+                "The anchor of an authorized new override is missing or duplicated.",
+                override=addition["selector"],
+            )
+        expected_workspace.insert(anchors[0], f'  "{addition["selector"]}": {addition["to"]}')
+    current_overrides = _workspace_overrides(current_workspace)
+    if (
+        current_overrides != authorization["allowed_overrides"]
+        or current_workspace.splitlines() != expected_workspace
+        or not current_workspace.endswith("\n")
+    ):
+        fail(
+            "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+            "The workspace overrides differ from the exact remediation authorization.",
+            expected=authorization["allowed_overrides"],
+            actual=current_overrides,
+        )
+
+    lock_bytes = (repository_root / VITE_LOCKFILE).read_bytes()
+    lock_text = lock_bytes.decode("utf-8")
+    validate_next_sharp_sourcemap_exact_lock_graph(
+        run_git(repository_root, "show", f"{base_main_sha}:{VITE_LOCKFILE}"),
+        lock_text,
+        authorization,
+        "zod",
+    )
+    for key, expected_integrity in authorization["expected_lock_integrities"].items():
+        integrity = _lock_resolution_integrity(lock_text, key)
+        if integrity != expected_integrity:
+            fail(
+                "LOCKFILE_GENERATED_GRAPH_INVALID",
+                "A moved package differs from its exact authorized registry integrity.",
+                package=key,
+                expected=expected_integrity,
+                actual=integrity,
+            )
+    lock_hash = hashlib.sha256(lock_bytes).hexdigest()
+    if lock_hash != authorization["expected_lockfile_sha256"]:
+        fail(
+            "LOCKFILE_GENERATED_GRAPH_INVALID",
+            "The pnpm lockfile differs from the exact authorized generated graph.",
+            expected=authorization["expected_lockfile_sha256"],
+            actual=lock_hash,
+        )
+    lock_keys = _lock_package_keys(lock_text)
+    if len(lock_keys) != authorization["expected_lock_package_count"]:
+        fail(
+            "LOCKFILE_PACKAGE_COUNT_CHANGED",
+            "The remediation lockfile package count changed.",
+            expected=authorization["expected_lock_package_count"],
+            actual=len(lock_keys),
+        )
+    for package, replacement in replacements.items():
+        versions = _lock_key_versions(lock_text, package)
+        if versions != set(replacement["to"]):
+            fail(
+                "SECURITY_REMEDIATION_LOCK_VERSION_INVALID",
+                "A security target differs from its exact authorized lockfile version.",
+                package=package,
+                expected=sorted(replacement["to"]),
+                actual=sorted(versions),
+            )
+    lock_lines = lock_text.splitlines()
+    target_sharp = authorization["target_sharp_version"]
+    sharp_edges = [
+        selector
+        for selector, version in authorization["allowed_overrides"].items()
+        if selector.endswith(">sharp") and version == target_sharp
+    ]
+    if (
+        _lock_key_versions(lock_text, "sharp") != {target_sharp}
+        or len(sharp_edges) != 1
+        or f"  {sharp_edges[0]}: {target_sharp}" not in lock_lines
+        or any(
+            f"  {addition['selector']}: {addition['to']}" not in lock_lines
+            for addition in override_additions
+        )
+    ):
+        fail(
+            "LOCKFILE_INCONSISTENT",
+            "The lockfile does not keep Sharp on its exact protected edge and the new override.",
+            expected=target_sharp,
+            actual=sorted(_lock_key_versions(lock_text, "sharp")),
+        )
+
+    return {
+        "remediation_id": authorization["id"],
+        "dependency_manifest_changed": False,
+        "dependency_lockfile_changed": True,
+        "dependency_workspace_changed": True,
+        "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
+        "changed_dependency_files": changed_dependency_files,
+        "lockfile_consistency_verified": True,
+        "lockfile_sha256": lock_hash,
+        "lock_package_count": len(lock_keys),
+        "vulnerable_lock_versions": [],
+        "sharp_versions": [target_sharp],
+        "sharp_override_selector": sharp_edges[0],
+        "zod_versions": sorted(_lock_key_versions(lock_text, "zod")),
+        "zod_override_selectors": [addition["selector"] for addition in override_additions],
+    }
+
+
 def _first_nuget_node_difference(
     expected: dict[str, Any], current: Any
 ) -> dict[str, Any]:
@@ -8902,6 +9219,14 @@ def validate_dependency_diff(
         )
     if authorization is not None and authorization.get("id") == VITE_REMEDIATION_ID:
         return validate_vite_remediation_diff(
+            repository_root,
+            base_main_sha,
+            all_changed,
+            changed,
+            authorization,
+        )
+    if authorization is not None and authorization.get("id") == ZOD_REMEDIATION_ID:
+        return validate_zod_remediation_diff(
             repository_root,
             base_main_sha,
             all_changed,

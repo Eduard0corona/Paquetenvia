@@ -476,6 +476,75 @@ Historia de la remediación:
 Las imágenes web instalan las dependencias de desarrollo antes de `NODE_ENV=production` y copian
 `node_modules`, así que incluyen `vite` y `vitest`; `next start` en Linux nunca los carga.
 
+### Remediación pnpm de zod (SEC-2026-15)
+
+`SEC-2026-15-ZOD` (Issue #315, rama `fix/security-2026-15-zod`, base `9e55771`) remedia
+`GHSA-mrhx-c7xc-m3w5` (CVE-2023-54404, alto, publicado el 2026-10-01 y con su rango corregido el
+2026-10-23): `zod` `<4.6.6` puede agotar la memoria al validar arreglos grandes. `zod` 4.4.3 sólo
+llega por las herramientas de lint: `eslint-config-next` 16.4.1 → `eslint-plugin-react-hooks`
+7.1.1, que depende de `zod` y de `zod-validation-error` 4.0.2, que lo pide como peer. Ningún código
+de la aplicación lo importa.
+
+El owner decidió "Remediar con la tabla" (2026-10-24), por la ruta de SEC-2026-14. Si salen más
+avisos que esta misma tabla corrige, se agregan sin volver a preguntar. La tabla:
+
+| Paquete | De | A | Dónde |
+|---|---|---|---|
+| `zod` | 4.4.3 | 4.6.6 | transitivo de desarrollo, sólo lockfile |
+| override nuevo | — | `"zod@<4.6.6": 4.6.6` | `apps/web/pnpm-workspace.yaml` |
+
+- **Archivos.** `package.json` no cambia. `pnpm-workspace.yaml` gana la línea del override, justo
+  antes de la arista de Sharp, como SEC-2026-11 colocó `source-map-js`. pnpm 11.15.1 regeneró el
+  lockfile con `pnpm install --lockfile-only`; otra corrida no cambia nada. El lockfile suma 9 líneas
+  y quita 8:
+  - la línea del override en sus `overrides`;
+  - la clave de `zod` y su integridad del registro npm;
+  - la clave de la instantánea de `zod` y las referencias que la nombran:
+    `zod-validation-error@4.0.2(zod@4.6.6)` y las dos entradas `zod` de la instantánea de
+    `eslint-plugin-react-hooks@7.1.1`;
+  - el rango peer que el lockfile anota para `zod-validation-error@4.0.2`, que pasa a `zod: 4.6.6`:
+    pnpm aplica el override también a los rangos peer. El paquete declara el mismo rango que antes y
+    ningún paquete ni versión se mueve por ello.
+
+  Siguen 475 paquetes, ninguno nuevo.
+- **Validador.** `validate_zod_remediation_diff` exige:
+  - el manifiesto igual a la base;
+  - el workspace igual a la base salvo la línea nueva antes de su ancla, con los overrides exactos
+    (`allowed_overrides`) y sin que la base ya tuviera ese selector;
+  - el lockfile igual a la base tras el movimiento de `zod`, el override insertado y la línea de
+    metadatos declarada (`expected_lock_metadata_changes`), con el grafo exacto de SEC-2026-11
+    (`validate_next_sharp_sourcemap_exact_lock_graph`);
+  - la integridad de `zod@4.6.6` igual a la del registro npm;
+  - el SHA-256 del lockfile, el conteo de paquetes, `zod` sólo en 4.6.6 y Sharp 0.35.5 en su arista;
+    el smoke de Sharp es obligatorio.
+
+  Cualquier otro archivo, línea, versión o prerelease falla cerrado. Para que el movimiento alcance
+  la referencia que cierra el sufijo peer (`(zod@4.6.6)`), el reemplazo compartido de claves y
+  referencias acepta también `)` después de la versión. `expected_lock_metadata_changes` sólo puede
+  aparecer en SEC-2026-14 o SEC-2026-15, cada una con exactamente sus líneas
+  (`LOCK_METADATA_CHANGES`).
+- **braces (SEC-2026-10, Issue #180).** GitHub retiró ese aviso el 2026-10-23T12:53:02Z ("not a
+  practically exploitable vulnerability"); desde entonces ni el audit de npm ni osv.dev lo reportan.
+  Por eso la base autorizada tiene sólo el aviso de `zod` (1 alto) y la rama queda en cero. Su
+  autorización sigue en la política: si vuelve a aparecer, se acepta sobre el grafo vigente. Como el
+  lockfile cambia de bytes, la remediación revincula sólo su `expected_lockfile_sha256`
+  (`3f5834c3…` → `f944eecd…`), como SEC-2026-11 y SEC-2026-14; ruta, paquete y versión no cambian.
+  - Su `known_advisory_base_binding` hace que sólo su propia corrida lea la base con los bytes
+    anteriores; el modo normal y cualquier otra remediación la leen contra los nuevos.
+  - Si braces volviera a aparecer antes de la fusión, la base ya no sería la autorizada
+    (`BASE_AUDIT_UNEXPECTED`) y habría que volver a fijar el conjunto esperado.
+  - Retirar esa autorización o cerrar el Issue #180 no es parte de esta remediación.
+  - La réplica de SEC-2026-14 lee braces tal como lo declaraba su `validated_target_sha`, como la de
+    SEC-2026-11.
+- **Orden (K4).** El mismo que SEC-2026-14: la remediación a `main`, el retiro en `main` (devuelve
+  la línea `REL000_REMEDIATION_ID` de ambos flujos y el fixture a su forma de `9e55771`), el
+  back-sync a `development` y la fila `SEC-2026-15-PNPM-REMEDIATION-2026-10-24` del decision-log en
+  un PR normal a `development`.
+
+En `development` las imágenes web ya sólo llevan dependencias de producción (#311), así que no
+incluyen `zod`. En `main` (`9e55771`) ese cambio aún no llegó: una imagen construida desde `main`
+incluye `zod` en `node_modules` y `next start` nunca lo carga.
+
 ## Admisión explícita de dependencias (GOV-DEPENDENCY-ADMISSION-001)
 
 Desde MVP-1 el owner admite dependencias nuevas una por una ("Admisión
