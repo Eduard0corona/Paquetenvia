@@ -26,6 +26,8 @@ using Paqueteria.Infrastructure.Voice;
 using Paqueteria.Hosting.Observability;
 using Locations.Endpoints;
 using Locations.Infrastructure;
+using Notifications.Endpoints;
+using Notifications.Infrastructure.RecipientNotices.Webhooks;
 using Pricing.Endpoints;
 using Pricing.Infrastructure;
 using Realtime.Endpoints;
@@ -96,6 +98,10 @@ builder.Services.AddFinanceInfrastructure(builder.Configuration);
 builder.Services.AddFinanceEndpoints();
 builder.Services.AddRoutingInfrastructure(builder.Configuration);
 builder.Services.AddRoutingEndpoints();
+// NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006): the Meta and Event Grid webhooks (off by default, uniform
+// 404) and the e-mail unsubscribe; only the wrap side of the recipient-notice key, never the Notifications lane.
+builder.Services.AddRecipientNoticeReceipts(builder.Configuration, builder.Environment);
+builder.Services.AddRecipientNoticeEndpoints();
 builder.Services.AddScoped<IOrganizationRequestSession, OrganizationRequestSessionAdapter>();
 builder.Services.AddIdentitySecurity(builder.Configuration, builder.Environment);
 builder.Services
@@ -192,6 +198,7 @@ app.MapRouteEndpoints();
 app.MapCodEndpoints();
 app.MapFinancialsEndpoints();
 app.MapSettlementEndpoints();
+app.MapRecipientNoticeWebhookEndpoints();
 
 app.Run();
 

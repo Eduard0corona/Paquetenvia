@@ -727,13 +727,53 @@ CREATE TABLE notifications.notifications (
 --     key over paquetenvia-contact-v1, the channel and the normalized phone or e-mail), channel WHATSAPP or EMAIL,
 --     key_version integer 1 to 32767 (as EmailLookup:Keys), source RECIPIENT_REPLY (WhatsApp only), EMAIL_LINK (e-mail
 --     only) or DISPATCHER, recorded_at; primary key (contact_hash, channel); never a number, an address, a message body
---     or an organization. NTF-006 adds its writer functions.
--- Declared contract, not installed yet (Notifications lane step of AI-08 NTF-006):
+--     or an organization. Its writer is security.record_recipient_opt_out (AI-08 NTF-006, recipient notices step 3 of
+--     AI-18): a contact already opted out on the channel under any configured key version is not recorded again.
+-- NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (project owner: O7 "Aprobar lo propuesto (Recommended)" and O11 "Aprobarlas
+-- todas (Recommended)", choice 10; AI-24 recipient_notices.auto_reply). Installed by the Notifications lane step
+-- 20261029000100_AddRecipientNoticeReceipts of AI-08 NTF-006, which holds the DDL (Up, Down and Up again tested on
+-- PostgreSQL; its Down refuses while any request exists and otherwise drops only the store and the step's functions).
 --   automatic replies (AI-08 NTF-006, E4-P9 and E4-P15): a platform-wide store with the same row security and
---     definer-only access, holding per request only its kind (automatic reply or opt-out confirmation), the sender
---     contact hash, the sender number sealed under the recipient-notice key until the one reply attempt (then erased),
---     received_at, the reply status and its code; at most one automatic reply per contact hash in 24 hours, and one
---     opt-out confirmation only for the message that records the WhatsApp opt-out of its hash, outside that limit.
+--     definer-only access as the opt-out store (AI-18 recipient notices step 3), holding per request only its kind
+--     (automatic reply or opt-out confirmation), the sender contact hash and its contact lookup key version, the sender
+--     number sealed under the recipient-notice key with its key version, bound to a fixed platform identifier and the
+--     request id (never an organization), until the one reply attempt (then erased, whatever the outcome),
+--     received_at, the reply status, its lease (lease_token, lease_expires_at, available_at), attempts, its code and
+--     settled_at; never a number in clear, a message body or an organization. At most one automatic reply per contact
+--     hash in 24 hours, and one opt-out confirmation only for the message that records the WhatsApp opt-out of its
+--     hash, outside that limit. A request older than 23 hours is dropped. Settled rows are purged later by a
+--     maintenance function (not in this step).
+--   CREATE TABLE notifications.recipient_auto_replies (
+--     id uuid NOT NULL,
+--     kind text NOT NULL,
+--     contact_hash bytea NOT NULL,
+--     contact_key_version integer NOT NULL,
+--     sealed_number bytea,
+--     number_key_version text,
+--     received_at timestamptz NOT NULL,
+--     status text NOT NULL,
+--     attempts integer NOT NULL,
+--     available_at timestamptz NOT NULL,
+--     lease_token uuid,
+--     lease_expires_at timestamptz,
+--     last_code text,
+--     settled_at timestamptz,
+--     CONSTRAINT recipient_auto_replies_pkey PRIMARY KEY (id),
+--     CONSTRAINT recipient_auto_replies_kind_check CHECK (kind IN ('AUTO_REPLY','OPT_OUT_CONFIRMATION')),
+--     CONSTRAINT recipient_auto_replies_hash_check CHECK (octet_length(contact_hash)=32),
+--     CONSTRAINT recipient_auto_replies_key_version_check CHECK (contact_key_version BETWEEN 1 AND 32767),
+--     CONSTRAINT recipient_auto_replies_status_check CHECK (status IN ('PENDING','PROCESSING','SENT','FAILED','DROPPED')),
+--     CONSTRAINT recipient_auto_replies_number_check CHECK ((status IN ('PENDING','PROCESSING'))=(sealed_number IS NOT NULL) AND (sealed_number IS NULL)=(number_key_version IS NULL)),
+--     CONSTRAINT recipient_auto_replies_lease_check CHECK ((status='PROCESSING')=(lease_token IS NOT NULL) AND (lease_token IS NULL)=(lease_expires_at IS NULL)),
+--     CONSTRAINT recipient_auto_replies_settled_check CHECK ((status IN ('SENT','FAILED','DROPPED'))=(settled_at IS NOT NULL)),
+--     CONSTRAINT recipient_auto_replies_attempts_check CHECK (attempts BETWEEN 0 AND 1)
+--   );
+--   CREATE UNIQUE INDEX recipient_auto_replies_confirmation_uq ON notifications.recipient_auto_replies(contact_hash) WHERE kind='OPT_OUT_CONFIRMATION';
+--   CREATE INDEX recipient_auto_replies_contact_idx ON notifications.recipient_auto_replies(contact_hash,received_at) WHERE kind='AUTO_REPLY';
+--   CREATE INDEX recipient_auto_replies_pending_idx ON notifications.recipient_auto_replies(available_at) WHERE status='PENDING';
+--   ALTER TABLE notifications.recipient_auto_replies ENABLE ROW LEVEL SECURITY;
+--   ALTER TABLE notifications.recipient_auto_replies FORCE ROW LEVEL SECURITY;
+--   REVOKE ALL ON notifications.recipient_auto_replies FROM PUBLIC,paqueteria_app,paqueteria_worker;
 -- NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 (project owner: L1 "Función de conteo (Recommended)" and L2 "Toda la plataforma
 -- (Recommended)"; AI-24 recipient_notices.caps). Installed by the Notifications lane step
 -- 20261023000100_AddRecipientNoticeCounts of AI-08 NTF-005, which holds the DDL (Up, Down and Up again tested on

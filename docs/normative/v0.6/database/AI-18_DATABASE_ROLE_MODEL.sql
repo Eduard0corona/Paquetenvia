@@ -17,6 +17,7 @@ DO $$ BEGIN CREATE ROLE paqueteria_master_data_loader NOLOGIN NOBYPASSRLS; EXCEP
 DO $$ BEGIN CREATE ROLE paqueteria_operator_outbox_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE paqueteria_auto_close_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 DO $$ BEGIN CREATE ROLE paqueteria_realtime NOLOGIN NOBYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+DO $$ BEGIN CREATE ROLE paqueteria_notification_receipt_executor NOLOGIN BYPASSRLS; EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 -- Normalize ownership after AI-06 was applied by the privileged deployment owner.
 DO $$
@@ -502,8 +503,7 @@ REVOKE paqueteria_realtime FROM paqueteria_app, paqueteria_worker, paqueteria_bo
 -- Recipient notices (NTF-RECIPIENT-NOTICES-2026-10-20, project owner: E4 "Los 4 del plan (Recommended)", E4-P2 "Llave
 -- propia para avisos (Recommended)", E4-P8 "Las tres vías (Recommended)" and E4-P9 "Respuesta automática
 -- (Recommended)"; docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md; AI-24 recipient_notices). Each named lane step changes
--- nothing in this baseline: it lands together with its baseline assertions. Steps 1, 2 and 6 are installed; step 3 is
--- declared contract, not installed yet.
+-- nothing in this baseline: it lands together with its baseline assertions. Steps 1, 2, 3 and 6 are installed.
 -- 1. Notifications lane step 20261020000100_AddRecipientNoticeLane of AI-08 NTF-003 (installed).
 --    security.resolve_outbox_consumer(text) gains the branch orders.recipient-notice-requested -> NOTIFICATIONS. New or
 --    replaced functions, each owned by paqueteria_outbox_executor, SECURITY DEFINER with a pinned search_path that starts
@@ -534,17 +534,41 @@ REVOKE paqueteria_realtime FROM paqueteria_app, paqueteria_worker, paqueteria_bo
 --      GRANT SELECT,INSERT ON orders.recipient_notice_consents TO paqueteria_app;
 --      GRANT SELECT ON orders.recipient_notice_consents TO paqueteria_worker;
 --    The producer row orders.recipient-notice-requested uses the existing INSERT on platform.outbox_events.
--- 3. AI-08 NTF-006 adds, as DDL of this baseline together with its baseline assertions and the role lists of the
---    migrator guards, the role paqueteria_notification_receipt_executor, NOLOGIN and BYPASSRLS because a provider
---    webhook carries no tenant, removed from paqueteria_app, paqueteria_worker and paqueteria_realtime and granted to
---    no runtime role. It owns security.record_messaging_receipt, security.record_recipient_opt_out and the
---    automatic-reply request functions, executable only by paqueteria_app, and the automatic-reply claim and settle
---    functions, executable only by paqueteria_worker. Its privileges are column-limited: on notifications.notifications
---    reading id, owner_org_id, channel, status, provider_reference, version and attempts and changing only status,
---    delivered_at, version and updated_at; inserting status events and notifications.status-changed outbox rows;
---    reading and inserting opt-outs; reading, inserting and changing only status, attempt and sealed-number columns of
---    the automatic-reply store; no DELETE, no table-wide privilege, no other table. Receipts move a Notification only
---    forward (SENT to DELIVERED or FAILED) and ignore an unknown provider reference.
+-- 3. Notifications lane step 20261029000100_AddRecipientNoticeReceipts of AI-08 NTF-006 (installed;
+--    NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25, project owner: O5 "Ampliar AI-18 (Recommended)", O10 "Sí, el registro de
+--    la baja basta (Recommended)" and O11 "Aprobarlas todas (Recommended)", choice 10). The role
+--    paqueteria_notification_receipt_executor is DDL of this baseline (declared above with the other roles), NOLOGIN and
+--    BYPASSRLS because a provider webhook carries no tenant, removed from paqueteria_app, paqueteria_worker and
+--    paqueteria_realtime and granted to no runtime role; the step also creates it, idempotently, for an installation
+--    whose baseline predates it. It owns security.record_messaging_receipt(text,text,text,text,timestamptz),
+--    security.record_recipient_opt_out(text,text,bytea,integer,bytea[]) and the automatic-reply request function
+--    security.request_recipient_auto_reply(uuid,text,bytea,integer,bytea[],bytea,text,timestamptz), executable only by
+--    paqueteria_app, and the automatic-reply claim and settle functions
+--    security.claim_recipient_auto_replies(integer,interval) and
+--    security.settle_recipient_auto_reply(uuid,uuid,text,text,timestamptz), executable only by paqueteria_worker; each is
+--    SECURITY DEFINER with a pinned search_path that starts with pg_catalog and ends with pg_temp, without dynamic SQL or
+--    RETURNING, EXECUTE revoked from PUBLIC. Its privileges are column-limited, issued by paqueteria_migrator exactly as:
+--      GRANT USAGE ON SCHEMA notifications,security TO paqueteria_notification_receipt_executor;
+--      GRANT SELECT (id,owner_org_id,channel,status,provider_reference,version,attempts) ON notifications.notifications TO paqueteria_notification_receipt_executor;
+--      GRANT UPDATE (status,delivered_at,version,updated_at,last_provider_attempt_code) ON notifications.notifications TO paqueteria_notification_receipt_executor;
+--      GRANT INSERT (id,owner_org_id,notification_id,version,status,attempts,provider_attempt_code,occurred_at) ON notifications.notification_status_events TO paqueteria_notification_receipt_executor;
+--      GRANT SELECT (contact_hash,channel,source,recorded_at) ON notifications.recipient_opt_outs TO paqueteria_notification_receipt_executor;
+--      GRANT INSERT (contact_hash,channel,key_version,source,recorded_at) ON notifications.recipient_opt_outs TO paqueteria_notification_receipt_executor;
+--      GRANT SELECT (id,kind,contact_hash,sealed_number,number_key_version,received_at,status,attempts,available_at,lease_token,lease_expires_at) ON notifications.recipient_auto_replies TO paqueteria_notification_receipt_executor;
+--      GRANT INSERT (id,kind,contact_hash,contact_key_version,sealed_number,number_key_version,received_at,status,attempts,available_at) ON notifications.recipient_auto_replies TO paqueteria_notification_receipt_executor;
+--      GRANT UPDATE (status,attempts,available_at,lease_token,lease_expires_at,last_code,settled_at,sealed_number,number_key_version) ON notifications.recipient_auto_replies TO paqueteria_notification_receipt_executor;
+--    and, issued by the writer's owner paqueteria_outbox_executor (O5: the existing status-changed writer builds the
+--    notification-status-changed-v2 row, so the executor reads no further column and holds no privilege on either outbox
+--    table):
+--      GRANT EXECUTE ON FUNCTION security.emit_notification_status_changed(uuid,uuid,integer,text,text,integer,timestamptz) TO paqueteria_notification_receipt_executor;
+--    On notifications.notifications it reads only id, owner_org_id, channel, status, provider_reference, version and
+--    attempts and changes only status, delivered_at, version, updated_at and, for a FAILED receipt, the failure code
+--    last_provider_attempt_code (O5); it inserts status events; it reads and inserts opt-outs (O10: a recipient opt-out,
+--    WhatsApp BAJA or the e-mail link, writes no audit row; the opt-out row with its source and recorded_at is the
+--    record); it reads and inserts automatic-reply requests and changes only their status, attempt, availability, lease,
+--    code, settle and sealed-number columns (O11 choice 10); no DELETE, no table-wide privilege, no other table and no
+--    CREATE (CREATE on schema security is held only while the step creates the functions). Receipts move a Notification
+--    only forward (SENT to DELIVERED or FAILED) and ignore an unknown provider reference.
 -- 4. Besides the consent table of step 2, the runtime roles gain no table privilege: paqueteria_worker already reads orders.orders, orders.order_events,
 --    orders.public_tracking_tokens and locations.locations under FORCE RLS through the runtime table privileges above,
 --    and it never reaches the PII key (the recipient-notice key is a Key Vault matter, not a database one).
@@ -564,6 +588,7 @@ REVOKE paqueteria_realtime FROM paqueteria_app, paqueteria_worker, paqueteria_bo
 --    conteo estricto (Recommended)"). The step adds the
 --    two partial indexes AI-06 declares and no table, column, row, role or table privilege; the runtime roles still gain no
 --    table privilege (step 4). Its Down drops the function and the two indexes.
+REVOKE paqueteria_notification_receipt_executor FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;
 
 -- Mandatory deployment assertions:
 -- 1. API login SET ROLE paqueteria_app; Worker login SET ROLE paqueteria_worker. The API's realtime dispatcher login
@@ -607,3 +632,4 @@ REVOKE paqueteria_realtime FROM paqueteria_app, paqueteria_worker, paqueteria_bo
 -- 38. once the Notifications lane step 20261020000100_AddRecipientNoticeLane (NTF-RECIPIENT-NOTICES-2026-10-20) is recorded, security.expand_recipient_notice_request(uuid,uuid,boolean,interval,time,time,text,text[]), security.read_notification_delivery(uuid,uuid), security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,text,timestamptz,timestamptz), security.cancel_notification(uuid,uuid,uuid,integer,text,timestamptz) and security.is_recipient_opted_out(text,bytea[]) are owned by paqueteria_outbox_executor, SECURITY DEFINER with a pinned search_path, and only paqueteria_worker may EXECUTE them; the published 8-argument security.apply_notification_outcome is absent; notifications.recipient_opt_outs has ENABLE and FORCE ROW LEVEL SECURITY with no policy, paqueteria_app, paqueteria_worker, paqueteria_realtime and paqueteria_bootstrap hold no privilege on it and paqueteria_outbox_executor holds SELECT only. Its rollback restores the published routines and grants exactly.
 -- 39. once the Notifications lane step 20261023000100_AddRecipientNoticeCounts (NTF-RECIPIENT-NOTICE-CAPS-2026-10-23) is recorded, security.read_recipient_notice_counts(uuid,uuid) is owned by paqueteria_outbox_executor, SECURITY DEFINER with search_path=pg_catalog, platform, notifications, pg_temp, contains no dynamic SQL and no RETURNING, returns at most one row of two integers and only under a live send-request lease_token, and only paqueteria_worker may EXECUTE it; paqueteria_worker still holds no privilege on notifications.notifications. Its rollback drops the function and its two indexes.
 -- 40. once the Orders lane step 20261023000200_AddRecipientNoticeConsents (NTF-RECIPIENT-NOTICES-2026-10-20) is recorded, orders.recipient_notice_consents is owned by paqueteria_migrator, has ENABLE and FORCE ROW LEVEL SECURITY with exactly its tenant policy recipient_notice_consents_tenant (security.app_allowed_org(owner_org_id)) and the append-only trigger recipient_notice_consents_append_only, paqueteria_app holds exactly SELECT and INSERT and paqueteria_worker exactly SELECT on it, and paqueteria_realtime and paqueteria_bootstrap hold nothing; no runtime role can UPDATE, DELETE or TRUNCATE a consent. Its rollback refuses while any consent exists.
+-- 41. paqueteria_notification_receipt_executor is NOLOGIN BYPASSRLS, inherits no role and is granted to no runtime or bootstrap role; once the Notifications lane step 20261029000100_AddRecipientNoticeReceipts (NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25) is recorded, it owns exactly security.record_messaging_receipt(text,text,text,text,timestamptz), security.record_recipient_opt_out(text,text,bytea,integer,bytea[]), security.request_recipient_auto_reply(uuid,text,bytea,integer,bytea[],bytea,text,timestamptz), security.claim_recipient_auto_replies(integer,interval) and security.settle_recipient_auto_reply(uuid,uuid,text,text,timestamptz), each SECURITY DEFINER with a pinned search_path and without dynamic SQL or RETURNING; only paqueteria_app may EXECUTE the first three and only paqueteria_worker the last two; it holds exactly USAGE on schemas notifications and security, the 59 column privileges of recipient notices step 3 and EXECUTE on security.emit_notification_status_changed(uuid,uuid,integer,text,text,integer,timestamptz), none grantable, and no CREATE, DELETE, table-wide or outbox privilege; notifications.recipient_auto_replies has ENABLE and FORCE ROW LEVEL SECURITY with no policy and paqueteria_app, paqueteria_worker, paqueteria_realtime and paqueteria_bootstrap hold no privilege on it. Its rollback refuses while any automatic-reply request exists and otherwise drops the functions and the store and revokes every privilege of the executor; the role then stays, inert.

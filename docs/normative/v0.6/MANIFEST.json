@@ -4,7 +4,7 @@
   "bundle_revision": "v0.6-full-canonical-sync-7-fin001-mvp1",
   "date": "2026-07-31",
   "status": "NORMATIVE_BASELINE_CANONICAL_SYNC_FIN001_MVP1",
-  "canonical_sql_sha256": "6e0294fa25a6d8ddc5e63f5e2de191e41130a0f505ae9fca97e79fcd477d19da",
+  "canonical_sql_sha256": "b83ed5283e4fd03a4cf6afc958345fe45556fb42b2a79fc13c0fd973f8eed32f",
   "file_count": 74,
   "files": [
     {
@@ -25,7 +25,7 @@
     {
       "path": "CANONICAL_SOURCE_OF_TRUTH.md",
       "bytes": 4696,
-      "sha256": "9a58a669fd302f04aa6394f12160b38e8d4d2bb3e4351400488a338be69ea574"
+      "sha256": "391d7f163cce8f57fed8314a9df3dc456da51abfbdfa82dbcb20e348a9968a70"
     },
     {
       "path": "CHANGED_FILES_SINCE_V0.5.md",
@@ -34,18 +34,18 @@
     },
     {
       "path": "CHANGELOG.md",
-      "bytes": 261501,
-      "sha256": "ac4fc0c69ef5599efeb54841104b325df3641b7f69a6a7d5a3579551ec8e0633"
+      "bytes": 265355,
+      "sha256": "ac7bcaacf6bddb2580ca471a11cdb16a370724ae67acf4ec1d7fdf82e9f85c4f"
     },
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "9449f86548c515dc69dc8f0ba8d5e2a57707c3ba487561e6a5aef7747928c5b7"
+      "sha256": "6f6316f95dc9f6f15b26ab697c323ccc7c30e4795015060142e5be961f4f52ea"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
       "bytes": 2634,
-      "sha256": "5ea90b44cdad142e3f6a55f9148d1135c50666407547abc7e0c5ddc4678a0713"
+      "sha256": "e2f646f281c609e549948a0cbee871de55d5b7299e0039f280b94cc971b8f322"
     },
     {
       "path": "VALIDATION_RESULTS.txt",
@@ -54,8 +54,8 @@
     },
     {
       "path": "contracts/AI-05_OPENAPI.yaml",
-      "bytes": 329850,
-      "sha256": "933423afdd5ec34bd66f4687849f79281af1a862dc23094c1a9b2ac6bf4a1759"
+      "bytes": 347445,
+      "sha256": "4f5e7c973793cd48ef2715dd994f6da6b0eb8d5664bd4ad23dfd269b16aaf383"
     },
     {
       "path": "contracts/AI-12_SIGNALR_CONTRACT.yaml",
@@ -64,18 +64,18 @@
     },
     {
       "path": "database/AI-06_SCHEMA.sql",
-      "bytes": 82335,
-      "sha256": "6e0294fa25a6d8ddc5e63f5e2de191e41130a0f505ae9fca97e79fcd477d19da"
+      "bytes": 85668,
+      "sha256": "b83ed5283e4fd03a4cf6afc958345fe45556fb42b2a79fc13c0fd973f8eed32f"
     },
     {
       "path": "database/AI-18_DATABASE_ROLE_MODEL.sql",
-      "bytes": 64788,
-      "sha256": "47be7b53cbb27a173277258ca0f3ff1035ef49e8ceb4ba93f210ac5dbc9b6bda"
+      "bytes": 69715,
+      "sha256": "9c9fd48b8c95457b9b9b26600c0db6fa75976060e904206414a721070fd281e4"
     },
     {
       "path": "decision-log.md",
-      "bytes": 576877,
-      "sha256": "ccb99c4fd292d98912b08c6b6b5621113491a35fb347adcf17dcb9dac6279b82"
+      "bytes": 596845,
+      "sha256": "327d806142b6a31518511e2e362987f23124912d859f2c49d0443605a8d59039"
     },
     {
       "path": "docs/AI-14_TECH_REFERENCES.md",
@@ -334,13 +334,13 @@
     },
     {
       "path": "specs/AI-07_UI_CONTRACTS.yaml",
-      "bytes": 134486,
-      "sha256": "497235ac12ebc268047c2b25bc5770b0faf45284a37655caf99b0d3c1e3a903a"
+      "bytes": 135223,
+      "sha256": "9127cad009adad233cb88c7183f3581af80044284351d10c756fefb02c36466a"
     },
     {
       "path": "specs/AI-08_BACKLOG.yaml",
-      "bytes": 118652,
-      "sha256": "c514324b34a61bd92f2039573c0670fdc2d8752ef75502f13c5f0e082534a8b8"
+      "bytes": 120734,
+      "sha256": "9305ad5b33152f022fa5c618f2aa3c12b707e56a1778145992bab53b845e125b"
     },
     {
       "path": "specs/AI-10_DECISIONS_AND_GATES.yaml",
@@ -364,8 +364,8 @@
     },
     {
       "path": "specs/AI-24_RUNTIME_HARDENING_CONTRACT.yaml",
-      "bytes": 56938,
-      "sha256": "d3c2d474e8d17e58536582729bfdc855b457db85b74bff6bedc4e237610ed7a9"
+      "bytes": 63769,
+      "sha256": "b01611b00ded1f209f52e8a12efa44dbc1498756d2fe62d26ca11281984f1a33"
     },
     {
       "path": "tests/AI-09_ACCEPTANCE_TESTS.feature",
@@ -374,8 +374,8 @@
     },
     {
       "path": "tools/validate_contracts.py",
-      "bytes": 52891,
-      "sha256": "a62d5d26c8948c6d07651604497f6c4c03ba5ddd9994fa059cedd2db9bc80a89"
+      "bytes": 59249,
+      "sha256": "9198f03e428421a690bc3c40dfb50067a663d46be61dc52159a3b82025013a8b"
     }
   ]
 }

@@ -5,6 +5,7 @@ using Finance.Endpoints;
 using Identity.Endpoints.AuthCenter;
 using Locations.Endpoints;
 using Microsoft.Extensions.Options;
+using Notifications.Endpoints;
 using Orders.Endpoints;
 using Paqueteria.Infrastructure.Security.RateLimiting;
 using Pricing.Endpoints;
@@ -50,6 +51,21 @@ namespace Paqueteria.Api.Http;
 /// <item><term><c>Dispatch.AssignableDrivers</c></term><description><c>listAssignableDrivers</c>, 60 per 60 s.</description></item>
 /// <item><term><c>Identity.SignIn</c></term><description><c>startAuthCenterSignIn</c> (<c>GET /auth/login</c>), 20
 /// per 60 s per client network; a browser navigation sees a simple page.</description></item>
+/// </list>
+/// <para>
+/// NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (owner answer O3 "Los propuestos (Recommended)" and O4 "404 siempre; baja sin
+/// interruptor (Recommended)"), per client network and per 60 s, re-set after two weeks of pilot metrics like the other
+/// SEC-004 numbers:
+/// </para>
+/// <list type="table">
+/// <item><term><c>Messaging.WhatsAppWebhookVerify</c></term><description><c>verifyMetaWhatsAppWebhook</c>, 10; not applied
+/// while the WhatsApp webhook is off.</description></item>
+/// <item><term><c>Messaging.WhatsAppWebhook</c></term><description><c>receiveMetaWhatsAppWebhook</c>, 300; not applied while
+/// the WhatsApp webhook is off.</description></item>
+/// <item><term><c>Messaging.EmailEvents</c></term><description><c>receiveAcsEmailEvents</c>, 120; not applied while the
+/// e-mail events are off.</description></item>
+/// <item><term><c>RecipientNotices.Unsubscribe</c></term><description><c>unsubscribeRecipientNotices</c>, 20, with the
+/// uniform public 429 of <c>publicTracking</c>; it has no switch.</description></item>
 /// </list>
 /// Recipient calls are not a limiter policy: their limit (<c>Drivers:RecipientCalls</c>) is counted in the database
 /// per driver and order, and their 429 uses the same <c>TooManyRequests</c> shape.
@@ -108,7 +124,32 @@ public static class ApiRateLimitPolicies
             new RateLimitPolicy(
                 AuthCenterDefaults.SignInRateLimitPolicy,
                 RateLimitPartitionKind.ClientNetwork,
-                static provider => Configured(provider).SignIn.ToLimit()));
+                static provider => Configured(provider).SignIn.ToLimit()),
+            new RateLimitPolicy(
+                RecipientNoticeEndpointDefaults.WhatsAppVerifyRateLimitPolicy,
+                RateLimitPartitionKind.ClientNetwork,
+                static provider => Configured(provider).WhatsAppWebhookVerify.ToLimit())
+            {
+                IsActive = RecipientNoticeEndpointDefaults.IsWhatsAppWebhookActive,
+            },
+            new RateLimitPolicy(
+                RecipientNoticeEndpointDefaults.WhatsAppWebhookRateLimitPolicy,
+                RateLimitPartitionKind.ClientNetwork,
+                static provider => Configured(provider).WhatsAppWebhook.ToLimit())
+            {
+                IsActive = RecipientNoticeEndpointDefaults.IsWhatsAppWebhookActive,
+            },
+            new RateLimitPolicy(
+                RecipientNoticeEndpointDefaults.EmailEventsRateLimitPolicy,
+                RateLimitPartitionKind.ClientNetwork,
+                static provider => Configured(provider).EmailEvents.ToLimit())
+            {
+                IsActive = RecipientNoticeEndpointDefaults.IsEmailEventsActive,
+            },
+            new RateLimitPolicy(
+                RecipientNoticeEndpointDefaults.UnsubscribeRateLimitPolicy,
+                RateLimitPartitionKind.ClientNetwork,
+                static provider => Configured(provider).RecipientUnsubscribe.ToLimit()));
     }
 
     private static RateLimitPolicy PerUser(string name, Func<ApiRateLimitOptions, FixedWindowRateLimitOptions> select) =>
@@ -159,6 +200,18 @@ public sealed class ApiRateLimitOptions
     /// <summary>"inicio de sesión 20/min por red" (owner answer Q5: <c>/auth/login</c> only).</summary>
     public FixedWindowRateLimitOptions SignIn { get; set; } = new(20);
 
+    /// <summary>O3 "Verificación del webhook de Meta (GET)": 10 per minute and client network.</summary>
+    public FixedWindowRateLimitOptions WhatsAppWebhookVerify { get; set; } = new(10);
+
+    /// <summary>O3 "Webhook de Meta (POST)": 300 per minute and client network.</summary>
+    public FixedWindowRateLimitOptions WhatsAppWebhook { get; set; } = new(300);
+
+    /// <summary>O3 "Eventos de correo de Azure": 120 per minute and client network.</summary>
+    public FixedWindowRateLimitOptions EmailEvents { get; set; } = new(120);
+
+    /// <summary>O3 "Baja desde el correo": 20 per minute and client network.</summary>
+    public FixedWindowRateLimitOptions RecipientUnsubscribe { get; set; } = new(20);
+
     /// <summary>The name of the first invalid setting, or null when every one is valid.</summary>
     public string? Invalid() =>
         new (string Name, FixedWindowRateLimitOptions? Value)[]
@@ -174,6 +227,10 @@ public sealed class ApiRateLimitOptions
                 (nameof(Quote), Quote),
                 (nameof(AssignableDrivers), AssignableDrivers),
                 (nameof(SignIn), SignIn),
+                (nameof(WhatsAppWebhookVerify), WhatsAppWebhookVerify),
+                (nameof(WhatsAppWebhook), WhatsAppWebhook),
+                (nameof(EmailEvents), EmailEvents),
+                (nameof(RecipientUnsubscribe), RecipientUnsubscribe),
             }
             .Where(static setting => setting.Value is null || !setting.Value.IsValid)
             .Select(static setting => setting.Name)

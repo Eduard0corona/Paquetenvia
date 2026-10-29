@@ -342,6 +342,7 @@ recipient_notices:
   - NTF-RECIPIENT-NOTICES-2026-10-20
   - NTF-RECIPIENT-NOTICE-CAPS-2026-10-23
   - NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23
+  - NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25
   - GATE-004-CHANNELS
   - NTF-EMAIL-ACS-PILOT-2026-10-11
   - NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02
@@ -355,9 +356,11 @@ recipient_notices:
     (the Notifications lane step) and AI-08 NTF-005 (the Worker consumer and sender, the count function of the caps, the
     readers, the unwrap-only notice key and the adapters' buttons and headers) and AI-08 NTF-004 (the ORD-002 producer
     of orders.recipient-notice-requested, the WhatsApp consent box on createOrder and the CSV-001 commit and the Orders
-    lane table orders.recipient_notice_consents the Worker reads; NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23, N1 to N3),
-    with every switch off and every provider Disabled; nothing is configured or enabled. AI-08 NTF-006 to NTF-008
-    deliver the rest, each item with its own code and tests; only a later change that records the GATE-004 and GATE-007
+    lane table orders.recipient_notice_consents the Worker reads; NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23, N1 to N3)
+    and AI-08 NTF-006 (the provider webhooks, the e-mail unsubscribe and its page, the receipt executor's Notifications
+    lane step with the automatic-reply store and the Worker's automatic-reply sender;
+    NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25, O2 to O11), with every switch off and every provider Disabled; nothing is
+    configured or enabled. AI-08 NTF-007 and NTF-008 deliver the rest, each item with its own code and tests; only a later change that records the GATE-004 and GATE-007
     resolution rows turns it on. GATE-004 and GATE-007 stay open
   adr: docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md
   audience: the delivery recipient of the order only, reached at the contact of its destination location; never the
@@ -587,18 +590,32 @@ recipient_notices:
     scope: global - an opt-out stops every recipient notice of that channel to that phone or e-mail from every
       organization, because the WhatsApp number is only one
     whatsapp_reply: an inbound WhatsApp text that is exactly BAJA, ALTO, STOP or CANCELAR (trimmed, case and accents
-      ignored), or a tap on the quick reply No recibir avisos (receiveMetaWhatsAppWebhook); source RECIPIENT_REPLY,
+      ignored), or a tap on the quick reply No recibir avisos, recognized by its fixed payload RECIPIENT_NOTICE_OPT_OUT
+      or by its text normalized the same way (NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 O11 choice 4;
+      receiveMetaWhatsAppWebhook); source RECIPIENT_REPLY,
       channel WHATSAPP; the sender gets the one confirmation below (confirmation); the message body is never stored or
       logged
     email_link: the link in every e-mail and its List-Unsubscribe one-click (unsubscribeRecipientNotices); source
-      EMAIL_LINK, channel EMAIL
+      EMAIL_LINK, channel EMAIL; the API verifies the token, reads the destination e-mail copy of that notice under
+      FORCE RLS in a transaction of the token's organization and opens it with its PII key (purpose locations.email,
+      the VOICE-001 provider callback precedent), in memory only; a notice whose copy no longer exists is the uniform
+      404 (NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 O11 choice 1)
     dispatcher: the button "Detener avisos" on the order (stopOrderRecipientNotices), for a recipient who asks by
       phone; source DISPATCHER, both channels of the contact of that order; audited RECIPIENT_NOTICES_STOPPED without
       any value
     store: the opt-out store declared in AI-06 (NTF-003 table, NTF-006 writer functions) keeps keyed hashes only
+    writer: security.record_recipient_opt_out, owned by paqueteria_notification_receipt_executor and executable only by
+      paqueteria_app (AI-18 recipient notices step 3); a contact already opted out on the channel under any configured
+      key version is not recorded again
+    audit: NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O10 "Sí, el registro de la baja basta (Recommended)") - an opt-out
+      by the recipient (whatsapp_reply or email_link) writes no audit row; its opt-out row, with its source and
+      recorded_at and no contact data, is the record; only the dispatcher path is audited
     hash: HMAC-SHA256 under the Key Vault secret paquetenvia-contact-lookup-key-1 (read by the API and the Worker,
       versioned like EmailLookup:Keys) over paquetenvia-contact-v1|{channel}|{value}, where value is the E.164 +52
       phone (a WhatsApp 521 mobile prefix is reduced to 52 first) or the trimmed lower-case e-mail address
+    key_versions: NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O11 choice 8) - a contact lookup key version stays
+      configured (ContactLookup:Keys, at most 8) while opt-outs recorded under it exist, because every check and
+      every new opt-out hashes the contact under every configured version
     check: before every send the Worker hashes the decrypted contact under every configured key version and asks
       security.is_recipient_opted_out; an opted-out contact ends CANCELLED with RECIPIENT_OPTED_OUT and no provider call
     confirmation:
@@ -638,21 +655,48 @@ recipient_notices:
     path: the webhook never calls the provider; it seals the sender number under the recipient-notice key and records
       the request with its keyed hash through a SECURITY DEFINER function; the Worker sends it, decrypting in memory,
       and erases the sealed number right after the attempt whatever its outcome; a request older than 23 hours is
-      dropped unsent; NTF-006 fixes the store and its functions
+      dropped unsent
+    store: NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O11 choice 10) - notifications.recipient_auto_replies (AI-06,
+      Notifications lane step 20261029000100_AddRecipientNoticeReceipts), written by
+      security.request_recipient_auto_reply (paqueteria_app) and leased and settled by
+      security.claim_recipient_auto_replies and security.settle_recipient_auto_reply (paqueteria_worker), all owned by
+      paqueteria_notification_receipt_executor; the request records the contact lookup key version, and the sealed
+      number its recipient-notice key version and an ADP-001 binding to the fixed platform identifier
+      b32d80c1-ecb9-4b22-a049-ffb64e63f38a (no organization) and the request id, purpose notifications.auto_reply_phone;
+      the API seals with its wrap-only half of the key and the Worker opens with its unwrap-only half; one batch is
+      leased under one lease_token; a lease that expires ends the request FAILED with AMBIGUOUS_TIMEOUT and the number
+      erased (it may have been sent, and WhatsApp has no idempotency); a transient Key Vault failure before the call
+      puts it back with its number; settled rows are purged later by a maintenance function, not by this step
+    quiet_hours: NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O7 "Aprobar lo propuesto (Recommended)", point 1) - it
+      ignores the 08:00 to 21:00 window, because it answers a message of the person; Meta's 23-hour bound above still
+      applies
+    switches_off: O7 point 2 - while Notifications:RecipientNotices:Enabled is false or Messaging:WhatsApp:Provider is
+      Disabled, a request ends DROPPED with MESSAGING_CHANNEL_DISABLED, its number erased and no provider call
+    daily_cap: O7 point 3 - none of its own; the limit of one per contact in 24 hours is its bound (Meta charges these
+      service messages beyond 1,000 free per number per month since 2026-10-01)
     never: the inbound body, the sender profile name or the number in logs, audit, events or any row other than the
       sealed number until the attempt
   receipts:
     whatsapp: receiveMetaWhatsAppWebhook statuses - delivered sets DELIVERED and delivered_at; failed sets FAILED with
-      the code of the existing classifier (131026 is MESSAGING_RECIPIENT_UNDELIVERABLE); sent and read are ignored (data
-      minimization); recipient_id, contacts, conversation and pricing data are never stored or logged
-    email: receiveAcsEmailEvents, Microsoft.Communication.EmailDeliveryReportReceived - Delivered sets DELIVERED;
-      Failed, Bounced, Suppressed and FilteredSpam set FAILED with a closed MessagingResultCodes code
+      the code of the existing classifier (131026 is MESSAGING_RECIPIENT_UNDELIVERABLE; a failure without a code is
+      MESSAGING_PROVIDER_REJECTED); sent and read are ignored (data minimization); recipient_id, contacts, conversation
+      and pricing data are never stored or logged
+    email: receiveAcsEmailEvents, Microsoft.Communication.EmailDeliveryReportReceived (NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25,
+      O6 "Cuarentena = bloqueado; Expanded se ignora (Recommended)") - Delivered sets DELIVERED; Bounced and
+      Suppressed set FAILED with MESSAGING_RECIPIENT_UNDELIVERABLE; FilteredSpam and Quarantined set FAILED with
+      MESSAGING_POLICY_BLOCKED; Failed sets FAILED with MESSAGING_PROVIDER_REJECTED; Expanded is ignored because it is
+      not final
     function: security.record_messaging_receipt, SECURITY DEFINER owned by paqueteria_notification_receipt_executor
-      (AI-18, NTF-006) and executable only by paqueteria_app; it crosses tenants because a webhook carries none;
-      transitions only move forward (SENT to DELIVERED or FAILED); a repeated receipt changes nothing; a provider
-      reference that matches nothing, a receipt that arrives before its send was settled included, is ignored; each
-      change writes one status event and one notifications.status-changed row
-    meaning: until receipts exist, SENT means provider acceptance only
+      (AI-18 recipient notices step 3, NTF-006) and executable only by paqueteria_app; it crosses tenants because a
+      webhook carries none; transitions only move forward (SENT to DELIVERED or FAILED); a repeated receipt changes
+      nothing; a provider reference that matches nothing, a receipt that arrives before its send was settled included,
+      is ignored (O11 choice 6, a residual risk - that receipt is lost and the notice stays SENT); each change writes
+      one status event and, through the existing writer security.emit_notification_status_changed, one
+      notifications.status-changed row; a FAILED receipt also records its code in last_provider_attempt_code (O5
+      "Ampliar AI-18 (Recommended)"); DELIVERED sets delivered_at to the reported time, never later than the server
+      time
+    meaning: SENT means provider acceptance only until a receipt moves it on; while the webhooks are off no receipt
+      arrives
   dispatcher_view:
     list: listOrderRecipientNotices - notice, channel, status, attempts, last code and times; never the recipient, the
       link or a template parameter
@@ -662,18 +706,34 @@ recipient_notices:
     roles: DISPATCHER members, and PLATFORM_ADMIN members with a satisfied MFA challenge, of the owner organization only
       (the tracking_link_operations rule); an operator organization gets the uniform 404
   webhooks:
+    decision: NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O2, O3, O4 and O11 choices 1, 2, 5, 7 and 9)
     whatsapp: GET and POST /api/v1/messaging/whatsapp/webhook - the verification answers hub.challenge only for
       hub.mode subscribe and a hub.verify_token equal, in constant time, to its Key Vault secret; every POST needs a
       valid X-Hub-Signature-256 (HMAC-SHA256 of the raw body under the Meta app secret from Key Vault) compared in
-      constant time before the body is parsed; the body size is bounded
+      constant time before the body is parsed; the app secret and the verify token each have a current and a previous
+      slot for rotation (O11 choice 9); only object whatsapp_business_account and changes whose phone_number_id is the
+      configured one are read, the rest is ignored (O11 choice 5); the body is bounded at 256 KiB (O11 choice 2)
     email: POST /api/v1/messaging/email/events - the Event Grid subscription validation handshake, then authenticated
-      deliveries only (Microsoft Entra protected delivery or a Key Vault secret header, chosen and recorded by NTF-006)
+      deliveries only (O2 "Secreto en un encabezado (Recommended)") - Event Grid sends the Key Vault secret as the
+      static delivery header X-Paquetenvia-Event-Secret, which the API compares in constant time, with a current and a
+      previous slot for rotation, before it reads the body; missing is 401 and wrong is the uniform 403; no new
+      package; the body is bounded at 64 KiB (O11 choice 2)
     unsubscribe: POST /api/v1/recipient-notices/unsubscribe/{unsubscribeToken} - the token binds the owner organization and the
       notification id under HMAC-SHA256 (contact lookup key, prefix paquetenvia-unsubscribe-v1), checked in constant
-      time and never stored or logged; a GET never opts out, so link scanners cannot
-    common: anonymous (no session, cookie or CSRF), rate limited under SEC-004 (their budgets are an owner decision
-      asked in NTF-006, like the SEC-004 numbers), inert (uniform 404) while their switch is off, problem+json errors
-      that never echo a value
+      time and never stored or logged; a GET never opts out, so link scanners cannot; it accepts an empty body, the
+      form or multipart field List-Unsubscribe=One-Click or the {} of the page, never redirects and has no GET; the
+      body is bounded at 1 KiB (O11 choices 2 and 7)
+    redaction: the unsubscribe token (path) and the whole verification query (hub.verify_token) are removed from the
+      request target before hosting, logging or tracing reads it; each endpoint reads the original from a request
+      feature only (O11 choice 7)
+    common: anonymous (no session, cookie or CSRF), rate limited under SEC-004 per client network per 60 seconds (O3
+      "Los propuestos (Recommended)") - verifyMetaWhatsAppWebhook 10, receiveMetaWhatsAppWebhook 300,
+      receiveAcsEmailEvents 120 and unsubscribeRecipientNotices 20 with the uniform public 429 body (as publicTracking),
+      configuration (RateLimits) re-set after two weeks of pilot metrics like the other SEC-004 numbers; inert
+      (uniform 404) while their switch is off, always 404 and never 429 then, because the limiter spends nothing on a
+      switched-off endpoint (O4 "404 siempre; baja sin interruptor (Recommended)"); the unsubscribe has no switch -
+      without the contact lookup key every link is already the uniform 404, and with it the link of every e-mail sent
+      keeps working after notices are turned off; problem+json errors that never echo a value
   switches:
     enabled: Notifications:RecipientNotices:Enabled (Worker), false by default; while false each request row ends
       PROCESSED with RECIPIENT_NOTICES_DISABLED at once - no Notification, no decryption and no backlog when it is
@@ -683,13 +743,20 @@ recipient_notices:
       Notifications:RecipientNotices:Gate004DecisionId and Gate007DecisionId name the decision-log rows that resolve
       GATE-004 and GATE-007 (the Voice:Twilio:Gate007DecisionId pattern); real providers are refused in Development,
       Testing and DEV_SYNTHETIC, and the synthetic ones are accepted only there
-    webhooks: Messaging:WhatsApp:Webhook:Enabled and Messaging:Email:Events:Enabled, false by default (uniform 404)
+    webhooks: Messaging:WhatsApp:Webhook:Enabled and Messaging:Email:Events:Enabled, false by default (uniform 404);
+      unsubscribeRecipientNotices has no switch (O4)
     pilot: Notifications__RecipientNotices__ and Messaging__ become platform-managed in tools/azr-001/env001_pilot_guards.py
       (as Voice__, NTF-008); only the gate-closing change sets them
   pilot_wiring: NTF-008 - the Worker reads public-tracking-link-key, paquetenvia-contact-lookup-key-1 and the WhatsApp
     token and phone number id and may only unwrap with recipient-notice-kek; the API reads
-    paquetenvia-contact-lookup-key-1, the Meta app secret and the webhook verify token and may only wrap with
-    recipient-notice-kek; secret names, the ACS role of the Worker and the Event Grid subscription are fixed there
+    paquetenvia-contact-lookup-key-1, the Meta app secret and the webhook verify token (each with its previous slot),
+    the Event Grid delivery secret (with its previous slot), the WhatsApp phone_number_id and the Azure resource id of
+    the Communication Services resource, and may only wrap with recipient-notice-kek (O11 choice 11); secret names
+    and the ACS role of the Worker are fixed there. Registration (NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25, O8
+    "Registrar al cerrar las compuertas (Recommended)") - Event Grid and Meta register a webhook only while it answers,
+    and both stay off (uniform 404) until the gate-closing change, so NTF-008 prepares the Event Grid subscription
+    behind a phase parameter (like the custom domain), not created until that change, and the runbook registers the
+    Meta callback as a step after the gates close
   logging: owner organization pseudonym, lane, channel, notice, outcome and code only (OBS-002 allowlist); never a
     phone, an e-mail, a name, a link, a token, a template parameter or a provider message
   rollback: Enabled false or a provider Disabled, no migration; rows already created then end FAILED with

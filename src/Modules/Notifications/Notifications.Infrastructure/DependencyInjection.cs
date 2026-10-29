@@ -4,6 +4,7 @@ using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using Paqueteria.Application.RecipientNotices;
 using Notifications.Application.Audience;
+using Notifications.Application.RecipientNotices;
 using Notifications.Infrastructure.Delivery;
 using Notifications.Infrastructure.Dispatching;
 using Notifications.Infrastructure.RecipientNotices;
@@ -85,5 +86,14 @@ public static class DependencyInjection
         services.AddOptions<PublicTrackingOptions>();
         services.AddSingleton<RecipientNoticeContactResolver>();
         services.AddSingleton<IRecipientNoticeLane, RecipientNoticeProcessor>();
+
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006; O7, O11 choice 10): the automatic-reply store loop. It
+        // runs on the Notifications lane's provider switch and drops every request while notices or WhatsApp are off.
+        services.TryAddSingleton(TimeProvider.System);
+        services.AddSingleton<IRecipientAutoReplyStore>(serviceProvider =>
+            serviceProvider.GetRequiredService<PostgreSqlNotificationsStore>());
+        services.AddSingleton<RecipientAutoReplyNumberResolver>();
+        services.AddSingleton<RecipientAutoReplyProcessor>();
+        services.AddHostedService<RecipientAutoReplyDispatcher>();
     }
 }

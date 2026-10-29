@@ -432,10 +432,19 @@ public sealed class OutboxTraceContextPostgreSqlContractTests(PostgreSqlContract
             await new DatabaseBaselineAssertions().AssertAsync(connection);
 
             // The Up SQL adopts what it finds and is idempotent; a column of another shape is refused, never altered.
+            // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (a later Notifications step) adds the receipt executor as a grantee
+            // of the status writer; the OBS-003 step is replayed on its own catalog, so that later grant is withdrawn
+            // inside the rolled-back transaction first.
             await using (var again = await connection.BeginTransactionAsync())
             {
                 await ExecuteAsync(connection, again, AddOutboxTraceContext.UpSql);
                 await ExecuteAsync(connection, again, "RESET ROLE");
+                await ExecuteAsync(connection, again,
+                    """
+                    SET ROLE paqueteria_outbox_executor;
+                    REVOKE EXECUTE ON FUNCTION security.emit_notification_status_changed(uuid,uuid,integer,text,text,integer,timestamptz) FROM paqueteria_notification_receipt_executor;
+                    RESET ROLE;
+                    """);
                 await ExecuteAsync(connection, again, CarryOutboxTraceContext.UpSql);
                 await ExecuteAsync(connection, again, "RESET ROLE");
                 await again.RollbackAsync();
@@ -531,13 +540,15 @@ public sealed class OutboxTraceContextPostgreSqlContractTests(PostgreSqlContract
         var index = Array.IndexOf(ids, migrationId);
         Assert.True(index > 0, $"{migrationId} must follow an earlier step of its lane");
         // Only the DP-INDEXES-ORDERS-DISPATCH-2026-10-20 read-index step (Dispatch), the NTF-RECIPIENT-NOTICES-2026-10-20
-        // recipient notice lane step and the NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 count step (Notifications) may follow the
-        // OBS-003 steps: rolling back to the previous step reverts them first; the read-index and count steps touch no
-        // outbox writer, and the recipient notice step keeps the trace context of every row it writes and restores the
-        // OBS-003 emitter on its way down.
+        // recipient notice lane step, the NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 count step and the
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 receipt step (Notifications) may follow the OBS-003 steps: rolling back
+        // to the previous step reverts them first; the read-index, count and receipt steps touch no outbox writer (the
+        // receipt executor only executes the existing status writer), and the recipient notice step keeps the trace
+        // context of every row it writes and restores the OBS-003 emitter on its way down.
         Assert.All(ids[(index + 1)..], later => Assert.Contains(later, new[]
         {
             AddAssignmentReadIndexes.MigrationId, AddRecipientNoticeLane.MigrationId, AddRecipientNoticeCounts.MigrationId,
+            AddRecipientNoticeReceipts.MigrationId,
         }));
         return ids[index - 1];
     }

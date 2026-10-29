@@ -2,6 +2,7 @@ using System.Text.Json;
 using Npgsql;
 using NpgsqlTypes;
 using Notifications.Application.Dispatching;
+using Notifications.Application.RecipientNotices;
 using Paqueteria.Infrastructure.Database.Outbox;
 
 namespace Notifications.Infrastructure.Dispatching;
@@ -95,7 +96,7 @@ internal interface IRecipientNoticeStore
 }
 
 internal sealed class PostgreSqlNotificationsStore(NotificationsWorkerConnectionFactory connections)
-    : INotificationsStore, IRecipientNoticeStore
+    : INotificationsStore, IRecipientNoticeStore, IRecipientAutoReplyStore
 {
     public Task<IReadOnlyList<ClaimedNotificationOutboxMessage>> ClaimNotificationsAsync(
         string workerId,
@@ -359,6 +360,73 @@ internal sealed class PostgreSqlNotificationsStore(NotificationsWorkerConnection
         var result = await command.ExecuteScalarAsync(cancellationToken) is true;
         await scope.Transaction.CommitAsync(cancellationToken);
         return result;
+    }
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: <c>security.claim_recipient_auto_replies</c> - stale leases end FAILED,
+    /// requests older than 23 hours end DROPPED, then a batch of pending requests is leased.
+    /// </summary>
+    public async Task<IReadOnlyList<ClaimedRecipientAutoReply>> ClaimAutoRepliesAsync(
+        int batchSize,
+        TimeSpan lease,
+        CancellationToken cancellationToken)
+    {
+        await using var scope = await OpenWorkerScopeAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            "SELECT request_id,kind,sealed_number,number_key_version,received_at,lease_token FROM security.claim_recipient_auto_replies(@batch_size,@lease);",
+            scope.Connection,
+            scope.Transaction);
+        command.Parameters.Add(P("batch_size", NpgsqlDbType.Integer, batchSize));
+        command.Parameters.Add(P("lease", NpgsqlDbType.Interval, lease));
+        var claimed = new List<ClaimedRecipientAutoReply>();
+        await using (var reader = await command.ExecuteReaderAsync(cancellationToken))
+        {
+            while (await reader.ReadAsync(cancellationToken))
+            {
+                claimed.Add(new ClaimedRecipientAutoReply(
+                    reader.GetGuid(0),
+                    reader.GetString(1) == "OPT_OUT_CONFIRMATION"
+                        ? RecipientAutoReplyKind.OptOutConfirmation
+                        : RecipientAutoReplyKind.AutoReply,
+                    reader.GetFieldValue<byte[]>(2),
+                    reader.GetString(3),
+                    reader.GetFieldValue<DateTimeOffset>(4),
+                    reader.GetGuid(5)));
+            }
+        }
+
+        await scope.Transaction.CommitAsync(cancellationToken);
+        return claimed;
+    }
+
+    /// <summary>NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: <c>security.settle_recipient_auto_reply</c> under the lease.</summary>
+    public async Task<bool> SettleAutoReplyAsync(
+        ClaimedRecipientAutoReply request,
+        RecipientAutoReplyOutcome outcome,
+        string? code,
+        DateTimeOffset? availableAt,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        await using var scope = await OpenWorkerScopeAsync(cancellationToken);
+        await using var command = new NpgsqlCommand(
+            "SELECT security.settle_recipient_auto_reply(@request_id,@lease_token,@outcome,@code,@available_at);",
+            scope.Connection,
+            scope.Transaction);
+        command.Parameters.Add(P("request_id", NpgsqlDbType.Uuid, request.RequestId));
+        command.Parameters.Add(P("lease_token", NpgsqlDbType.Uuid, request.LeaseToken));
+        command.Parameters.Add(P("outcome", NpgsqlDbType.Text, outcome switch
+        {
+            RecipientAutoReplyOutcome.Sent => "SENT",
+            RecipientAutoReplyOutcome.Failed => "FAILED",
+            RecipientAutoReplyOutcome.Dropped => "DROPPED",
+            _ => "RETRY",
+        }));
+        command.Parameters.Add(P("code", NpgsqlDbType.Text, code));
+        command.Parameters.Add(P("available_at", NpgsqlDbType.TimestampTz, availableAt?.ToUniversalTime()));
+        var settled = await command.ExecuteScalarAsync(cancellationToken) is true;
+        await scope.Transaction.CommitAsync(cancellationToken);
+        return settled;
     }
 
     public async Task<bool> CancelNotificationAsync(

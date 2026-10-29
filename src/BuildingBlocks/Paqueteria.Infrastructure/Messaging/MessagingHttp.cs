@@ -140,11 +140,26 @@ internal static partial class MessagingHttp
             (request.UrlButtonSuffix is null || UrlButtonSuffixPattern().IsMatch(request.UrlButtonSuffix)) &&
             (request.QuickReplyPayload is null || QuickReplyPayloadPattern().IsMatch(request.QuickReplyPayload)),
         MessagingChannel.Email =>
+            request.FreeFormText is null &&
             request.UrlButtonSuffix is null &&
             request.QuickReplyPayload is null &&
             (request.OneClickUnsubscribeUrl is null || IsOneClickUnsubscribeUrl(request.OneClickUnsubscribeUrl)),
         _ => false,
     };
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: a free-form text request is WhatsApp only, without parameters or buttons,
+    /// one to 1024 characters of a single line.
+    /// </summary>
+    public static bool IsFreeFormTextValid(MessagingRequest request) =>
+        request.Channel == MessagingChannel.WhatsApp &&
+        request.FreeFormText is { Length: > 0 and <= 1024 } text &&
+        !string.IsNullOrWhiteSpace(text) &&
+        !text.Any(char.IsControl) &&
+        request.Parameters is { Count: 0 } &&
+        request.UrlButtonSuffix is null &&
+        request.QuickReplyPayload is null &&
+        request.OneClickUnsubscribeUrl is null;
 
     private static bool IsOneClickUnsubscribeUrl(string value) =>
         value.Length <= 2048 &&

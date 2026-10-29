@@ -48,7 +48,7 @@ export function buildContentSecurityPolicy({
   const styleSources = development
     ? ["'self'", "'unsafe-inline'"]
     : ["'self'", `'nonce-${nonce}'`];
-  const formAction = isTrackingPath(pathname) ? "'none'" : "'self'";
+  const formAction = isTrackingPath(pathname) || isRecipientUnsubscribePath(pathname) ? "'none'" : "'self'";
 
   return [
     "default-src 'self'",
@@ -142,9 +142,15 @@ export function isTrackingPath(pathname: string): boolean {
   return pathname === "/track" || pathname.startsWith("/track/");
 }
 
+/** AI-07 /avisos/baja/:token, the public e-mail unsubscribe page (NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25). */
+export function isRecipientUnsubscribePath(pathname: string): boolean {
+  return pathname === "/avisos/baja" || pathname.startsWith("/avisos/baja/");
+}
+
 export function isPrivateNoStorePath(pathname: string): boolean {
   return (
     isTrackingPath(pathname) ||
+    isRecipientUnsubscribePath(pathname) ||
     pathname === "/onboarding" ||
     pathname === "/ops" ||
     pathname.startsWith("/ops/") ||

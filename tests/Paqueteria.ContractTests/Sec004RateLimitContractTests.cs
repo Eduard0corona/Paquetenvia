@@ -15,7 +15,7 @@ public sealed class Sec004RateLimitContractTests
     private static readonly YamlMappingNode Contract =
         YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
 
-    /// <summary>Every AI-05 operation that answers 429 TooManyRequests, PR 2's and the decided list of PR 3.</summary>
+    /// <summary>Every AI-05 operation that answers 429 TooManyRequests, PR 2's, the decided list of PR 3 and NTF-006's four.</summary>
     private static readonly string[] Limited =
     [
         "publicTracking",
@@ -31,6 +31,11 @@ public sealed class Sec004RateLimitContractTests
         "listOrders",
         "createQuote",
         "listAssignableDrivers",
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O3): the four anonymous recipient notice operations.
+        "verifyMetaWhatsAppWebhook",
+        "receiveMetaWhatsAppWebhook",
+        "receiveAcsEmailEvents",
+        "unsubscribeRecipientNotices",
     ];
 
     [Fact]

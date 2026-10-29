@@ -1,7 +1,8 @@
 # ADR-NTF-002: avisos al destinatario por WhatsApp y correo
 
-- Estado: aceptado (NTF-RECIPIENT-NOTICES-2026-10-20); **sin implementar y apagado**. GATE-004 y GATE-007 siguen
-  abiertas.
+- Estado: aceptado (NTF-RECIPIENT-NOTICES-2026-10-20; detallado por NTF-RECIPIENT-NOTICE-CAPS-2026-10-23,
+  NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 y NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25); implementado por partes (AI-08
+  NTF-002 a NTF-006) y **apagado**. GATE-004 y GATE-007 siguen abiertas.
 - Fecha: 2026-10-20
 - Alcance: contratos v0.6 (AI-03, AI-04, AI-05 `x-pilot-contract-deltas`, AI-06 y AI-18 como contrato declarado,
   AI-07, AI-08 NTF-002 a NTF-008, AI-09, AI-12, AI-13 §7.2 y AI-24 `recipient_notices`). El código llega con cada
@@ -88,9 +89,13 @@ GATE-007.
    aparte).
 9. **Acuses y vista del despachador.** Webhooks firmados de Meta y de Event Grid (ACS) marcan `DELIVERED` o
    `FAILED` solo hacia adelante, mediante una función `SECURITY DEFINER` de un rol nuevo
-   `paqueteria_notification_receipt_executor` (NOLOGIN, BYPASSRLS porque un webhook no trae tenant, solo EXECUTE para
-   la API). El despachador ve "Avisos al destinatario" en la orden (estado, canal, intentos, motivo), nunca el
-   destinatario, con `NotificationStatusChanged` v2 en tiempo real.
+   `paqueteria_notification_receipt_executor` (NOLOGIN, BYPASSRLS porque un webhook no trae tenant, otorgado a ningún
+   rol de runtime). Sus funciones de acuses, bajas y solicitud de respuesta automática solo las ejecuta la API, y las
+   de tomar y cerrar las respuestas automáticas solo el Worker (NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25, O11
+   elección 11). Un acuse `FAILED` guarda su código y el evento de cambio de estado sale de la función que ya lo arma
+   (O5); los eventos de correo de Event Grid se autentican con un secreto de Key Vault en un encabezado, comparado en
+   tiempo constante antes de leer el cuerpo (O2). El despachador ve "Avisos al destinatario" en la orden (estado,
+   canal, intentos, motivo), nunca el destinatario, con `NotificationStatusChanged` v2 en tiempo real.
 10. **Apagado por capas.** `Notifications:RecipientNotices:Enabled=false`, proveedores `Disabled`, webhooks inertes
     (404) y proveedores reales rechazados sin las filas que resuelven GATE-004 y GATE-007. Solo el cambio que
     registra esas filas los enciende.

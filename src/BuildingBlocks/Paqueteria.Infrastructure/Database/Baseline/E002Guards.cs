@@ -87,6 +87,8 @@ internal static class E002Guards
         // RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the API's realtime dispatcher runtime role (NOBYPASSRLS, owns
         // nothing, so the deployment role needs no SET or USAGE on it).
         ("paqueteria_realtime", false),
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: the receipt executor (AI-18 recipient notices step 3).
+        ("paqueteria_notification_receipt_executor", true),
     ];
 
     /// <summary>
@@ -97,7 +99,7 @@ internal static class E002Guards
     internal static readonly string[] LaneIntroducedRoles =
     [
         "paqueteria_master_data_executor", "paqueteria_master_data_loader", "paqueteria_operator_outbox_executor",
-        "paqueteria_auto_close_executor", "paqueteria_realtime",
+        "paqueteria_auto_close_executor", "paqueteria_realtime", "paqueteria_notification_receipt_executor",
     ];
 
     /// <summary>
@@ -110,6 +112,9 @@ internal static class E002Guards
         "paqueteria_operator_outbox_executor" =>
             "security.append_operator_order_outbox(uuid,uuid,jsonb,text,text,uuid,integer,jsonb,smallint,timestamp with time zone,timestamp with time zone)",
         "paqueteria_auto_close_executor" => "security.list_auto_close_owner_organizations(uuid,integer)",
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: the receipts step installs the executor's functions.
+        "paqueteria_notification_receipt_executor" =>
+            "security.record_messaging_receipt(text,text,text,text,timestamp with time zone)",
         _ => "security.load_master_data(uuid,uuid,json,bytea,boolean)",
     };
 
@@ -118,6 +123,7 @@ internal static class E002Guards
         "paqueteria_bootstrap", "paqueteria_outbox_executor", "paqueteria_maintenance", "paqueteria_lifecycle_executor",
         "paqueteria_cleanup_executor", "paqueteria_registration_executor", "paqueteria_session_executor",
         "paqueteria_master_data_executor", "paqueteria_operator_outbox_executor", "paqueteria_auto_close_executor",
+        "paqueteria_notification_receipt_executor",
     ];
 
     /// <summary>E-002 v0.8 §11: an ACL entry whose grantee/grantor cannot be resolved is a normalization failure.</summary>
@@ -132,7 +138,7 @@ internal static class E002Guards
         return new E002AclEntry(reader.GetString(0), reader.GetString(1), reader.GetString(2), reader.GetBoolean(3));
     }
 
-    /// <summary>E-002 v0.8 §15: exact canonical-role attribute map (ADR-034 adds the seventh, the lifecycle executor; OPS-003-CLEANUP-ROLE the eighth, the cleanup executor; REG-001 the ninth, the registration executor; BFF-SESSION-TABLE-SHAPE the tenth, the session executor; MDM-001-OPERATOR-LOADER the eleventh and twelfth, the master data executor and its operator grantee; DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03 the thirteenth, the operator outbox executor; ORD-AUTO-CLOSE-2026-10-10 the fourteenth, the auto-close executor; RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12 the fifteenth, the realtime dispatcher runtime role). Returns the names of roles that differ.</summary>
+    /// <summary>E-002 v0.8 §15: exact canonical-role attribute map (ADR-034 adds the seventh, the lifecycle executor; OPS-003-CLEANUP-ROLE the eighth, the cleanup executor; REG-001 the ninth, the registration executor; BFF-SESSION-TABLE-SHAPE the tenth, the session executor; MDM-001-OPERATOR-LOADER the eleventh and twelfth, the master data executor and its operator grantee; DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03 the thirteenth, the operator outbox executor; ORD-AUTO-CLOSE-2026-10-10 the fourteenth, the auto-close executor; RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12 the fifteenth, the realtime dispatcher runtime role; NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 the sixteenth, the receipt executor). Returns the names of roles that differ.</summary>
     internal static async Task<IReadOnlyList<string>> RoleAttributeMismatchesAsync(
         NpgsqlConnection connection, NpgsqlTransaction? transaction, CancellationToken cancellationToken)
     {
@@ -205,7 +211,8 @@ internal static class E002Guards
                      "paqueteria_outbox_executor", "paqueteria_maintenance", "paqueteria_lifecycle_executor",
                      "paqueteria_cleanup_executor", "paqueteria_registration_executor",
                      "paqueteria_session_executor", "paqueteria_master_data_executor",
-                     "paqueteria_operator_outbox_executor", "paqueteria_auto_close_executor" })
+                     "paqueteria_operator_outbox_executor", "paqueteria_auto_close_executor",
+                     "paqueteria_notification_receipt_executor" })
         {
             if (LaneIntroducedRoles.Contains(role, StringComparer.Ordinal) &&
                 !await RoleExistsAsync(connection, transaction, role, cancellationToken).ConfigureAwait(false))

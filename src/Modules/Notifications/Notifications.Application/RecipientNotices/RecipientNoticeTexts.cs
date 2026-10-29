@@ -28,6 +28,31 @@ public static class RecipientNoticeTexts
 
     public const string WhatsAppFooter = "Responde BAJA para no recibir más avisos";
 
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O11 choice 3; AI-24 <c>recipient_notices.auto_reply.text</c>, E4-P9): the
+    /// one automatic reply, a fixed free-form text (a contract test compares it with AI-24).
+    /// </summary>
+    public const string AutoReplyText =
+        "Este número solo envía avisos. Para dudas sobre tu envío contacta a quien te lo envió.";
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O11 choice 3; AI-24 <c>recipient_notices.opt_out.confirmation.text</c>,
+    /// E4-P15): the one confirmation of a WhatsApp opt-out by message, a fixed free-form text.
+    /// </summary>
+    public const string OptOutConfirmationText = "Listo. Ya no recibirás avisos en este número.";
+
+    /// <summary>The key that names <see cref="AutoReplyText"/> in a send (no template exists for it).</summary>
+    public const string AutoReplyKey = "recipient.auto-reply";
+
+    /// <summary>The key that names <see cref="OptOutConfirmationText"/> in a send (no template exists for it).</summary>
+    public const string OptOutConfirmationKey = "recipient.opt-out-confirmation";
+
+    /// <summary>
+    /// AI-24 <c>recipient_notices.opt_out.whatsapp_reply</c>: an inbound text that is exactly one of these (trimmed, case
+    /// and accents ignored) is an opt-out.
+    /// </summary>
+    public static IReadOnlyList<string> OptOutKeywords { get; } = Array.AsReadOnly(new[] { "BAJA", "ALTO", "STOP", "CANCELAR" });
+
     /// <summary>E-mail placeholders: <c>{{1}}</c> número de guía, <c>{{2}}</c> tracking link, <c>{{3}}</c> unsubscribe link.</summary>
     public const int EmailParameterCount = 3;
 

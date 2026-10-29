@@ -344,20 +344,31 @@ routes:
     release: MVP-0
     data_minimization: true
   # NTF-RECIPIENT-NOTICES-2026-10-20 (project owner, E4-P8 "Las tres vías (Recommended)", "un enlace en cada correo"):
-  # the page the unsubscribe link of a recipient e-mail opens; decided, not built yet (AI-08 NTF-006).
+  # the page the unsubscribe link of a recipient e-mail opens. Built by AI-08 NTF-006; its texts are
+  # NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (project owner, O9 "Aprobar estos textos (Recommended)").
   /avisos/baja/:token:
     roles:
     - public
     release: MVP-1
-    status: DECIDED, not implemented (AI-08 NTF-006)
+    status: DECIDED, implemented (AI-08 NTF-006)
     data_minimization: true
     rules:
     - opens with the heading "Seguimiento de envío" and names no brand, like public_tracking.branding (GATE-001)
     - opening the page changes nothing; one button sends unsubscribeRecipientNotices once with the token of the link,
       so a link scanner never unsubscribes anyone
     - it never reads or shows the e-mail, the order, the organization or anything else; success, an invalid link, a
-      wait (429) and a failure each show one es-MX message whose texts the owner approves in the NTF-006 change
+      wait (429) and a failure each show one es-MX message, the texts below
     - no session, no PWA manifest, no browser storage, not indexed
+    texts:
+      decision: NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O9 "Aprobar estos textos (Recommended)")
+      heading: "Seguimiento de envío"
+      button: "Dejar de recibir correos"
+      success: "Listo. Ya no recibirás correos de avisos en esta dirección."
+      invalid_link: "Este enlace no es válido o ya no está disponible."
+      wait: "Demasiadas solicitudes. Espera N segundos e intenta de nuevo."
+      wait_rule: the common SEC-004 wait notice - N counts down from the Retry-After of the 429 in whole seconds ("1
+        segundo" at one) and the button stays disabled until it ends
+      failure: "No pudimos procesar tu solicitud. Intenta más tarde."
   /business/orders:
     roles:
     - business_admin

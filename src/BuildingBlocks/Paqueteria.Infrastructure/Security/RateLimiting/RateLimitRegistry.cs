@@ -59,6 +59,14 @@ public sealed record RateLimitPolicy(
     /// <c>Retry-After</c>, and spends nothing from the window. Null: no in-flight rule.
     /// </summary>
     public int? InFlightLimit { get; init; }
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O4 "404 siempre; baja sin interruptor (Recommended)"): whether the policy
+    /// applies to the current request, read from the request services. While it is false the request spends nothing and
+    /// is never rejected, so an endpoint that is switched off answers only its own uniform 404, never 429. Null: always
+    /// applies.
+    /// </summary>
+    public Func<IServiceProvider, bool>? IsActive { get; init; }
 }
 
 /// <summary>
@@ -215,6 +223,12 @@ public static class RateLimitingServiceCollectionExtensions
         RateLimitPolicy policy,
         HttpContext context)
     {
+        // O4: a switched-off endpoint is not limited; its partition is the shared no-limiter one, never a client's.
+        if (policy.IsActive is { } isActive && !isActive(context.RequestServices))
+        {
+            return RateLimitPartition.GetNoLimiter(InactivePartitionKey);
+        }
+
         var limit = policy.Limit(context.RequestServices);
         var key = RateLimitPartitionKeys.For(policy.Partition, context);
         if (registry.UsesBudgets(policy))
@@ -225,6 +239,12 @@ public static class RateLimitingServiceCollectionExtensions
 
         return RateLimitPartition.GetFixedWindowLimiter(key, _ => FixedWindow(limit));
     }
+
+    /// <summary>
+    /// The one partition of a policy whose <see cref="RateLimitPolicy.IsActive"/> is false. A client partition key is an
+    /// upper-case hex hash, so it can never be this value.
+    /// </summary>
+    internal const string InactivePartitionKey = "inactive";
 
     /// <summary>Every window of the registry: a fixed window without a queue, replenished automatically.</summary>
     internal static FixedWindowRateLimiterOptions FixedWindow(FixedWindowLimit limit) => new()

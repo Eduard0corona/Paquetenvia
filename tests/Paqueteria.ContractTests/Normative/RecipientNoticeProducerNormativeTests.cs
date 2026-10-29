@@ -125,7 +125,8 @@ public sealed partial class RecipientNoticeProducerNormativeTests
             $"-- 2. Orders lane step {AddRecipientNoticeConsents.MigrationId} of AI-08 NTF-004 (installed;",
             roles,
             StringComparison.Ordinal);
-        Assert.Contains("Steps 1, 2 and 6 are installed; step 3 is\n-- declared contract", roles, StringComparison.Ordinal);
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006) installed step 3 as well.
+        Assert.Contains("Steps 1, 2, 3 and 6 are installed.\n", roles, StringComparison.Ordinal);
         Assert.Contains(
             $"-- 40. once the Orders lane step {AddRecipientNoticeConsents.MigrationId} ({AddRecipientNoticeConsents.DecisionId}) is recorded, orders.recipient_notice_consents",
             roles,

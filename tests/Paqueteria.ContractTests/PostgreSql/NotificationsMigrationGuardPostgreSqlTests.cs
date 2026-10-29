@@ -377,7 +377,7 @@ public sealed class NotificationsMigrationGuardPostgreSqlTests
             $"SELECT to_regprocedure('{AddRecipientNoticeCounts.CountsSignature}') IS NULL"));
 
         await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
-        await migrator.MigrateAsync();
+        await migrator.MigrateAsync(AddRecipientNoticeCounts.MigrationId);
         await ExecuteAsync(connection, "RESET ROLE");
         var counts = await NotificationsCatalogAsync(connection);
         var added = counts.Except(lane).ToArray();
@@ -420,9 +420,162 @@ public sealed class NotificationsMigrationGuardPostgreSqlTests
         Assert.Equal(lane, await NotificationsCatalogAsync(connection));
 
         await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
-        await migrator.MigrateAsync();
+        await migrator.MigrateAsync(AddRecipientNoticeCounts.MigrationId);
         await ExecuteAsync(connection, "RESET ROLE");
         Assert.Equal(counts, await NotificationsCatalogAsync(connection));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Recipient_notice_receipt_step_up_down_up_adds_only_the_executor_catalog_and_refuses_while_requests_exist()
+    {
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006; AI-06 and AI-18 recipient notices step 3):
+        // 20261029000100_AddRecipientNoticeReceipts. The role is AI-18 baseline DDL with no privilege; Up adds the
+        // automatic-reply store, the five functions the executor owns, its column-limited grants and its EXECUTE on the
+        // status-changed writer, and nothing else; Down refuses while a request exists and otherwise restores the count
+        // step's catalog exactly, the role kept and inert; Up again reproduces the same catalog.
+        var password = Convert.ToHexString(RandomNumberGenerator.GetBytes(24));
+        await using var container = new PostgreSqlBuilder(Image)
+            .WithDatabase("paqueteria_ntf006_receipts")
+            .WithUsername("postgres")
+            .WithPassword(password)
+            .WithCleanUp(true)
+            .Build();
+        await container.StartAsync();
+        var connectionString = container.GetConnectionString();
+        var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+        await new DatabaseBaselineDeployer().ApplyAsync(baseline, connectionString);
+
+        await using var connection = new NpgsqlConnection(connectionString);
+        await connection.OpenAsync();
+        // AI-18 declares the role: NOLOGIN, BYPASSRLS, a member of nothing and granted to no one, with no privilege yet.
+        Assert.Equal("false|true|0|0", await ScalarTextAsync(connection,
+            $"""
+            SELECT r.rolcanlogin::text || '|' || r.rolbypassrls::text || '|' ||
+              (SELECT count(*) FROM pg_auth_members m WHERE m.member=r.oid)::text || '|' ||
+              (SELECT count(*) FROM pg_auth_members m WHERE m.roleid=r.oid)::text
+            FROM pg_roles r WHERE r.rolname='{AddRecipientNoticeReceipts.Role}'
+            """));
+        await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
+        await using var context = CreateNotificationsContext(connection);
+        var migrator = context.GetService<IMigrator>();
+        await migrator.MigrateAsync(AddRecipientNoticeCounts.MigrationId);
+        await ExecuteAsync(connection, "RESET ROLE");
+        var counts = await NotificationsCatalogAsync(connection);
+        Assert.Empty(await ReceiptColumnGrantsAsync(connection));
+
+        await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
+        await migrator.MigrateAsync(AddRecipientNoticeReceipts.MigrationId);
+        await ExecuteAsync(connection, "RESET ROLE");
+        var receipts = await NotificationsCatalogAsync(connection);
+        var added = receipts.Except(counts).ToArray();
+        var removed = counts.Except(receipts).ToArray();
+        // Only the status-changed writer's ACL and the two schema ACLs change among the earlier lines.
+        Assert.Equal(3, removed.Length);
+        Assert.Contains(removed, line => line.StartsWith("routine security.emit_notification_status_changed(", StringComparison.Ordinal));
+        Assert.Contains(added, line => line.StartsWith("routine security.emit_notification_status_changed(", StringComparison.Ordinal)
+            && line.Contains($"{AddRecipientNoticeReceipts.Role}:EXECUTE:false", StringComparison.Ordinal));
+        Assert.Contains(added, line => line.StartsWith("schema notifications acl=", StringComparison.Ordinal)
+            && line.Contains($"{AddRecipientNoticeReceipts.Role}:USAGE:false", StringComparison.Ordinal));
+        Assert.Contains(added, line => line.StartsWith("schema security acl=", StringComparison.Ordinal)
+            && line.Contains($"{AddRecipientNoticeReceipts.Role}:USAGE:false", StringComparison.Ordinal)
+            && !line.Contains($"{AddRecipientNoticeReceipts.Role}:CREATE", StringComparison.Ordinal));
+        foreach (var signature in AddRecipientNoticeReceipts.ApiFunctions)
+        {
+            Assert.Contains(added, line => line.StartsWith($"routine {signature} owner={AddRecipientNoticeReceipts.Role} definer=true config=search_path=pg_catalog,", StringComparison.Ordinal)
+                && line.EndsWith($"acl=paqueteria_app:EXECUTE:false,{AddRecipientNoticeReceipts.Role}:EXECUTE:false", StringComparison.Ordinal));
+        }
+
+        foreach (var signature in AddRecipientNoticeReceipts.WorkerFunctions)
+        {
+            Assert.Contains(added, line => line.StartsWith($"routine {signature} owner={AddRecipientNoticeReceipts.Role} definer=true config=search_path=pg_catalog,", StringComparison.Ordinal)
+                && line.EndsWith($"acl={AddRecipientNoticeReceipts.Role}:EXECUTE:false,paqueteria_worker:EXECUTE:false", StringComparison.Ordinal));
+        }
+
+        // FORCE RLS, no policy, and no table-wide privilege for anyone but its owner (the executor's are column grants).
+        var table = Assert.Single(added, line => line.StartsWith("table recipient_auto_replies ", StringComparison.Ordinal));
+        Assert.StartsWith("table recipient_auto_replies rls=true force=true owner=paqueteria_migrator acl=", table, StringComparison.Ordinal);
+        Assert.All(
+            table[(table.IndexOf("acl=", StringComparison.Ordinal) + 4)..].Split(','),
+            entry => Assert.StartsWith("paqueteria_migrator:", entry, StringComparison.Ordinal));
+        Assert.DoesNotContain(added, line => line.StartsWith("policy recipient_auto_replies", StringComparison.Ordinal));
+        Assert.Equal(14, added.Count(line => line.StartsWith("column recipient_auto_replies.", StringComparison.Ordinal)));
+        Assert.Equal(3, added.Count(line => line.StartsWith("index recipient_auto_replies ", StringComparison.Ordinal) && !line.Contains("_pkey", StringComparison.Ordinal)));
+        // Nothing else: five routines, the store's columns, constraints, indexes and table line, and the three changed lines.
+        Assert.All(added, line => Assert.True(
+            line.Contains("recipient_auto_replies", StringComparison.Ordinal) ||
+            AddRecipientNoticeReceipts.ApiFunctions.Concat(AddRecipientNoticeReceipts.WorkerFunctions)
+                .Any(signature => line.StartsWith($"routine {signature} ", StringComparison.Ordinal)) ||
+            line.StartsWith("routine security.emit_notification_status_changed(", StringComparison.Ordinal) ||
+            line.StartsWith("schema ", StringComparison.Ordinal),
+            line));
+        Assert.Equal(AddRecipientNoticeReceipts.ColumnGrants, await ReceiptColumnGrantsAsync(connection));
+        Assert.False(await ScalarBooleanAsync(connection,
+            """
+            SELECT bool_or(has_table_privilege(r,'notifications.recipient_auto_replies',p))
+            FROM unnest(ARRAY['paqueteria_app','paqueteria_worker','paqueteria_realtime','paqueteria_bootstrap']) r
+            CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) p
+            """));
+        Assert.False(await ScalarBooleanAsync(connection,
+            $"SELECT pg_has_role('paqueteria_app','{AddRecipientNoticeReceipts.Role}','USAGE') OR pg_has_role('paqueteria_worker','{AddRecipientNoticeReceipts.Role}','USAGE')"));
+
+        // A request blocks the rollback; the store, its row and the history stay.
+        await ExecuteAsync(connection,
+            """
+            INSERT INTO notifications.recipient_auto_replies(
+              id,kind,contact_hash,contact_key_version,sealed_number,number_key_version,received_at,status,attempts,available_at)
+            VALUES(gen_random_uuid(),'AUTO_REPLY',decode(repeat('ab',32),'hex'),1,decode('01','hex'),'ntf006-auto-reply-mock-v1',
+              clock_timestamp(),'PENDING',0,clock_timestamp())
+            """);
+        await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
+        var blocked = await Assert.ThrowsAnyAsync<Exception>(() => migrator.MigrateAsync(AddRecipientNoticeCounts.MigrationId));
+        await ExecuteAsync(connection, "RESET ROLE");
+        var postgres = blocked as PostgresException ?? blocked.InnerException as PostgresException;
+        Assert.NotNull(postgres);
+        Assert.Equal(AddRecipientNoticeReceipts.DowngradeBlockedMessage, postgres.MessageText);
+        Assert.Equal(receipts, await NotificationsCatalogAsync(connection));
+        Assert.True(await ScalarBooleanAsync(connection,
+            $"SELECT EXISTS (SELECT 1 FROM platform.__ef_migrations_history_notifications WHERE \"MigrationId\"='{AddRecipientNoticeReceipts.MigrationId}')"));
+
+        // Without requests the Down restores the count step's catalog exactly and revokes every privilege of the role.
+        await ExecuteAsync(connection, "DELETE FROM notifications.recipient_auto_replies");
+        await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
+        await migrator.MigrateAsync(AddRecipientNoticeCounts.MigrationId);
+        await ExecuteAsync(connection, "RESET ROLE");
+        Assert.Equal(counts, await NotificationsCatalogAsync(connection));
+        Assert.Empty(await ReceiptColumnGrantsAsync(connection));
+        Assert.True(await ScalarBooleanAsync(connection,
+            $"SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='{AddRecipientNoticeReceipts.Role}')"));
+
+        await ExecuteAsync(connection, "SET ROLE paqueteria_migrator");
+        await migrator.MigrateAsync();
+        await ExecuteAsync(connection, "RESET ROLE");
+        Assert.Equal(receipts, await NotificationsCatalogAsync(connection));
+        Assert.Equal(AddRecipientNoticeReceipts.ColumnGrants, await ReceiptColumnGrantsAsync(connection));
+        await using var transaction = await connection.BeginTransactionAsync();
+        await new DatabaseBaselineAssertions().AssertAsync(connection, transaction);
+        await transaction.RollbackAsync();
+    }
+
+    /// <summary>The executor's column privileges (schema.table.column:privilege), sorted as the catalog check sorts them.</summary>
+    private static async Task<IReadOnlyList<string>> ReceiptColumnGrantsAsync(NpgsqlConnection connection)
+    {
+        await using var command = new NpgsqlCommand(
+            $"""
+            SELECT grant_line FROM (
+              SELECT table_schema || '.' || table_name || '.' || column_name || ':' || privilege_type AS grant_line
+              FROM information_schema.column_privileges
+              WHERE grantee='{AddRecipientNoticeReceipts.Role}') privileges
+            ORDER BY grant_line COLLATE "C"
+            """,
+            connection);
+        var result = new List<string>();
+        await using var reader = await command.ExecuteReaderAsync();
+        while (await reader.ReadAsync())
+        {
+            result.Add(reader.GetString(0));
+        }
+
+        return result;
     }
 
     /// <summary>

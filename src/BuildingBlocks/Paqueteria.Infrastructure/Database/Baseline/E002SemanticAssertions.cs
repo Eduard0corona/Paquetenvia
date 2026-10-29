@@ -54,8 +54,6 @@ public sealed class E002SemanticAssertions
         await AssertSchemaOwnersAsync(connection, transaction, violations, cancellationToken).ConfigureAwait(false);
         await AssertExtensionsAsync(connection, transaction, violations, cancellationToken).ConfigureAwait(false);
         await AssertTemporaryCreateResidueAsync(connection, transaction, violations, cancellationToken).ConfigureAwait(false);
-        await AssertSchemaAclAsync(connection, transaction, "notifications", NotificationsAcl(state), violations,
-            cancellationToken).ConfigureAwait(false);
         var mapState = E002NotificationStateReader.SelectMap(state);
         var lif001Applied = await E002LifecycleStateReader.IsAppliedAsync(connection, transaction, cancellationToken)
             .ConfigureAwait(false);
@@ -83,15 +81,22 @@ public sealed class E002SemanticAssertions
             .IsRecipientNoticeLaneAppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
         var recipientNoticeCountsApplied = await E002NotificationStateReader
             .IsRecipientNoticeCountsAppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        var recipientNoticeReceiptsApplied = await E002NotificationStateReader
+            .IsRecipientNoticeReceiptsAppliedAsync(connection, transaction, cancellationToken).ConfigureAwait(false);
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: the receipts step grants its executor USAGE on notifications and on
+        // security, so both schema ACLs are re-read with it.
+        await AssertSchemaAclAsync(connection, transaction, "notifications",
+            NotificationsAcl(state, recipientNoticeReceiptsApplied), violations, cancellationToken).ConfigureAwait(false);
         await AssertSchemaAclAsync(connection, transaction, "security",
-            await SecurityAclAsync(connection, transaction, realtimeDispatcherApplied, cancellationToken)
+            await SecurityAclAsync(connection, transaction, realtimeDispatcherApplied, recipientNoticeReceiptsApplied,
+                    cancellationToken)
                 .ConfigureAwait(false), violations,
             cancellationToken).ConfigureAwait(false);
         var (identities, aclRows) = await AssertRoutineMapCoreAsync(
             connection, transaction, mapState, lif001Applied, dispatchLaneApplied, ops003Applied, reg001Applied,
             bffSessionApplied, bffPurgeApplied, reg002Applied, mdm001Applied, operatorOutboxApplied,
             orderAutoCloseApplied, realtimeDispatcherApplied, recipientNoticeLaneApplied, recipientNoticeCountsApplied,
-            violations, cancellationToken)
+            recipientNoticeReceiptsApplied, violations, cancellationToken)
             .ConfigureAwait(false);
         await AssertSecurityDefinerAsync(connection, transaction, violations, cancellationToken).ConfigureAwait(false);
         if (violations.Count != 0)
@@ -104,7 +109,7 @@ public sealed class E002SemanticAssertions
             E002RoutineMap.Name(
                 mapState, lif001Applied, dispatchLaneApplied, ops003Applied, reg001Applied, bffSessionApplied, bffPurgeApplied,
                 reg002Applied, mdm001Applied, operatorOutboxApplied, orderAutoCloseApplied, realtimeDispatcherApplied,
-                recipientNoticeLaneApplied, recipientNoticeCountsApplied),
+                recipientNoticeLaneApplied, recipientNoticeCountsApplied, recipientNoticeReceiptsApplied),
             identities,
             aclRows);
     }
@@ -147,7 +152,8 @@ public sealed class E002SemanticAssertions
         await AssertRoutineMapCoreAsync(connection, transaction, E002RoutineMapState.Ntf001TargetApplied,
             lif001Applied, dispatchLaneApplied: false, ops003Applied, reg001Applied, bffSessionApplied, bffPurgeApplied,
             reg002Applied, mdm001Applied, operatorOutboxApplied, orderAutoCloseApplied, realtimeDispatcherApplied: false,
-            recipientNoticeLaneApplied: false, recipientNoticeCountsApplied: false, violations, cancellationToken)
+            recipientNoticeLaneApplied: false, recipientNoticeCountsApplied: false, recipientNoticeReceiptsApplied: false,
+            violations, cancellationToken)
             .ConfigureAwait(false);
         if (violations.Count != 0)
         {
@@ -270,7 +276,8 @@ public sealed class E002SemanticAssertions
         }
     }
 
-    private static IReadOnlyList<AclEntry> SecurityAcl(bool masterDataLoaderPresent, bool realtimeDispatcherApplied)
+    private static IReadOnlyList<AclEntry> SecurityAcl(
+        bool masterDataLoaderPresent, bool realtimeDispatcherApplied, bool recipientNoticeReceiptsApplied)
     {
         var expected = new List<AclEntry>
         {
@@ -298,20 +305,27 @@ public sealed class E002SemanticAssertions
             expected.Add(new("paqueteria_realtime", "paqueteria_migrator", "USAGE", false));
         }
 
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: the Notifications lane grants the receipt executor USAGE on security
+        // (its five functions live there and call the status-changed writer).
+        if (recipientNoticeReceiptsApplied)
+        {
+            expected.Add(new(E002RoutineMap.ReceiptExecutor, "paqueteria_migrator", "USAGE", false));
+        }
+
         return expected;
     }
 
     private static async Task<IReadOnlyList<AclEntry>> SecurityAclAsync(
         NpgsqlConnection connection, NpgsqlTransaction? transaction, bool realtimeDispatcherApplied,
-        CancellationToken cancellationToken)
+        bool recipientNoticeReceiptsApplied, CancellationToken cancellationToken)
     {
         await using var command = new NpgsqlCommand(
             "SELECT pg_catalog.to_regrole('paqueteria_master_data_loader') IS NOT NULL", connection, transaction);
         var present = await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
-        return SecurityAcl(present, realtimeDispatcherApplied);
+        return SecurityAcl(present, realtimeDispatcherApplied, recipientNoticeReceiptsApplied);
     }
 
-    private static IReadOnlyList<AclEntry> NotificationsAcl(E002NotificationState state)
+    private static IReadOnlyList<AclEntry> NotificationsAcl(E002NotificationState state, bool recipientNoticeReceiptsApplied)
     {
         var expected = new List<AclEntry>
         {
@@ -323,6 +337,12 @@ public sealed class E002SemanticAssertions
         if (state == E002NotificationState.Applied)
         {
             expected.Add(new("paqueteria_outbox_executor", "paqueteria_migrator", "USAGE", false));
+        }
+
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: the receipt executor reads and writes its columns of this schema.
+        if (recipientNoticeReceiptsApplied)
+        {
+            expected.Add(new(E002RoutineMap.ReceiptExecutor, "paqueteria_migrator", "USAGE", false));
         }
 
         return expected;
@@ -363,13 +383,13 @@ public sealed class E002SemanticAssertions
         bool lif001Applied, bool dispatchLaneApplied, bool ops003Applied, bool reg001Applied, bool bffSessionApplied,
         bool bffPurgeApplied, bool reg002Applied, bool mdm001Applied, bool operatorOutboxApplied,
         bool orderAutoCloseApplied, bool realtimeDispatcherApplied, bool recipientNoticeLaneApplied,
-        bool recipientNoticeCountsApplied,
+        bool recipientNoticeCountsApplied, bool recipientNoticeReceiptsApplied,
         ICollection<string> violations, CancellationToken cancellationToken)
     {
         var map = E002RoutineMap.Select(
             mapState, lif001Applied, dispatchLaneApplied, ops003Applied, reg001Applied, bffSessionApplied, bffPurgeApplied,
             reg002Applied, mdm001Applied, operatorOutboxApplied, orderAutoCloseApplied, realtimeDispatcherApplied,
-            recipientNoticeLaneApplied, recipientNoticeCountsApplied);
+            recipientNoticeLaneApplied, recipientNoticeCountsApplied, recipientNoticeReceiptsApplied);
         var expectedOids = new HashSet<uint>();
         var totalRows = 0;
         foreach (var routine in map)

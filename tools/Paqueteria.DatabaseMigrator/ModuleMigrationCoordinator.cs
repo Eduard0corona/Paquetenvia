@@ -61,8 +61,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20261011000100_AllowDispatchDecidedNextAction.cs"),
         ("Finance", "__ef_migrations_history_finance", EnforceSettlementLedgerIntegrity.MigrationId,
             "src/Modules/Finance/Finance.Infrastructure/Persistence/Migrations/20260925000100_EnforceSettlementLedgerIntegrity.cs"),
-        ("Notifications", "__ef_migrations_history_notifications", AddRecipientNoticeCounts.MigrationId,
-            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261023000100_AddRecipientNoticeCounts.cs"),
+        ("Notifications", "__ef_migrations_history_notifications", AddRecipientNoticeReceipts.MigrationId,
+            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261029000100_AddRecipientNoticeReceipts.cs"),
         ("DataProtection", PlatformDataProtectionSchema.MigrationsHistoryTable,
             AddDistributedDataProtectionKeyRing.MigrationId,
             "src/BuildingBlocks/Paqueteria.Infrastructure/DataProtection/Migrations/20260922000100_AddDistributedDataProtectionKeyRing.cs"),
@@ -104,11 +104,13 @@ internal sealed class ModuleMigrationCoordinator
                 // America/Mazatlan only); its rollback restores the previous function. No grant, table, role or
                 // row is added, dropped, deleted or rewritten.
                 "Pricing" => IsMazatlanTimeZoneLoaderSource(source),
-                // NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 (AI-08 NTF-005): the lane's latest step adds one read-only count
-                // function and two partial indexes; its rollback drops only those. NTF-RECIPIENT-NOTICES-2026-10-20,
-                // OBS-003-OUTBOX-TRACE-CONTEXT, RTM-API-REALTIME-DISPATCHER-ROLE and the earlier steps are verified below
-                // with their own rules.
-                "Notifications" => IsRecipientNoticeCountsSource(source),
+                // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006): the lane's latest step creates the receipt
+                // executor (idempotently, never dropped), the automatic-reply store and the five executor functions with
+                // their exact column grants; its rollback refuses while any automatic-reply request exists and otherwise
+                // drops only those and revokes the executor's privileges. NTF-RECIPIENT-NOTICE-CAPS-2026-10-23,
+                // NTF-RECIPIENT-NOTICES-2026-10-20, OBS-003-OUTBOX-TRACE-CONTEXT, RTM-API-REALTIME-DISPATCHER-ROLE and the
+                // earlier steps are verified below with their own rules.
+                "Notifications" => IsRecipientNoticeReceiptsSource(source),
                 // SET-001: the settlement ledger is append-only, so the lane only ever adds guards to
                 // the canonical tables and its rollback fails closed.
                 "Finance" =>
@@ -328,6 +330,12 @@ internal sealed class ModuleMigrationCoordinator
             AddRecipientNoticeLane.MigrationId,
             "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261020000100_AddRecipientNoticeLane.cs",
             IsRecipientNoticeLaneSource);
+        VerifyLaneSource(
+            root,
+            "Notifications",
+            AddRecipientNoticeCounts.MigrationId,
+            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261023000100_AddRecipientNoticeCounts.cs",
+            IsRecipientNoticeCountsSource);
         VerifyLaneSource(
             root,
             "Notifications",
@@ -594,6 +602,7 @@ internal sealed class ModuleMigrationCoordinator
                     CarryOutboxTraceContext.MigrationId,
                     AddRecipientNoticeLane.MigrationId,
                     AddRecipientNoticeCounts.MigrationId,
+                    AddRecipientNoticeReceipts.MigrationId,
                 ],
             "Identity" =>
                 [AdoptCanonicalIdentityBaseline.MigrationId, AddBffSessionStore.MigrationId],
@@ -965,6 +974,39 @@ internal sealed class ModuleMigrationCoordinator
         !source.Contains("GRANT SELECT", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("GRANT INSERT", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("GRANT UPDATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (Notifications lane, AI-08 NTF-006): the receipt executor, created
+    /// idempotently as NOLOGIN BYPASSRLS and never dropped, the automatic-reply store (its only table drop, behind the
+    /// data guard of its rollback), the five executor functions (EXECUTE for paqueteria_app or paqueteria_worker only) and
+    /// the executor's exact column grants, revoked by the rollback. No policy, no row deletion or rewrite, no grant option
+    /// and no table privilege for a runtime role.</summary>
+    private static bool IsRecipientNoticeReceiptsSource(string source) =>
+        source.Contains(AddRecipientNoticeReceipts.DecisionId, StringComparison.Ordinal) &&
+        source.Contains(AddRecipientNoticeReceipts.DowngradeBlockedMessage, StringComparison.Ordinal) &&
+        source.Contains("NTF-001 rollback blocked", StringComparison.Ordinal) &&
+        source.Contains("CREATE ROLE paqueteria_notification_receipt_executor NOLOGIN BYPASSRLS;", StringComparison.Ordinal) &&
+        source.Contains("EXCEPTION WHEN duplicate_object THEN NULL;", StringComparison.Ordinal) &&
+        source.Contains("REVOKE paqueteria_notification_receipt_executor FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;", StringComparison.Ordinal) &&
+        source.Contains("REVOKE ALL ON notifications.recipient_auto_replies FROM PUBLIC,paqueteria_app,paqueteria_worker;", StringComparison.Ordinal) &&
+        source.Contains("FORCE ROW LEVEL SECURITY;", StringComparison.Ordinal) &&
+        source.Split("DROP TABLE", StringSplitOptions.None).Length - 1 == 1 &&
+        source.Contains("DROP TABLE notifications.recipient_auto_replies;", StringComparison.Ordinal) &&
+        source.Split("CREATE ROLE", StringSplitOptions.None).Length - 1 == 1 &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("ALTER TABLE notifications.notifications", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE notifications.recipient_opt_outs", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("WITH GRANT OPTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains(" ON notifications.notifications TO paqueteria_app", StringComparison.Ordinal) &&
+        !source.Contains(" ON notifications.recipient_auto_replies TO paqueteria_app", StringComparison.Ordinal) &&
+        !source.Contains(" ON notifications.recipient_auto_replies TO paqueteria_worker", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);

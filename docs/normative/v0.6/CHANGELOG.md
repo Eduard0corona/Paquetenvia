@@ -1,5 +1,42 @@
 # Changelog
 
+## Avisos al destinatario: acuses, bajas y respuesta automática (NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25, AI-08 NTF-006) — 2026-10-25
+
+- Respuestas literales del project owner (ronda O, preguntas O2 a O11, 2026-10-24 y 2026-10-25), registradas en
+  `decision-log.md` con sus contextos, los textos de las opciones, las vistas previas y las opciones no elegidas: O2
+  "Secreto en un encabezado (Recommended)", O3 "Los propuestos (Recommended)", O4 "404 siempre; baja sin interruptor
+  (Recommended)", O5 "Ampliar AI-18 (Recommended)", O6 "Cuarentena = bloqueado; Expanded se ignora (Recommended)", O7
+  "Aprobar lo propuesto (Recommended)", O8 "Registrar al cerrar las compuertas (Recommended)", O9 "Aprobar estos textos
+  (Recommended)", O10 "Sí, el registro de la baja basta (Recommended)" y O11 "Aprobarlas todas (Recommended)". Es el PR-5
+  de la secuencia de `docs/development/ntf-recipient-notices.md`; aplica además `NTF-RECIPIENT-NOTICES-2026-10-20` (E4-P8,
+  E4-P9 y E4-P15).
+- AI-05 publica las cuatro operaciones anónimas de la parte NTF-006 (etiqueta Messaging): `verifyMetaWhatsAppWebhook`,
+  `receiveMetaWhatsAppWebhook` (firma `X-Hub-Signature-256` en tiempo constante antes de leer el JSON, 256 KiB),
+  `receiveAcsEmailEvents` (handshake de Event Grid y secreto de Key Vault `X-Paquetenvia-Event-Secret` con dos ranuras,
+  comparado antes de leer el cuerpo, 64 KiB) y `unsubscribeRecipientNotices` (cuerpo vacío, `List-Unsubscribe=One-Click`
+  o `{}`, 1 KiB, 204, 404 y 503 uniformes, sin GET ni redirección). Límites de SEC-004 por red y minuto: 10, 300, 120 y 20
+  (este con el 429 uniforme del seguimiento público). Un webhook apagado responde siempre el 404 uniforme, nunca 429; la
+  baja por correo no tiene interruptor.
+- Paso de carril Notifications `20261029000100_AddRecipientNoticeReceipts`, con ida, vuelta e ida probadas en PostgreSQL 18
+  y PostGIS 3.6: el rol `paqueteria_notification_receipt_executor` (DDL de AI-18, NOLOGIN y BYPASSRLS, otorgado a ningún
+  rol de runtime) es dueño de las tres funciones de la API (acuses, bajas, solicitud de respuesta automática) y de las dos
+  del Worker (tomar y cerrar solicitudes), con 59 privilegios de columna y EXECUTE sobre el escritor del cambio de estado
+  (O5: un acuse `FAILED` guarda su código). El almacén `notifications.recipient_auto_replies` (AI-06) tiene FORCE RLS sin
+  política; su `Down` se niega mientras exista una solicitud. AI-18 declara los permisos byte a byte (paso 3 de avisos,
+  ahora instalado, y aserción 41) y `validate_contracts.py` los verifica.
+- Acuses solo hacia adelante (SENT → DELIVERED o FAILED), con el mapa de ACS de O6; bajas globales por WhatsApp (palabra o
+  botón, por payload o texto) y por el enlace del correo, sin auditoría (O10); una sola confirmación por baja; respuesta
+  automática una vez por contacto cada 24 h, sin horario ni tope diario y descartada con el número borrado si los avisos
+  o WhatsApp están apagados (O7). El número del remitente se sella con la llave de avisos, ligado a un identificador fijo
+  de plataforma, y el Worker lo borra tras el intento.
+- AI-07 `/avisos/baja/:token`: implementada con el botón "Dejar de recibir correos" y los cuatro mensajes de O9. AI-24
+  `recipient_notices` registra O2 a O11; AI-08 NTF-006 gana su criterio `DECIDED` y lee el vector "repetido" como un
+  duplicado firmado que no cambia nada; AI-08 NTF-008 y AI-24 `pilot_wiring` preparan la suscripción de Event Grid tras
+  un parámetro de fase y registran el callback de Meta después de las compuertas, con el secreto de Event Grid, el
+  `phone_number_id` y el id del recurso de Azure (O8, O11). ADR-NTF-002 nombra las funciones del rol para el Worker.
+- Todos los interruptores siguen apagados; GATE-004 y GATE-007 siguen abiertas. Nota:
+  `docs/development/ntf-006-receipts-optouts-autoreply.md`.
+
 ## Remediación de seguridad pnpm: zod 4.6.6 (SEC-2026-15-PNPM-REMEDIATION-2026-10-24) — 2026-10-24
 
 - Respuesta literal del project owner (2026-10-24, ronda O, pregunta O1), registrada en `decision-log.md` con su

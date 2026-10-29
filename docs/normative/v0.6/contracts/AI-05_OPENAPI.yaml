@@ -28,6 +28,7 @@ tags:
 - name: Platform
 - name: Operations
 - name: Voice
+- name: Messaging
 paths:
   /quotes:
     post:
@@ -1940,6 +1941,212 @@ paths:
           $ref: '#/components/responses/VoiceWebhookRejected'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+  /messaging/whatsapp/webhook:
+    get:
+      tags:
+      - Messaging
+      operationId: verifyMetaWhatsAppWebhook
+      security: []
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006; AI-24 recipient_notices.webhooks.whatsapp) - the
+        verification Meta sends when the callback URL is saved. Anonymous: no session, cookie or CSRF. 200 with
+        hub.challenge as text/plain only for hub.mode subscribe, one hub.challenge of 1 to 256 characters of A-Z a-z
+        0-9 . _ - and a hub.verify_token equal, in constant time, to the current or the previous configured token
+        (two slots for rotation, O11 choice 9); otherwise the uniform 403. The whole query, hub.verify_token included,
+        is removed from the request target before anything logs it (O11 choice 7). 404 while
+        Messaging:WhatsApp:Webhook:Enabled is false, before anything else and never 429 (O4); 429 under SEC-004, 10
+        per 60 seconds per client network (O3). Cache-Control no-store.
+      parameters:
+      - name: hub.mode
+        in: query
+        required: true
+        schema:
+          type: string
+          maxLength: 64
+      - name: hub.verify_token
+        in: query
+        required: true
+        schema:
+          type: string
+          maxLength: 256
+      - name: hub.challenge
+        in: query
+        required: true
+        schema:
+          type: string
+          pattern: ^[A-Za-z0-9_.-]{1,256}$
+      responses:
+        '200':
+          description: The hub.challenge, unchanged
+          content:
+            text/plain:
+              schema:
+                type: string
+        '403':
+          $ref: '#/components/responses/MessagingWebhookRejected'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+    post:
+      tags:
+      - Messaging
+      operationId: receiveMetaWhatsAppWebhook
+      security: []
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006; AI-24 recipient_notices.webhooks.whatsapp, receipts,
+        opt_out and auto_reply) - Meta's webhook of the platform's one WhatsApp number. Anonymous: no session, cookie or
+        CSRF. 404 while Messaging:WhatsApp:Webhook:Enabled is false, before anything else and never 429 (O4). A body
+        over 256 KiB is 413 without being read further (O11 choice 2). X-Hub-Signature-256 must be exactly one valid
+        signature of the raw body under the current or the previous Meta app secret (O11 choice 9), compared in
+        constant time before the body is parsed; otherwise the uniform 403. A validly signed body that is not a JSON
+        object is 400. Only object whatsapp_business_account and changes of field messages whose
+        metadata.phone_number_id is the configured number are read (O11 choice 5); every other object, change and field
+        is ignored with 200. Statuses delivered and failed become delivery receipts (sent and read are ignored); an
+        inbound text that is exactly BAJA, ALTO, STOP or CANCELAR (trimmed, case and accents ignored), or the quick
+        reply No recibir avisos (recognized by its payload or its text, O11 choice 4), records the WHATSAPP opt-out of
+        the sender hash and, when it records it, requests the one confirmation; any other inbound message requests the
+        one automatic reply (at most one per contact in 24 hours; none for a message older than 23 hours). A validly
+        signed duplicate (Meta's retries) changes nothing. 200 once recorded; 503 when the store or a key is
+        unavailable, so Meta retries; 429 under SEC-004, 300 per 60 seconds per client network (O3). No inbound text,
+        profile name, phone, recipient_id or provider reference is ever logged, stored in clear or audited.
+        Cache-Control no-store.
+      parameters:
+      - $ref: '#/components/parameters/MetaWebhookSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MetaWhatsAppWebhookPayload'
+      responses:
+        '200':
+          description: Acknowledged
+        '400':
+          $ref: '#/components/responses/MessagingWebhookMalformed'
+        '403':
+          $ref: '#/components/responses/MessagingWebhookRejected'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /messaging/email/events:
+    post:
+      tags:
+      - Messaging
+      operationId: receiveAcsEmailEvents
+      security: []
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006; O2 "Secreto en un encabezado (Recommended)"; AI-24
+        recipient_notices.webhooks.email and receipts.email) - the Event Grid subscription of the Communication
+        Services resource, Event Grid event schema, batching off. Anonymous: no session, cookie or CSRF. 404 while
+        Messaging:Email:Events:Enabled is false, before anything else and never 429 (O4). A request whose
+        aeg-event-type is SubscriptionValidation is the subscription validation handshake: its
+        Microsoft.EventGrid.SubscriptionValidationEvent code (A-Z a-z 0-9 and -, at most 128) is answered as
+        validationResponse, and nothing is recorded. Every other request is a delivery and must carry the Key Vault
+        secret header X-Paquetenvia-Event-Secret, compared in constant time against the current and the previous
+        secret (two slots for rotation) before the body is read: missing is 401, wrong is the uniform 403. A body over
+        64 KiB is 413 (O11 choice 2); a body that is not a JSON array of events is 400.
+        Microsoft.Communication.EmailDeliveryReportReceived events of the configured resource (topic) become receipts
+        (O6: Delivered is DELIVERED; Bounced and Suppressed are FAILED MESSAGING_RECIPIENT_UNDELIVERABLE; FilteredSpam
+        and Quarantined are FAILED MESSAGING_POLICY_BLOCKED; Failed is FAILED MESSAGING_PROVIDER_REJECTED; Expanded is
+        ignored); other event types and resources are ignored. A duplicate changes nothing. 200 once recorded; 503 when
+        the store is unavailable, so Event Grid retries; 429 under SEC-004, 120 per 60 seconds per client network
+        (O3). The recipient address, the sender and the status message are never read, logged or stored.
+        Cache-Control no-store.
+      parameters:
+      - $ref: '#/components/parameters/EventGridEventType'
+      - $ref: '#/components/parameters/EventGridDeliverySecret'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/EventGridEvent'
+      responses:
+        '200':
+          description: Acknowledged; the handshake answer carries validationResponse
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventGridValidationResponse'
+        '400':
+          $ref: '#/components/responses/MessagingWebhookMalformed'
+        '401':
+          $ref: '#/components/responses/MessagingWebhookUnauthenticated'
+        '403':
+          $ref: '#/components/responses/MessagingWebhookRejected'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /recipient-notices/unsubscribe/{unsubscribeToken}:
+    post:
+      tags:
+      - Messaging
+      operationId: unsubscribeRecipientNotices
+      security: []
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006; AI-24 recipient_notices.webhooks.unsubscribe and
+        opt_out.email_link) - the RFC 8058 one-click unsubscribe of a recipient e-mail (List-Unsubscribe-Post) and the
+        button of the public page /avisos/baja/:token (AI-07). Anonymous: no session, cookie or CSRF; no switch (O4).
+        The body is empty, application/x-www-form-urlencoded or multipart/form-data with exactly the field
+        List-Unsubscribe=One-Click, or the JSON object {} of the page; anything else is 400 and a body over 1 KiB is
+        413 (O11 choices 2 and 7), both before the token is read. The token (88 Base64URL characters) binds the owner
+        organization and the notification under HMAC-SHA256 (contact lookup key, prefix paquetenvia-unsubscribe-v1)
+        and is checked in constant time; it is removed from the request target before anything logs it and is never
+        stored (O11 choice 7). A valid token reads the destination e-mail copy of that ORDER_DESTINATION e-mail
+        notice under FORCE RLS in a transaction of its organization and opens it with the API's PII key (O11 choice
+        1); the EMAIL opt-out of its hash is recorded (source EMAIL_LINK, no audit row, O10) and the answer is 204,
+        also when it was already recorded. An invalid or malformed token, an unknown notification or one whose e-mail
+        copy no longer exists is the uniform 404; 503 when the store or a key is unavailable; both without traceId,
+        like publicTracking. Never a redirect, and no GET (a link scanner never opts out). 429 under SEC-004, 20 per
+        60 seconds per client network, with the uniform public body (O3). Cache-Control no-store and Referrer-Policy
+        no-referrer.
+      parameters:
+      - name: unsubscribeToken
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 256
+      requestBody:
+        required: false
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/OneClickUnsubscribeForm'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/OneClickUnsubscribeForm'
+          application/json:
+            schema:
+              type: object
+              maxProperties: 0
+      responses:
+        '204':
+          description: The e-mail opt-out is recorded
+        '400':
+          $ref: '#/components/responses/MessagingWebhookMalformed'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /quotes/{quoteId}:
     get:
       tags:
@@ -3572,6 +3779,40 @@ components:
         type: string
         minLength: 1
         maxLength: 256
+    MetaWebhookSignature:
+      name: X-Hub-Signature-256
+      in: header
+      required: true
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 - sha256= followed by the hexadecimal HMAC-SHA256 of the raw request
+        body under the Meta app secret (Key Vault; a current and a previous slot for rotation, O11 choice 9), compared
+        in constant time before the body is parsed.
+      schema:
+        type: string
+        pattern: ^sha256=[0-9A-Fa-f]{64}$
+    EventGridEventType:
+      name: aeg-event-type
+      in: header
+      required: false
+      description: >-
+        Event Grid's own header: SubscriptionValidation marks the subscription validation handshake; any other value,
+        or none, is a delivery.
+      schema:
+        type: string
+        maxLength: 64
+    EventGridDeliverySecret:
+      name: X-Paquetenvia-Event-Secret
+      in: header
+      required: false
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O2 "Secreto en un encabezado (Recommended)") - the Key Vault secret
+        the Event Grid subscription sends as a static delivery header; required on every delivery (every request but
+        the validation handshake) and compared in constant time against the current and the previous secret before
+        the body is read.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 256
     OrganizationContext:
       name: X-Organization-Id
       in: header
@@ -3770,6 +4011,41 @@ components:
       description: >-
         VOICE-001 webhook without exactly one valid X-Twilio-Signature for the configured public URL, or for another
         Twilio account. Uniform; nothing is read, logged or stored.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    MessagingWebhookMalformed:
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 - a body that is not the contracted shape: a validly signed Meta body
+        that is not a JSON object, an Event Grid body that is not a JSON array of events (or a handshake without a
+        usable validation code), or an unsubscribe body other than empty, List-Unsubscribe=One-Click or {}. Nothing is
+        recorded or echoed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    MessagingWebhookUnauthenticated:
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O2) - an Event Grid delivery without the X-Paquetenvia-Event-Secret
+        header. The body is not read.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    MessagingWebhookRejected:
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 - a Meta verification whose mode, challenge or verify token is not
+        accepted, a Meta POST without exactly one valid X-Hub-Signature-256, or an Event Grid delivery with a wrong
+        secret. Uniform; nothing is parsed, logged or stored.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PayloadTooLarge:
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O11 choice 2) - the body exceeds the operation's bound (Meta webhook
+        256 KiB, Event Grid events 64 KiB, unsubscribe 1 KiB); it is not read further or parsed.
       content:
         application/problem+json:
           schema:
@@ -5709,6 +5985,60 @@ components:
           pattern: ^[0-9]{1,5}$
       additionalProperties:
         type: string
+    MetaWhatsAppWebhookPayload:
+      type: object
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 - Meta's WhatsApp Business webhook body. Only object
+        (whatsapp_business_account), entry[].changes[] of field messages with value.metadata.phone_number_id, and in
+        value the statuses (id, status, timestamp, errors[0].code) and the messages (from, timestamp, type, text.body,
+        button.payload and button.text) are read; every other member is ignored.
+      properties:
+        object:
+          type: string
+        entry:
+          type: array
+          items:
+            type: object
+    EventGridEvent:
+      type: object
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 - one Event Grid event (Event Grid event schema). Only eventType,
+        topic and, in data, validationCode (Microsoft.EventGrid.SubscriptionValidationEvent) or messageId, status and
+        deliveryAttemptTimeStamp (Microsoft.Communication.EmailDeliveryReportReceived) are read.
+      properties:
+        id:
+          type: string
+        eventType:
+          type: string
+        topic:
+          type: string
+        subject:
+          type: string
+        eventTime:
+          type: string
+        dataVersion:
+          type: string
+        data:
+          type: object
+    EventGridValidationResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - validationResponse
+      properties:
+        validationResponse:
+          type: string
+          pattern: ^[A-Za-z0-9-]{1,128}$
+    OneClickUnsubscribeForm:
+      type: object
+      description: RFC 8058 one-click unsubscribe body; exactly this field.
+      additionalProperties: false
+      required:
+      - List-Unsubscribe
+      properties:
+        List-Unsubscribe:
+          type: string
+          const: One-Click
     DriverLocationInvalidRequestProblem:
       type: object
       required:
@@ -8363,8 +8693,14 @@ x-pilot-contract-deltas:
       recipient_whatsapp_consent_version on commitOrderCsv, the Orders lane step 20261023000200_AddRecipientNoticeConsents
       (orders.recipient_notice_consents, append-only under FORCE RLS) with its AI-06 and AI-18 declarations and baseline
       assertions, the ORD-002 producer of orders.recipient-notice-requested (RecipientNoticeRequestPolicy) and the two
-      consent boxes (NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23); every other part is pending - nothing else below is
-      served or accepted yet; each part is published in this file together with its code and tests by the AI-08 item it
+      consent boxes (NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23); part NTF-006 shipped by
+      feat/ntf-006-receipts-optouts-autoreply together with its code and tests - verifyMetaWhatsAppWebhook,
+      receiveMetaWhatsAppWebhook, receiveAcsEmailEvents and unsubscribeRecipientNotices with their SEC-004 policies,
+      the Notifications lane step 20261029000100_AddRecipientNoticeReceipts (the receipt executor's functions and the
+      automatic-reply store) with its AI-06 and AI-18 declarations and baseline assertions, the Worker's
+      automatic-reply sender and the public page /avisos/baja/:token (NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25, O2 to
+      O11); both webhook switches stay off (uniform 404); every other part is pending - nothing else below is served
+      or accepted yet; each part is published in this file together with its code and tests by the AI-08 item it
       names; GATE-004 and GATE-007 stay open and every switch stays off
     delta: recipient notices (TRACKING_LINK, IN_TRANSIT, DELIVERY_FAILED and DELIVERED) to the delivery recipient by
       WhatsApp and by e-mail; the parts below add an optional recipient e-mail, the WhatsApp consent, the dispatcher
@@ -8401,39 +8737,52 @@ x-pilot-contract-deltas:
       operation: verifyMetaWhatsAppWebhook
       method_path: GET /messaging/whatsapp/webhook
       change: tag Messaging, security none; query hub.mode, hub.verify_token and hub.challenge; 200 text/plain with
-        hub.challenge only for hub.mode subscribe and a verify token equal, in constant time, to the configured secret;
-        otherwise the uniform 403; 404 while Messaging:WhatsApp:Webhook:Enabled is false; 429 under SEC-004 (the budgets
-        of these four anonymous operations are an owner decision asked in NTF-006)
+        hub.challenge only for hub.mode subscribe and a verify token equal, in constant time, to the current or the
+        previous configured secret (two slots, NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 O11 choice 9); otherwise the
+        uniform 403; the query is removed from the request target before anything logs it (O11 choice 7); 404 while
+        Messaging:WhatsApp:Webhook:Enabled is false, never 429 then (O4); 429 under SEC-004, 10 per 60 seconds per
+        client network (O3)
     - item: NTF-006
       operation: receiveMetaWhatsAppWebhook
       method_path: POST /messaging/whatsapp/webhook
       change: tag Messaging, security none, application/json from Meta with the required X-Hub-Signature-256 header
-        (sha256= and the HMAC-SHA256 of the raw body under the Meta app secret), checked in constant time before
-        parsing; statuses become delivery receipts (AI-24 recipient_notices.receipts); an inbound opt-out keyword or the
-        quick reply No recibir avisos becomes a WHATSAPP opt-out of the sender hash (recipient_notices.opt_out) and, when
-        it records that opt-out, the one confirmation (recipient_notices.opt_out.confirmation, E4-P15); any other
-        inbound message gets the one automatic reply (recipient_notices.auto_reply, E4-P9); 200 once recorded, fields it
-        does not use ignored; the uniform 403 for a missing or invalid signature; 400 for a validly signed body that is
-        not a JSON object; 404 while disabled; 429 under SEC-004; 503 when the store or a key is unavailable, so Meta
-        retries; no inbound text, profile name, phone or recipient_id is ever logged, stored in clear or audited
+        (sha256= and the HMAC-SHA256 of the raw body under the current or the previous Meta app secret, O11 choice 9),
+        checked in constant time before parsing; a body over 256 KiB is 413 (O11 choice 2); only object
+        whatsapp_business_account and the configured phone_number_id are read (O11 choice 5); statuses become delivery
+        receipts (AI-24 recipient_notices.receipts); an inbound opt-out keyword or the quick reply No recibir avisos (by
+        its payload or its text, O11 choice 4) becomes a WHATSAPP opt-out of the sender hash
+        (recipient_notices.opt_out) and, when it records that opt-out, the one confirmation
+        (recipient_notices.opt_out.confirmation, E4-P15); any other inbound message gets the one automatic reply
+        (recipient_notices.auto_reply, E4-P9); 200 once recorded, fields it does not use ignored; the uniform 403 for a
+        missing or invalid signature; 400 for a validly signed body that is not a JSON object; 404 while disabled,
+        never 429 then (O4); 429 under SEC-004, 300 per 60 seconds per client network (O3); 503 when the store or a key
+        is unavailable, so Meta retries; no inbound text, profile name, phone or recipient_id is ever logged, stored in
+        clear or audited
     - item: NTF-006
       operation: receiveAcsEmailEvents
       method_path: POST /messaging/email/events
       change: tag Messaging, security none, Event Grid event schema (application/json); answers the subscription
-        validation handshake with its validationResponse; otherwise only authenticated deliveries (Microsoft Entra
-        protected delivery or a Key Vault secret header, chosen and recorded by NTF-006), else 401 or the uniform 403;
-        Microsoft.Communication.EmailDeliveryReportReceived events become receipts and other event types are ignored;
-        200 once recorded; 404 while Messaging:Email:Events:Enabled is false; 429 under SEC-004; 503 when the store is
-        unavailable, so Event Grid retries
+        validation handshake (aeg-event-type SubscriptionValidation) with its validationResponse; otherwise only
+        deliveries authenticated by the Key Vault secret header X-Paquetenvia-Event-Secret, compared in constant time
+        against two slots before the body is read (O2 "Secreto en un encabezado (Recommended)"), else 401 when it is
+        missing or the uniform 403 when it is wrong; a body over 64 KiB is 413 (O11 choice 2);
+        Microsoft.Communication.EmailDeliveryReportReceived events become receipts with the O6 status map and other
+        event types are ignored; 200 once recorded; 404 while Messaging:Email:Events:Enabled is false, never 429 then
+        (O4); 429 under SEC-004, 120 per 60 seconds per client network (O3); 503 when the store is unavailable, so
+        Event Grid retries
     - item: NTF-006
       operation: unsubscribeRecipientNotices
       method_path: POST /recipient-notices/unsubscribe/{unsubscribeToken}
-      change: tag Messaging, security none, no session, cookie or CSRF; the body is empty, the RFC 8058 form
-        List-Unsubscribe=One-Click or an empty JSON object from the public page; the token binds the owner organization
-        and the notification id under HMAC-SHA256 and is checked in constant time; a valid token records the EMAIL
-        opt-out of that notification contact (source EMAIL_LINK) and answers 204, also when it was already recorded; an
-        invalid or malformed token, or one whose notification no longer exists, is the uniform 404; 429 under SEC-004;
-        503 when the store or a key is unavailable; Cache-Control no-store
+      change: tag Messaging, security none, no session, cookie or CSRF, and no switch (O4); the body is empty, the RFC
+        8058 field List-Unsubscribe=One-Click as a form or multipart, or an empty JSON object from the public page,
+        else 400, and a body over 1 KiB is 413 (O11 choices 2 and 7); the token binds the owner organization and the
+        notification id under HMAC-SHA256 and is checked in constant time, and it is removed from the request target
+        before anything logs it; a valid token reads the e-mail copy of that notification with the API's PII key in a
+        transaction of its organization (O11 choice 1) and records the EMAIL opt-out of its hash (source EMAIL_LINK,
+        no audit row, O10) and answers 204, also when it was already recorded; an invalid or malformed token, or one
+        whose notification or e-mail copy no longer exists, is the uniform 404; 429 under SEC-004, 20 per 60 seconds
+        per client network with the uniform public body (O3); 503 when the store or a key is unavailable; never a
+        redirect and no GET; Cache-Control no-store
     - item: NTF-007
       operation: listOrderRecipientNotices
       method_path: GET /orders/{orderId}/recipient-notices

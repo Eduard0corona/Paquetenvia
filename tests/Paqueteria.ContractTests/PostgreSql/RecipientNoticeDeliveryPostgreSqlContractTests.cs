@@ -99,11 +99,15 @@ public sealed class RecipientNoticeDeliveryPostgreSqlContractTests(PostgreSqlCon
                   AND c.relnamespace='notifications'::regnamespace
                 """));
 
-        // The step is recorded as the tail of the Notifications lane.
+        // The step is recorded in the Notifications lane, followed only by the NTF-006 receipt step.
         Assert.Equal(
-            AddRecipientNoticeCounts.MigrationId,
+            $"{AddRecipientNoticeCounts.MigrationId},{AddRecipientNoticeReceipts.MigrationId}",
             await AdminScalarAsync<string>(
-                "SELECT max(\"MigrationId\") FROM platform.__ef_migrations_history_notifications"));
+                $"""
+                SELECT string_agg("MigrationId", ',' ORDER BY "MigrationId" COLLATE "C")
+                FROM platform.__ef_migrations_history_notifications
+                WHERE "MigrationId" >= '{AddRecipientNoticeCounts.MigrationId}'
+                """));
 
         // The Worker still reads nothing of the Notifications table, and the API cannot ask for the counts.
         await using (var worker = await fixture.WorkerDataSource.OpenConnectionAsync())

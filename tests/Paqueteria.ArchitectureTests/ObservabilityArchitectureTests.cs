@@ -39,7 +39,8 @@ public sealed partial class ObservabilityArchitectureTests
         "Owner",
         "Channel",
         // AI-24 recipient_notices.logging: one of the four fixed notice names (TRACKING_LINK, IN_TRANSIT, DELIVERY_FAILED,
-        // DELIVERED), never a recipient, a link or a template parameter.
+        // DELIVERED) or of the two fixed automatic replies (AUTO_REPLY, OPT_OUT_CONFIRMATION;
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25), never a recipient, a link or a template parameter.
         "Notice",
         "Code",
         "Provider",

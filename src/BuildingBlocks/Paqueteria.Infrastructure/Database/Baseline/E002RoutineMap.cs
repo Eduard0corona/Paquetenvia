@@ -186,6 +186,29 @@ public static class E002RoutineMap
         new("security.read_recipient_notice_counts(uuid,uuid)", "paqueteria_outbox_executor", ["paqueteria_worker"]),
     ];
 
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006): the Notifications lane migration
+    /// 20261029000100_AddRecipientNoticeReceipts installs five routines owned by paqueteria_notification_receipt_executor:
+    /// the receipt, opt-out and automatic-reply request writers executable only by paqueteria_app, and the automatic-reply
+    /// claim and settle executable only by paqueteria_worker. It also adds the executor as the one grantee of
+    /// <see cref="EmitStatusChangedSignature"/> (O5). It follows the recipient notice count step.
+    /// </summary>
+    private static readonly E002RoutineEntry[] RecipientNoticeReceiptEntries =
+    [
+        new("security.record_messaging_receipt(text,text,text,text,timestamp with time zone)", ReceiptExecutor, ["paqueteria_app"]),
+        new("security.record_recipient_opt_out(text,text,bytea,integer,bytea[])", ReceiptExecutor, ["paqueteria_app"]),
+        new("security.request_recipient_auto_reply(uuid,text,bytea,integer,bytea[],bytea,text,timestamp with time zone)", ReceiptExecutor, ["paqueteria_app"]),
+        new("security.claim_recipient_auto_replies(integer,interval)", ReceiptExecutor, ["paqueteria_worker"]),
+        new("security.settle_recipient_auto_reply(uuid,uuid,text,text,timestamp with time zone)", ReceiptExecutor, ["paqueteria_worker"]),
+    ];
+
+    /// <summary>NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: the receipt executor (AI-18 recipient notices step 3).</summary>
+    public const string ReceiptExecutor = "paqueteria_notification_receipt_executor";
+
+    /// <summary>The NTF-001 status-changed writer the receipt executor may execute (O5).</summary>
+    public const string EmitStatusChangedSignature =
+        "security.emit_notification_status_changed(uuid,uuid,integer,text,text,integer,timestamp with time zone)";
+
     /// <summary>The published NTF-001 settle, dropped by the recipient notice lane step.</summary>
     public const string PublishedApplyOutcomeSignature =
         "security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,timestamp with time zone,timestamp with time zone)";
@@ -215,6 +238,8 @@ public static class E002RoutineMap
             OrderAutoCloseEntries.Length != 1 || OrderAutoCloseEntries.Sum(entry => 1 + entry.Grantees.Count) != 2 ||
             RecipientNoticeEntries.Length != 4 || RecipientNoticeEntries.Sum(entry => 1 + entry.Grantees.Count) != 8 ||
             RecipientNoticeCountEntries.Length != 1 || RecipientNoticeCountEntries.Sum(entry => 1 + entry.Grantees.Count) != 2 ||
+            RecipientNoticeReceiptEntries.Length != 5 || RecipientNoticeReceiptEntries.Sum(entry => 1 + entry.Grantees.Count) != 10 ||
+            Ntf001Entries.Count(entry => entry.Signature == EmitStatusChangedSignature && entry.Grantees.Count == 0) != 1 ||
             Ntf001Entries.Count(entry => entry.Signature == PublishedApplyOutcomeSignature) != 1 ||
             RealtimeDispatcherRoutines.Count != 6 ||
             RealtimeDispatcherRoutines.Any(signature => AppliedEntries.All(entry => entry.Signature != signature)))
@@ -237,7 +262,8 @@ public static class E002RoutineMap
         bool orderAutoCloseApplied = false,
         bool realtimeDispatcherApplied = false,
         bool recipientNoticeLaneApplied = false,
-        bool recipientNoticeCountsApplied = false)
+        bool recipientNoticeCountsApplied = false,
+        bool recipientNoticeReceiptsApplied = false)
     {
         IReadOnlyList<E002RoutineEntry> entries = state switch
         {
@@ -318,6 +344,20 @@ public static class E002RoutineMap
             selected = selected.Concat(RecipientNoticeCountEntries);
         }
 
+        if (recipientNoticeReceiptsApplied)
+        {
+            if (state == E002RoutineMapState.Pending || !recipientNoticeCountsApplied)
+            {
+                throw new InvalidOperationException("E002_ROUTINE_MAP_TRANSITION_CONTEXT_INVALID");
+            }
+
+            selected = selected
+                .Select(entry => entry.Signature == EmitStatusChangedSignature
+                    ? entry with { Grantees = Array.AsReadOnly(entry.Grantees.Append(ReceiptExecutor).ToArray()) }
+                    : entry)
+                .Concat(RecipientNoticeReceiptEntries);
+        }
+
         if (realtimeDispatcherApplied)
         {
             if (state == E002RoutineMapState.Pending)
@@ -347,7 +387,8 @@ public static class E002RoutineMap
         bool orderAutoCloseApplied = false,
         bool realtimeDispatcherApplied = false,
         bool recipientNoticeLaneApplied = false,
-        bool recipientNoticeCountsApplied = false)
+        bool recipientNoticeCountsApplied = false,
+        bool recipientNoticeReceiptsApplied = false)
     {
         var prefix = state switch
         {
@@ -370,6 +411,7 @@ public static class E002RoutineMap
             (realtimeDispatcherApplied ? "_PLUS_RTMAPIROLE" : string.Empty) +
             (recipientNoticeLaneApplied ? "_PLUS_NTFRECIPIENT" : string.Empty) +
             (recipientNoticeCountsApplied ? "_PLUS_NTFCAPS" : string.Empty) +
+            (recipientNoticeReceiptsApplied ? "_PLUS_NTFRECEIPTS" : string.Empty) +
             "_V1";
     }
 }
