@@ -36,7 +36,7 @@ public interface IAssignmentLifecycleReactor
 /// Idempotency: only the assignment Orders found active under the order lock is eligible, and only while
 /// it is still ACCEPTED/ACTIVE. A replay finds it closed and a newer assignment (for example the one
 /// DSP-002 creates after a reschedule, <c>D8-REASSIGNMENT-NEW-ASSIGNMENT</c>) has a different id, so a
-/// stale redelivery never closes it. This is not a sixth AI-13 §4 atomic flow: the transaction touches
+/// stale redelivery never closes it. This is not a new AI-13 §4 atomic flow: the transaction touches
 /// Dispatch state plus its own outbox and audit rows only.
 /// </remarks>
 public sealed class PostgreSqlAssignmentLifecycleReactor(

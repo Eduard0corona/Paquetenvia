@@ -492,6 +492,40 @@ describe("create and confirm (owner, 2026-10-10: \"Confirmada (Recommended)\")",
     });
   });
 
+  it("sends recipient_notices with createOrder only when the WhatsApp box is ticked (NTF-RECIPIENT-NOTICES-2026-10-20)", async () => {
+    const { controller, orders } = setup({ [orgA]: "DISPATCHER" });
+    await controller.start();
+    await reachConfirm(controller);
+    expect(controller.getSnapshot().draft.recipientWhatsAppConsent).toBe(false);
+    controller.updateDraft({ recipientWhatsAppConsent: true });
+    await controller.submit();
+    const [body] = vi.mocked(orders.createOrder).mock.calls[0];
+    expect(body.recipient_notices).toEqual({
+      whatsapp_consent_attested: true,
+      whatsapp_consent_version: "NTF-RECIPIENT-WHATSAPP-CONSENT-V1",
+    });
+  });
+
+  it("uses another createOrder key when the box changes after a failed attempt", async () => {
+    const createOrder = vi
+      .fn<OrdersApi["createOrder"]>()
+      .mockRejectedValueOnce(new TenantApiError("network"))
+      .mockRejectedValueOnce(new TenantApiError("network"))
+      .mockResolvedValueOnce(parseCreatedOrder(orderResponse()));
+    const { controller } = setup({ [orgA]: "DISPATCHER" }, { createOrder });
+    await controller.start();
+    await reachConfirm(controller);
+    await controller.submit();
+    await controller.submit();
+    controller.updateDraft({ recipientWhatsAppConsent: true });
+    await controller.submit();
+    const keys = createOrder.mock.calls.map((call) => call[1]);
+    expect(keys[0]).toBe(keys[1]);
+    // The box is part of the createOrder request hash (N3 choice 3): the other answer is another request.
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(createOrder.mock.calls.map((call) => "recipient_notices" in call[0])).toEqual([false, false, true]);
+  });
+
   it("sends the declared COD in cents and shows it with the confirmed order (D6-COD-EXPECTED)", async () => {
     const { controller, orders } = setup({ [orgA]: "DISPATCHER" });
     await controller.start();

@@ -34,6 +34,20 @@ export const csvRestrictedGoodsField = "restricted_goods_acknowledged";
 export const csvRestrictedGoodsRequiredMessage =
   "Confirma que ningún envío del archivo contiene artículos prohibidos antes de confirmar el lote.";
 
+/**
+ * NTF-RECIPIENT-NOTICES-2026-10-20 (AI-05 CsvImportCommitRequest, part NTF-004; AI-07 csv_order_import.recipient_notices):
+ * the commit form fields of the one optional WhatsApp consent box of the file. Ticked, both are sent once; unticked,
+ * neither is sent.
+ */
+export const csvRecipientConsentField = "recipient_whatsapp_consent_attested";
+export const csvRecipientConsentVersionField = "recipient_whatsapp_consent_version";
+
+/**
+ * NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 (N2 "Mismo texto y una nota (Recommended)"): the fixed note below the CSV
+ * box, whose label is exactly the AI-24 consent text of "Nueva orden" (recipientWhatsAppConsentText, version V1).
+ */
+export const csvRecipientConsentHint = "Aplica a todas las filas de este archivo. Márcala solo si cada destinatario lo aceptó.";
+
 export const csvFileErrors = [
   "ENCODING_INVALID",
   "MALFORMED_QUOTING",

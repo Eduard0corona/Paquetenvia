@@ -989,12 +989,14 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             REVOKE SELECT (id,status,claim_window_ends_at,finalized_at), UPDATE (finalized_at)
               ON orders.orders FROM paqueteria_lifecycle_executor;
             DROP FUNCTION {Orders.Infrastructure.Persistence.Migrations.AddOrderAutoCloseDiscovery.FunctionSignature};
+            DROP TABLE orders.recipient_notice_consents;
             DELETE FROM platform."__ef_migrations_history_orders"
               WHERE "MigrationId" IN ('{E002LifecycleStateReader.Lif001MigrationId}',
                 '{Orders.Infrastructure.Persistence.Migrations.AddTrackingLinkGenerations.MigrationId}',
                 '{Orders.Infrastructure.Persistence.Migrations.AddOrderServiceWindow.MigrationId}',
                 '{E002OrderAutoCloseStateReader.MigrationId}',
-                '{Orders.Infrastructure.Persistence.Migrations.AddOrderReadIndexes.MigrationId}');
+                '{Orders.Infrastructure.Persistence.Migrations.AddOrderReadIndexes.MigrationId}',
+                '{Orders.Infrastructure.Persistence.Migrations.AddRecipientNoticeConsents.MigrationId}');
             """);
         Assert.Equal("PENDING", await OrdersLaneAsync());
         const string SecurityAclSql = "SELECT nspacl::text FROM pg_namespace WHERE nspname='security'";
@@ -1205,9 +1207,11 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
         await coordinator.ApplyAsync(environment.AdminConnectionString, CancellationToken.None, azureOwnershipBridge: true);
         await environment.AdminExecuteAsync($"""
             DROP FUNCTION {Orders.Infrastructure.Persistence.Migrations.AddOrderAutoCloseDiscovery.FunctionSignature};
+            DROP TABLE orders.recipient_notice_consents;
             DELETE FROM platform."__ef_migrations_history_orders"
               WHERE "MigrationId" IN ('{E002OrderAutoCloseStateReader.MigrationId}',
-                '{Orders.Infrastructure.Persistence.Migrations.AddOrderReadIndexes.MigrationId}');
+                '{Orders.Infrastructure.Persistence.Migrations.AddOrderReadIndexes.MigrationId}',
+                '{Orders.Infrastructure.Persistence.Migrations.AddRecipientNoticeConsents.MigrationId}');
             """);
         Assert.Equal("PENDING", await OrdersLaneAsync());
         const string MembershipSql = """

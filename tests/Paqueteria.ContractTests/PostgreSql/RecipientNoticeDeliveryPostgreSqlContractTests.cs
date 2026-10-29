@@ -3,6 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Identity.Application.Notifications;
 using Locations.Infrastructure.RecipientNotices;
+using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -18,15 +19,23 @@ using Notifications.Infrastructure.Persistence.Migrations;
 using Notifications.Infrastructure.RecipientNotices;
 using Npgsql;
 using NpgsqlTypes;
+using Orders.Application.Orders;
 using Orders.Application.RecipientNotices;
+using Orders.Infrastructure;
+using Orders.Infrastructure.Orders;
+using Orders.Infrastructure.Persistence;
 using Orders.Infrastructure.RecipientNotices;
 using Organizations.Application.Notifications;
+using Paqueteria.Application.Auditing;
 using Paqueteria.Application.Messaging;
 using Paqueteria.Application.RecipientNotices;
 using Paqueteria.Application.Security;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
 using Paqueteria.Contracts.Tracking;
+using Paqueteria.Infrastructure;
+using Paqueteria.Infrastructure.Auditing;
 using Paqueteria.Infrastructure.Messaging;
+using Paqueteria.Infrastructure.Tenancy;
 
 namespace Paqueteria.ContractTests.PostgreSql;
 
@@ -36,8 +45,11 @@ namespace Paqueteria.ContractTests.PostgreSql;
 /// (<c>security.read_recipient_notice_counts</c>) and its two indexes, the Worker readers under FORCE RLS, and the
 /// recipient notice lane composed exactly as the Worker composes it - the PostgreSQL store, the Orders and Locations
 /// readers, the link key ring and the synthetic providers behind the real router - driven through
-/// <see cref="NotificationsOutboxProcessor"/>. No producer writes <c>orders.recipient-notice-requested</c> before AI-08
-/// NTF-004, so the test administrator writes each request row as AI-24 <c>recipient_notices.producer</c> declares it.
+/// <see cref="NotificationsOutboxProcessor"/>. The WhatsApp consent is the one AI-08 NTF-004 records: an order that needs
+/// it is created through createOrder with the box ticked (NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23, N3 choice 7) and the
+/// Worker's own reader finds it under FORCE RLS; one run goes from createOrder and the ORD-002 confirmation, whose
+/// transaction writes the request row (AI-24 <c>recipient_notices.producer</c>), to both sends. The other runs write each
+/// request row as the administrator, exactly as that producer writes it, to reach every state of the lane.
 /// Every contact is a one-byte synthetic copy and the synthetic providers use the AI-24 placeholders; nothing is
 /// decrypted and no key or token is a literal of this file.
 /// </summary>
@@ -263,8 +275,7 @@ public sealed class RecipientNoticeDeliveryPostgreSqlContractTests(PostgreSqlCon
         var scenario = new Scenario(fixture);
         try
         {
-            var seeded = await scenario.SeedOrderAsync(admin, owner, "CONFIRMED", phone: true, email: true, link: true);
-            scenario.Consents.Add(seeded.Order);
+            var seeded = await scenario.SeedOrderAsync(admin, owner, "CONFIRMED", phone: true, email: true, link: true, OrderCreation.CreateOrderTicked);
             await using var worker = scenario.CreateWorker();
             var token = scenario.Token(seeded.Order, 1);
             var version = 3;
@@ -460,8 +471,7 @@ public sealed class RecipientNoticeDeliveryPostgreSqlContractTests(PostgreSqlCon
         try
         {
             await using var worker = scenario.CreateWorker();
-            var seeded = await scenario.SeedOrderAsync(admin, owner, "DELIVERED", phone: true, email: true, link: true);
-            scenario.Consents.Add(seeded.Order);
+            var seeded = await scenario.SeedOrderAsync(admin, owner, "DELIVERED", phone: true, email: true, link: true, OrderCreation.CreateOrderTicked);
             var source = await scenario.RequestAsync(admin, owner, seeded.Order, seeded.OrderEvent, "DELIVERED");
             await scenario.ProcessAsync(worker, source);
             var sends = await scenario.SendRowsAsync(source);
@@ -475,11 +485,54 @@ public sealed class RecipientNoticeDeliveryPostgreSqlContractTests(PostgreSqlCon
             Assert.Equal($"DEAD:{NotificationErrorCodes.AmbiguousTimeout}", await OutboxStateAsync(whatsApp.Send));
             Assert.Single(scenario.Provider.Requests, request => request.MessageId == whatsApp.Notification);
 
-            // Without the recorded consent (AI-08 NTF-004) the expansion creates the e-mail notice only.
-            scenario.Consents.Clear();
-            var noConsent = await scenario.RequestAsync(admin, owner, seeded.Order, await InsertOrderEventAsync(admin, owner, seeded.Order, 3), "DELIVERED");
+            // An order created with the box unticked has no consent row (AI-08 NTF-004): with a phone on file, the expansion
+            // still creates the e-mail notice only.
+            var unticked = await scenario.SeedOrderAsync(admin, owner, "DELIVERED", phone: true, email: true, link: true, OrderCreation.CreateOrderUnticked);
+            var noConsent = await scenario.RequestAsync(admin, owner, unticked.Order, unticked.OrderEvent, "DELIVERED");
             await scenario.ProcessAsync(worker, noConsent);
             Assert.Equal(["EMAIL"], (await scenario.SendRowsAsync(noConsent)).Select(static send => send.Channel));
+        }
+        finally
+        {
+            await RetireAsync(owner);
+        }
+    }
+
+    [PostgreSqlContractFact]
+    public async Task CreateOrder_and_the_confirmation_send_the_tracking_link_on_whatsapp_only_with_the_ticked_box()
+    {
+        await using var admin = await fixture.AdminDataSource.OpenConnectionAsync();
+        var owner = await RecipientNoticeSeed.InsertOrganizationAsync(admin, "NTF-004 Producer");
+        var scenario = new Scenario(fixture);
+        try
+        {
+            var ticked = await scenario.SeedOrderAsync(admin, owner, "DRAFT", phone: true, email: true, link: true, OrderCreation.CreateOrderTicked);
+            var unticked = await scenario.SeedOrderAsync(admin, owner, "DRAFT", phone: true, email: true, link: true, OrderCreation.CreateOrderUnticked);
+            await using var worker = scenario.CreateWorker();
+            foreach (var (seeded, channels) in new[] { (ticked, new[] { "WHATSAPP", "EMAIL" }), (unticked, new[] { "EMAIL" }) })
+            {
+                // ORD-002 DRAFT -> CONFIRMED: its transaction writes the TRACKING_LINK request row (NTF-004 producer).
+                Assert.Equal("CONFIRMED", (await scenario.ConfirmAsync(owner, seeded.Order)).Status);
+                var source = await scenario.ProducerRowAsync(seeded.Order);
+                await scenario.ProcessAsync(worker, source);
+                Assert.Equal("PROCESSED:SOURCE_EXPANDED", await OutboxStateAsync(source));
+                var sends = await scenario.SendRowsAsync(source);
+                Assert.Equal(channels, sends.Select(static send => send.Channel));
+                foreach (var send in sends)
+                {
+                    await scenario.ProcessAsync(worker, send.Send);
+                    Assert.Equal("SENT:1:MESSAGING_SYNTHETIC_ACCEPTED", await NotificationStateAsync(send.Notification));
+                }
+            }
+
+            // Three provider calls: the tracking link on WhatsApp and e-mail for the ticked box, on e-mail only without it.
+            var requests = scenario.Provider.Requests.ToArray();
+            Assert.Equal(
+                [(MessagingChannel.WhatsApp, ticked.PublicId), (MessagingChannel.Email, ticked.PublicId), (MessagingChannel.Email, unticked.PublicId)],
+                requests.Select(static request => (request.Channel, request.Parameters[0])));
+            Assert.All(requests, request => Assert.Equal("recipient.tracking-link", request.TemplateKey));
+            Assert.Equal(scenario.Token(ticked.Order, 1), requests[0].UrlButtonSuffix);
+            await scenario.AssertNothingLeakedAsync(owner, scenario.Token(ticked.Order, 1));
         }
         finally
         {
@@ -677,6 +730,28 @@ public sealed class RecipientNoticeDeliveryPostgreSqlContractTests(PostgreSqlCon
     /// <summary>One order of the run, with its first order event, número de guía and destination location.</summary>
     private sealed record SeededOrder(Guid Order, Guid OrderEvent, string PublicId, Guid Destination);
 
+    /// <summary>How an order of the run is made: written by the administrator, or created through createOrder with the box.</summary>
+    private enum OrderCreation
+    {
+        Seeded,
+        CreateOrderTicked,
+        CreateOrderUnticked,
+    }
+
+    private static readonly DateTimeOffset AcceptedAtClient = new(
+        DateTimeOffset.UtcNow.AddHours(-1).UtcTicks / TimeSpan.TicksPerSecond * TimeSpan.TicksPerSecond,
+        TimeSpan.Zero);
+
+    private static readonly OrdersOptions OrdersRuntimeOptions = new()
+    {
+        Provider = OrdersProviderKind.PostgreSql,
+        CommandTimeoutSeconds = 30,
+        IdempotencyLifetimeMinutes = 60,
+        PublicIdCollisionRetryCount = 2,
+        ClaimWindowHours = 72,
+        TransitionMetadataMaximumBytes = 4_096,
+    };
+
     /// <summary>
     /// One run of the lane as the Worker composes it, with this run's own link key and contact lookup key (generated at
     /// runtime), the synthetic providers behind the real router (recorded, and ambiguous where a test says so), the
@@ -688,7 +763,7 @@ public sealed class RecipientNoticeDeliveryPostgreSqlContractTests(PostgreSqlCon
 
         public byte[] LookupKey { get; } = RandomNumberGenerator.GetBytes(32);
 
-        public ConcurrentBag<Guid> Consents { get; } = [];
+        private readonly Dictionary<Guid, Guid> _dispatchers = [];
 
         public RecordingProvider Provider { get; } = new();
 
@@ -739,9 +814,10 @@ public sealed class RecipientNoticeDeliveryPostgreSqlContractTests(PostgreSqlCon
             services.AddPaqueteriaMessaging(configuration, environment);
             services.AddOrdersRecipientNoticeReaders(configuration, environment);
             services.AddLocationsRecipientNoticeContactReader(configuration);
-            // The consent store arrives with AI-08 NTF-004; the run records it per order.
-            services.RemoveAll<IRecipientNoticeConsentReader>();
-            services.AddSingleton<IRecipientNoticeConsentReader>(new RecordedConsents(Consents));
+            // The consent is read from orders.recipient_notice_consents by the Worker's own reader (AI-08 NTF-004).
+            Assert.Equal(
+                "PostgreSqlRecipientNoticeConsentReader",
+                services.Last(descriptor => descriptor.ServiceType == typeof(IRecipientNoticeConsentReader)).ImplementationType!.Name);
             // The real router (and its synthetic providers) behind a recorder.
             var router = services.Last(descriptor => descriptor.ServiceType == typeof(IMessagingProvider)).ImplementationType!;
             Assert.Equal("MessagingProviderRouter", router.Name);
@@ -754,9 +830,18 @@ public sealed class RecipientNoticeDeliveryPostgreSqlContractTests(PostgreSqlCon
             return built;
         }
 
-        public async Task<SeededOrder> SeedOrderAsync(NpgsqlConnection admin, Guid owner, string status, bool phone, bool email, bool link)
+        public async Task<SeededOrder> SeedOrderAsync(
+            NpgsqlConnection admin,
+            Guid owner,
+            string status,
+            bool phone,
+            bool email,
+            bool link,
+            OrderCreation creation = OrderCreation.Seeded)
         {
-            var (order, orderEvent, publicId) = await RecipientNoticeSeed.InsertOrderAsync(admin, owner);
+            var (order, orderEvent, publicId) = creation == OrderCreation.Seeded
+                ? await RecipientNoticeSeed.InsertOrderAsync(admin, owner)
+                : await CreateOrderAsync(admin, owner, creation == OrderCreation.CreateOrderTicked);
             await SetStatusAsync(admin, order, status);
             var destination = (Guid)(await new NpgsqlCommand(
                 $"SELECT destination_location_id FROM orders.orders WHERE id='{order:D}'", admin).ExecuteScalarAsync())!;
@@ -783,6 +868,159 @@ public sealed class RecipientNoticeDeliveryPostgreSqlContractTests(PostgreSqlCon
             }
 
             return new SeededOrder(order, orderEvent, publicId, destination);
+        }
+
+        /// <summary>
+        /// One DRAFT order created through createOrder (<see cref="QuoteSnapshotToOrderCoordinator"/>, as
+        /// <c>paqueteria_app</c>) by a dispatcher of <paramref name="owner"/>, with the WhatsApp box ticked or not: a ticked
+        /// box is the consent row the Worker reads (N3 choice 7). Returns the order, its ORDER_CREATED event and its número
+        /// de guía.
+        /// </summary>
+        public async Task<(Guid Order, Guid OrderEvent, string PublicId)> CreateOrderAsync(NpgsqlConnection admin, Guid owner, bool whatsAppConsent)
+        {
+            var dispatcher = await DispatcherAsync(admin, owner);
+            var (city, origin, destination, quote) = (Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid());
+            await RecipientNoticeSeed.ExecuteAsync(admin,
+                """
+                INSERT INTO locations.cities(id,state_code,name,timezone)
+                  VALUES (@city,'SI',@city_name,'America/Mazatlan');
+                INSERT INTO locations.locations(id,owner_org_id,city_id,point,address_ciphertext,address_summary,pii_key_version) VALUES
+                  (@origin,@org,@city,public.ST_SetSRID(public.ST_MakePoint(-107.40,24.80),4326),decode('00','hex'),'Synthetic origin','test-v1'),
+                  (@destination,@org,@city,public.ST_SetSRID(public.ST_MakePoint(-107.39,24.81),4326),decode('01','hex'),'Synthetic destination','test-v1');
+                INSERT INTO pricing.quotes(
+                  id,owner_org_id,city_id,origin_location_id,destination_location_id,service_type,pricing_tier,consolidated_route,
+                  subtotal_cents,discount_cents,tax_cents,total_cents,minimum_total_cents_snapshot,currency,pricing_policy_version,
+                  request_snapshot_redacted,package_snapshot,breakdown,input_hash,status,expires_at)
+                VALUES (
+                  @quote,@org,@city,@origin,@destination,'SAME_DAY','OCCASIONAL',false,
+                  10000,0,0,10000,5000,'MXN','ntf004-policy-v1',
+                  '{"city":"synthetic"}','[{"description":"synthetic package","weight_grams":500,"declared_value_cents":10000}]','{}',@input_hash,'ACTIVE',clock_timestamp()+interval '1 day');
+                """,
+                new NpgsqlParameter("city", city), new NpgsqlParameter("city_name", $"NTF-004 City {city:N}"),
+                new NpgsqlParameter("origin", origin), new NpgsqlParameter("destination", destination),
+                new NpgsqlParameter("org", owner), new NpgsqlParameter("quote", quote), new NpgsqlParameter("input_hash", new byte[32]));
+
+            var created = await OrderService().CreateAsync(
+                new CreateOrderCommand(
+                    dispatcher,
+                    owner,
+                    $"ntf004-create-{quote:N}",
+                    quote,
+                    "SENDER",
+                    new OrderAcceptanceInput("terms-synthetic-v1", "privacy-synthetic-v1", AcceptedAtClient, "WEB"),
+                    "ntf004-create",
+                    RestrictedGoodsAcknowledged: true)
+                {
+                    WhatsAppConsentVersion = whatsAppConsent ? RecipientNoticeConsentPolicy.Version : null,
+                },
+                CancellationToken.None);
+            Assert.Equal("DRAFT", created.Status);
+            Assert.Equal(
+                whatsAppConsent ? 1L : 0L,
+                (long)(await new NpgsqlCommand(
+                    $"SELECT count(*) FROM orders.recipient_notice_consents WHERE order_id='{created.Id:D}'", admin).ExecuteScalarAsync())!);
+            var orderEvent = (Guid)(await new NpgsqlCommand(
+                $"SELECT id FROM orders.order_events WHERE order_id='{created.Id:D}'", admin).ExecuteScalarAsync())!;
+            return (created.Id, orderEvent, created.PublicId);
+        }
+
+        /// <summary>ORD-002 DRAFT -> CONFIRMED by the dispatcher, as <c>paqueteria_app</c> (the restricted-goods metadata of ORD-RESTRICTED).</summary>
+        public async Task<OrderResult> ConfirmAsync(Guid owner, Guid order) =>
+            await TransitionService().TransitionAsync(
+                new TransitionOrderCommand(
+                    _dispatchers[owner],
+                    owner,
+                    $"ntf004-confirm-{order:N}",
+                    order,
+                    "CONFIRMED",
+                    "synthetic reason",
+                    1,
+                    """{"restricted_goods_acknowledged":true}""",
+                    false,
+                    "ntf004-confirm"),
+                CancellationToken.None);
+
+        /// <summary>The single request row the ORD-002 transaction wrote for <paramref name="order"/>.</summary>
+        public async Task<Guid> ProducerRowAsync(Guid order)
+        {
+            await using var command = fixture.AdminDataSource.CreateCommand(
+                "SELECT id FROM platform.outbox_events WHERE topic=@topic AND aggregate_id=@order");
+            command.Parameters.AddWithValue("topic", RecipientNoticeSeed.RequestTopic);
+            command.Parameters.AddWithValue("order", order);
+            var ids = new List<Guid>();
+            await using var reader = await command.ExecuteReaderAsync();
+            while (await reader.ReadAsync())
+            {
+                ids.Add(reader.GetGuid(0));
+            }
+
+            return Assert.Single(ids);
+        }
+
+        private async Task<Guid> DispatcherAsync(NpgsqlConnection admin, Guid owner)
+        {
+            if (_dispatchers.TryGetValue(owner, out var existing))
+            {
+                return existing;
+            }
+
+            var user = Guid.NewGuid();
+            await RecipientNoticeSeed.ExecuteAsync(admin,
+                """
+                INSERT INTO identity.users(id,identity_subject) VALUES (@user,@subject);
+                INSERT INTO organizations.organization_memberships(id,user_id,organization_id,role,status,is_default)
+                  VALUES (gen_random_uuid(),@user,@org,'DISPATCHER','ACTIVE',true);
+                """,
+                new NpgsqlParameter("user", user), new NpgsqlParameter("subject", $"oidc|ntf004|{user:N}"),
+                new NpgsqlParameter("org", owner));
+            _dispatchers[owner] = user;
+            return user;
+        }
+
+        private (OrdersDbContext Context, TenantTransactionContext<OrdersDbContext> Transactions, TenantDatabaseExecutionState State) OrdersContext()
+        {
+            var state = new TenantDatabaseExecutionState();
+            var options = new DbContextOptionsBuilder<OrdersDbContext>()
+                .UseNpgsql(fixture.AppDataSource, postgres => postgres.EnableRetryOnFailure())
+                .AddInterceptors(new TenantTransactionGuardInterceptor(state), new TenantSaveChangesGuardInterceptor(state))
+                .Options;
+            var context = new OrdersDbContext(options, state);
+            return (context, new TenantTransactionContext<OrdersDbContext>(context, state), state);
+        }
+
+        private QuoteSnapshotToOrderCoordinator OrderService()
+        {
+            var (_, transactions, state) = OrdersContext();
+            return new QuoteSnapshotToOrderCoordinator(
+                transactions,
+                new CryptographicOrderPublicIdGenerator(),
+                new NoOpOrderCreationFailureInjector(),
+                new PostgreSqlAppendOnlyAuditWriter(state),
+                new AuditPayloadRedactor(),
+                Options.Create(OrdersRuntimeOptions),
+                new SystemClock());
+        }
+
+        private PostgreSqlOrderTransitionService TransitionService()
+        {
+            var (_, transactions, state) = OrdersContext();
+            return new PostgreSqlOrderTransitionService(
+                transactions,
+                new PostgreSqlOrderTransitionAuthorizationReader(),
+                new PostgreSqlOrderTransitionReplayAuthorizationReader(),
+                new PostgreSqlOrderQuoteAcceptanceGuardReader(),
+                new PostgreSqlOrderAssignmentGuardReader(Options.Create(new OrderTransitionDriverEligibilityOptions())),
+                new PostgreSqlOrderProofGuardReader(),
+                new PostgreSqlOrderCustodyGuardReader(),
+                new PostgreSqlOrderIncidentGuardReader(),
+                new PostgreSqlOrderCodGuardReader(),
+                new OrderTransitionAuthorizer(),
+                new OrderTransitionGuardRegistry(),
+                new PostgreSqlAppendOnlyAuditWriter(state),
+                new AuditPayloadRedactor(),
+                new NoOpOrderTransitionFailureInjector(),
+                Options.Create(OrdersRuntimeOptions),
+                new SystemClock());
         }
 
         public Task SetStatusAsync(NpgsqlConnection admin, Guid order, string status) =>
@@ -915,12 +1153,6 @@ public sealed class RecipientNoticeDeliveryPostgreSqlContractTests(PostgreSqlCon
                     : inner.SendAsync(request, cancellationToken);
             }
         }
-    }
-
-    private sealed class RecordedConsents(ConcurrentBag<Guid> orders) : IRecipientNoticeConsentReader
-    {
-        public Task<bool> HasWhatsAppConsentAsync(Guid ownerOrganizationId, Guid orderId, CancellationToken cancellationToken) =>
-            Task.FromResult(orders.Contains(orderId));
     }
 
     private sealed class NoAudience : IOwnerOrganizationDispatcherReader, IActiveNotificationRecipientReader

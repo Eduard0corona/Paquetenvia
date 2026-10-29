@@ -159,6 +159,27 @@ export interface AcceptanceDraft {
    */
   readonly serviceWindowFrom?: string;
   readonly serviceWindowTo?: string;
+  /**
+   * NTF-RECIPIENT-NOTICES-2026-10-20 (AI-07 create_order.recipient_notices.consent): the optional box
+   * {@link recipientWhatsAppConsentText}, unticked by default and never required. Ticked, createOrder carries
+   * `recipient_notices`; unticked, nothing is sent and the order gets no WhatsApp notice.
+   */
+  readonly recipientWhatsAppConsent?: boolean;
+}
+
+/** AI-24 recipient_notices.consent.text: the approved box text, the same on "Nueva orden" and on the CSV commit. */
+export const recipientWhatsAppConsentText = "El destinatario aceptó recibir avisos de su envío por WhatsApp";
+
+/**
+ * AI-24 recipient_notices.consent.version. NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 (N3 choice 1): a constant of the
+ * web, not a deployment setting; the API accepts this version only and answers 409 to any other.
+ */
+export const recipientWhatsAppConsentVersion = "NTF-RECIPIENT-WHATSAPP-CONSENT-V1";
+
+/** AI-05 CreateOrderRequest.recipient_notices, sent only when the box is ticked. */
+export interface RecipientNoticesBody {
+  whatsapp_consent_attested: true;
+  whatsapp_consent_version: typeof recipientWhatsAppConsentVersion;
 }
 
 interface AddressBody {
@@ -209,6 +230,8 @@ export interface CreateOrderBody {
   restricted_goods_acknowledged: true;
   /** ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: UTC instants, sent only when a window was typed. */
   service_window?: ServiceWindowBody;
+  /** NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-004): the WhatsApp consent box, sent only when ticked. */
+  recipient_notices?: RecipientNoticesBody;
 }
 
 export type DraftResult<T> =
@@ -438,6 +461,12 @@ export function buildCreateOrderBody(
   if (codCents! > 0) body.cod_expected_cents = codCents!;
   // Both empty is "no window": the field is left out and the zone's schedule applies.
   if (serviceWindow.ok && serviceWindow.window !== null) body.service_window = serviceWindow.window;
+  // Unticked is "no consent": the field is left out, so the request is the one sent before the box existed.
+  if (draft.recipientWhatsAppConsent === true)
+    body.recipient_notices = {
+      whatsapp_consent_attested: true,
+      whatsapp_consent_version: recipientWhatsAppConsentVersion,
+    };
   return { ok: true, body };
 }
 

@@ -4,7 +4,7 @@
 
 - `D8-DISPATCH-OUTBOX-CLOSURE` (2026-09-26): Dispatch cierra sus asignaciones
   reaccionando por outbox a las transiciones de orden ya confirmadas, con
-  consistencia eventual. No hay un sexto flujo atómico (AI-13 §4).
+  consistencia eventual. No hay un flujo atómico nuevo (AI-13 §4).
 - `D8-OUTBOX-LANE-DISPATCH` (2026-09-27): lane `DISPATCH` con
   `claim_dispatch_outbox` y `requeue_stale_dispatch_outbox`, propiedad de
   `paqueteria_outbox_executor`, `EXECUTE` sólo para `paqueteria_worker`.

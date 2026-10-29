@@ -1,5 +1,40 @@
 # Changelog
 
+## Avisos al destinatario: productor en ORD-002 y permiso de WhatsApp (NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23, AI-08 NTF-004) — 2026-10-23
+
+- Respuestas literales del project owner (2026-10-23, ronda N, preguntas N1 a N3), registradas en `decision-log.md` con
+  su contexto, los textos de las opciones, la lista de N3 y las opciones no elegidas: N1 "Seis, y corregir los textos
+  (Recommended)", N2 "Mismo texto y una nota (Recommended)" y N3 "Aprobarlas todas (Recommended)". Es el PR-3 de la
+  secuencia de `docs/development/ntf-recipient-notices.md`; aplica además `NTF-RECIPIENT-NOTICES-2026-10-20` (E4-P1, E4-P3,
+  E4-P4 y E4-P5).
+- Productor: `RecipientNoticeRequestPolicy` nombra exactamente `DRAFT → CONFIRMED`, `PICKED_UP → IN_TRANSIT`,
+  `IN_TRANSIT → FAILED_ATTEMPT`, `DELIVERING → FAILED_ATTEMPT` y `DELIVERING → DELIVERED` (nunca `AT_PICKUP →
+  FAILED_ATTEMPT`), y la transición ORD-002 escribe en su misma transacción, junto a la fila de Despacho, una fila
+  `orders.recipient-notice-requested` (`recipient-notice-requested-v1`, solo ids) con todos los valores, sin RETURNING y sin
+  datos personales, aunque los avisos estén apagados: el Worker la liquida al momento con `RECIPIENT_NOTICES_DISABLED`.
+  Una repetición idempotente no escribe otra fila y una falla posterior la deshace. Una prueba fija las 29 transiciones
+  de AI-04.
+- Permiso de WhatsApp: casilla opcional y sin marcar en "Nueva orden" y una para todo el archivo en la carga CSV, con el
+  texto de AI-24 y la versión `NTF-RECIPIENT-WHATSAPP-CONSENT-V1` (constante de la web); la casilla del CSV lleva la nota
+  fija "Aplica a todas las filas de este archivo. Márcala solo si cada destinatario lo aceptó." (N2, AI-07
+  `csv_order_import.recipient_notices.wording`). AI-05 publica la parte NTF-004: `CreateOrderRequest.recipient_notices` y
+  los campos `recipient_whatsapp_consent_attested` y `recipient_whatsapp_consent_version` de `commitOrderCsv`; cualquier otra
+  forma es el 409 uniforme antes de crear algo. La casilla entra en la huella de la solicitud y del lote solo cuando está
+  marcada; la auditoría `ORDER_CREATED` guarda solo el booleano y cada orden del CSV recibe su propia fila.
+- Paso de carril Orders `20261023000200_AddRecipientNoticeConsents`, con ida, vuelta e ida probadas en PostgreSQL 18 y
+  PostGIS 3.6: `orders.recipient_notice_consents` (orden, empresa, canal WHATSAPP, versión V1, quién y cuándo; una fila por
+  orden y canal), ENABLE y FORCE ROW LEVEL SECURITY con la política de la empresa dueña, disparador append-only y
+  exactamente SELECT e INSERT para `paqueteria_app` y SELECT para `paqueteria_worker`; su `Down` se niega mientras exista un
+  permiso. AI-06 declara la tabla y AI-18 los permisos byte a byte (paso 2 de avisos, ahora instalado, y aserción 40); las
+  aserciones de la línea base revisan la tabla.
+- El Worker lee el permiso de esa tabla bajo RLS (`PostgreSqlRecipientNoticeConsentReader`) y la prueba de punta a punta de
+  NTF-005 registra el permiso creando la orden con `createOrder`.
+- N1: siguen los seis flujos de AI-13 §4 y la prueba de arquitectura lo exige sin escritura nueva en otro módulo; los
+  textos "cinco"/"sin sexto flujo" pasan a "seis"/"sin flujo nuevo" en AI-08 NTF-004, AI-13 §7.1, §7.2 y §14.5, AI-24
+  `recipient_notices.producer.pattern`, el escenario de AI-09 y el ADR de avisos.
+- Todo sigue apagado: `Notifications:RecipientNotices:Enabled` falso y proveedores `Disabled`. GATE-004 y GATE-007 siguen
+  abiertas. Nota: `docs/development/ntf-004-recipient-notice-producer.md`.
+
 ## Avisos al destinatario: entrega en el Worker y topes (NTF-RECIPIENT-NOTICE-CAPS-2026-10-23, AI-08 NTF-005) — 2026-10-23
 
 - Respuestas literales del project owner (2026-10-23, ronda L, preguntas L1 a L4), registradas en `decision-log.md` con

@@ -37,7 +37,7 @@ correo. Preguntas y respuestas literales del project owner (textos copiados del 
 Es un cambio de alcance legal y de privacidad (AI-01 §7): nuevos encargados que reciben datos del destinatario
 (Meta y Microsoft), una llave nueva que abre el Worker, un almacén de bajas con hashes con llave y un rol de base de
 datos nuevo. Restricciones: sin PII en logs, outbox, eventos ni auditoría (AI-01 regla 9); el seguimiento público solo
-expone el mapa de AI-04 (regla 11); solo los cinco flujos de AI-13 §4 (regla 18); outbox con valores completos, sin
+expone el mapa de AI-04 (regla 11); solo los seis flujos de AI-13 §4 (regla 18); outbox con valores completos, sin
 `RETURNING` y con `lease_token` (reglas 7 a 9); API y Worker `NOBYPASSRLS` (regla 3); ningún dato real antes de
 GATE-007.
 
@@ -48,7 +48,7 @@ GATE-007.
    `IN_TRANSIT→FAILED_ATTEMPT` y `DELIVERING→FAILED_ATTEMPT` (nunca si falla la recolección) sin motivo (E4-P5) y
    "Entregado" en `DELIVERING→DELIVERED`. Cada aviso se revisa al enviarse; si ya no aplica termina `CANCELLED`
    (`NOTICE_SUPERSEDED`) sin llamar al proveedor.
-2. **Productor en ORD-002, sin sexto flujo.** Orders escribe `orders.recipient-notice-requested`
+2. **Productor en ORD-002, sin flujo nuevo.** Orders escribe `orders.recipient-notice-requested`
    (`recipient-notice-requested-v1`, solo ids) en la misma transacción de la transición, como el lane DISPATCH de D8.
    El lane NOTIFICATIONS lo expande a una notificación por canal; expansión, envío, acuses y bajas escriben solo
    filas de Notifications más el outbox y la auditoría compartidos.

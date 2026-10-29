@@ -105,7 +105,7 @@ AI-04 agrega la guarda `failed_attempt_dispatch_decides` a RESCHEDULED, DELIVERI
 - `getOrder.allowed_transitions` aplica la misma política a las salidas de FAILED_ATTEMPT (con la custodia que
   necesitan RETURNING y DELIVERING), leída en la misma transacción que las demás comprobaciones. La asignación del
   reintento la sigue juzgando solo `transitionOrder`. Sin esa lectura no se lista ninguna salida.
-- No es un sexto flujo de AI-13 §4: cada paso es una petición propia y la decisión es una transición ORD-002.
+- No es un flujo nuevo de AI-13 §4: cada paso es una petición propia y la decisión es una transición ORD-002.
 
 ## Pantalla del despachador
 

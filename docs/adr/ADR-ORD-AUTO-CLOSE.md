@@ -21,7 +21,7 @@ cierra en cuanto cumple las reglas. Requiere ADR, porque cambia el comportamient
 Restricciones que la solución debe respetar: el Worker es `NOBYPASSRLS` y `orders.orders` aplica `FORCE ROW LEVEL
 SECURITY`, así que no puede ver órdenes sin un contexto tenant (ADR-025); todo acceso elevado exige función, consumer y
 ADR específicos (ADR-025, ADR-034); las guardas no pueden tener una segunda implementación divergente; solo existen los
-cinco flujos atómicos de AI-13 §4.
+flujos atómicos de AI-13 §4.
 
 ## Decisión
 
@@ -71,7 +71,7 @@ cinco flujos atómicos de AI-13 §4.
   última orden intentada, así que órdenes que todavía no cumplen las guardas no bloquean a las demás.
 - `CLOSED -> CLAIM_OPEN` sigue permitido hasta `claim_window_ends_at` y LIF-001 finaliza después; el cierre manual no
   cambia.
-- No es un sexto flujo de AI-13 §4: cada transacción es la transición ORD-002 de una orden. El flujo 4 (conciliación
+- No es un flujo nuevo de AI-13 §4: cada transacción es la transición ORD-002 de una orden. El flujo 4 (conciliación
   COD -> cierre) sigue sin implementarse; el job cubre por igual órdenes con y sin COD.
 - Sin datos personales ni identificadores en logs ni métricas.
 

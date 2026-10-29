@@ -64,6 +64,32 @@ describe("CSV import api", () => {
     expect(result).toMatchObject({ kind: "committed" });
   });
 
+  it("sends the WhatsApp consent fields once each only when the file's box is ticked (NTF-RECIPIENT-NOTICES-2026-10-20)", async () => {
+    const fetchMock = vi.fn(async () => jsonResponse(200, commitResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    const api = createCsvImportApi("https://api.synthetic.test", bearerSession());
+    await api.commit(csv(), syntheticDigest(), key, undefined, true);
+    const ticked = lastCall(fetchMock)[1].body as FormData;
+    expect(ticked.getAll("recipient_whatsapp_consent_attested")).toEqual(["true"]);
+    expect(ticked.getAll("recipient_whatsapp_consent_version")).toEqual(["NTF-RECIPIENT-WHATSAPP-CONSENT-V1"]);
+    expect(ticked.getAll("restricted_goods_acknowledged")).toEqual(["true"]);
+    for (const answer of [false, undefined]) {
+      await api.commit(csv(), syntheticDigest(), key, undefined, answer);
+      const unticked = lastCall(fetchMock)[1].body as FormData;
+      expect(unticked.has("recipient_whatsapp_consent_attested")).toBe(false);
+      expect(unticked.has("recipient_whatsapp_consent_version")).toBe(false);
+    }
+  });
+
+  it("never sends the consent fields with a preview", async () => {
+    const fetchMock = vi.fn().mockResolvedValue(jsonResponse(200, previewResponse()));
+    vi.stubGlobal("fetch", fetchMock);
+    await createCsvImportApi("https://api.synthetic.test", bearerSession()).preview(csv());
+    const form = lastCall(fetchMock)[1].body as FormData;
+    expect(form.has("recipient_whatsapp_consent_attested")).toBe(false);
+    expect(form.has("recipient_whatsapp_consent_version")).toBe(false);
+  });
+
   it("returns the 422 per-row report instead of throwing", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue(jsonResponse(422, invalidPreviewResponse())));
     const result = await createCsvImportApi("https://api.synthetic.test", bearerSession()).commit(

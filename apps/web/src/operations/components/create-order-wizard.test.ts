@@ -116,11 +116,12 @@ describe("new order wizard markup (UI-PHASE3-ORDER-WIZARD-2026-10-10)", () => {
       expect(service).toContain(label);
   });
 
-  it("leaves exactly who pays and the two acceptance checkboxes for step 4", () => {
+  it("leaves exactly who pays, the two acceptance checkboxes and the optional WhatsApp box for step 4", () => {
     const markup = wizard(state("confirm"));
     const form = markup.slice(markup.indexOf("<form"), markup.indexOf("</form>"));
     expect(form.match(/<select/g)).toHaveLength(1);
-    expect(form.match(/type="checkbox"/g)).toHaveLength(2);
+    // NTF-RECIPIENT-NOTICES-2026-10-20: the third box is the optional recipient consent (AI-07 create_order).
+    expect(form.match(/type="checkbox"/g)).toHaveLength(3);
     expect(form).not.toMatch(/<input(?![^>]*type="checkbox")/);
     const text = readable(form);
     expect(text).toContain("Quién paga");

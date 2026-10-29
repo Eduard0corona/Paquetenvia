@@ -745,6 +745,26 @@ CREATE TABLE notifications.notifications (
 -- The WhatsApp consent record (E4-P1, AI-08 NTF-004) belongs to the Orders lane: orders.recipient_notice_consents,
 -- append-only, row security by owner_org_id, with order_id, owner_org_id, channel WHATSAPP, consent_version,
 -- attested_by and attested_at; at most one row per order and channel, written in the transaction that creates the order.
+-- NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 (project owner: N3 "Aprobarlas todas (Recommended)", choice 2; AI-24
+-- recipient_notices.consent.record). Installed by the Orders lane step 20261023000200_AddRecipientNoticeConsents of AI-08
+-- NTF-004, which holds the DDL (Up, Down and Up again tested on PostgreSQL; its Down refuses while any consent exists and
+-- otherwise drops only the table): channel WHATSAPP only, consent version NTF-RECIPIENT-WHATSAPP-CONSENT-V1 only,
+-- attested_by the creating actor and attested_at the server time; no phone, e-mail or name. AI-18 recipient notices step 2
+-- declares its privileges.
+--   CREATE TABLE orders.recipient_notice_consents (
+--     order_id uuid NOT NULL REFERENCES orders.orders(id),
+--     owner_org_id uuid NOT NULL REFERENCES organizations.organizations(id),
+--     channel text NOT NULL CONSTRAINT recipient_notice_consents_channel_check CHECK (channel='WHATSAPP'),
+--     consent_version text NOT NULL CONSTRAINT recipient_notice_consents_version_check CHECK (consent_version='NTF-RECIPIENT-WHATSAPP-CONSENT-V1'),
+--     attested_by uuid NOT NULL REFERENCES identity.users(id),
+--     attested_at timestamptz NOT NULL,
+--     CONSTRAINT recipient_notice_consents_pkey PRIMARY KEY (order_id,channel)
+--   );
+--   ALTER TABLE orders.recipient_notice_consents ENABLE ROW LEVEL SECURITY;
+--   ALTER TABLE orders.recipient_notice_consents FORCE ROW LEVEL SECURITY;
+--   CREATE POLICY recipient_notice_consents_tenant ON orders.recipient_notice_consents USING (security.app_allowed_org(owner_org_id)) WITH CHECK (security.app_allowed_org(owner_org_id));
+--   CREATE TRIGGER recipient_notice_consents_append_only BEFORE UPDATE OR DELETE ON orders.recipient_notice_consents
+--     FOR EACH ROW EXECUTE FUNCTION platform.reject_runtime_mutation();
 
 CREATE TABLE reporting.report_exports (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

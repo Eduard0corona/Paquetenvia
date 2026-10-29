@@ -34,8 +34,8 @@ public sealed class OrdersOpenApiImplementationTests
     public void Request_and_response_DTOs_match_AI05_without_internal_or_PII_fields()
     {
         AssertJsonProperties<CreateOrderRequest>(
-            "acceptance", "cod_expected_cents", "payer_type", "quote_id", "restricted_goods_acknowledged",
-            "service_window");
+            "acceptance", "cod_expected_cents", "payer_type", "quote_id", "recipient_notices",
+            "restricted_goods_acknowledged", "service_window");
         AssertJsonProperties<OrderAcceptanceRequest>(
             "acceptance_channel", "accepted_at", "privacy_version", "terms_version");
         AssertJsonProperties<TransitionOrderRequest>(
@@ -478,10 +478,11 @@ public sealed class OrdersOpenApiImplementationTests
         var createOrder = root.Mapping("components").Mapping("schemas").Mapping("CreateOrderRequest");
         var acceptance = createOrder.Mapping("properties").Mapping("acceptance");
 
-        // D6-COD-EXPECTED and ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: cod_expected_cents and service_window are
-        // the optional CreateOrderRequest fields.
+        // D6-COD-EXPECTED, ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02 and NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-004):
+        // cod_expected_cents, service_window and recipient_notices are the optional CreateOrderRequest fields.
         Assert.Equal(
-            JsonPropertyNames<CreateOrderRequest>().Where(name => name is not ("cod_expected_cents" or "service_window")),
+            JsonPropertyNames<CreateOrderRequest>()
+                .Where(name => name is not ("cod_expected_cents" or "service_window" or "recipient_notices")),
             RequiredPropertyNames(createOrder));
         Assert.Equal(
             JsonPropertyNames<CreateOrderRequest>(),

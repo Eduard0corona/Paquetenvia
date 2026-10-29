@@ -7,6 +7,7 @@ using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
+using Orders.Application.Orders;
 using Orders.Application.RecipientNotices;
 using Orders.Application.Tracking;
 using Orders.Infrastructure.Lifecycle;
@@ -103,6 +104,76 @@ internal sealed class PostgreSqlRecipientNoticeOrderReader(OrdersWorkerDataSourc
 }
 
 /// <summary>
+/// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-24 <c>recipient_notices.consent.effect</c> and <c>expansion.reads</c>; AI-08
+/// NTF-004; NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 N3 choice 7): whether the order recorded the WhatsApp consent, read
+/// by the Worker in one short tenant transaction of the owner organization - BEGIN, <c>set_config('app.current_org_ids',
+/// ..., true)</c> with only that organization, <c>SET LOCAL ROLE paqueteria_worker</c> (NOBYPASSRLS, FORCE RLS, SELECT
+/// only on <c>orders.recipient_notice_consents</c>, AI-18 recipient notices step 2) - and committed before the caller
+/// does anything else. Only the current consent version counts. It reads a boolean and writes nothing.
+/// </summary>
+internal sealed class PostgreSqlRecipientNoticeConsentReader(OrdersWorkerDataSource worker) : IRecipientNoticeConsentReader
+{
+    private const int CommandTimeoutSeconds = 10;
+
+    public async Task<bool> HasWhatsAppConsentAsync(
+        Guid ownerOrganizationId,
+        Guid orderId,
+        CancellationToken cancellationToken)
+    {
+        if (ownerOrganizationId == Guid.Empty || orderId == Guid.Empty)
+        {
+            return false;
+        }
+
+        await using var connection = await worker.DataSource.OpenConnectionAsync(cancellationToken);
+        await using var transaction = await connection.BeginTransactionAsync(cancellationToken);
+        await using (var context = new NpgsqlCommand(
+            """
+            SELECT set_config('app.current_org_ids', @organization_ids::uuid[]::text, true);
+            SET LOCAL ROLE paqueteria_worker;
+            """,
+            connection,
+            transaction))
+        {
+            context.Parameters.Add(new NpgsqlParameter<Guid[]>("organization_ids", NpgsqlDbType.Array | NpgsqlDbType.Uuid)
+            {
+                TypedValue = [ownerOrganizationId],
+            });
+            await context.ExecuteNonQueryAsync(cancellationToken);
+        }
+
+        bool consented;
+        await using (var command = new NpgsqlCommand(
+            """
+            SELECT EXISTS (
+              SELECT 1 FROM orders.recipient_notice_consents c
+              WHERE c.order_id=@order_id AND c.owner_org_id=@owner_org_id
+                AND c.channel='WHATSAPP' AND c.consent_version=@consent_version)
+            """,
+            connection,
+            transaction)
+        {
+            CommandTimeout = CommandTimeoutSeconds,
+        })
+        {
+            command.Parameters.Add(new NpgsqlParameter<Guid>("order_id", NpgsqlDbType.Uuid) { TypedValue = orderId });
+            command.Parameters.Add(new NpgsqlParameter<Guid>("owner_org_id", NpgsqlDbType.Uuid)
+            {
+                TypedValue = ownerOrganizationId,
+            });
+            command.Parameters.Add(new NpgsqlParameter<string>("consent_version", NpgsqlDbType.Text)
+            {
+                TypedValue = RecipientNoticeConsentPolicy.Version,
+            });
+            consented = await command.ExecuteScalarAsync(cancellationToken) is true;
+        }
+
+        await transaction.CommitAsync(cancellationToken);
+        return consented;
+    }
+}
+
+/// <summary>
 /// AI-24 <c>recipient_notices.tracking_link.derive</c> with the Worker's own key ring (<c>PublicTracking:LinkKeys</c>, the
 /// Key Vault secret <c>public-tracking-link-key</c> mapped by AI-08 NTF-008) and <c>PublicTracking:PublicBaseUrl</c>. The
 /// token is derived in memory with <c>TrackingLinkTokenDerivation</c>, accepted only when the SHA-256 of its exact UTF-8
@@ -151,8 +222,8 @@ internal sealed class RecipientNoticeTrackingLinks(
 public static class RecipientNoticeOrderDependencyInjection
 {
     /// <summary>
-    /// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-005) Worker composition: the order reader, the consent reader (no
-    /// consent is recorded before AI-08 NTF-004) and the tracking link deriver with the Worker's key ring. Only
+    /// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-005 and NTF-004) Worker composition: the order reader, the consent
+    /// reader of <c>orders.recipient_notice_consents</c> and the tracking link deriver with the Worker's key ring. Only
     /// Development and Testing may derive with the synthetic runtime key or build links on an http loopback origin, as in
     /// the API; any configured key must be valid everywhere.
     /// </summary>
@@ -185,7 +256,8 @@ public static class RecipientNoticeOrderDependencyInjection
         services.AddSingleton<IRecipientNoticeOrderReader, PostgreSqlRecipientNoticeOrderReader>();
         services.RemoveAll<IRecipientNoticeTrackingLinks>();
         services.AddSingleton<IRecipientNoticeTrackingLinks, RecipientNoticeTrackingLinks>();
-        services.TryAddSingleton<IRecipientNoticeConsentReader, UnrecordedRecipientNoticeConsentReader>();
+        services.RemoveAll<IRecipientNoticeConsentReader>();
+        services.AddSingleton<IRecipientNoticeConsentReader, PostgreSqlRecipientNoticeConsentReader>();
         return services;
     }
 }
