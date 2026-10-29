@@ -1905,11 +1905,12 @@ items:
   - exactly DRAFT -> CONFIRMED, PICKED_UP -> IN_TRANSIT, IN_TRANSIT -> FAILED_ATTEMPT, DELIVERING -> FAILED_ATTEMPT and DELIVERING -> DELIVERED write a request row, in the same transaction as the order event, with every value supplied, no RETURNING and no personal data; AT_PICKUP -> FAILED_ATTEMPT writes none
   - an idempotent replay of a transition writes no second row; a later failure in the transaction rolls the row back
   - the consent is optional, unticked by default and recorded once (who, when, version); without it no WhatsApp notice is created
-  - still five coordinators (AI-13 section 4); it merges only after NTF-005, whose consumer settles the rows while notices are off
+  - still the six AI-13 section 4 flows, with no new flow or coordinator; it merges only after NTF-005, whose consumer settles the rows while notices are off
+  - 'DECIDED NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 (N1 "Seis, y corregir los textos (Recommended)", N2 "Mismo texto y una nota (Recommended)", N3 "Aprobarlas todas (Recommended)") - the CSV-001 box reads exactly the AI-24 consent text, version NTF-RECIPIENT-WHATSAPP-CONSENT-V1, with the fixed note "Aplica a todas las filas de este archivo. Márcala solo si cada destinatario lo aceptó."; the version is a constant of the web; the box enters the createOrder request hash and the CSV batch fingerprint only when ticked; the ORDER_CREATED audit keeps the boolean only and each CSV order gets its own consent row; invalid CSV consent fields are the existing uniform 409; the Worker reads the consent under RLS'
   required_tests:
   - unit - the 29-transition matrix and the attempt-stage rule
   - PostgreSQL - row in the same transaction, rollback, no RETURNING, idempotent replay, payload without PII, the consent table append-only and under RLS
-  - architecture - five coordinators
+  - architecture - six coordinators (AI-13 section 4), no new flow and no new write into another module's schema
   - Vitest - the consent checkbox
   approval_gate: GATE-004
 - id: NTF-005

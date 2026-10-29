@@ -77,6 +77,7 @@ internal sealed class SyntheticOrderScenario(PostgreSqlContractFixture fixture) 
                 DELETE FROM incidents.incident_evidence WHERE owner_org_id=@org OR operator_org_id=@org;
                 DELETE FROM custody.proofs WHERE owner_org_id=@org;
                 DELETE FROM orders.order_acceptances WHERE owner_org_id=@org;
+                DELETE FROM orders.recipient_notice_consents WHERE owner_org_id=@org;
                 DELETE FROM orders.order_events WHERE owner_org_id=@org;
                 DELETE FROM platform.audit_logs WHERE org_id=@org;
                 """, P("org", OrganizationId));

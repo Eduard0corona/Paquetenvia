@@ -1252,6 +1252,14 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
         return result is true;
     }
 
+    /// <summary>
+    /// Drains the Notifications lane rows of the scenario: one <c>orders.created</c> row per order and, since AI-08 NTF-004
+    /// (NTF-RECIPIENT-NOTICES-2026-10-20), one <c>orders.recipient-notice-requested</c> row for each of its three notice
+    /// transitions (DRAFT -> CONFIRMED, PICKED_UP -> IN_TRANSIT and DELIVERING -> DELIVERED). The request rows are settled
+    /// exactly as the Worker settles them while recipient notices are off: through
+    /// <c>security.expand_recipient_notice_request</c> with notices disabled, which also validates each producer row
+    /// against the lane's own payload contract and creates nothing.
+    /// </summary>
     private async Task CompleteOrderCreatedOutboxAsync(
         Guid organizationId,
         CancellationToken cancellationToken)
@@ -1260,14 +1268,15 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
             """
             UPDATE platform.outbox_events
             SET available_at=clock_timestamp()
-            WHERE owner_org_id=@org AND topic='orders.created'
+            WHERE owner_org_id=@org AND topic IN ('orders.created','orders.recipient-notice-requested')
               AND status IN ('PENDING','RETRY')
             """,
             cancellationToken,
             P("org", organizationId));
 
         var completed = 0;
-        while (completed < Ops001ScenarioData.OrderCount)
+        var notices = 0;
+        while (completed < Ops001ScenarioData.OrderCount || notices < Ops001ScenarioData.OrderCount * 3)
         {
             await using var connection = new NpgsqlConnection(
                 fixture.Database.WorkerConnectionString);
@@ -1298,9 +1307,25 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
             Assert.NotEmpty(claimed);
             Assert.All(
                 claimed,
-                item => Assert.Equal("orders.created", item.Topic));
+                item => Assert.Contains(item.Topic, new[] { "orders.created", "orders.recipient-notice-requested" }));
             foreach (var message in claimed)
             {
+                if (message.Topic == "orders.recipient-notice-requested")
+                {
+                    await using var disabled = new NpgsqlCommand(
+                        """
+                        SELECT security.expand_recipient_notice_request(
+                          @id,@lease_token,false,NULL,NULL,NULL,NULL,ARRAY[]::text[])
+                        """,
+                        connection,
+                        transaction);
+                    disabled.Parameters.Add(P("id", message.Id));
+                    disabled.Parameters.Add(P("lease_token", message.LeaseToken));
+                    Assert.Equal("RECIPIENT_NOTICES_DISABLED", await disabled.ExecuteScalarAsync(cancellationToken));
+                    notices++;
+                    continue;
+                }
+
                 await using var settle = new NpgsqlCommand(
                     """
                     SELECT security.settle_outbox(
@@ -1318,6 +1343,7 @@ internal sealed class Ops001ScenarioRunner(Ops001DeliverySimulationFixture fixtu
         }
 
         Assert.Equal(Ops001ScenarioData.OrderCount, completed);
+        Assert.Equal(Ops001ScenarioData.OrderCount * 3, notices);
     }
 
     /// <summary>

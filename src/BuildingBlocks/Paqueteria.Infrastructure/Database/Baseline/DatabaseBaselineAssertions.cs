@@ -766,6 +766,50 @@ public sealed class DatabaseBaselineAssertions
                 cancellationToken).ConfigureAwait(false);
             checks++;
 
+            // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-004; AI-18 recipient notices step 2 and deployment assertion 40):
+            // once the Orders lane step installs the WhatsApp consent table, it keeps FORCE RLS, its one tenant policy and
+            // its append-only trigger, and the runtime roles hold exactly SELECT and INSERT (paqueteria_app) and SELECT
+            // (paqueteria_worker) on it.
+            await AddRowsAsync(
+                violations,
+                connection,
+                activeTransaction,
+                """
+                WITH consent AS (SELECT pg_catalog.to_regclass('orders.recipient_notice_consents') AS oid)
+                SELECT 'orders.recipient_notice_consents is missing ENABLE/FORCE RLS'
+                FROM consent JOIN pg_catalog.pg_class c ON c.oid=consent.oid
+                WHERE NOT c.relrowsecurity OR NOT c.relforcerowsecurity
+                UNION ALL
+                SELECT 'orders.recipient_notice_consents does not have exactly its tenant policy'
+                FROM consent
+                WHERE consent.oid IS NOT NULL
+                  AND ((SELECT count(*) FROM pg_catalog.pg_policy p
+                        WHERE p.polrelid=consent.oid AND p.polname='recipient_notice_consents_tenant' AND p.polcmd='*'
+                          AND pg_catalog.pg_get_expr(p.polqual,p.polrelid)='security.app_allowed_org(owner_org_id)'
+                          AND pg_catalog.pg_get_expr(p.polwithcheck,p.polrelid)='security.app_allowed_org(owner_org_id)') <> 1
+                       OR (SELECT count(*) FROM pg_catalog.pg_policy p WHERE p.polrelid=consent.oid) <> 1)
+                UNION ALL
+                SELECT 'append-only trigger missing or disabled: recipient_notice_consents_append_only'
+                FROM consent
+                WHERE consent.oid IS NOT NULL
+                  AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_trigger t
+                                  WHERE t.tgrelid=consent.oid AND t.tgname='recipient_notice_consents_append_only'
+                                    AND NOT t.tgisinternal AND t.tgenabled<>'D'
+                                    AND t.tgfoid='platform.reject_runtime_mutation()'::regprocedure)
+                UNION ALL
+                SELECT 'runtime role ' || role.name || ' privilege ' || privilege.name || ' on orders.recipient_notice_consents differs from AI-18'
+                FROM consent
+                CROSS JOIN unnest(ARRAY['paqueteria_app','paqueteria_worker','paqueteria_realtime','paqueteria_bootstrap']) role(name)
+                CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) privilege(name)
+                WHERE consent.oid IS NOT NULL
+                  AND pg_catalog.to_regrole(role.name) IS NOT NULL
+                  AND pg_catalog.has_table_privilege(role.name,consent.oid,privilege.name)
+                      IS DISTINCT FROM ((role.name='paqueteria_app' AND privilege.name IN ('SELECT','INSERT'))
+                                        OR (role.name='paqueteria_worker' AND privilege.name='SELECT'))
+                """,
+                cancellationToken).ConfigureAwait(false);
+            checks++;
+
             await ProbeDefaultPrivilegesAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 

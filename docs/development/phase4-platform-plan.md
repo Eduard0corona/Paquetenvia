@@ -316,6 +316,6 @@ Lo aplicado está en `docs/development/ops-005-end-to-end-suite.md`:
 - Outbox solo por funciones con `lease_token`.
 - Sin PII, tokens ni payloads en logs, trazas, métricas o eventos.
 - El seguimiento público mantiene su 404 uniforme.
-- Siguen los cinco flujos atómicos de AI-13 §4, sin un sexto.
+- Siguen solo los flujos atómicos de AI-13 §4, sin uno nuevo.
 - Dinero en centavos `long`.
 - Nada de NestJS, BullMQ, microservicios ni Kubernetes.

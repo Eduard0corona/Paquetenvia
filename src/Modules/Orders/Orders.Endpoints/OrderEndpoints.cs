@@ -85,7 +85,8 @@ public static class OrderEndpoints
             !OrderAcceptanceInputPolicy.IsWithinAcceptanceWindow(request.Acceptance.AcceptedAt, clock.UtcNow) ||
             !TryReadCodExpectedCents(request.CodExpectedCents, out var codExpectedCents) ||
             !TryReadServiceWindow(request.ServiceWindow, out var serviceWindow) ||
-            (serviceWindow is not null && !OrderServiceWindowPolicy.IsWithinServerTime(serviceWindow, clock.UtcNow)))
+            (serviceWindow is not null && !OrderServiceWindowPolicy.IsWithinServerTime(serviceWindow, clock.UtcNow)) ||
+            !TryReadRecipientNotices(request.RecipientNotices, out var whatsAppConsentVersion))
         {
             return Conflict();
         }
@@ -117,7 +118,8 @@ public static class OrderEndpoints
                     httpContext.TraceIdentifier,
                     codExpectedCents,
                     RestrictedGoodsAcknowledged: true,
-                    ServiceWindow: serviceWindow),
+                    ServiceWindow: serviceWindow,
+                    WhatsAppConsentVersion: whatsAppConsentVersion),
                 cancellationToken);
             return Results.Created($"/api/v1/orders/{result.Id:D}", ToResponse(result));
         }
@@ -456,6 +458,60 @@ public static class OrderEndpoints
         return true;
     }
 
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-05 <c>x-pilot-contract-deltas</c> NTF-RECIPIENT-NOTICES, part NTF-004; AI-24
+    /// <c>recipient_notices.consent</c>): an absent (or JSON null) <c>recipient_notices</c> records nothing. A present one
+    /// is an object with exactly the boolean <c>whatsapp_consent_attested</c> and, only when it is <c>true</c>,
+    /// <c>whatsapp_consent_version</c> equal to <see cref="RecipientNoticeConsentPolicy.Version"/>; <c>false</c> without a
+    /// version records nothing. Any other shape (another member, a repeated one, a string or number for the boolean, a
+    /// version with <c>false</c>, <c>true</c> without the version or another version) is the uniform 409 before any order
+    /// is created.
+    /// </summary>
+    private static bool TryReadRecipientNotices(JsonElement? value, out string? whatsAppConsentVersion)
+    {
+        whatsAppConsentVersion = null;
+        if (value is not { } element || element.ValueKind == JsonValueKind.Null)
+        {
+            return true;
+        }
+
+        if (element.ValueKind != JsonValueKind.Object)
+        {
+            return false;
+        }
+
+        bool? attested = null;
+        string? version = null;
+        var versionSeen = false;
+        foreach (var member in element.EnumerateObject())
+        {
+            switch (member.Name)
+            {
+                case "whatsapp_consent_attested" when attested is null &&
+                    member.Value.ValueKind is JsonValueKind.True or JsonValueKind.False:
+                    attested = member.Value.ValueKind == JsonValueKind.True;
+                    break;
+                case "whatsapp_consent_version" when !versionSeen && member.Value.ValueKind == JsonValueKind.String:
+                    versionSeen = true;
+                    version = member.Value.GetString();
+                    break;
+                default:
+                    return false;
+            }
+        }
+
+        switch (attested)
+        {
+            case false:
+                return !versionSeen;
+            case true when versionSeen && string.Equals(version, RecipientNoticeConsentPolicy.Version, StringComparison.Ordinal):
+                whatsAppConsentVersion = RecipientNoticeConsentPolicy.Version;
+                return true;
+            default:
+                return false;
+        }
+    }
+
     private static bool TryReadIdempotencyKey(HttpRequest request, out string value)
     {
         value = string.Empty;
@@ -560,6 +616,8 @@ public static class OrderEndpoints
 /// literal <c>true</c>.
 /// <c>service_window</c> (ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02) is the optional delivery window <c>{from, to}</c>;
 /// absent means the zone's schedule applies. It is stored on the order and returned as <c>Order.service_window</c>.
+/// <c>recipient_notices</c> (NTF-RECIPIENT-NOTICES-2026-10-20, AI-08 NTF-004) carries the optional WhatsApp consent box
+/// of "Nueva orden"; ticked, the order records the consent once (who and when), and nothing else ever reads it back.
 /// </summary>
 public sealed record CreateOrderRequest(
     [property: JsonPropertyName("quote_id")] Guid QuoteId,
@@ -567,7 +625,8 @@ public sealed record CreateOrderRequest(
     [property: JsonPropertyName("acceptance")] OrderAcceptanceRequest Acceptance,
     [property: JsonPropertyName("cod_expected_cents")] JsonElement? CodExpectedCents = null,
     [property: JsonPropertyName("restricted_goods_acknowledged")] JsonElement? RestrictedGoodsAcknowledged = null,
-    [property: JsonPropertyName("service_window")] JsonElement? ServiceWindow = null);
+    [property: JsonPropertyName("service_window")] JsonElement? ServiceWindow = null,
+    [property: JsonPropertyName("recipient_notices")] JsonElement? RecipientNotices = null);
 
 public sealed record OrderAcceptanceRequest(
     [property: JsonPropertyName("terms_version")] string TermsVersion,

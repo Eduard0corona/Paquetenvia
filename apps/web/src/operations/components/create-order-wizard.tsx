@@ -10,6 +10,7 @@ import {
   maximumPhoneInputLength,
   maximumRecipientEmailLength,
   payerTypes,
+  recipientWhatsAppConsentText,
   serviceTypes,
   vatIncludedLabel,
   type AddressDraft,
@@ -738,6 +739,18 @@ function ConfirmStep({
           La aceptación queda registrada como asistida por ti, con las versiones vigentes de los términos y del aviso de
           privacidad.
         </p>
+      </fieldset>
+      <fieldset>
+        <legend>Avisos al destinatario</legend>
+        {/* NTF-RECIPIENT-NOTICES-2026-10-20 (AI-07 create_order.recipient_notices.consent): optional and unticked by
+            default; it never blocks "Confirmar". */}
+        <CheckboxField
+          id={fieldControlId("recipientWhatsAppConsent")}
+          checked={draft.recipientWhatsAppConsent}
+          onChange={(checked) => controller.updateDraft({ recipientWhatsAppConsent: checked })}
+        >
+          {recipientWhatsAppConsentText}
+        </CheckboxField>
       </fieldset>
       {!versionsConfigured && (
         <p id={fieldControlId("acceptanceVersions")} className="notice noticeWarn" role="alert" tabIndex={-1}>

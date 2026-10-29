@@ -83,6 +83,8 @@ export interface OrderWizardDraft {
   readonly payerType: string;
   readonly accepted: boolean;
   readonly restrictedGoodsAcknowledged: boolean;
+  /** NTF-RECIPIENT-NOTICES-2026-10-20: the optional WhatsApp consent box of step "Confirmar", unticked by default. */
+  readonly recipientWhatsAppConsent: boolean;
 }
 
 export const emptyAddressDraft: AddressDraft = {
@@ -118,6 +120,7 @@ export const initialOrderWizardDraft: OrderWizardDraft = {
   payerType: "",
   accepted: false,
   restrictedGoodsAcknowledged: false,
+  recipientWhatsAppConsent: false,
 };
 
 /** The createQuote draft; a role that cannot authorize a low price never sends the field. */
@@ -134,7 +137,7 @@ export function quoteDraftOf(draft: OrderWizardDraft, canAuthorizeLowPrice: bool
   };
 }
 
-/** The createOrder draft: who pays, both acknowledgements, the COD and the delivery window. */
+/** The createOrder draft: who pays, both acknowledgements, the COD, the delivery window and the WhatsApp consent. */
 export function acceptanceDraftOf(draft: OrderWizardDraft): AcceptanceDraft {
   return {
     payerType: draft.payerType,
@@ -143,6 +146,7 @@ export function acceptanceDraftOf(draft: OrderWizardDraft): AcceptanceDraft {
     codAmount: draft.codAmount,
     serviceWindowFrom: draft.serviceWindowFrom,
     serviceWindowTo: draft.serviceWindowTo,
+    recipientWhatsAppConsent: draft.recipientWhatsAppConsent,
   };
 }
 

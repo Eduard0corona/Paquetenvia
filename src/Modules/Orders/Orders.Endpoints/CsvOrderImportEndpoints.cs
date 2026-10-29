@@ -119,8 +119,9 @@ public static class CsvOrderImportEndpoints
 
         var upload = await TryReadUploadAsync(httpContext, cancellationToken);
         // ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: without the dispatcher's no-prohibited-goods confirmation the
-        // batch is the uniform conflict, before any reservation or order.
-        if (upload?.ContentDigest is null || !upload.RestrictedGoodsAcknowledged)
+        // batch is the uniform conflict, before any reservation or order. NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 (N3
+        // choice 5): so are WhatsApp consent fields of any shape but true with the version, false, or none.
+        if (upload?.ContentDigest is null || !upload.RestrictedGoodsAcknowledged || !upload.ConsentFieldsValid)
         {
             return Conflict();
         }
@@ -148,7 +149,8 @@ public static class CsvOrderImportEndpoints
                     prevalidation.ContentDigest,
                     prevalidation.ValidRows,
                     httpContext.TraceIdentifier,
-                    RestrictedGoodsAcknowledged: true),
+                    RestrictedGoodsAcknowledged: true,
+                    WhatsAppConsentVersion: upload.WhatsAppConsentVersion),
                 cancellationToken);
             return Results.Ok(ToCommitResponse(result));
         }
@@ -226,6 +228,12 @@ public static class CsvOrderImportEndpoints
             return null;
         }
 
+        // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-05 NTF-RECIPIENT-NOTICES, part NTF-004): one box for the whole file.
+        var consentValid = RecipientNoticeConsentPolicy.TryReadCsvFields(
+            form[RecipientNoticeConsentPolicy.CsvFieldAttested].ToArray(),
+            form[RecipientNoticeConsentPolicy.CsvFieldVersion].ToArray(),
+            out var consentVersion);
+
         return new CsvUpload(
             buffer.ToArray(),
             digests.Count == 1 ? digests[0] : null,
@@ -233,7 +241,9 @@ public static class CsvOrderImportEndpoints
             string.Equals(
                 acknowledgements[0],
                 CsvOrderImportContract.RestrictedGoodsAcknowledgedValue,
-                StringComparison.Ordinal));
+                StringComparison.Ordinal),
+            consentValid,
+            consentVersion);
     }
 
     private static bool TryReadIdempotencyKey(HttpRequest request, out string value)
@@ -299,7 +309,12 @@ public static class CsvOrderImportEndpoints
     private static IResult Unavailable() =>
         Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Service unavailable.");
 
-    private sealed record CsvUpload(byte[] Content, string? ContentDigest, bool RestrictedGoodsAcknowledged);
+    private sealed record CsvUpload(
+        byte[] Content,
+        string? ContentDigest,
+        bool RestrictedGoodsAcknowledged,
+        bool ConsentFieldsValid,
+        string? WhatsAppConsentVersion);
 }
 
 public sealed record CsvImportRowErrorResponse(
