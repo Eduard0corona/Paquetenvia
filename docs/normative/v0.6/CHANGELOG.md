@@ -1,5 +1,31 @@
 # Changelog
 
+## Remediación de seguridad pnpm: zod 4.6.6 (SEC-2026-15-PNPM-REMEDIATION-2026-10-24) — 2026-10-24
+
+- Respuesta literal del project owner (2026-10-24, ronda O, pregunta O1), registrada en `decision-log.md` con su
+  contexto, el texto de la opción, la tabla que vio y las opciones no elegidas: O1 "Remediar con la tabla
+  (Recommended)", por la ruta de SEC-2026-14 (K4).
+- La tabla corrige el aviso del Issue #315: GHSA-mrhx-c7xc-m3w5 (CVE-2023-54404, alto) en `zod` `<4.6.6`, que puede
+  agotar memoria al validar arreglos grandes. `zod` 4.4.3 sólo llegaba por las herramientas de lint
+  (`eslint-config-next` 16.4.1 → `eslint-plugin-react-hooks` 7.1.1 y `zod-validation-error` 4.0.2); ningún código de
+  la aplicación lo importa.
+- `apps/web/package.json` no cambia. `apps/web/pnpm-workspace.yaml` gana un override, `"zod@<4.6.6": 4.6.6`, justo
+  antes de la arista de Sharp; Sharp sigue en 0.35.5.
+- `apps/web/pnpm-lock.yaml`, regenerado con pnpm 11.15.1, mueve sólo `zod` de 4.4.3 a 4.6.6. Sigue con 475 paquetes,
+  ninguno nuevo. Además de la línea del override, de la integridad de `zod` 4.6.6 y de las claves y referencias que
+  nombran a `zod`, cambia una línea de metadatos: el rango peer que el lockfile anota para `zod-validation-error@4.0.2`
+  pasa a `zod: 4.6.6`, porque pnpm aplica el override también a los rangos peer.
+- REL-000:
+  - la autorización `SEC-2026-15-ZOD`, con un validador de grafo exacto (`validate_zod_remediation_diff`) y la
+    prueba de Sharp 0.35.5 en ejecución;
+  - el aviso conocido de braces (SEC-2026-10, Issue #180) queda revinculado sólo al hash nuevo del lockfile; ruta,
+    paquete y versión no cambian. GitHub retiró ese aviso el 2026-10-23, así que la base autorizada tenía sólo el de
+    `zod`. Nota: `docs/development/rel-000-internal-release.md`.
+- En el orden de K4: fusionada en `main` por #316 (2f39bcc), retirada a `historical_remediations` en `main` por #317
+  (11bb7f2) y sincronizada a `development` por #318 (9387e1c). Este PR sólo agrega la fila del decision-log, esta
+  entrada y la historia del back-sync en la nota de REL-000.
+- Sin cambios en código de la aplicación, migraciones, AI-04, AI-05, AI-06, AI-12, AI-18, roles ni permisos.
+
 ## Avisos al destinatario: entrega en el Worker y topes (NTF-RECIPIENT-NOTICE-CAPS-2026-10-23, AI-08 NTF-005) — 2026-10-23
 
 - Respuestas literales del project owner (2026-10-23, ronda L, preguntas L1 a L4), registradas en `decision-log.md` con
