@@ -5966,6 +5966,7 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
             "MERGED", historical[rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID]["status"]
         )
         self.assertEqual("MERGED", historical[rel000.VITE_REMEDIATION_ID]["status"])
+        self.assertEqual("MERGED", historical[rel000.ZOD_REMEDIATION_ID]["status"])
 
     def test_web_transitive_mode_requires_exact_branch_and_id(self):
         policy = self.policy()
@@ -7459,14 +7460,45 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
             accepted["lock_path"],
         )
         # SEC-2026-14 (vite 8.1.6, vitest 4.1.12, next 16.4.1) regenerated the lockfile and
-        # rebound the path heads and this hash; package, version and path shape are unchanged.
+        # rebound the path heads and the hash; SEC-2026-15 (zod 4.6.6) regenerated it again
+        # and rebound only this hash. Package, version and path shape are unchanged.
         self.assertEqual(
-            "3f5834c346a1ad3f172fe52481acd748a9d0d05e0752d418220eb075e84c2ddd",
+            "f944eecd2b6dd09f39fbe06677be038e6e38bdbcaca901da330353f02f0b5aa4",
             accepted["expected_lockfile_sha256"],
         )
         self.assertEqual(
             accepted["expected_lockfile_sha256"],
             rel000.validate_known_advisory_lock_graph(self.base_lock(), accepted, "branch"),
+        )
+        # The zod 4.4.3 bytes of the SEC-2026-15 base keep the path but no longer satisfy the
+        # binding: their hash is the one SEC-2026-15 declares as its base binding.
+        zod = next(
+            item
+            for item in [
+                *self.policy_value["historical_remediations"],
+                *self.policy_value["active_remediations"],
+            ]
+            if item["id"] == rel000.ZOD_REMEDIATION_ID
+        )
+        zod_base = subprocess.check_output(
+            ["git", "show", f"{zod['authorized_base_sha']}:apps/web/pnpm-lock.yaml"],
+            cwd=REPOSITORY_ROOT,
+        )
+        rel000.validate_known_advisory_lock_path(zod_base.decode("utf-8"), accepted)
+        self.assert_reason(
+            "KNOWN_ADVISORY_LOCK_GRAPH_CHANGED",
+            lambda: rel000.validate_known_advisory_lock_graph(zod_base, accepted, "base"),
+        )
+        self.assertEqual(accepted["lock_path"], zod["known_advisory_base_binding"]["lock_path"])
+        rel000.validate_known_advisory_lock_graph(
+            zod_base,
+            {
+                **accepted,
+                "expected_lockfile_sha256": zod["known_advisory_base_binding"][
+                    "expected_lockfile_sha256"
+                ],
+            },
+            "base",
         )
         # The 16.3.8 graph of the SEC-2026-14 base no longer satisfies the binding: its path
         # is the one SEC-2026-14 declares as its base binding.
@@ -8908,14 +8940,41 @@ class ViteRemediationPolicyTests(unittest.TestCase):
             )
         )
 
-    def braces(self):
+    def target_braces_advisory(self) -> dict[str, Any]:
+        """The braces accepted known advisory exactly as the validated target declared it.
+
+        SEC-2026-15 later rebound its hash to the lockfile it generated, so the replay reads
+        braces on the graph this remediation bound it to, as the SEC-2026-11 replay does.
+        """
+
+        target_policy = json.loads(self.target_file(rel000.REMEDIATION_POLICY_PATH))
         return copy.deepcopy(
+            next(
+                entry["accepted_known_advisory"]
+                for entry in target_policy["active_remediations"]
+                if entry["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+            )
+        )
+
+    def braces(self):
+        braces = copy.deepcopy(
             next(
                 item
                 for item in self.policy_value["active_remediations"]
                 if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
             )
         )
+        braces["accepted_known_advisory"] = self.target_braces_advisory()
+        return braces
+
+    def replay_policy(self):
+        """The loaded policy with braces bound as it was when PR #305 was validated."""
+
+        policy = self.policy()
+        for item in policy["active_remediations"]:
+            if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID:
+                item["accepted_known_advisory"] = self.target_braces_advisory()
+        return policy
 
     def base_file(self, relative: str) -> bytes:
         return subprocess.check_output(
@@ -9111,7 +9170,7 @@ class ViteRemediationPolicyTests(unittest.TestCase):
         return rel000.resolve_accepted_known_advisories(
             root,
             base,
-            self.policy(),
+            self.replay_policy(),
             tracking if tracking is not None else self.tracking(),
             self.audit(self.base_advisories()),
             self.audit([self.braces_advisory()]),
@@ -9208,6 +9267,11 @@ class ViteRemediationPolicyTests(unittest.TestCase):
         """Once retired, the merged graph is plain base content for normal release evidence."""
 
         policy = rel000.load_remediation_policy(self.repository_policy_path)
+        # Braces is read on the graph this remediation bound it to (SEC-2026-15 later rebound
+        # its hash), as replay_policy reads it.
+        for item in policy["active_remediations"]:
+            if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID:
+                item["accepted_known_advisory"] = self.target_braces_advisory()
         # A later commit on top of the merged tree that leaves the web dependencies alone is
         # clean, with braces accepted on the rebound graph in both audits.
         root, _, _ = self.dependency_repo()
@@ -10317,6 +10381,1399 @@ class ViteRemediationPolicyTests(unittest.TestCase):
             with self.subTest(retired=name):
                 self.assertNotIn(
                     "SEC-2026-14-VITE", (REPOSITORY_ROOT / path).read_text(encoding="utf-8")
+                )
+
+
+class ZodRemediationPolicyTests(unittest.TestCase):
+    """SEC-2026-15: the zod 4.4.3 advisory, reached only through the lint tooling.
+
+    The owner admitted an exact table (2026-10-24, "Remediar con la tabla"): zod 4.4.3 ->
+    4.6.6 (transitive, development only, through eslint-config-next -> eslint-plugin-react-hooks
+    7.1.1 and its zod-validation-error 4.0.2) and the new workspace override
+    "zod@<4.6.6": 4.6.6. No manifest change and no new package. pnpm applies the override to
+    peer ranges too, so the peer range the lockfile records for zod-validation-error@4.0.2
+    becomes 4.6.6: one declared metadata line. The regenerated lockfile changes the bytes the
+    braces accepted known advisory (Issue #180) is pinned to, so the same remediation rebinds
+    that hash, as SEC-2026-11 and SEC-2026-14 did. That advisory was withdrawn upstream on
+    2026-10-23, so npm's audit no longer reports it and the authorized base set is zod alone.
+    """
+
+    ISSUE = "315"
+    ADVISORY = "GHSA-mrhx-c7xc-m3w5"
+    KNOWN_ADVISORY = "GHSA-vfj7-8cjw-p6xm"
+    LOCK = "apps/web/pnpm-lock.yaml"
+    MANIFEST = "apps/web/package.json"
+    WORKSPACE = "apps/web/pnpm-workspace.yaml"
+    OVERRIDE = '  "zod@<4.6.6": 4.6.6\n'
+    LOCK_OVERRIDE = "  zod@<4.6.6: 4.6.6\n"
+    SHARP_EDGE = '  "next@16.4.1>sharp": 0.35.5\n'
+
+    MERGE_COMMIT = "2f39bcc7e503ee48fad1b8e87f53d70923ed1b09"
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-zod-tests-")
+        self.root = Path(self.temp.name)
+        self.repository_policy_path = REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH
+        current_policy = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+        # PR #316 merged, so the authorization is historical; the regression suite replays it
+        # as the active authorization it was while the remediation branch was open.
+        zod = copy.deepcopy(
+            next(
+                item
+                for item in current_policy["historical_remediations"]
+                if item["id"] == rel000.ZOD_REMEDIATION_ID
+            )
+        )
+        for field in ("status", "validated_target_sha", "tracked_pull_request"):
+            zod.pop(field, None)
+        self.policy_value = copy.deepcopy(current_policy)
+        self.policy_value["historical_remediations"] = [
+            item
+            for item in self.policy_value["historical_remediations"]
+            if item["id"] != rel000.ZOD_REMEDIATION_ID
+        ]
+        # Its original slot was the last active authorization.
+        self.policy_value["active_remediations"].append(zod)
+        self.policy_path = self.root / "active-policy.json"
+        self.policy_path.write_text(json.dumps(self.policy_value), encoding="utf-8")
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def policy(self):
+        return rel000.load_remediation_policy(self.policy_path)
+
+    def authorization(self):
+        return copy.deepcopy(
+            next(
+                item
+                for item in self.policy_value["active_remediations"]
+                if item["id"] == rel000.ZOD_REMEDIATION_ID
+            )
+        )
+
+    def braces(self):
+        return copy.deepcopy(
+            next(
+                item
+                for item in self.policy_value["active_remediations"]
+                if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+            )
+        )
+
+    def base_file(self, relative: str) -> bytes:
+        return subprocess.check_output(
+            ["git", "show", f"{self.authorization()['authorized_base_sha']}:{relative}"],
+            cwd=REPOSITORY_ROOT,
+        )
+
+    def retired(self) -> dict[str, Any]:
+        policy = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+        return next(
+            item
+            for item in policy["historical_remediations"]
+            if item["id"] == rel000.ZOD_REMEDIATION_ID
+        )
+
+    def target_file(self, relative: str) -> bytes:
+        """The file exactly as it merged (validated_target_sha), not the checkout.
+
+        Later changes may move the checkout past this graph, so the regression suite replays
+        the head Foundation CI passed 13/13 on, whose tree is the merge commit's.
+        """
+
+        return subprocess.check_output(
+            ["git", "show", f"{self.retired()['validated_target_sha']}:{relative}"],
+            cwd=REPOSITORY_ROOT,
+        )
+
+    def dependency_repo(self):
+        """A repository at the authorized base web files, then the remediation's two files."""
+
+        authorization = self.authorization()
+        root = Path(tempfile.mkdtemp(prefix="repo-", dir=self.root))
+        for relative in (self.LOCK, self.MANIFEST, self.WORKSPACE):
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(self.base_file(relative))
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "rel000@example.invalid"], cwd=root, check=True
+        )
+        subprocess.run(["git", "config", "user.name", "REL-000 Tests"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        for relative in authorization["required_dependency_files"]:
+            (root / relative).write_bytes(self.target_file(relative))
+        return root, base, authorization
+
+    def validate_dependency(self, root, base, authorization=None):
+        return rel000.validate_dependency_diff(
+            root,
+            base,
+            rel000.SECURITY_REMEDIATION,
+            authorization or self.authorization(),
+        )
+
+    @staticmethod
+    def rewrite(path: Path, old: str, new: str, count: int = 1) -> None:
+        text = path.read_text(encoding="utf-8")
+        assert old in text, old
+        path.write_text(text.replace(old, new, count), encoding="utf-8")
+
+    def policy_with(self, mutate) -> Path:
+        value = copy.deepcopy(self.policy_value)
+        for item in value["active_remediations"]:
+            if item["id"] == rel000.ZOD_REMEDIATION_ID:
+                mutate(item)
+        path = self.root / "policy.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return path
+
+    def zod_advisory(self):
+        """The advisory exactly as sanitize-audit records the base finding."""
+
+        return {
+            "advisory_id": self.ADVISORY,
+            "package": "zod",
+            "installed_versions": ["4.4.3"],
+            "severity": "high",
+            "affected_range": "<4.6.6",
+            "patched_range": ">=4.6.6",
+            "direct_or_transitive": "transitive",
+            "dependency_path_count": 2,
+            "fix_available": True,
+            "fix_compatibility": "requires_compatibility_assessment",
+        }
+
+    def braces_advisory(self):
+        """The withdrawn braces advisory as npm's audit reported it until 2026-10-23."""
+
+        return {
+            "advisory_id": self.KNOWN_ADVISORY,
+            "package": "braces",
+            "installed_versions": ["3.0.3"],
+            "severity": "high",
+            "affected_range": "<=3.0.3",
+            "patched_range": ">=3.0.4",
+            "direct_or_transitive": "transitive",
+            "dependency_path_count": 1,
+            "fix_available": True,
+            "fix_compatibility": "requires_compatibility_assessment",
+        }
+
+    @staticmethod
+    def audit(advisories):
+        values = copy.deepcopy(advisories)
+        totals = {
+            key: sum(item["severity"] == key for item in values)
+            for key in ("critical", "high", "moderate", "low")
+        }
+        totals["total"] = len(values)
+        return {
+            "format_version": "paquetenvia-rel000-audit-v1",
+            "command_executed": True,
+            "command_exit_code": 1 if values else 0,
+            "parse_succeeded": True,
+            "totals": totals,
+            "affected_packages": sorted({item["package"] for item in values}),
+            "advisories": values,
+        }
+
+    def known_issue(self, **changes):
+        issue = {
+            "number": 180,
+            "state": "OPEN",
+            "title": self.braces()["tracked_issue_title"],
+            "url": "https://github.com/example/issues/180",
+            "tracked_advisory_ids": [self.KNOWN_ADVISORY.upper()],
+        }
+        issue.update(changes)
+        return issue
+
+    def tracking(self, state="OPEN", tracked=None, known_issues=None):
+        authorization = self.authorization()
+        return {
+            "number": 315,
+            "state": state,
+            "title": authorization["tracked_issue_title"],
+            "url": "https://github.com/example/issues/315",
+            "tracked_advisory_ids": sorted(
+                value.upper()
+                for value in (
+                    authorization["issue_advisories"][self.ISSUE] if tracked is None else tracked
+                )
+            ),
+            # CI always attaches the SEC-2026-08 related Issue; SEC-2026-15 ignores it.
+            "related_issue": {
+                "number": 40,
+                "state": "CLOSED",
+                "title": "SEC-2026-08: remediate transitive SSH.NET advisory",
+                "url": "https://github.com/example/issues/40",
+                "tracked_advisory_ids": ["GHSA-Q939-RPR3-3284"],
+            },
+            # CI still consults Issue #180 through the fixture's known advisory Issues.
+            "known_advisory_issues": [self.known_issue()] if known_issues is None else known_issues,
+        }
+
+    @staticmethod
+    def issue5():
+        return {
+            "number": 5,
+            "state": "CLOSED",
+            "title": "Sharp historical remediation",
+            "url": "https://github.com/example/issues/5",
+            "tracked_advisory_ids": [rel000.ISSUE5_ADVISORY],
+        }
+
+    def accepted(self, root, base, tracking=None, remediation=None, base_audit=None, branch_audit=None):
+        return rel000.resolve_accepted_known_advisories(
+            root,
+            base,
+            self.policy(),
+            tracking if tracking is not None else self.tracking(),
+            base_audit if base_audit is not None else self.audit([self.zod_advisory()]),
+            branch_audit if branch_audit is not None else self.audit([]),
+            remediation if remediation is not None else self.authorization(),
+        )
+
+    def security(self, tracking=None, base=None, branch=None, accepted=None, authorization=None):
+        tracking = tracking if tracking is not None else self.tracking()
+        base = base if base is not None else self.audit([self.zod_advisory()])
+        branch = branch if branch is not None else self.audit([])
+        if accepted is None:
+            root, base_sha, _ = self.dependency_repo()
+            accepted = self.accepted(root, base_sha, tracking, base_audit=base, branch_audit=branch)
+        return rel000.validate_issue_and_audit(
+            self.issue5(),
+            tracking,
+            base,
+            branch,
+            {
+                "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
+                "vulnerable_lock_versions": [],
+            },
+            rel000.SECURITY_REMEDIATION,
+            authorization or self.authorization(),
+            accepted,
+        )
+
+    def test_merged_authorization_is_historical_and_not_active(self):
+        policy = rel000.load_remediation_policy(self.repository_policy_path)
+        retired = {item["id"]: item for item in policy["historical_remediations"]}[
+            rel000.ZOD_REMEDIATION_ID
+        ]
+        self.assertEqual("MERGED", retired["status"])
+        self.assertEqual(316, retired["tracked_pull_request"])
+        # The head Foundation CI passed 13/13 on; PR #316 merged it into main as 2f39bcc,
+        # whose tree is the same.
+        self.assertEqual(
+            "da7bfa128bd6164da5607a251d274fa0181433b5", retired["validated_target_sha"]
+        )
+        self.assertEqual(
+            retired["validated_target_sha"],
+            subprocess.check_output(
+                ["git", "rev-parse", f"{self.MERGE_COMMIT}^2"], cwd=REPOSITORY_ROOT, text=True
+            ).strip(),
+        )
+        self.assertEqual(
+            *(
+                subprocess.check_output(
+                    ["git", "rev-parse", f"{commit}^{{tree}}"], cwd=REPOSITORY_ROOT, text=True
+                ).strip()
+                for commit in (retired["validated_target_sha"], self.MERGE_COMMIT)
+            )
+        )
+        # The policy still loads, so the exact table, metadata line and braces base binding
+        # stay declared on the historical entry of this id.
+        self.assertEqual(
+            rel000.ZOD_LOCK_VERSION_REPLACEMENTS, retired["expected_lock_version_replacements"]
+        )
+        self.assertEqual(rel000.ZOD_OVERRIDE_ADDITIONS, retired["expected_override_additions"])
+        self.assertEqual(
+            rel000.ZOD_LOCK_METADATA_CHANGES, retired["expected_lock_metadata_changes"]
+        )
+        self.assertEqual(
+            rel000.ZOD_KNOWN_ADVISORY_BASE_BINDING, retired["known_advisory_base_binding"]
+        )
+        self.assertNotIn(
+            rel000.ZOD_REMEDIATION_ID, {item["id"] for item in policy["active_remediations"]}
+        )
+        self.assert_reason(
+            "REMEDIATION_ID_NOT_ACTIVE",
+            lambda: rel000.resolve_rel000_mode(
+                policy, "fix/security-2026-15-zod", rel000.ZOD_REMEDIATION_ID
+            ),
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(policy, "fix/security-2026-15-zod"),
+        )
+        # Retired with another binding or other metadata lines, the policy no longer loads.
+        for field, mutate in (
+            (
+                "known_advisory_base_binding",
+                lambda item: item["known_advisory_base_binding"].update(
+                    expected_lockfile_sha256="0" * 64
+                ),
+            ),
+            ("expected_lock_metadata_changes", lambda item: item["expected_lock_metadata_changes"].pop()),
+        ):
+            with self.subTest(field=field):
+                value = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+                for item in value["historical_remediations"]:
+                    if item["id"] == rel000.ZOD_REMEDIATION_ID:
+                        mutate(item)
+                path = self.root / "tampered-retired.json"
+                path.write_text(json.dumps(value), encoding="utf-8")
+                self.assert_reason(
+                    "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+                )
+
+    def test_normal_mode_judges_the_merged_table_clean_and_any_move_back_closed(self):
+        """Once retired, the merged graph is plain base content for normal release evidence."""
+
+        policy = rel000.load_remediation_policy(self.repository_policy_path)
+        # A later commit on top of the merged tree that leaves the web dependencies alone is
+        # clean. Were the withdrawn braces advisory reported again in both audits, it would be
+        # accepted on the rebound graph.
+        root, _, _ = self.dependency_repo()
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "merged"], cwd=root, check=True)
+        merged = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        (root / "README.md").write_text("unrelated\n", encoding="utf-8")
+        self.assertEqual(
+            "CLEAN",
+            rel000.validate_dependency_diff(
+                root, merged, rel000.NORMAL_RELEASE_EVIDENCE, None, []
+            )["dependency_diff_against_base"],
+        )
+        accepted = rel000.resolve_accepted_known_advisories(
+            root,
+            merged,
+            policy,
+            self.tracking(),
+            self.audit([self.braces_advisory()]),
+            self.audit([self.braces_advisory()]),
+            None,
+        )
+        self.assertEqual([rel000.BRACES_KNOWN_ADVISORY_ID], [item["remediation_id"] for item in accepted])
+        # Moving zod back to 4.4.3, or dropping its override, now fails closed: normal mode
+        # admits no dependency drift.
+        for label, relative, old, new in (
+            ("zod moved back", self.LOCK, "zod@4.6.6", "zod@4.4.3"),
+            ("override dropped", self.WORKSPACE, self.OVERRIDE, ""),
+        ):
+            with self.subTest(case=label):
+                path = root / relative
+                original = path.read_bytes()
+                self.rewrite(path, old, new, count=-1)
+                failure = self.assert_reason(
+                    "DEPENDENCY_FILES_CHANGED",
+                    lambda: rel000.validate_dependency_diff(
+                        root, merged, rel000.NORMAL_RELEASE_EVIDENCE, None, []
+                    ),
+                )
+                self.assertEqual([relative], failure.details["files"])
+                path.write_bytes(original)
+
+    def test_policy_loads_and_mode_requires_exact_branch_id_and_base(self):
+        policy = self.policy()
+        authorization = self.authorization()
+        self.assertEqual("fix/security-2026-15-zod", authorization["authorized_source_branch"])
+        self.assertEqual(
+            "9e55771e572689bd475d81bfbda098593a17748a", authorization["authorized_base_sha"]
+        )
+        self.assertEqual(
+            rel000.SECURITY_REMEDIATION,
+            rel000.resolve_rel000_mode(
+                policy, authorization["authorized_source_branch"], authorization["id"]
+            ),
+        )
+        self.assertIsNotNone(
+            rel000.validate_mode_authorization(
+                rel000.SECURITY_REMEDIATION,
+                policy,
+                authorization["authorized_source_branch"],
+                authorization["authorized_base_sha"],
+                authorization["id"],
+            )
+        )
+        self.assert_reason(
+            "REMEDIATION_ID_REQUIRED",
+            lambda: rel000.resolve_rel000_mode(policy, authorization["authorized_source_branch"]),
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(policy, "feature/other", authorization["id"]),
+        )
+        # Another active route does not accept this branch, nor this id another one.
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(
+                policy, "fix/security-2026-13-openapi-yamlreader", authorization["id"]
+            ),
+        )
+        self.assert_reason(
+            "REMEDIATION_ID_NOT_ACTIVE",
+            lambda: rel000.resolve_rel000_mode(
+                policy, authorization["authorized_source_branch"], rel000.VITE_REMEDIATION_ID
+            ),
+        )
+
+    def test_wrong_base_sha_is_rejected(self):
+        authorization = self.authorization()
+        self.assert_reason(
+            "SECURITY_REMEDIATION_BASE_MISMATCH",
+            lambda: rel000.validate_mode_authorization(
+                rel000.SECURITY_REMEDIATION,
+                self.policy(),
+                authorization["authorized_source_branch"],
+                "0" * 40,
+                authorization["id"],
+            ),
+        )
+
+    def test_authorization_is_exact_and_tampering_is_rejected(self):
+        authorization = self.authorization()
+        self.assertEqual([self.ADVISORY], authorization["expected_base_advisories"])
+        self.assertEqual({self.ISSUE: [self.ADVISORY]}, authorization["issue_advisories"])
+        self.assertEqual(
+            {"zod": {"from": ["4.4.3"], "to": ["4.6.6"]}},
+            authorization["expected_lock_version_replacements"],
+        )
+        self.assertEqual({}, authorization["expected_direct_version_changes"])
+        self.assertEqual([], authorization["allowed_direct_packages"])
+        self.assertEqual({}, authorization["expected_override_changes"])
+        self.assertEqual(
+            [{"selector": "zod@<4.6.6", "to": "4.6.6", "before": "next@16.4.1>sharp"}],
+            authorization["expected_override_additions"],
+        )
+        self.assertEqual("4.6.6", authorization["allowed_overrides"]["zod@<4.6.6"])
+        self.assertEqual("0.35.5", authorization["target_sharp_version"])
+        self.assertEqual(
+            "sha512-4UmzQUF5fxvfcYHlbjBmejU+w+hbDnWFx4aS8kBx7nPBHcO2SqPbpAG8snbdg+Xse4pRefR98hgjFgIMCI/UhA==",
+            authorization["expected_lock_integrities"]["zod@4.6.6"],
+        )
+        self.assertEqual(
+            {"total": 1, "critical": 0, "high": 1, "moderate": 0, "low": 0},
+            authorization["expected_base_totals"],
+        )
+        self.assertEqual(
+            {"total": 0, "critical": 0, "high": 0, "moderate": 0, "low": 0},
+            authorization["expected_branch_totals"],
+        )
+        self.assertEqual({self.ADVISORY: "CVE-2023-54404"}, authorization["expected_cves"])
+        self.assertEqual([self.LOCK, self.WORKSPACE], authorization["required_dependency_files"])
+        self.assertEqual(
+            "f944eecd2b6dd09f39fbe06677be038e6e38bdbcaca901da330353f02f0b5aa4",
+            authorization["expected_lockfile_sha256"],
+        )
+        mutations = [
+            lambda item: item.update(tracked_issue=304),
+            lambda item: item.update(tracked_issue_title="SEC-2026-15: something else"),
+            lambda item: item["issue_advisories"][self.ISSUE].append(self.KNOWN_ADVISORY),
+            lambda item: item.update(issue_advisories={"304": [self.ADVISORY]}),
+            lambda item: item.update(
+                issue_cited_known_advisories={self.ISSUE: [self.KNOWN_ADVISORY]}
+            ),
+            # The withdrawn braces advisory is no longer part of the authorized base set.
+            lambda item: item["expected_base_advisories"].append(self.KNOWN_ADVISORY),
+            lambda item: item["expected_base_packages"].update({self.KNOWN_ADVISORY: "braces"}),
+            lambda item: item["expected_base_packages"].update({self.ADVISORY: "zod-validation-error"}),
+            lambda item: item["expected_base_severities"].update({self.ADVISORY: "moderate"}),
+            lambda item: item["expected_base_totals"].update(high=2, total=2),
+            lambda item: item["expected_branch_totals"].update(high=1, total=1),
+            lambda item: item["expected_cves"].update({self.ADVISORY: None}),
+            lambda item: item["advisory_affected_ranges"].update({self.ADVISORY: "<=4.6.6"}),
+            lambda item: item["first_patched_versions"].update({"zod": "4.6.7"}),
+            lambda item: item["allowed_direct_packages"].append("zod"),
+            lambda item: item["allowed_dependency_files"].append(self.MANIFEST),
+            lambda item: item["required_dependency_files"].remove(self.WORKSPACE),
+            lambda item: item["allowed_non_dependency_files"].append("apps/web/eslint.config.mjs"),
+            lambda item: item["allowed_non_dependency_files"].append(
+                "docs/normative/v0.6/decision-log.md"
+            ),
+            lambda item: item["expected_direct_version_changes"].update(
+                {"eslint-config-next": {"from": "16.4.1", "to": "16.4.2"}}
+            ),
+            lambda item: item["expected_override_changes"].update(
+                {"next@16.4.1>sharp": {"selector": "next@16.4.1>sharp", "from": "0.35.5", "to": "0.35.6"}}
+            ),
+            lambda item: item["expected_override_additions"][0].update(to="4.6.7"),
+            lambda item: item["expected_override_additions"][0].update(selector="zod"),
+            lambda item: item["expected_override_additions"][0].update(before="postcss"),
+            lambda item: item["expected_override_additions"].append(
+                {"selector": "zod-validation-error", "to": "4.0.2", "before": "next@16.4.1>sharp"}
+            ),
+            lambda item: item["allowed_overrides"].update({"zod@<4.6.6": "4.6.7"}),
+            lambda item: item["allowed_overrides"].pop("source-map-js@<1.2.2"),
+            lambda item: item["expected_lock_version_replacements"]["zod"].update(to=["4.6.7"]),
+            lambda item: item["expected_lock_version_replacements"].update(
+                {"zod-validation-error": {"from": ["4.0.2"], "to": ["4.0.3"]}}
+            ),
+            lambda item: item["allowed_lock_metadata_additions"].append(
+                {"package": "zod@4.6.6", "line": "    deprecated: anything"}
+            ),
+            lambda item: item["expected_lock_metadata_changes"].pop(),
+            lambda item: item["expected_lock_metadata_changes"][0].update(to="      zod: ^4.6.6"),
+            lambda item: item["expected_lock_metadata_changes"][0].update(
+                package="eslint-plugin-react-hooks@7.1.1"
+            ),
+            lambda item: item["expected_lock_integrities"].update(
+                {"zod@4.6.6": "sha512-" + "A" * 86 + "=="}
+            ),
+            lambda item: item["expected_lock_integrities"].pop("zod@4.6.6"),
+            lambda item: item["known_advisory_base_binding"].update(
+                expected_lockfile_sha256="0" * 64
+            ),
+            lambda item: item["known_advisory_base_binding"]["lock_path"].pop(1),
+            lambda item: item.pop("known_advisory_base_binding"),
+            lambda item: item.update(expected_lockfile_sha256="x"),
+            lambda item: item.update(expected_lock_package_count=476),
+            lambda item: item.update(related_tracked_issue=40),
+            lambda item: item.update(require_sharp_runtime_smoke=False),
+            lambda item: item.update(target_sharp_version="0.35.4"),
+            lambda item: item.update(prohibited_prereleases=False),
+            lambda item: item.update(manual_lockfile_edits_allowed=True),
+        ]
+        for index, mutate in enumerate(mutations):
+            with self.subTest(mutation=index):
+                path = self.policy_with(mutate)
+                self.assert_reason(
+                    "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+                )
+
+    def test_rebinding_and_metadata_changes_belong_only_to_this_authorization(self):
+        authorization = self.authorization()
+        self.assertEqual(
+            rel000.ZOD_KNOWN_ADVISORY_BASE_BINDING, authorization["known_advisory_base_binding"]
+        )
+        self.assertEqual(
+            rel000.ZOD_LOCK_METADATA_CHANGES, authorization["expected_lock_metadata_changes"]
+        )
+        # The braces path keeps its shape and its heads; only the pinned bytes move.
+        accepted = self.braces()["accepted_known_advisory"]
+        self.assertEqual(accepted["lock_path"], authorization["known_advisory_base_binding"]["lock_path"])
+        self.assertEqual(
+            authorization["known_advisory_base_binding"]["expected_lockfile_sha256"],
+            hashlib.sha256(self.base_file(self.LOCK)).hexdigest(),
+        )
+        self.assertEqual(authorization["expected_lockfile_sha256"], accepted["expected_lockfile_sha256"])
+        binding = authorization["known_advisory_base_binding"]
+        metadata = authorization["expected_lock_metadata_changes"]
+        cases = {
+            # This binding on another authorization, active or retired.
+            "binding on braces": (
+                rel000.BRACES_KNOWN_ADVISORY_ID, "known_advisory_base_binding", binding
+            ),
+            "binding on SEC-2026-13": (
+                rel000.OPENAPI_YAMLREADER_REMEDIATION_ID, "known_advisory_base_binding", binding
+            ),
+            "binding on retired SEC-2026-14": (
+                rel000.VITE_REMEDIATION_ID, "known_advisory_base_binding", binding
+            ),
+            # The rebinding authorizations cannot swap their bindings.
+            "SEC-2026-14 binding here": (
+                rel000.ZOD_REMEDIATION_ID,
+                "known_advisory_base_binding",
+                rel000.VITE_KNOWN_ADVISORY_BASE_BINDING,
+            ),
+            # Metadata line changes exist only on SEC-2026-14 and here, each with its own lines.
+            "metadata on retired SEC-2026-14": (
+                rel000.VITE_REMEDIATION_ID, "expected_lock_metadata_changes", metadata
+            ),
+            "SEC-2026-14 metadata here": (
+                rel000.ZOD_REMEDIATION_ID,
+                "expected_lock_metadata_changes",
+                rel000.VITE_LOCK_METADATA_CHANGES,
+            ),
+            "metadata on braces": (
+                rel000.BRACES_KNOWN_ADVISORY_ID, "expected_lock_metadata_changes", metadata
+            ),
+            "metadata on SEC-2026-11": (
+                rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID,
+                "expected_lock_metadata_changes",
+                metadata,
+            ),
+        }
+        for label, (target, field, value) in cases.items():
+            with self.subTest(case=label):
+                policy = copy.deepcopy(self.policy_value)
+                for item in [*policy["historical_remediations"], *policy["active_remediations"]]:
+                    if item["id"] == target:
+                        item[field] = copy.deepcopy(value)
+                path = self.root / "policy.json"
+                path.write_text(json.dumps(policy), encoding="utf-8")
+                self.assert_reason(
+                    "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+                )
+
+    def test_exact_generated_dependency_graph_is_accepted(self):
+        root, base, authorization = self.dependency_repo()
+        result = self.validate_dependency(root, base, authorization)
+        self.assertEqual("AUTHORIZED_SECURITY_REMEDIATION", result["dependency_diff_against_base"])
+        self.assertEqual([self.LOCK, self.WORKSPACE], result["changed_dependency_files"])
+        self.assertFalse(result["dependency_manifest_changed"])
+        self.assertTrue(result["dependency_workspace_changed"])
+        self.assertEqual(["4.6.6"], result["zod_versions"])
+        self.assertEqual(["zod@<4.6.6"], result["zod_override_selectors"])
+        self.assertEqual("next@16.4.1>sharp", result["sharp_override_selector"])
+        self.assertEqual(["0.35.5"], result["sharp_versions"])
+        self.assertEqual(475, result["lock_package_count"])
+        self.assertEqual(authorization["expected_lockfile_sha256"], result["lockfile_sha256"])
+
+    def test_generated_graph_is_exactly_the_owner_table(self):
+        """Every changed line is the zod move, its integrity, the override or the peer line."""
+
+        authorization = self.authorization()
+        self.assertEqual(self.base_file(self.MANIFEST), self.target_file(self.MANIFEST))
+        # The workspace is the base plus the one override line, right before the Sharp edge.
+        base_workspace = self.base_file(self.WORKSPACE).decode("utf-8").splitlines()
+        workspace = self.target_file(self.WORKSPACE).decode("utf-8").splitlines()
+        added = workspace.index(self.OVERRIDE.rstrip("\n"))
+        self.assertEqual(self.SHARP_EDGE.rstrip("\n"), workspace[added + 1])
+        self.assertEqual(base_workspace, workspace[:added] + workspace[added + 1 :])
+        # The lockfile is the base plus the same override line, with lines changed in place.
+        base_lines = self.base_file(self.LOCK).decode("utf-8").splitlines()
+        lines = self.target_file(self.LOCK).decode("utf-8").splitlines()
+        added = lines.index(self.LOCK_OVERRIDE.rstrip("\n"))
+        self.assertEqual("  next@16.4.1>sharp: 0.35.5", lines[added + 1])
+        self.assertEqual(1, lines.count(self.LOCK_OVERRIDE.rstrip("\n")))
+        lines = lines[:added] + lines[added + 1 :]
+        changed = [
+            (old, new) for old, new in zip(base_lines, lines, strict=True) if old != new
+        ]
+        self.assertEqual(8, len(changed))
+        metadata = {
+            (item["from"], item["to"]) for item in authorization["expected_lock_metadata_changes"]
+        }
+        integrity = (
+            "    resolution: {integrity: "
+            f"{authorization['expected_lock_integrities']['zod@4.6.6']}}}"
+        )
+
+        def moved_back(line: str) -> str:
+            line = re.sub(r"(?<![\w/.-])zod@4\.6\.6(?=[:'\"()]|$)", "zod@4.4.3", line)
+            return re.sub(r"^(\s+'?)zod('?: )4\.6\.6(?=\(|$)", r"\g<1>zod\g<2>4.4.3", line)
+
+        kinds = {"move": 0, "integrity": 0, "metadata": 0}
+        for old, new in changed:
+            if (old, new) in metadata:
+                kinds["metadata"] += 1
+            elif new == integrity:
+                kinds["integrity"] += 1
+            else:
+                self.assertEqual(old, moved_back(new))
+                kinds["move"] += 1
+        self.assertEqual({"move": 6, "integrity": 1, "metadata": 1}, kinds)
+
+    def test_file_outside_allowlist_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        (root / "apps/web/eslint.config.mjs").write_text("export default [];\n", encoding="utf-8")
+        self.assert_reason(
+            "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_manifest_never_changes(self):
+        for label, old, new in (
+            ("a direct zod pin", '"typescript": "5.9.3",', '"typescript": "5.9.3",\n    "zod": "4.6.6",'),
+            ("another dependency", '"typescript": "5.9.3"', '"typescript": "5.9.4"'),
+            ("eslint-config-next moved", '"eslint-config-next": "16.4.1"', '"eslint-config-next": "16.4.2"'),
+        ):
+            with self.subTest(case=label):
+                root, base, authorization = self.dependency_repo()
+                self.rewrite(root / self.MANIFEST, old, new)
+                failure = self.assert_reason(
+                    "UNAUTHORIZED_DEPENDENCY_FILE_CHANGED",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+                self.assertEqual([self.MANIFEST], failure.details["files"])
+        # Even an authorization that listed the manifest could not move it.
+        root, base, authorization = self.dependency_repo()
+        self.rewrite(root / self.MANIFEST, '"typescript": "5.9.3"', '"typescript": "5.9.4"')
+        authorization["allowed_dependency_files"].append(self.MANIFEST)
+        authorization["required_dependency_files"].append(self.MANIFEST)
+        self.assert_reason(
+            "UNAUTHORIZED_DEPENDENCY_MANIFEST_CHANGE",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        root, base, authorization = self.dependency_repo()
+        authorization["allowed_direct_packages"] = ["zod"]
+        self.assert_reason(
+            "SECURITY_REMEDIATION_DIRECT_SCOPE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_workspace_adds_only_the_zod_override(self):
+        for label, old, new, reason in (
+            ("another target", self.OVERRIDE, '  "zod@<4.6.6": 4.6.7\n', "SECURITY_REMEDIATION_OVERRIDE_INVALID"),
+            ("unscoped selector", self.OVERRIDE, "  zod: 4.6.6\n", "SECURITY_REMEDIATION_OVERRIDE_INVALID"),
+            ("after the Sharp edge", self.OVERRIDE + self.SHARP_EDGE, self.SHARP_EDGE + self.OVERRIDE, "SECURITY_REMEDIATION_OVERRIDE_INVALID"),
+            ("Sharp moved", self.SHARP_EDGE, '  "next@16.4.1>sharp": 0.35.4\n', "SECURITY_REMEDIATION_OVERRIDE_INVALID"),
+            ("override dropped", '  "source-map-js@<1.2.2": 1.2.2\n', "", "SECURITY_REMEDIATION_OVERRIDE_INVALID"),
+            ("a second new override", self.OVERRIDE, self.OVERRIDE + '  "zod-validation-error": 4.0.2\n', "SECURITY_REMEDIATION_OVERRIDE_INVALID"),
+            # Without the new override, the workspace is no longer a changed, required file.
+            ("override missing", self.OVERRIDE, "", "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID"),
+        ):
+            with self.subTest(case=label):
+                root, base, authorization = self.dependency_repo()
+                self.rewrite(root / self.WORKSPACE, old, new)
+                self.assert_reason(
+                    reason, lambda: self.validate_dependency(root, base, authorization)
+                )
+        # A selector the base already carries is not a new override.
+        root, base, authorization = self.dependency_repo()
+        authorization["expected_override_additions"][0]["selector"] = "postcss"
+        self.assert_reason(
+            "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        # Nor is one the base workspace already declared, even with the line added again:
+        # commit a base whose workspace has it (the lockfile stays the base's), then add it
+        # a second time on top of the generated lockfile.
+        root, _, authorization = self.dependency_repo()
+        workspace = self.target_file(self.WORKSPACE).decode("utf-8")
+        (root / self.LOCK).write_bytes(self.base_file(self.LOCK))
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "base with override"], cwd=root, check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        (root / self.LOCK).write_bytes(self.target_file(self.LOCK))
+        (root / self.WORKSPACE).write_text(
+            workspace.replace(self.OVERRIDE, self.OVERRIDE * 2), encoding="utf-8"
+        )
+        self.assert_reason(
+            "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        # The workspace must also equal the declared override set, not only the base lines.
+        root, base, authorization = self.dependency_repo()
+        authorization["allowed_overrides"]["postcss"] = "8.5.24"
+        self.assert_reason(
+            "SECURITY_REMEDIATION_OVERRIDE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_defense_in_depth_checks_hold_without_the_exact_graph(self):
+        """Each lockfile check after the exact graph still fails closed on its own."""
+
+        def tampered(old: str, new: str, count_delta: int = 0):
+            root, base, authorization = self.dependency_repo()
+            self.rewrite(root / self.LOCK, old, new)
+            lock = (root / self.LOCK).read_bytes()
+            authorization["expected_lockfile_sha256"] = hashlib.sha256(lock).hexdigest()
+            authorization["expected_lock_package_count"] += count_delta
+            return root, base, authorization
+
+        cases = (
+            # The vulnerable zod kept next to the patched one.
+            (
+                "vulnerable zod kept",
+                "\n  zod@4.6.6:\n",
+                "\n  zod@4.4.3:\n    resolution: {integrity: sha512-"
+                + "A" * 86
+                + "==}\n\n  zod@4.6.6:\n",
+                1,
+                "SECURITY_REMEDIATION_LOCK_VERSION_INVALID",
+            ),
+            # Sharp off its protected version.
+            ("Sharp moved", "\n  sharp@0.35.5:\n", "\n  sharp@0.35.6:\n", 0, "LOCKFILE_INCONSISTENT"),
+            # The lockfile without the new override or the Sharp edge.
+            ("override missing", self.LOCK_OVERRIDE, "", 0, "LOCKFILE_INCONSISTENT"),
+            ("Sharp edge missing", "  next@16.4.1>sharp: 0.35.5\n", "", 0, "LOCKFILE_INCONSISTENT"),
+        )
+        for label, old, new, count_delta, reason in cases:
+            with self.subTest(case=label):
+                root, base, authorization = tampered(old, new, count_delta)
+                with patch.object(rel000, "validate_next_sharp_sourcemap_exact_lock_graph"):
+                    self.assert_reason(
+                        reason, lambda: self.validate_dependency(root, base, authorization)
+                    )
+
+    def test_every_dependency_file_must_change(self):
+        for relative in (self.LOCK, self.WORKSPACE):
+            with self.subTest(unchanged=relative):
+                root, base, authorization = self.dependency_repo()
+                (root / relative).write_bytes(self.base_file(relative))
+                self.assert_reason(
+                    "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+
+    def test_lock_change_outside_the_authorized_graph_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        # Any package other than zod keeps its base bytes.
+        self.rewrite(root / self.LOCK, "\n  react@19.2.7:\n", "\n  react@19.2.8:\n")
+        failure = self.assert_reason(
+            "LOCKFILE_GRAPH_SCOPE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        self.assertEqual("react@19.2.8", failure.details["package"])
+
+    def test_every_moved_reference_must_follow_the_table(self):
+        for label, old, new in (
+            # The react-hooks snapshot keeps the vulnerable zod.
+            (
+                "react-hooks zod reference",
+                "      zod: 4.6.6\n      zod-validation-error: 4.0.2(zod@4.6.6)\n",
+                "      zod: 4.4.3\n      zod-validation-error: 4.0.2(zod@4.6.6)\n",
+            ),
+            # The reference that closes the peer suffix keeps the vulnerable zod.
+            (
+                "peer suffix reference",
+                "      zod-validation-error: 4.0.2(zod@4.6.6)\n",
+                "      zod-validation-error: 4.0.2(zod@4.4.3)\n",
+            ),
+            # The zod-validation-error snapshot key keeps the vulnerable peer.
+            (
+                "peer suffix snapshot key",
+                "  zod-validation-error@4.0.2(zod@4.6.6):\n",
+                "  zod-validation-error@4.0.2(zod@4.4.3):\n",
+            ),
+            # The lockfile does not apply the new override.
+            ("lockfile override missing", self.LOCK_OVERRIDE, ""),
+            # The lockfile applies it somewhere else.
+            (
+                "lockfile override moved",
+                self.LOCK_OVERRIDE + "  next@16.4.1>sharp: 0.35.5\n",
+                "  next@16.4.1>sharp: 0.35.5\n" + self.LOCK_OVERRIDE,
+            ),
+            # A wider override would add another lockfile override line.
+            ("unscoped lockfile override", self.LOCK_OVERRIDE, "  zod: 4.6.6\n"),
+            # Another peer range rewritten by an override is metadata outside the table.
+            (
+                "another peer range",
+                "      eslint: ^3.0.0 || ^4.0.0 || ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0-0 || "
+                "^9.0.0 || ^10.0.0\n",
+                "      eslint: 9.39.5\n",
+            ),
+        ):
+            with self.subTest(case=label):
+                root, base, authorization = self.dependency_repo()
+                self.rewrite(root / self.LOCK, old, new)
+                self.assert_reason(
+                    "LOCKFILE_GRAPH_SCOPE_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+
+    def test_metadata_line_changes_only_as_declared(self):
+        for label, old, new in (
+            # The recorded peer range left as the package declares it.
+            ("peer range kept", "    peerDependencies:\n      zod: 4.6.6\n", "    peerDependencies:\n      zod: ^3.25.0 || ^4.0.0\n"),
+            ("another peer value", "    peerDependencies:\n      zod: 4.6.6\n", "    peerDependencies:\n      zod: ^4.6.6\n"),
+            ("peer dropped", "    peerDependencies:\n      zod: 4.6.6\n", ""),
+            ("a new deprecation", "\n  zod@4.6.6:\n", "\n  zod@4.6.6:\n    deprecated: anything\n"),
+        ):
+            with self.subTest(case=label):
+                root, base, authorization = self.dependency_repo()
+                self.rewrite(root / self.LOCK, old, new)
+                self.assert_reason(
+                    "LOCKFILE_GRAPH_SCOPE_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+        # A declared metadata line the base no longer carries means a different base graph.
+        authorization = self.authorization()
+        base_lock = self.base_file(self.LOCK).decode("utf-8")
+        self.assertEqual(1, base_lock.count("      zod: ^3.25.0 || ^4.0.0\n"))
+        self.assert_reason(
+            "BASE_LOCK_GRAPH_UNEXPECTED",
+            lambda: rel000.validate_next_sharp_sourcemap_exact_lock_graph(
+                base_lock.replace(
+                    "      zod: ^3.25.0 || ^4.0.0\n", "      zod: ^4.0.0\n", 1
+                ),
+                self.target_file(self.LOCK).decode("utf-8"),
+                authorization,
+                "zod",
+            ),
+        )
+
+    def test_another_target_version_is_rejected(self):
+        for label, replacements in (
+            ("zod 4.6.7", (("zod@4.6.6", "zod@4.6.7"), ("zod: 4.6.6", "zod: 4.6.7"))),
+            ("zod 4.4.3 kept", (("zod@4.6.6", "zod@4.4.3"), ("      zod: 4.6.6\n      zod-validation-error", "      zod: 4.4.3\n      zod-validation-error"))),
+        ):
+            with self.subTest(case=label):
+                root, base, authorization = self.dependency_repo()
+                path = root / self.LOCK
+                text = path.read_text(encoding="utf-8")
+                for old, new in replacements:
+                    text = text.replace(old, new)
+                path.write_text(text, encoding="utf-8")
+                self.assert_reason(
+                    "LOCKFILE_GRAPH_SCOPE_INVALID",
+                    lambda: self.validate_dependency(root, base, authorization),
+                )
+        root, base, authorization = self.dependency_repo()
+        authorization["expected_lock_version_replacements"]["zod"]["to"] = ["4.6.6-beta.0"]
+        self.assert_reason(
+            "PRERELEASE_DEPENDENCY_REJECTED",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        root, base, authorization = self.dependency_repo()
+        authorization["expected_override_additions"][0]["to"] = "4.6.6-canary.1"
+        self.assert_reason(
+            "PRERELEASE_DEPENDENCY_REJECTED",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_moved_integrity_is_exactly_the_registry_one(self):
+        root, base, authorization = self.dependency_repo()
+        path = root / self.LOCK
+        text = path.read_text(encoding="utf-8")
+        marker = "\n  zod@4.6.6:\n    resolution: {integrity: sha512-"
+        start = text.index(marker) + len(marker)
+        path.write_text(
+            text[:start] + ("B" if text[start] != "B" else "C") + text[start + 1 :],
+            encoding="utf-8",
+        )
+        failure = self.assert_reason(
+            "LOCKFILE_GENERATED_GRAPH_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        self.assertEqual("zod@4.6.6", failure.details["package"])
+        # The integrity of a package that does not move keeps its base bytes.
+        root, base, authorization = self.dependency_repo()
+        path = root / self.LOCK
+        text = path.read_text(encoding="utf-8")
+        marker = "\n  zod-validation-error@4.0.2:\n    resolution: {integrity: sha512-"
+        start = text.index(marker) + len(marker)
+        path.write_text(
+            text[:start] + ("B" if text[start] != "B" else "C") + text[start + 1 :],
+            encoding="utf-8",
+        )
+        self.assert_reason(
+            "LOCKFILE_GRAPH_SCOPE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_lockfile_keeps_sharp_on_its_exact_target(self):
+        root, base, authorization = self.dependency_repo()
+        authorization["target_sharp_version"] = "0.35.4"
+        failure = self.assert_reason(
+            "LOCKFILE_INCONSISTENT",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        self.assertEqual(["0.35.5"], failure.details["actual"])
+
+    def test_generated_lockfile_drift_is_rejected(self):
+        root, base, authorization = self.dependency_repo()
+        path = root / self.LOCK
+        path.write_bytes(path.read_bytes() + b"\n")
+        self.assert_reason(
+            "LOCKFILE_GRAPH_SCOPE_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        root, base, authorization = self.dependency_repo()
+        authorization["expected_lockfile_sha256"] = "0" * 64
+        self.assert_reason(
+            "LOCKFILE_GENERATED_GRAPH_INVALID",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+        root, base, authorization = self.dependency_repo()
+        authorization["expected_lock_package_count"] = 476
+        self.assert_reason(
+            "LOCKFILE_PACKAGE_COUNT_CHANGED",
+            lambda: self.validate_dependency(root, base, authorization),
+        )
+
+    def test_base_lockfile_must_be_the_authorized_vulnerable_graph(self):
+        authorization = self.authorization()
+        base_lock = self.base_file(self.LOCK).decode("utf-8")
+        lock = self.target_file(self.LOCK).decode("utf-8")
+        rel000.validate_next_sharp_sourcemap_exact_lock_graph(base_lock, lock, authorization, "zod")
+        for label, old, new in (
+            ("another zod", "\n  zod@4.4.3:\n", "\n  zod@4.4.2:\n"),
+            ("override already there", "  next@16.4.1>sharp: 0.35.5\n", self.LOCK_OVERRIDE + "  next@16.4.1>sharp: 0.35.5\n"),
+            ("no Sharp anchor", "  next@16.4.1>sharp: 0.35.5\n", "  next@16.4.2>sharp: 0.35.5\n"),
+        ):
+            with self.subTest(case=label):
+                self.assert_reason(
+                    "BASE_LOCK_GRAPH_UNEXPECTED",
+                    lambda: rel000.validate_next_sharp_sourcemap_exact_lock_graph(
+                        base_lock.replace(old, new, 1), lock, authorization, "zod"
+                    ),
+                )
+
+    def test_real_audits_and_issue_are_pending_merge(self):
+        authorization = self.authorization()
+        result = self.security()
+        self.assertEqual(rel000.SECURITY_REMEDIATION, result["mode"])
+        self.assertEqual("REMEDIATED_PENDING_MERGE", result["dependency_security_status"])
+        self.assertEqual(
+            "BLOCKED_BY_SECURITY_REMEDIATION_MERGE_AND_OWNER_DECISION",
+            result["release_candidate_status"],
+        )
+        # The braces advisory is in neither audit, so nothing binds Issue #180 in this run.
+        self.assertEqual(
+            [
+                ("Issue #5", "CLOSED", 1, "REMEDIATED"),
+                ("Issue #315", "OPEN", 1, "REMEDIATED_PENDING_MERGE"),
+            ],
+            [
+                (item["id"], item["state"], item["tracked_advisories"], item["remediation_status"])
+                for item in result["known_security_issues"]
+            ],
+        )
+        self.assertEqual([], result["accepted_known_advisories"])
+        self.assertEqual([], result["remaining_advisory_ids"])
+        self.assertEqual([self.ADVISORY], result["removed_advisory_ids"])
+        self.assertEqual(
+            [
+                {
+                    "advisory_id": self.ADVISORY,
+                    "package": "zod",
+                    "severity": "high",
+                    "tracking_issue": "Issue #315",
+                    "remediation_status": "REMEDIATED_PENDING_MERGE",
+                }
+            ],
+            result["remediated_advisories"],
+        )
+        self.assertEqual(authorization["expected_base_totals"], result["base_totals"])
+        self.assertEqual(authorization["expected_branch_totals"], result["branch_totals"])
+        self.assertIsNone(result["related_security_issue"])
+        rel000.assert_redacted(result["remediated_advisories"])
+
+    def test_sanitized_pnpm_audit_matches_the_authorized_baseline(self):
+        """sanitize-audit turns the real pnpm 11.15.1 audits into the authorized sets."""
+
+        base_source = self.root / "pnpm-base.json"
+        base_source.write_text(
+            json.dumps(
+                {
+                    "advisories": {
+                        "1243066": {
+                            "findings": [
+                                {
+                                    "version": "4.4.3",
+                                    "paths": [
+                                        ".>eslint-config-next>eslint-plugin-react-hooks>zod",
+                                        ".>eslint-config-next>eslint-plugin-react-hooks>"
+                                        "zod-validation-error>zod",
+                                    ],
+                                    "dev": True,
+                                    "optional": False,
+                                    "bundled": False,
+                                }
+                            ],
+                            "id": 1243066,
+                            "title": "Zod can exhaust memory while validating oversized "
+                            "constrained collections",
+                            "module_name": "zod",
+                            "vulnerable_versions": "<4.6.6",
+                            "patched_versions": ">=4.6.6",
+                            "severity": "high",
+                            "cwe": "CWE-770",
+                            "github_advisory_id": self.ADVISORY,
+                            "url": f"https://github.com/advisories/{self.ADVISORY}",
+                        }
+                    },
+                    "metadata": {
+                        "vulnerabilities": {
+                            "info": 0,
+                            "low": 0,
+                            "moderate": 0,
+                            "high": 1,
+                            "critical": 0,
+                        },
+                        "dependencies": 75,
+                        "devDependencies": 363,
+                        "optionalDependencies": 94,
+                        "totalDependencies": 475,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        output = self.root / "base-audit.json"
+        rel000.sanitize_audit(base_source, output, True, 1)
+        sanitized = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(self.audit([self.zod_advisory()]), sanitized)
+        authorization = self.authorization()
+        self.assertEqual(authorization["expected_base_totals"], sanitized["totals"])
+        self.assertEqual(
+            authorization["expected_base_packages"],
+            {item["advisory_id"]: item["package"] for item in sanitized["advisories"]},
+        )
+        # The branch audit is pnpm's clean report, exit code 0.
+        branch_source = self.root / "pnpm-branch.json"
+        branch_source.write_text(
+            json.dumps(
+                {
+                    "advisories": {},
+                    "metadata": {
+                        "vulnerabilities": {
+                            "info": 0,
+                            "low": 0,
+                            "moderate": 0,
+                            "high": 0,
+                            "critical": 0,
+                        },
+                        "dependencies": 75,
+                        "devDependencies": 363,
+                        "optionalDependencies": 94,
+                        "totalDependencies": 475,
+                    },
+                }
+            ),
+            encoding="utf-8",
+        )
+        output = self.root / "branch-audit.json"
+        rel000.sanitize_audit(branch_source, output, True, 0)
+        sanitized = json.loads(output.read_text(encoding="utf-8"))
+        self.assertEqual(self.audit([]), sanitized)
+        self.assertEqual(authorization["expected_branch_totals"], sanitized["totals"])
+
+    def test_retained_advisory_is_rejected_or_blocks(self):
+        self.assert_reason(
+            "BRANCH_AUDIT_NOT_ZERO",
+            lambda: self.security(branch=self.audit([self.zod_advisory()])),
+        )
+        # A different advisory on the branch is new, whatever the totals say.
+        other = {**self.zod_advisory(), "advisory_id": "GHSA-aaaa-bbbb-cccc"}
+        self.assert_reason(
+            "BRANCH_AUDIT_NOT_ZERO",
+            lambda: self.security(branch=self.audit([other])),
+        )
+
+    def test_base_audit_must_match_the_authorized_baseline(self):
+        # An empty base or the earlier base with the withdrawn braces advisory back.
+        for label, advisories in (
+            ("empty", []),
+            ("braces back", [self.zod_advisory(), self.braces_advisory()]),
+        ):
+            with self.subTest(case=label):
+                self.assert_reason(
+                    "BASE_AUDIT_UNEXPECTED",
+                    lambda: self.security(base=self.audit(advisories)),
+                )
+        advisory = {**self.zod_advisory(), "package": "zod-validation-error"}
+        self.assert_reason(
+            "BASE_AFFECTED_PACKAGES_UNEXPECTED",
+            lambda: self.security(base=self.audit([advisory])),
+        )
+        advisory = {**self.zod_advisory(), "advisory_id": "GHSA-aaaa-bbbb-cccc"}
+        self.assert_reason(
+            "BASE_ADVISORY_SET_UNEXPECTED",
+            lambda: self.security(base=self.audit([advisory])),
+        )
+
+    def test_tracking_issue_must_be_open_exact_and_not_cite_braces(self):
+        self.assert_reason(
+            "ADDITIONAL_SECURITY_ISSUE_STATE_INVALID",
+            lambda: self.security(tracking=self.tracking(state="CLOSED")),
+        )
+        for ids in (
+            [],
+            [self.ADVISORY, self.KNOWN_ADVISORY],
+            [self.ADVISORY, "GHSA-aaaa-bbbb-cccc"],
+            [self.KNOWN_ADVISORY],
+        ):
+            with self.subTest(ids=ids):
+                self.assert_reason(
+                    "ADDITIONAL_SECURITY_TRACKING_INVALID",
+                    lambda: self.security(tracking=self.tracking(tracked=ids)),
+                )
+        tracking = self.tracking()
+        tracking["title"] = "SEC-2026-15: remediate zod advisory"
+        self.assert_reason(
+            "ADDITIONAL_SECURITY_TRACKING_INVALID", lambda: self.security(tracking=tracking)
+        )
+
+    def test_withdrawn_braces_advisory_binds_nothing_while_absent(self):
+        root, base, _ = self.dependency_repo()
+        # Absent from both audits, braces is not resolved, whatever Issue #180 says.
+        for known_issues in ([self.known_issue()], [self.known_issue(state="CLOSED")], []):
+            with self.subTest(known_issues=len(known_issues)):
+                self.assertEqual(
+                    [], self.accepted(root, base, self.tracking(known_issues=known_issues))
+                )
+
+    def test_base_binding_reads_the_previous_bytes_only_in_this_remediation(self):
+        """Were braces reported again, this run would read the base against its old bytes."""
+
+        root, base, authorization = self.dependency_repo()
+        with_braces = self.audit([self.zod_advisory(), self.braces_advisory()])
+        branch_braces = self.audit([self.braces_advisory()])
+        accepted = self.accepted(root, base, base_audit=with_braces, branch_audit=branch_braces)
+        self.assertEqual(
+            [rel000.BRACES_KNOWN_ADVISORY_ID], [item["remediation_id"] for item in accepted]
+        )
+        self.assertEqual(authorization["expected_lockfile_sha256"], accepted[0]["lockfile_sha256"])
+        # Normal mode and any other remediation read the base against the rebound bytes.
+        for remediation in ({}, self.braces()):
+            with self.subTest(remediation=remediation.get("id")):
+                self.assert_reason(
+                    "KNOWN_ADVISORY_LOCK_GRAPH_CHANGED",
+                    lambda: self.accepted(
+                        root,
+                        base,
+                        remediation=remediation,
+                        base_audit=with_braces,
+                        branch_audit=branch_braces,
+                    ),
+                )
+        for field, value in (
+            ("expected_lockfile_sha256", "0" * 64),
+            ("advisory_id", "GHSA-aaaa-bbbb-cccc"),
+        ):
+            with self.subTest(tampered=field):
+                tampered = copy.deepcopy(authorization)
+                tampered["known_advisory_base_binding"][field] = value
+                self.assert_reason(
+                    "KNOWN_ADVISORY_LOCK_GRAPH_CHANGED",
+                    lambda: self.accepted(
+                        root,
+                        base,
+                        remediation=tampered,
+                        base_audit=with_braces,
+                        branch_audit=branch_braces,
+                    ),
+                )
+        # The branch can never keep the base bytes: it is read against the rebound ones.
+        (root / self.LOCK).write_bytes(self.base_file(self.LOCK))
+        self.assert_reason(
+            "KNOWN_ADVISORY_LOCK_GRAPH_CHANGED",
+            lambda: self.accepted(root, base, base_audit=with_braces, branch_audit=branch_braces),
+        )
+        # And the authorized base set no longer holds, so the run fails closed anyway.
+        self.assert_reason(
+            "BASE_AUDIT_UNEXPECTED",
+            lambda: self.security(base=with_braces, branch=branch_braces),
+        )
+
+    def test_tested_base_policy_predating_the_rebinding_still_loads(self):
+        authorization = self.authorization()
+        base_policy = json.loads(self.base_file(rel000.REMEDIATION_POLICY_PATH))
+        self.assertNotIn(
+            rel000.ZOD_REMEDIATION_ID,
+            {
+                item["id"]
+                for item in [
+                    *base_policy["historical_remediations"],
+                    *base_policy["active_remediations"],
+                ]
+            },
+        )
+        braces = next(
+            item
+            for item in base_policy["active_remediations"]
+            if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+        )["accepted_known_advisory"]
+        for field in ("lock_path", "expected_lockfile_sha256"):
+            self.assertEqual(authorization["known_advisory_base_binding"][field], braces[field])
+        # Only the hash moved, and the loader pins no hash value: the base policy loads both
+        # as a tested base and as a tree policy.
+        rel000.validate_remediation_policy(copy.deepcopy(base_policy), base_policy=True)
+        rel000.validate_remediation_policy(copy.deepcopy(base_policy))
+        self.assertEqual(
+            ["AUTH-001-OIDC", "ADP-001-AZURE", "OBS-003-OPENTELEMETRY"],
+            [
+                item["id"]
+                for item in rel000.load_base_dependency_admissions(
+                    REPOSITORY_ROOT, authorization["authorized_base_sha"]
+                )
+            ],
+        )
+
+    def test_release_evidence_after_merge_is_clean(self):
+        """The push run on main tests the merged commit against itself (base = tested)."""
+
+        root, _, _ = self.dependency_repo()
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "merged"], cwd=root, check=True)
+        merged = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        result = rel000.validate_dependency_diff(
+            root, merged, rel000.NORMAL_RELEASE_EVIDENCE, None, []
+        )
+        self.assertEqual("CLEAN", result["dependency_diff_against_base"])
+        # Were braces reported again, normal mode would accept it on the rebound bytes.
+        accepted = self.accepted(
+            root,
+            merged,
+            remediation={},
+            base_audit=self.audit([self.braces_advisory()]),
+            branch_audit=self.audit([self.braces_advisory()]),
+        )
+        self.assertEqual(
+            self.braces()["accepted_known_advisory"]["expected_lockfile_sha256"],
+            accepted[0]["lockfile_sha256"],
+        )
+        # Against the vulnerable base, normal mode rejects the two dependency files.
+        root, base, _ = self.dependency_repo()
+        failure = self.assert_reason(
+            "DEPENDENCY_FILES_CHANGED",
+            lambda: rel000.validate_dependency_diff(
+                root, base, rel000.NORMAL_RELEASE_EVIDENCE, None, []
+            ),
+        )
+        self.assertEqual([self.LOCK, self.WORKSPACE], failure.details["files"])
+
+    def test_sharp_runtime_smoke_requires_the_0_35_5_target(self):
+        authorization = self.authorization()
+
+        def smoke(version):
+            return {
+                "result": "SHARP_RUNTIME_SMOKE_PASSED",
+                "sharp_version": version,
+                "dependency_parent": "next",
+                "node_version": "24.13.0",
+                "platform": "linux",
+                "architecture": "x64",
+                "output_format": "png",
+                "output_bytes": 95,
+            }
+
+        result = rel000.validate_sharp_runtime_smoke(
+            smoke("0.35.5"), rel000.SECURITY_REMEDIATION, authorization
+        )
+        self.assertEqual(("PASSED", "0.35.5"), (result["status"], result["sharp_version"]))
+        self.assert_reason(
+            "SHARP_RUNTIME_SMOKE_VERSION_INVALID",
+            lambda: rel000.validate_sharp_runtime_smoke(
+                smoke("0.35.4"), rel000.SECURITY_REMEDIATION, authorization
+            ),
+        )
+        self.assert_reason(
+            "SHARP_RUNTIME_SMOKE_NOT_EXECUTED",
+            lambda: rel000.validate_sharp_runtime_smoke(
+                None, rel000.SECURITY_REMEDIATION, authorization
+            ),
+        )
+
+    def test_fixture_and_both_workflows_bind_issue_branch_and_remediation(self):
+        # The retirement removed this binding from the checkout (K4: the line is back to its
+        # 9e55771 form); the tree PR #316 merged (validated_target_sha) carried it in the
+        # fixture and in both workflows.
+        fixture = json.loads(self.target_file("tests/fixtures/rel-000/security-tracking.json"))
+        self.assertEqual(315, fixture["remediation_issues"][rel000.ZOD_REMEDIATION_ID])
+        self.assertEqual({rel000.BRACES_KNOWN_ADVISORY_ID: 180}, fixture["known_advisory_issues"])
+        for name in ("ci.yml", "pr-validation.yml"):
+            workflow = self.target_file(f".github/workflows/{name}").decode("utf-8")
+            with self.subTest(workflow=name):
+                self.assertIn(
+                    "github.head_ref == 'fix/security-2026-15-zod' && 'SEC-2026-15-ZOD'",
+                    workflow,
+                )
+        checkout = json.loads(
+            (REPOSITORY_ROOT / "tests/fixtures/rel-000/security-tracking.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertNotIn(rel000.ZOD_REMEDIATION_ID, checkout["remediation_issues"])
+        for name in ("ci.yml", "pr-validation.yml"):
+            path = f".github/workflows/{name}"
+            with self.subTest(retired=name):
+                self.assertNotIn(
+                    "SEC-2026-15-ZOD", (REPOSITORY_ROOT / path).read_text(encoding="utf-8")
                 )
 
 
