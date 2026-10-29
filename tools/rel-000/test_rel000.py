@@ -5950,7 +5950,6 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
                 rel000.WEB_TRANSITIVE_REMEDIATION_ID,
                 rel000.BRACES_KNOWN_ADVISORY_ID,
                 rel000.OPENAPI_YAMLREADER_REMEDIATION_ID,
-                rel000.ZOD_REMEDIATION_ID,
             },
             {item["id"] for item in policy["active_remediations"]},
         )
@@ -5965,6 +5964,7 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
             "MERGED", historical[rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID]["status"]
         )
         self.assertEqual("MERGED", historical[rel000.VITE_REMEDIATION_ID]["status"])
+        self.assertEqual("MERGED", historical[rel000.ZOD_REMEDIATION_ID]["status"])
 
     def test_web_transitive_mode_requires_exact_branch_and_id(self):
         policy = self.policy()
@@ -10399,11 +10399,34 @@ class ZodRemediationPolicyTests(unittest.TestCase):
     LOCK_OVERRIDE = "  zod@<4.6.6: 4.6.6\n"
     SHARP_EDGE = '  "next@16.4.1>sharp": 0.35.5\n'
 
+    MERGE_COMMIT = "2f39bcc7e503ee48fad1b8e87f53d70923ed1b09"
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="rel000-zod-tests-")
         self.root = Path(self.temp.name)
-        self.policy_path = REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH
-        self.policy_value = json.loads(self.policy_path.read_text(encoding="utf-8"))
+        self.repository_policy_path = REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH
+        current_policy = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+        # PR #316 merged, so the authorization is historical; the regression suite replays it
+        # as the active authorization it was while the remediation branch was open.
+        zod = copy.deepcopy(
+            next(
+                item
+                for item in current_policy["historical_remediations"]
+                if item["id"] == rel000.ZOD_REMEDIATION_ID
+            )
+        )
+        for field in ("status", "validated_target_sha", "tracked_pull_request"):
+            zod.pop(field, None)
+        self.policy_value = copy.deepcopy(current_policy)
+        self.policy_value["historical_remediations"] = [
+            item
+            for item in self.policy_value["historical_remediations"]
+            if item["id"] != rel000.ZOD_REMEDIATION_ID
+        ]
+        # Its original slot was the last active authorization.
+        self.policy_value["active_remediations"].append(zod)
+        self.policy_path = self.root / "active-policy.json"
+        self.policy_path.write_text(json.dumps(self.policy_value), encoding="utf-8")
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -10441,11 +10464,25 @@ class ZodRemediationPolicyTests(unittest.TestCase):
             cwd=REPOSITORY_ROOT,
         )
 
+    def retired(self) -> dict[str, Any]:
+        policy = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+        return next(
+            item
+            for item in policy["historical_remediations"]
+            if item["id"] == rel000.ZOD_REMEDIATION_ID
+        )
+
     def target_file(self, relative: str) -> bytes:
-        # The remediation is active, so its graph is the checkout's (as SEC-2026-14 did while
-        # PR #305 was open). Once a later change moves the graph, pin validated_target_sha
-        # and replay that commit instead.
-        return (REPOSITORY_ROOT / relative).read_bytes()
+        """The file exactly as it merged (validated_target_sha), not the checkout.
+
+        Later changes may move the checkout past this graph, so the regression suite replays
+        the head Foundation CI passed 13/13 on, whose tree is the merge commit's.
+        """
+
+        return subprocess.check_output(
+            ["git", "show", f"{self.retired()['validated_target_sha']}:{relative}"],
+            cwd=REPOSITORY_ROOT,
+        )
 
     def dependency_repo(self):
         """A repository at the authorized base web files, then the remediation's two files."""
@@ -10618,6 +10655,125 @@ class ZodRemediationPolicyTests(unittest.TestCase):
             authorization or self.authorization(),
             accepted,
         )
+
+    def test_merged_authorization_is_historical_and_not_active(self):
+        policy = rel000.load_remediation_policy(self.repository_policy_path)
+        retired = {item["id"]: item for item in policy["historical_remediations"]}[
+            rel000.ZOD_REMEDIATION_ID
+        ]
+        self.assertEqual("MERGED", retired["status"])
+        self.assertEqual(316, retired["tracked_pull_request"])
+        # The head Foundation CI passed 13/13 on; PR #316 merged it into main as 2f39bcc,
+        # whose tree is the same.
+        self.assertEqual(
+            "da7bfa128bd6164da5607a251d274fa0181433b5", retired["validated_target_sha"]
+        )
+        self.assertEqual(
+            retired["validated_target_sha"],
+            subprocess.check_output(
+                ["git", "rev-parse", f"{self.MERGE_COMMIT}^2"], cwd=REPOSITORY_ROOT, text=True
+            ).strip(),
+        )
+        self.assertEqual(
+            *(
+                subprocess.check_output(
+                    ["git", "rev-parse", f"{commit}^{{tree}}"], cwd=REPOSITORY_ROOT, text=True
+                ).strip()
+                for commit in (retired["validated_target_sha"], self.MERGE_COMMIT)
+            )
+        )
+        # The policy still loads, so the exact table, metadata line and braces base binding
+        # stay declared on the historical entry of this id.
+        self.assertEqual(
+            rel000.ZOD_LOCK_VERSION_REPLACEMENTS, retired["expected_lock_version_replacements"]
+        )
+        self.assertEqual(rel000.ZOD_OVERRIDE_ADDITIONS, retired["expected_override_additions"])
+        self.assertEqual(
+            rel000.ZOD_LOCK_METADATA_CHANGES, retired["expected_lock_metadata_changes"]
+        )
+        self.assertEqual(
+            rel000.ZOD_KNOWN_ADVISORY_BASE_BINDING, retired["known_advisory_base_binding"]
+        )
+        self.assertNotIn(
+            rel000.ZOD_REMEDIATION_ID, {item["id"] for item in policy["active_remediations"]}
+        )
+        self.assert_reason(
+            "REMEDIATION_ID_NOT_ACTIVE",
+            lambda: rel000.resolve_rel000_mode(
+                policy, "fix/security-2026-15-zod", rel000.ZOD_REMEDIATION_ID
+            ),
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(policy, "fix/security-2026-15-zod"),
+        )
+        # Retired with another binding or other metadata lines, the policy no longer loads.
+        for field, mutate in (
+            (
+                "known_advisory_base_binding",
+                lambda item: item["known_advisory_base_binding"].update(
+                    expected_lockfile_sha256="0" * 64
+                ),
+            ),
+            ("expected_lock_metadata_changes", lambda item: item["expected_lock_metadata_changes"].pop()),
+        ):
+            with self.subTest(field=field):
+                value = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+                for item in value["historical_remediations"]:
+                    if item["id"] == rel000.ZOD_REMEDIATION_ID:
+                        mutate(item)
+                path = self.root / "tampered-retired.json"
+                path.write_text(json.dumps(value), encoding="utf-8")
+                self.assert_reason(
+                    "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+                )
+
+    def test_normal_mode_judges_the_merged_table_clean_and_any_move_back_closed(self):
+        """Once retired, the merged graph is plain base content for normal release evidence."""
+
+        policy = rel000.load_remediation_policy(self.repository_policy_path)
+        # A later commit on top of the merged tree that leaves the web dependencies alone is
+        # clean. Were the withdrawn braces advisory reported again in both audits, it would be
+        # accepted on the rebound graph.
+        root, _, _ = self.dependency_repo()
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "merged"], cwd=root, check=True)
+        merged = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        (root / "README.md").write_text("unrelated\n", encoding="utf-8")
+        self.assertEqual(
+            "CLEAN",
+            rel000.validate_dependency_diff(
+                root, merged, rel000.NORMAL_RELEASE_EVIDENCE, None, []
+            )["dependency_diff_against_base"],
+        )
+        accepted = rel000.resolve_accepted_known_advisories(
+            root,
+            merged,
+            policy,
+            self.tracking(),
+            self.audit([self.braces_advisory()]),
+            self.audit([self.braces_advisory()]),
+            None,
+        )
+        self.assertEqual([rel000.BRACES_KNOWN_ADVISORY_ID], [item["remediation_id"] for item in accepted])
+        # Moving zod back to 4.4.3, or dropping its override, now fails closed: normal mode
+        # admits no dependency drift.
+        for label, relative, old, new in (
+            ("zod moved back", self.LOCK, "zod@4.6.6", "zod@4.4.3"),
+            ("override dropped", self.WORKSPACE, self.OVERRIDE, ""),
+        ):
+            with self.subTest(case=label):
+                path = root / relative
+                original = path.read_bytes()
+                self.rewrite(path, old, new, count=-1)
+                failure = self.assert_reason(
+                    "DEPENDENCY_FILES_CHANGED",
+                    lambda: rel000.validate_dependency_diff(
+                        root, merged, rel000.NORMAL_RELEASE_EVIDENCE, None, []
+                    ),
+                )
+                self.assertEqual([relative], failure.details["files"])
+                path.write_bytes(original)
 
     def test_policy_loads_and_mode_requires_exact_branch_id_and_base(self):
         policy = self.policy()
@@ -11585,19 +11741,30 @@ class ZodRemediationPolicyTests(unittest.TestCase):
         )
 
     def test_fixture_and_both_workflows_bind_issue_branch_and_remediation(self):
-        fixture = json.loads(
-            (REPOSITORY_ROOT / "tests/fixtures/rel-000/security-tracking.json").read_text(
-                encoding="utf-8"
-            )
-        )
+        # The retirement removed this binding from the checkout (K4: the line is back to its
+        # 9e55771 form); the tree PR #316 merged (validated_target_sha) carried it in the
+        # fixture and in both workflows.
+        fixture = json.loads(self.target_file("tests/fixtures/rel-000/security-tracking.json"))
         self.assertEqual(315, fixture["remediation_issues"][rel000.ZOD_REMEDIATION_ID])
         self.assertEqual({rel000.BRACES_KNOWN_ADVISORY_ID: 180}, fixture["known_advisory_issues"])
         for name in ("ci.yml", "pr-validation.yml"):
-            workflow = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            workflow = self.target_file(f".github/workflows/{name}").decode("utf-8")
             with self.subTest(workflow=name):
                 self.assertIn(
                     "github.head_ref == 'fix/security-2026-15-zod' && 'SEC-2026-15-ZOD'",
                     workflow,
+                )
+        checkout = json.loads(
+            (REPOSITORY_ROOT / "tests/fixtures/rel-000/security-tracking.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertNotIn(rel000.ZOD_REMEDIATION_ID, checkout["remediation_issues"])
+        for name in ("ci.yml", "pr-validation.yml"):
+            path = f".github/workflows/{name}"
+            with self.subTest(retired=name):
+                self.assertNotIn(
+                    "SEC-2026-15-ZOD", (REPOSITORY_ROOT / path).read_text(encoding="utf-8")
                 )
 
 
