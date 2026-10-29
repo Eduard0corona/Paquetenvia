@@ -541,6 +541,22 @@ avisos que esta misma tabla corrige, se agregan sin volver a preguntar. La tabla
   back-sync a `development` y la fila `SEC-2026-15-PNPM-REMEDIATION-2026-10-24` del decision-log en
   un PR normal a `development`.
 
+Historia de la remediación:
+
+- **Fusión.** Entró a `main` con #316 (merge `2f39bcc`), después de Foundation CI 13/13 en su
+  cabeza `da7bfa1`; el árbol de ambos commits es el mismo.
+- **Retiro en `main`.** Un PR pequeño a `main` la movió a `historical_remediations`, justo después
+  de SEC-2026-14, con `status` `MERGED`, `tracked_pull_request` 316 y `validated_target_sha`
+  `da7bfa1`, la cabeza que validó Foundation CI. También devolvió la línea `REL000_REMEDIATION_ID`
+  de ambos flujos y el fixture a su forma de `9e55771`. No tocó archivos normativos. Las pruebas de
+  SEC-2026-15 reproducen ese commit como la autorización activa que fue. La entrada retirada sigue
+  declarando la tabla exacta, la línea de metadatos y la vinculación base de braces, y la política
+  sólo carga con exactamente esos valores.
+- **Después del retiro.** El modo normal juzga el grafo fusionado como contenido de la base: un
+  cambio que no toca las dependencias web es `CLEAN`, braces se aceptaría sobre el grafo
+  revinculado si volviera a reportarse, y devolver `zod` a 4.4.3 o quitar su override falla
+  cerrado (`DEPENDENCY_FILES_CHANGED`). El back-sync `main` → `development` entra sin conflictos.
+
 En `development` las imágenes web ya sólo llevan dependencias de producción (#311), así que no
 incluyen `zod`. En `main` (`9e55771`) ese cambio aún no llegó: una imagen construida desde `main`
 incluye `zod` en `node_modules` y `next start` nunca lo carga.
