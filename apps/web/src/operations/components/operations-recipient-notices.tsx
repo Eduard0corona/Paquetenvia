@@ -142,8 +142,8 @@ export function RecipientNoticesView({
   return (
     <section aria-labelledby="recipient-notices-title" className="panel opsRecipientNotices">
       <h2 id="recipient-notices-title">{recipientNoticeTexts.title}</h2>
-      <p className="pageNote">{recipientNoticeTexts.notActiveYet}</p>
-      <p className="pageNote">{recipientNoticeTexts.quietHours}</p>
+      <p className="opsSummaryNote">{recipientNoticeTexts.notActiveYet}</p>
+      <p className="opsSummaryNote">{recipientNoticeTexts.quietHours}</p>
       {list.kind === "loaded" && (
         <>
           <ul>
