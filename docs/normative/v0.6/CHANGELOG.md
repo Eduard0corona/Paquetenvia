@@ -37,6 +37,30 @@
 - Todos los interruptores siguen apagados; GATE-004 y GATE-007 siguen abiertas. Nota:
   `docs/development/ntf-006-receipts-optouts-autoreply.md`.
 
+## Retiro del aviso conocido de braces (SEC-2026-10-BRACES-RETIREMENT-2026-10-29) — 2026-10-29
+
+- Respuestas literales del project owner (ronda O, pregunta O12, 2026-10-25; ronda P, preguntas P1, 2026-10-29, y P2,
+  2026-10-30), registradas en `decision-log.md` con sus contextos, los textos de las opciones y las opciones no elegidas
+  ("Dejarla", "Primero en main (ruta K4)", "Como las retiradas antiguas" y "Un estado nuevo (WITHDRAWN)"):
+  O12 "Retirar SEC-2026-10 después (Recommended)", P1 "A development, un solo PR (Recommended)" y
+  P2 "Como las retiradas recientes (Recommended)".
+- El motivo es el retiro del aviso en GitHub: `GHSA-vfj7-8cjw-p6xm` (`braces` 3.0.3, Issue #180) se retiró el
+  2026-10-23T12:53:02Z y ni el audit de npm ni osv.dev lo reportan. No se publicó `braces>=3.0.4`, la condición de salida
+  registrada, y ninguna dependencia cambia: `apps/web/pnpm-lock.yaml` sigue con `braces` 3.0.3.
+- REL-000: la autorización `SEC-2026-10-BRACES-DOS-TRACKED` pasa a `historical_remediations` con `status` `MERGED`,
+  `tracked_pull_request` 181 y `validated_target_sha` `b66d83c`, como SEC-2026-12 a SEC-2026-15. Aquí `MERGED` registra que
+  se fusionó #181, el PR que aceptó el aviso. Ningún otro valor registrado cambia, tampoco la condición de salida.
+- La línea `REL000_REMEDIATION_ID` de ambos flujos ya no nombra la rama de braces y el fixture de tracking queda sin Issues
+  de remediación ni de aviso conocido. `rel000.py` no cambia: si braces vuelve a aparecer en un audit, REL-000 falla
+  cerrado (`UNTRACKED_DEPENDENCY_ADVISORY` o `NEW_DEPENDENCY_ADVISORY`), y el modo normal sobre el lockfile actual sigue
+  `CLEAN`.
+- Las pruebas reproducen #181 y SEC-2026-11 a SEC-2026-15 con braces como la autorización activa que fue, cada una sobre el
+  grafo que declaraba su `validated_target_sha`. Nota: `docs/development/rel-000-internal-release.md`.
+- Un solo PR a `development`, como #292, con esta entrada y la fila del decision-log; sin back-sync. `main` conserva la
+  autorización hasta la próxima promoción. El owner cierra el Issue #180 después de la fusión.
+- Sin cambios en código de la aplicación, dependencias, lockfiles, migraciones, AI-04, AI-05, AI-06, AI-12, AI-18, roles ni
+  permisos.
+
 ## Remediación de seguridad pnpm: zod 4.6.6 (SEC-2026-15-PNPM-REMEDIATION-2026-10-24) — 2026-10-24
 
 - Respuesta literal del project owner (2026-10-24, ronda O, pregunta O1), registrada en `decision-log.md` con su

@@ -623,6 +623,53 @@ En `development` las imágenes web ya sólo llevan dependencias de producción (
 incluyen `zod`. En `main` (`9e55771`) ese cambio aún no llegó: una imagen construida desde `main`
 incluye `zod` en `node_modules` y `next start` nunca lo carga.
 
+### Retiro del aviso conocido de braces (SEC-2026-10)
+
+`SEC-2026-10-BRACES-DOS-TRACKED` (Issue #180, rama `fix/security-2026-10-braces-dos-tracked`, base
+`8100c87`) aceptaba `GHSA-vfj7-8cjw-p6xm` (`braces` 3.0.3, alto, sólo de desarrollo por
+`eslint-config-next` → `@next/eslint-plugin-next` → `fast-glob` → `micromatch` → `braces`), porque
+ninguna versión de `braces` lo corregía. Entró a `main` con #181 (merge `1799568`, el 2026-10-03; su
+cabeza `b66d83c` pasó sus 15 checks, REL-000 incluido, y tiene el mismo árbol). SEC-2026-11, SEC-2026-14
+y SEC-2026-15 revincularon después su ruta y su hash al lockfile que cada una generó.
+
+GitHub retiró el aviso el 2026-10-23T12:53:02Z; desde entonces ni el audit de npm ni osv.dev lo
+reportan. Su condición de salida (publicar `braces>=3.0.4`) nunca ocurrió y no hace falta mover
+ninguna dependencia: `apps/web/pnpm-lock.yaml` sigue con `braces` 3.0.3. El owner decidió retirar la
+autorización con un PR pequeño a `development`, como #292, sin back-sync, y registrarla como las
+retiradas recientes (fila `SEC-2026-10-BRACES-RETIREMENT-2026-10-29` del decision-log).
+
+- **Política.** La entrada pasó de `active_remediations` al final de `historical_remediations` con
+  `status` `MERGED`, `tracked_pull_request` 181 y `validated_target_sha` `b66d83c`, como SEC-2026-12 a
+  SEC-2026-15. Aquí `MERGED` registra que se fusionó el PR que aceptó el aviso (#181); el motivo del
+  retiro fue el retiro del aviso en GitHub, no una remediación. Ningún otro valor registrado cambia: el
+  aviso aceptado sigue declarando la ruta 16.4.1, el `expected_lockfile_sha256` `f944eecd…` y la
+  condición de salida original. Es la primera autorización de aviso conocido que se retira; la política
+  no tenía forma para ello y el owner eligió esta (P2).
+- **Flujos y fixture.** La línea `REL000_REMEDIATION_ID` de ambos flujos ya no nombra la rama de braces
+  (siguen idénticas) y `tests/fixtures/rel-000/security-tracking.json` deja `remediation_issues` y
+  `known_advisory_issues` vacíos, así que REL-000 no consulta ningún Issue de aviso conocido. El paso
+  que los consulta sigue en los flujos y funciona con la lista vacía.
+- **Si braces vuelve a aparecer.** `rel000.py` no cambia: sólo una autorización activa acepta un aviso
+  conocido, así que un audit que vuelva a reportar braces falla cerrado en modo normal:
+  `UNTRACKED_DEPENDENCY_ADVISORY` si está en ambos audits y `NEW_DEPENDENCY_ADVISORY` si sólo está en la
+  rama, aunque el Issue #180 siga abierto y se consulte. La rama de braces ya no activa el modo de
+  remediación (`REMEDIATION_ID_NOT_ACTIVE`). Volver a aceptarlo exigiría otra decisión del owner.
+- **Modo normal.** Un cambio que no toca las dependencias web sigue siendo `CLEAN` sobre el lockfile
+  actual, con audit cero y sin avisos aceptados.
+- **Réplicas.** Las pruebas reproducen braces como la autorización activa que fue, justo después de
+  SEC-2026-08, y cada réplica lo lee tal como lo declaraba su propio `validated_target_sha`:
+  - #181, sobre el grafo 16.3.6 (lockfile `a85a581a…`), con los archivos de `b66d83c`;
+  - SEC-2026-11, SEC-2026-12 y SEC-2026-13, sobre el grafo 16.3.8 (`336b1c82…`). Las de SEC-2026-12 y
+    SEC-2026-13 leían el lockfile del checkout; ahora leen el de su `validated_target_sha`, porque
+    nadie volverá a revincular braces;
+  - SEC-2026-14, sobre el grafo 16.4.1 (`3f5834c3…`), y SEC-2026-15, sobre `f944eecd…`.
+
+  La entrada retirada, sin los tres campos del retiro, es exactamente la autorización que acepta la
+  validación exacta de braces, y, salvo la ruta y el hash revinculados, la que validó #181.
+- **Ruta.** El PR va sólo a `development`. `main` conserva la autorización hasta la próxima promoción,
+  sin efecto porque el aviso ya no se reporta. El owner cierra el Issue #180 con la nota del retiro
+  después de la fusión.
+
 ## Admisión explícita de dependencias (GOV-DEPENDENCY-ADMISSION-001)
 
 Desde MVP-1 el owner admite dependencias nuevas una por una ("Admisión
