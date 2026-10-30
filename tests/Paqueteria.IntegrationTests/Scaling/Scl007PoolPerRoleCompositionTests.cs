@@ -58,11 +58,13 @@ public sealed class Scl007PoolPerRoleCompositionTests
         AssertPool(realtime, "scl007_realtime", 4);
 
         var contexts = AssertContextsUse(services, provider, application.DataSource);
+        // NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (AI-08 NTF-007): the recipient notice panel's tenant transactions run on
+        // the Notifications context, on the same shared pool.
         Assert.Equal(
             [
                 "CustodyDbContext", "DispatchDbContext", "DriversDbContext", "FinanceDbContext", "IdentityDbContext",
-                "IncidentsDbContext", "LocationsDbContext", "OrdersDbContext", "OrganizationsDbContext",
-                "PricingDbContext", "RoutingDbContext",
+                "IncidentsDbContext", "LocationsDbContext", "NotificationsDbContext", "OrdersDbContext",
+                "OrganizationsDbContext", "PricingDbContext", "RoutingDbContext",
             ],
             contexts);
     }

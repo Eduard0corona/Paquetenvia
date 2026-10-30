@@ -16,6 +16,7 @@ import {
   financeOperationsMatrix,
   screenOperationsMatrix,
   mayHandleExactCoordinates,
+  recipientNoticeOperationsMatrix,
   requiresMfa,
   resolveActiveRole,
   type CapabilityOperation,
@@ -95,6 +96,24 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
     expect(published.openIncident).toEqual(["DISPATCHER", "PLATFORM_ADMIN", "DRIVER"]);
     for (const operation of ["resolveIncident", "listIncidents", "getIncident", "listOrderProofs"] as const) {
       expect(published[operation], operation).toEqual([...screenOperationsMatrix[operation]]);
+      expect(requiresMfa("PLATFORM_ADMIN", operation), operation).toBe(true);
+      expect(requiresMfa("DISPATCHER", operation), operation).toBe(false);
+    }
+  });
+
+  it("mirrors AI-05 recipient_notice_operations with the tracking link rule (NTF-RECIPIENT-NOTICE-PANEL-2026-10-30)", () => {
+    const published = publishedSection("recipient_notice_operations", "\nx-pilot-contract-deltas:");
+    expect(published).toEqual({
+      listOrderRecipientNotices: ["DISPATCHER", "PLATFORM_ADMIN"],
+      stopOrderRecipientNotices: ["DISPATCHER", "PLATFORM_ADMIN"],
+    });
+    expect(recipientNoticeOperationsMatrix).toEqual(published);
+    expect(published.listOrderRecipientNotices).toEqual([...capabilityMatrix.issueTrackingLink]);
+    for (const operation of ["listOrderRecipientNotices", "stopOrderRecipientNotices"] as const) {
+      expect(canPerform("DISPATCHER", operation), operation).toBe(true);
+      expect(canPerform("PLATFORM_ADMIN", operation), operation).toBe(true);
+      for (const role of ["VIEWER", "DRIVER", "FINANCE", "ALLY_ADMIN", "BUSINESS_ADMIN", null])
+        expect(canPerform(role, operation), `${role} ${operation}`).toBe(false);
       expect(requiresMfa("PLATFORM_ADMIN", operation), operation).toBe(true);
       expect(requiresMfa("DISPATCHER", operation), operation).toBe(false);
     }

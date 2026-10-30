@@ -158,6 +158,19 @@ public static class DependencyInjection
                 LocationPiiProtectorKind.AzureKeyVault => serviceProvider.GetRequiredService<EnvelopeRecipientEmailOpener>(),
                 _ => serviceProvider.GetRequiredService<DisabledRecipientEmailOpener>(),
             });
+        // NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (T6 choice 12): "Detener avisos" opens the destination phone with the PII
+        // key the way it was protected, from the same bound option, like the e-mail above.
+        services.AddSingleton<DisabledRecipientPhoneOpener>();
+        services.AddSingleton<SyntheticRecipientPhoneOpener>();
+        services.AddSingleton(serviceProvider =>
+            new EnvelopeRecipientPhoneOpener(serviceProvider.GetRequiredService<IPiiEnvelopeProtector>()));
+        services.AddScoped<IRecipientPhoneOpener>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<LocationsOptions>>().Value.PiiProtector switch
+            {
+                LocationPiiProtectorKind.Mock => serviceProvider.GetRequiredService<SyntheticRecipientPhoneOpener>(),
+                LocationPiiProtectorKind.AzureKeyVault => serviceProvider.GetRequiredService<EnvelopeRecipientPhoneOpener>(),
+                _ => serviceProvider.GetRequiredService<DisabledRecipientPhoneOpener>(),
+            });
 
         services.AddSingleton<DisabledLocationService>();
         services.AddScoped<PostgreSqlLocationService>();

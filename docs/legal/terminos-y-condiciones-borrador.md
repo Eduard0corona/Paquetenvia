@@ -395,8 +395,9 @@ después del fin del envío y hoy no se borran.]**
 apagados y nada los usa. El personal puede ver y copiar el enlace de seguimiento de cada orden.
 
 El owner ya decidió cómo funcionarán cuando se construyan y se habiliten **[PENDIENTE: GATE-004 y GATE-007; de estas
-decisiones solo está construido el campo opcional del correo del destinatario (AI-08 NTF-002), y todas, salvo el texto
-del diálogo de "Detener avisos", ya están registradas en el decision log]**. Este borrador las recoge para que el abogado revise las obligaciones del Cliente:
+decisiones solo está construido el campo opcional del correo del destinatario (AI-08 NTF-002), y todas, incluido el
+texto del diálogo de "Detener avisos" (I4, registrada en NTF-RECIPIENT-NOTICE-PANEL-2026-10-30), ya están registradas en
+el decision log]**. Este borrador las recoge para que el abogado revise las obligaciones del Cliente:
 
 10.1. **Qué avisos.** Por WhatsApp: el enlace de seguimiento cuando la orden queda confirmada, "Va en camino" cuando el
 repartidor inicia el traslado, "No se pudo entregar" (sin el motivo; no se avisa si falla la recolección) y
@@ -457,9 +458,9 @@ estado. Hoy, por el enlace de seguimiento que le pase el personal.]**
 > "en el enlace de abajo" donde WhatsApp dice "con el botón Ver seguimiento" (E4-P14). Confirmaciones y permanencia de
 > la baja: AI-24 `recipient_notices.opt_out` (`confirmation` y `permanence`) y AI-08 NTF-006. Página de baja del
 > correo: AI-07 `/avisos/baja/:token` (abrirla no cambia nada; un botón da la baja). "Detener avisos" detiene
-> los dos canales del contacto de la orden (`opt_out.dispatcher`). El texto de su diálogo es la decisión I4, que se
-> aplica en AI-08 NTF-007 y todavía no está en el decision log; AI-07 (`/ops/orders/:id`, `recipient_notices.stop`)
-> solo pide que diga que el destinatario deja de recibir avisos de todas las organizaciones. Canales:
+> los dos canales del contacto de la orden (`opt_out.dispatcher`). El texto de su diálogo es la decisión I4, registrada
+> con su pregunta en NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (T1 "Así, como I4 (Recommended)") y aplicada en AI-08
+> NTF-007; AI-07 (`/ops/orders/:id`, `recipient_notices.texts.dialog`) la fija. Canales:
 > GATE-004-CHANNELS. Si la implementación cambia algo de esto, hay que revisar esta sección.
 
 ---
@@ -704,8 +705,8 @@ estos términos:]**
 4. Las condiciones de Meta (WhatsApp Business) sobre el permiso del destinatario, citadas solo como las describió la
    pregunta del owner E4-P1; no se abrieron sus políticas.
 5. Las decisiones E4 a E4-P16 están en el decision log (NTF-RECIPIENT-NOTICES-2026-10-20), pero todavía no en el
-   código; la I4 (el diálogo de "Detener avisos") está solo en las respuestas literales del owner. Si su implementación
-   cambia, la sección 10 cambia.
+   código; la I4 (el diálogo de "Detener avisos") quedó registrada en NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (T1). Si su
+   implementación cambia, la sección 10 cambia.
 6. Qué hará la Plataforma fuera del sistema: cobro del envío, entrega del efectivo al Cliente, atención de
    reclamaciones y copias de fotos. Nada de eso existe en el código.
 

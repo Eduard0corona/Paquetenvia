@@ -1971,7 +1971,7 @@ items:
   - no recipient stored or logged; rate limits; 404 when off
   approval_gate: GATE-004
 - id: NTF-007
-  decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner; E4-P8)
+  decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner; E4-P8) and NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (project owner; T1 to T6)
   epic: Operations UI
   release: MVP-1
   title: Panel de avisos al destinatario y "Detener avisos"
@@ -1985,12 +1985,14 @@ items:
   - "the order detail panel \"Avisos al destinatario\" with \"Detener avisos\" and its live update (AI-07 /ops/orders/:id recipient_notices)"
   acceptance_criteria:
   - 'DECIDED NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P8 "Las tres vías (Recommended)")'
+  - 'DECIDED NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (T1 "Así, como I4 (Recommended)", T2 "Sin hora, con nota (Recommended)", T3 "Mensaje y botón siempre (Recommended)", T4 "Panel con una línea (Recommended)", T5 "Aprobar estos textos (Recommended)", T6 "Aprobarlas todas (Recommended)") - T1 records I4: the ConfirmDialog of "Detener avisos" has the title and text the owner approved and the buttons Cancelar and Detener avisos, focus on Cancelar; the list answers no scheduled time and the panel states the 08:00 to 21:00 Mazatlan window (T2); after a stop the confirmation lives in memory and the button stays (T3); while notices are off the panel shows the fixed line and the button (T4); the es-MX texts come from one helper with a test that pins every string (T5); and the thirteen technical choices of T6'
   - DISPATCHER and PLATFORM_ADMIN with MFA of the owner organization only; a foreign or operated-only order is the uniform 404
   - no recipient value in any answer, audit row or log; the stop is idempotent and audited RECIPIENT_NOTICES_STOPPED
   required_tests:
   - authorization matrix (dispatcher, admin with MFA, other roles, foreign organization)
   - no recipient in the answer; idempotent stop
   - Vitest - the panel, the confirmation and the live update
+  - normative - the AI-05 part, the AI-07 texts, the AI-24 dispatcher view and the decision-log row of round T
   approval_gate: GATE-004
 - id: NTF-008
   decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner; E4-P2, E4-P7 and E4-P12)

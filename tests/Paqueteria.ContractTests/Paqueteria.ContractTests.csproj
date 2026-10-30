@@ -46,6 +46,7 @@
     <ProjectReference Include="..\..\src\Modules\Custody\Custody.Infrastructure\Custody.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Modules\Incidents\Incidents.Endpoints\Incidents.Endpoints.csproj" />
     <ProjectReference Include="..\..\src\Modules\Incidents\Incidents.Infrastructure\Incidents.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\src\Modules\Notifications\Notifications.Endpoints\Notifications.Endpoints.csproj" />
     <ProjectReference Include="..\..\src\Modules\Notifications\Notifications.Infrastructure\Notifications.Infrastructure.csproj" />
     <ProjectReference Include="..\..\src\Modules\Reporting\Reporting.Application\Reporting.Application.csproj" />
     <ProjectReference Include="..\..\src\Modules\Reporting\Reporting.Endpoints\Reporting.Endpoints.csproj" />

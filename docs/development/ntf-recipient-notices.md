@@ -15,8 +15,10 @@ la función de conteo de los topes ([`ntf-005-recipient-notice-delivery.md`](ntf
 ([`ntf-004-recipient-notice-producer.md`](ntf-004-recipient-notice-producer.md), `NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23`);
 con AI-08 NTF-006 (PR-5), los webhooks de Meta y Event Grid, los acuses, las bajas, la respuesta automática y la página
 de baja del correo ([`ntf-006-receipts-optouts-autoreply.md`](ntf-006-receipts-optouts-autoreply.md),
-`NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25`). Nada se envía ni está encendido.** GATE-004 y
-GATE-007 siguen abiertas; solo el cambio que registre sus filas de resolución enciende los avisos.
+`NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25`); con AI-08 NTF-007 (PR-6), el panel "Avisos al destinatario" del detalle de la
+orden y "Detener avisos" ([`ntf-007-recipient-notice-panel.md`](ntf-007-recipient-notice-panel.md),
+`NTF-RECIPIENT-NOTICE-PANEL-2026-10-30`). Nada se envía ni está encendido.** GATE-004 y GATE-007 siguen abiertas; solo
+el cambio que registre sus filas de resolución enciende los avisos.
 
 ## Arquitectura
 
@@ -120,7 +122,7 @@ SEC-2026-13 (back-sync #286): hasta entonces fallan al restaurar con NU1903.
 | PR-4 | NTF-005 | Envío en el Worker: rutas por canal, expansión, horario, caducidad, topes, lectores, descifrado en memoria, enlace, bajas, botón URL y respuesta rápida, correo con `List-Unsubscribe`, ids de decisión al iniciar | carril Notifications `20261023000100_AddRecipientNoticeCounts` (función de conteo de los topes y dos índices, L1; el `Down` solo los quita) | sí (todo apagado) |
 | PR-3 | NTF-004 | `RecipientNoticeRequestPolicy`, INSERT en ORD-002, permiso de WhatsApp en `createOrder` y CSV, tabla de permisos, casillas | carril Orders `20261023000200_AddRecipientNoticeConsents` (append-only; el `Down` se niega con filas) | sí, después de PR-4 |
 | PR-5 | NTF-006 | Webhooks de Meta y Event Grid, acuses, bajas, respuesta automática, baja por correo y su página, rol `paqueteria_notification_receipt_executor` con su DDL en AI-18 | carril Notifications `20261029000100_AddRecipientNoticeReceipts` (funciones del ejecutor y almacén de respuestas automáticas; el `Down` se niega con solicitudes) | sí (cargas firmadas falsas) |
-| PR-6 | NTF-007 | `listOrderRecipientNotices`, `stopOrderRecipientNotices`, panel y tiempo real | ninguna | sí |
+| PR-6 | NTF-007 | `listOrderRecipientNotices`, `stopOrderRecipientNotices`, panel y tiempo real; abridor del teléfono con la llave de datos personales en Locations (`NTF-RECIPIENT-NOTICE-PANEL-2026-10-30`, T1 a T6) | ninguna | sí |
 | PR-7 | NTF-008 | `apps.bicep` (secretos y roles del Worker y la API sobre la llave de avisos, rol de ACS, Event Grid, URLs), guardas del piloto, guía del owner | ninguna | solo después de que el owner cree secretos y recursos |
 | PR-8 | puerta | Filas de resolución de GATE-004 y GATE-007, interruptores, ids de decisión, nombres de plantillas aprobadas por Meta, textos de correo, `docs/legal` final | ninguna | no: necesita las dos puertas |
 
@@ -172,6 +174,10 @@ Orden: PR-0 → (PR-1 ∥ PR-2) → PR-4 → PR-3 → PR-5 → PR-6 → PR-7 →
   (`NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23`, N2).
 - La página de baja del correo y sus mensajes se revisaron en PR-5: el owner aprobó el botón "Dejar de recibir correos" y
   los cuatro mensajes (`NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25`, O9; AI-07 `/avisos/baja/:token`).
+- Los textos del panel "Avisos al destinatario" y el diálogo de "Detener avisos" se revisaron en PR-6: el owner registró
+  I4 con T1 y aprobó las etiquetas de T5 (`NTF-RECIPIENT-NOTICE-PANEL-2026-10-30`; AI-07 `/ops/orders/:id`
+  `recipient_notices.texts`). El cambio que cierre GATE-004 y GATE-007 quita la línea "Los avisos al destinatario todavía
+  no están activos." (T4).
 
 ## Costos (estimación del plan, 2026-10-19)
 
@@ -188,6 +194,10 @@ Con 20 entregas al día: unos 1,950 mensajes de WhatsApp al mes a USD 0.0085 (ut
   llega antes de liquidar el envío se ignora (O11 elección 6).
 - Órdenes confirmadas antes de encender no reciben el enlace; canceladas o devueltas no reciben aviso.
 - Una baja por error (BAJA, el enlace del correo o "Detener avisos") no se puede deshacer durante el piloto (E4-P16).
+- Desde PR-6, "Detener avisos" no cancela al instante: los avisos pendientes de ese contacto terminan `CANCELLED` con
+  `RECIPIENT_OPTED_OUT` cuando les toca salir; uno cuyo envío ya estaba tomado puede salir todavía. En desarrollo y
+  `DEV_SYNTHETIC` la baja cae sobre los marcadores comunes y silencia los avisos de prueba de ese ambiente hasta reiniciar
+  su base (T6, punto 11).
 
 ## Reversión
 

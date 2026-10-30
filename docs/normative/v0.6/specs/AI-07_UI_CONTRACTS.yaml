@@ -247,11 +247,11 @@ routes:
       recovery: refetched with the order; a failed read says the reason could not be read and never blocks
         "Siguiente paso"
     # NTF-RECIPIENT-NOTICES-2026-10-20 (project owner, E4 "Los 4 del plan (Recommended)" and E4-P8 "Las tres vías
-    # (Recommended)"): decided, not built yet; AI-08 NTF-007 builds it. REST is the source of truth and the backend and
-    # RLS remain the barrier.
+    # (Recommended)"): built by AI-08 NTF-007, with the texts and behaviour of NTF-RECIPIENT-NOTICE-PANEL-2026-10-30
+    # (project owner, round T, T1 to T6). REST is the source of truth and the backend and RLS remain the barrier.
     recipient_notices:
-      decision: NTF-RECIPIENT-NOTICES-2026-10-20
-      status: DECIDED, not implemented (AI-08 NTF-007)
+      decision: NTF-RECIPIENT-NOTICES-2026-10-20 and NTF-RECIPIENT-NOTICE-PANEL-2026-10-30
+      status: DECIDED, implemented (AI-08 NTF-007)
       title: Avisos al destinatario
       sources:
         list: GET /orders/{orderId}/recipient-notices (listOrderRecipientNotices)
@@ -264,11 +264,64 @@ routes:
         each in es-MX from one helper; times in America/Mazatlan
       - whether WhatsApp is allowed for the order (the consent box was ticked) and whether the recipient has an e-mail
       - never the phone, the e-mail, the link, a template parameter, an identifier or an internal code
+      - no scheduled time (T2 "Sin hora, con nota (Recommended)") - a pending notice reads "Pendiente" and the panel
+        always shows the fixed line of texts.quiet_hours
+      - an empty list reads texts.empty; a list that cannot be read reads texts.read_failure and is read again with the
+        order; a PLATFORM_ADMIN without MFA is offered the step-up back to the order
+      off: T4 "Panel con una línea (Recommended)" - while recipient notices are off (until the change that closes
+        GATE-004 and GATE-007) the panel still shows, always with the line of texts.not_active_yet and the button
+        available; that gate-closing change removes the line
       stop: the button "Detener avisos" (E4-P8, for a recipient who asks by phone) asks for confirmation (ConfirmDialog)
-        saying that the recipient stops receiving notices from every organization, then calls stopOrderRecipientNotices
-        with one Idempotency-Key reused for a retry of the same press; the list is fetched again after the answer
+        saying that the recipient stops receiving notices from every organization - the T1 dialog of texts below - then
+        calls stopOrderRecipientNotices with one Idempotency-Key reused for a retry of the same press; the list is
+        fetched again after the answer; it is offered even when the order has no notice and no consent box, because the
+        opt-out is global (T6 choice 13)
+      after_stop: T3 "Mensaje y botón siempre (Recommended)" - the answer shows texts.stopped in memory only and the
+        button stays available; pressing it again changes nothing for the recipient; after a reload, each notice the
+        Worker cancelled reads "El destinatario pidió no recibir avisos." (the panel cannot know later whether that
+        recipient opted out, and pending notices are cancelled when their send comes, not at once); a failed stop reads
+        texts.stop_failure
       realtime: a NotificationStatusChanged v2 notice for this order reloads the panel, gathered like the other order
-        notices of this screen
+        notices of this screen (T6 choice 9 - 250 ms, then at most one read every 3 seconds; the panel is also read with
+        each read of the order and after a stop, and pauses with the whole screen during the dashboard's 429 wait); the
+        dashboard and the inbox do not listen to it
+      # NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (project owner, T1 "Así, como I4 (Recommended)", recording I4, and T5
+      # "Aprobar estos textos (Recommended)"): every text below comes from one helper with a test that pins it.
+      texts:
+        decision: NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (T1 "Así, como I4 (Recommended)", T2 "Sin hora, con nota
+          (Recommended)", T4 "Panel con una línea (Recommended)", T5 "Aprobar estos textos (Recommended)")
+        helper: apps/web/src/operations/contracts/recipient-notices.ts
+        title: "Avisos al destinatario"
+        not_active_yet: "Los avisos al destinatario todavía no están activos."
+        quiet_hours: "Los avisos solo salen de 8:00 a 21:00, hora de Mazatlán"
+        notices: TRACKING_LINK "Enlace de seguimiento", IN_TRANSIT "Va en camino", DELIVERY_FAILED "No se pudo
+          entregar", DELIVERED "Entregado"
+        channels: WHATSAPP "WhatsApp", EMAIL "Correo"
+        statuses: PENDING "Pendiente", SENT "Enviado" (the service accepted it), DELIVERED "Recibido" (it reached the
+          phone or the mailbox), FAILED "No se pudo enviar", CANCELLED "No se envió"
+        row: '"{aviso} · {WhatsApp|Correo} — {estado}", the America/Mazatlan time of the last change, "Intentos: N" only
+          when there was more than one, and the reason below'
+        reasons: 'shown only for FAILED and CANCELLED - RECIPIENT_OPTED_OUT "El destinatario pidió no recibir avisos.",
+          NOTICE_SUPERSEDED "Ya no aplicaba cuando tocaba enviarlo.", NOTICE_STALE "Pasó demasiado tiempo para
+          enviarlo.", NOTICE_LIMIT_REACHED "Se alcanzó el límite de avisos.", MESSAGING_CHANNEL_DISABLED "Los avisos por
+          este medio están apagados.", MESSAGING_RECIPIENT_INVALID "No se pudo usar el teléfono." (WhatsApp) or "No se
+          pudo usar el correo." (e-mail), MESSAGING_RECIPIENT_UNDELIVERABLE "No llegó: el número no recibe WhatsApp."
+          (WhatsApp) or "No llegó: el correo rebotó." (e-mail), MESSAGING_POLICY_BLOCKED "El servicio de mensajes lo
+          bloqueó.", TRACKING_LINK_UNAVAILABLE "No había enlace de seguimiento vigente.", AMBIGUOUS_TIMEOUT "No se sabe si
+          llegó; no se reintenta para no duplicarlo.", MAX_ATTEMPTS_EXHAUSTED "Falló después de varios intentos.", and
+          every other code or none "Falla del servicio de mensajes."'
+        retrying: '"Reintentando", under a PENDING notice that already met a temporary failure'
+        consent: '"WhatsApp: permitido (se marcó la casilla)" or "WhatsApp: no permitido (no se marcó la casilla)"'
+        email: '"Correo del destinatario: registrado" or "Correo del destinatario: no registrado"'
+        empty: "Esta orden todavía no tiene avisos."
+        stopped: '"Listo. Se detuvieron los avisos por WhatsApp y correo." ("Listo. Se detuvieron los avisos por
+          WhatsApp." without an e-mail; "Listo. Se detuvieron los avisos por correo." when only the e-mail could be
+          used) and "Los avisos pendientes ya no se enviarán."'
+        stop_failure: "No pudimos detener los avisos. Intenta de nuevo."
+        read_failure: "No fue posible leer los avisos."
+        dialog: 'T1 - title "¿Detener avisos?", text "Orden {guía}. El destinatario dejará de recibir avisos de todas las
+          empresas. Durante el piloto no se puede deshacer.", buttons "Cancelar" and "Detener avisos", focus starting on
+          "Cancelar" (ConfirmDialog)'
     # SEC-004 (owner answers Q9, Q11, Q14; panel_rate_limit holds the common rules): the order detail refreshes itself.
     rate_limit:
       decision: SEC-004-PANEL-SCREENS-2026-10-13

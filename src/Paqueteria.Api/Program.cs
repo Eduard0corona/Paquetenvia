@@ -27,6 +27,7 @@ using Paqueteria.Hosting.Observability;
 using Locations.Endpoints;
 using Locations.Infrastructure;
 using Notifications.Endpoints;
+using Notifications.Infrastructure.RecipientNotices.Panel;
 using Notifications.Infrastructure.RecipientNotices.Webhooks;
 using Pricing.Endpoints;
 using Pricing.Infrastructure;
@@ -102,6 +103,9 @@ builder.Services.AddRoutingEndpoints();
 // 404) and the e-mail unsubscribe; only the wrap side of the recipient-notice key, never the Notifications lane.
 builder.Services.AddRecipientNoticeReceipts(builder.Configuration, builder.Environment);
 builder.Services.AddRecipientNoticeEndpoints();
+// NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (AI-08 NTF-007): the dispatcher's panel and "Detener avisos"; the destination
+// phone and e-mail are opened only with the PII key, through the Locations openers.
+builder.Services.AddRecipientNoticePanel(builder.Configuration);
 builder.Services.AddScoped<IOrganizationRequestSession, OrganizationRequestSessionAdapter>();
 builder.Services.AddIdentitySecurity(builder.Configuration, builder.Environment);
 builder.Services
@@ -199,6 +203,7 @@ app.MapCodEndpoints();
 app.MapFinancialsEndpoints();
 app.MapSettlementEndpoints();
 app.MapRecipientNoticeWebhookEndpoints();
+app.MapRecipientNoticePanelEndpoints();
 
 app.Run();
 

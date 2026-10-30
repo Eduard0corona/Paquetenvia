@@ -77,18 +77,31 @@ export const driverListOperationsMatrix = {
   listSettlementPayees: ["FINANCE", "PLATFORM_ADMIN"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
+/**
+ * AI-05 `x-capability-matrix.recipient_notice_operations` (NTF-RECIPIENT-NOTICES-2026-10-20 E4-P8 and
+ * NTF-RECIPIENT-NOTICE-PANEL-2026-10-30): the order detail panel "Avisos al destinatario" and its "Detener avisos"
+ * follow the tracking_link_operations rule - DISPATCHER, and PLATFORM_ADMIN with MFA, of the organization that owns
+ * the order only.
+ */
+export const recipientNoticeOperationsMatrix = {
+  listOrderRecipientNotices: ["DISPATCHER", "PLATFORM_ADMIN"],
+  stopOrderRecipientNotices: ["DISPATCHER", "PLATFORM_ADMIN"],
+} as const satisfies Readonly<Record<string, readonly string[]>>;
+
 const allOperations: Readonly<Record<string, readonly string[]>> = {
   ...capabilityMatrix,
   ...financeOperationsMatrix,
   ...screenOperationsMatrix,
   ...driverListOperationsMatrix,
+  ...recipientNoticeOperationsMatrix,
 };
 
 export type CapabilityOperation =
   | keyof typeof capabilityMatrix
   | keyof typeof financeOperationsMatrix
   | keyof typeof screenOperationsMatrix
-  | keyof typeof driverListOperationsMatrix;
+  | keyof typeof driverListOperationsMatrix
+  | keyof typeof recipientNoticeOperationsMatrix;
 
 /**
  * Operations that need a satisfied MFA challenge for a given role. D7-SETTLEMENT-MFA:
@@ -125,6 +138,8 @@ const mfaOperations: Readonly<Partial<Record<string, readonly CapabilityOperatio
     "transitionOrder",
     "listOrganizationDrivers",
     "listSettlementPayees",
+    "listOrderRecipientNotices",
+    "stopOrderRecipientNotices",
   ],
 };
 

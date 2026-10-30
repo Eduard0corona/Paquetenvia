@@ -1,5 +1,34 @@
 # Changelog
 
+## Avisos al destinatario: panel y "Detener avisos" (NTF-RECIPIENT-NOTICE-PANEL-2026-10-30, AI-08 NTF-007) — 2026-10-30
+
+- Respuestas literales del project owner (ronda T, preguntas T1 a T6, 2026-10-30), registradas en `decision-log.md` con
+  su contexto, los textos de las opciones, las vistas previas y las opciones no elegidas: T1 "Así, como I4
+  (Recommended)", T2 "Sin hora, con nota (Recommended)", T3 "Mensaje y botón siempre (Recommended)", T4 "Panel con una
+  línea (Recommended)", T5 "Aprobar estos textos (Recommended)" y T6 "Aprobarlas todas (Recommended)". T1 registra la
+  decisión I4 ("Sí, decirlo (Recommended)"), cuya pregunta original no se conservó. Es el PR-6 de la secuencia de
+  `docs/development/ntf-recipient-notices.md`; aplica además `NTF-RECIPIENT-NOTICES-2026-10-20` (E4-P8 y E4-P16).
+- AI-05 publica la parte NTF-007 (etiqueta Orders): `listOrderRecipientNotices` (los avisos de la orden por aviso y
+  canal, orden de creación y WhatsApp antes que correo, máximo 100, sin hora programada por T2, con `last_code` de un
+  conjunto cerrado explícito que incluye `MAX_ATTEMPTS_EXHAUSTED`, más `whatsapp_consent_attested` y `email_on_file`) y
+  `stopOrderRecipientNotices` (sin cuerpo, `Idempotency-Key` obligatoria; registra las bajas de WhatsApp y correo con
+  origen DISPATCHER, nombra los canales aunque ya estuvieran dados de baja, 409 `RECIPIENT_CONTACT_UNAVAILABLE` si
+  ningún contacto sirve, 503 sin la llave de datos personales o la de bajas). Ambas con `Cache-Control: no-store`, el
+  404 uniforme para una orden ajena, inexistente o solo operada, y la nueva sección `recipient_notice_operations` de
+  `x-capability-matrix` (DISPATCHER, y PLATFORM_ADMIN con MFA, de la empresa dueña). Sin límite nuevo de SEC-004.
+- El teléfono y el correo del destino se abren en memoria con la llave de datos personales de la API, fuera de toda
+  transacción abierta, mediante los abridores de Locations (nuevo `IRecipientPhoneOpener`, con modo de prueba y modo
+  apagado); la auditoría `RECIPIENT_NOTICES_STOPPED` lleva la clave de idempotencia y solo los canales. Sin migración ni
+  permisos nuevos; ningún flujo nuevo de AI-13 §4.
+- AI-07 `/ops/orders/:id` `recipient_notices` queda implementado, con su bloque `texts` (diálogo de T1, línea del horario
+  de T2, línea de avisos apagados de T4, etiquetas de T5) y el comportamiento después de detener (T3). El panel se lee
+  con cada lectura de la orden, después de detener y con cada `NotificationStatusChanged` v2 de la orden (250 ms y
+  espaciado de 3 s); el tablero y la bandeja no escuchan ese aviso. AI-24 `recipient_notices` registra NTF-007 y
+  `dispatcher_view` gana los campos de la lista, los pasos y la respuesta de la baja y la nota de los ambientes de prueba
+  (T6, punto 11). AI-08 NTF-007 gana su criterio `DECIDED`.
+- Todos los interruptores siguen apagados; GATE-004 y GATE-007 siguen abiertas. Nota:
+  `docs/development/ntf-007-recipient-notice-panel.md`.
+
 ## Avisos al destinatario: acuses, bajas y respuesta automática (NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25, AI-08 NTF-006) — 2026-10-25
 
 - Respuestas literales del project owner (ronda O, preguntas O2 a O11, 2026-10-24 y 2026-10-25), registradas en
