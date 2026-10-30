@@ -119,10 +119,20 @@ Otherwise the deploy job stops before logging in to Azure.
 - NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006): AI-18 declares `paqueteria_notification_receipt_executor
   NOLOGIN BYPASSRLS`, and the Notifications lane `20261029000100_AddRecipientNoticeReceipts` creates its five functions
   as that role. Like the auto-close executor, an Azure administrator creates it with SET for the deployment role before
-  the migration runs; until then the E-002 capability gate stops with
-  `E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles=paqueteria_notification_receipt_executor` before writing anything. The
-  role is never granted to the API, the Worker, the realtime login or an operator login. Its webhooks stay off
-  (uniform 404) until the gate-closing change.
+  the migration runs. The Notifications E-002 bridge runs only while the lane is Pending: it then checks that SET first
+  and, without it, stops with
+  `E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles=paqueteria_notification_receipt_executor; STOP_FOR_CONTRACT_REVIEW`
+  before writing anything. A database whose Notifications lane is already applied stops in that bridge with
+  `E002_ROUTINE_MAP_STATE_UNRESOLVED`, as before this change (the pilot database has not been deployed). The role is
+  never granted to the API, the Worker, the realtime login or an operator login. Its webhooks stay off (uniform 404)
+  until the gate-closing change.
+- NTF-006 configuration (key names only; values come from Key Vault or the environment, never from this guide):
+  `Messaging:WhatsApp:Webhook` (`Enabled`, `NumberSealer`, `AppSecret`, `PreviousAppSecret`, `VerifyToken`,
+  `PreviousVerifyToken`, `PhoneNumberId`), `Messaging:Email:Events` (`Enabled`, `SourceResourceId`, `Secret`,
+  `PreviousSecret`), the SEC-004 budgets `RateLimits:WhatsAppWebhookVerify`, `RateLimits:WhatsAppWebhook`,
+  `RateLimits:EmailEvents` and `RateLimits:RecipientUnsubscribe`. The API also uses
+  `PiiProtection:RecipientNoticeKey` (wrap only, to seal the automatic-reply number) and `ContactLookup:Keys` (the
+  opt-out hashes and the unsubscribe lookup).
 - `job-pv-pilot-logins` runs the new migrator command `runtime-logins`. It creates or re-keys
   `pv_pilot_api` → `paqueteria_app`, `pv_pilot_worker` → `paqueteria_worker` and `pv_pilot_realtime` →
   `paqueteria_realtime` as `LOGIN NOINHERIT NOBYPASSRLS` with exactly one membership. It receives

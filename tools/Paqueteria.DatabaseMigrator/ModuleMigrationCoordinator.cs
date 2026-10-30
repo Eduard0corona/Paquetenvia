@@ -2264,6 +2264,23 @@ internal sealed class ModuleMigrationCoordinator
                     "E002_ROUTINE_MAP_STATE_UNRESOLVED; Notifications changed before migration; STOP_FOR_CONTRACT_REVIEW");
             }
 
+            // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: the lane step 20261029000100_AddRecipientNoticeReceipts creates
+            // its five functions as the receipt executor (AI-18), so the deployment principal needs SET on it; an Azure
+            // administrator creates the role before the bridge runs. Nothing is written before this check.
+            stage = "capability-gate";
+            await using (var capability = new NpgsqlCommand("""
+                SELECT pg_catalog.to_regrole(@role) IS NOT NULL
+                   AND pg_catalog.pg_has_role(session_user,@role,'SET')
+                """, connection, transaction))
+            {
+                capability.Parameters.AddWithValue("role", AddRecipientNoticeReceipts.Role);
+                if (await capability.ExecuteScalarAsync(cancellationToken) is not true)
+                {
+                    throw new InvalidOperationException(
+                        $"E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles={AddRecipientNoticeReceipts.Role}; STOP_FOR_CONTRACT_REVIEW");
+                }
+            }
+
             stage = "grant-temporary-create";
             await using (var grant = new NpgsqlCommand("""
                 GRANT CREATE ON SCHEMA security,notifications TO paqueteria_outbox_executor

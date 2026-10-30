@@ -139,6 +139,30 @@ public sealed class RecipientNoticeReceiptsTests
         Assert.Empty(unconfigured.Messages);
     }
 
+    [Theory]
+    // An escaped lone surrogate parses as JSON but cannot be read as a string: in a value the readers use, in a value
+    // they never read and in a property name.
+    [InlineData("""{"object":"\uD800","entry":[]}""")]
+    [InlineData("""{"object":"whatsapp_business_account","entry":[],"extra":"\uDC00"}""")]
+    [InlineData("""{"object":"whatsapp_business_account","entry":[{"changes":[{"field":"messages","value":{"metadata":{"phone_number_id":"123456789012345"},"messages":[{"from":"520000000003","type":"text","text":{"body":"\uD800"}}]}}]}]}""")]
+    [InlineData("""{"object":"whatsapp_business_account","\uD800":1,"entry":[]}""")]
+    public void A_meta_body_with_an_unreadable_string_is_malformed_not_an_exception(string json)
+    {
+        Assert.False(MetaWhatsAppWebhookParser.TryParse(Utf8(json), PhoneNumberId, out var batch));
+        Assert.Same(MetaWhatsAppWebhookBatch.Empty, batch);
+    }
+
+    [Theory]
+    [InlineData("""[{"eventType":"\uD800","data":{}}]""")]
+    [InlineData("""[{"eventType":"Microsoft.EventGrid.SubscriptionValidationEvent","data":{"validationCode":"\uDBFF"}}]""")]
+    [InlineData("""[{"eventType":"Microsoft.EventGrid.SubscriptionValidationEvent","data":{"validationCode":"512d38b6-c7b8-40c8-89fe-f46f9e9622b6","\uD800x":"y"}}]""")]
+    public void An_event_grid_body_with_an_unreadable_string_is_malformed_not_an_exception(string json)
+    {
+        Assert.False(AcsEmailEventsParser.TryParse(Utf8(json), SourceResourceId, out var batch));
+        Assert.Null(batch.ValidationCode);
+        Assert.Empty(batch.Receipts);
+    }
+
     // ------------------------------------------------------------------ Event Grid reader (O6)
 
     [Theory]

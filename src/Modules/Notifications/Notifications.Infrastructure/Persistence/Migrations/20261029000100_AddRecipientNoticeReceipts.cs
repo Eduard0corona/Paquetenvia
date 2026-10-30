@@ -373,7 +373,8 @@ public sealed class AddRecipientNoticeReceipts : Migration
     /// <c>security.claim_recipient_auto_replies</c>: the Worker's lease on a batch of pending requests. First a request
     /// whose lease expired ends FAILED with AMBIGUOUS_TIMEOUT (it may have reached Meta, which has no idempotency) and a
     /// pending request older than 23 hours ends DROPPED with AUTO_REPLY_STALE, both with the number erased; then up to
-    /// <c>p_batch_size</c> pending requests are leased under one new lease token and returned.
+    /// <c>p_batch_size</c> pending requests (clamped to 1..200, as <c>security.claim_notifications_outbox</c>) are leased
+    /// under one new lease token and returned.
     /// </summary>
     public const string ClaimSql =
         """
@@ -385,7 +386,9 @@ public sealed class AddRecipientNoticeReceipts : Migration
         #variable_conflict use_column
         DECLARE v_now timestamptz; v_lease uuid; v_ids uuid[];
         BEGIN
-          IF p_batch_size IS NULL OR p_batch_size NOT BETWEEN 1 AND 100
+          -- The batch is clamped like claim_notifications_outbox (1 to 200, the range of Notifications:BatchSize), so
+          -- the clean-up below always runs.
+          IF p_batch_size IS NULL
              OR p_lease IS NULL OR p_lease<interval '10 seconds' OR p_lease>interval '10 minutes' THEN
             RAISE EXCEPTION 'invalid automatic reply claim' USING ERRCODE='22023';
           END IF;
@@ -401,7 +404,7 @@ public sealed class AddRecipientNoticeReceipts : Migration
             SELECT r.id FROM notifications.recipient_auto_replies r
             WHERE r.status='PENDING' AND r.available_at<=v_now
             ORDER BY r.received_at,r.id
-            LIMIT p_batch_size
+            LIMIT LEAST(GREATEST(p_batch_size,1),200)
             FOR UPDATE SKIP LOCKED);
           IF cardinality(v_ids)=0 THEN
             RETURN;

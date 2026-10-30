@@ -5,6 +5,7 @@ using System.Text.Json.Serialization;
 using System.Text.RegularExpressions;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
+using Microsoft.AspNetCore.Http.Metadata;
 using Microsoft.AspNetCore.Routing;
 using Microsoft.AspNetCore.WebUtilities;
 using Microsoft.Extensions.DependencyInjection;
@@ -82,6 +83,7 @@ public static partial class RecipientNoticeWebhookEndpoints
     {
         endpoints.MapGet(RecipientNoticeEndpointDefaults.WhatsAppWebhookPath, VerifyMetaAsync)
             .AllowAnonymous()
+            .WithMetadata(RecipientNoticeBodyLimit.WhatsApp)
             .RequireRateLimiting(RecipientNoticeEndpointDefaults.WhatsAppVerifyRateLimitPolicy)
             .WithName("verifyMetaWhatsAppWebhook")
             .WithTags("Messaging")
@@ -90,6 +92,7 @@ public static partial class RecipientNoticeWebhookEndpoints
             .ProducesProblem(StatusCodes.Status404NotFound);
         endpoints.MapPost(RecipientNoticeEndpointDefaults.WhatsAppWebhookPath, ReceiveMetaAsync)
             .AllowAnonymous()
+            .WithMetadata(RecipientNoticeBodyLimit.WhatsApp)
             .DisableAntiforgery()
             .RequireRateLimiting(RecipientNoticeEndpointDefaults.WhatsAppWebhookRateLimitPolicy)
             .WithName("receiveMetaWhatsAppWebhook")
@@ -102,6 +105,7 @@ public static partial class RecipientNoticeWebhookEndpoints
             .ProducesProblem(StatusCodes.Status503ServiceUnavailable);
         endpoints.MapPost(RecipientNoticeEndpointDefaults.EmailEventsPath, ReceiveEmailEventsAsync)
             .AllowAnonymous()
+            .WithMetadata(RecipientNoticeBodyLimit.EmailEvents)
             .DisableAntiforgery()
             .RequireRateLimiting(RecipientNoticeEndpointDefaults.EmailEventsRateLimitPolicy)
             .WithName("receiveAcsEmailEvents")
@@ -398,7 +402,15 @@ public static partial class RecipientNoticeWebhookEndpoints
         var buffer = new ArrayBufferWriter<byte>(Math.Min(limit, 8192) + 1);
         while (true)
         {
+            // Never more than limit + 1 bytes in all: one byte past the bound is enough to know it is too large, and the
+            // server bound the endpoint declares (RecipientNoticeBodyLimit) is never reached first.
             var memory = buffer.GetMemory(4096);
+            var room = limit + 1 - buffer.WrittenCount;
+            if (memory.Length > room)
+            {
+                memory = memory[..room];
+            }
+
             var read = await request.Body.ReadAsync(memory, cancellationToken);
             if (read == 0)
             {
@@ -462,4 +474,19 @@ public static partial class RecipientNoticeWebhookEndpoints
             await httpContext.Response.Body.WriteAsync(body, httpContext.RequestAborted);
         }
     }
+}
+
+/// <summary>
+/// The body bound a recipient notice webhook declares (<see cref="IRequestSizeLimitMetadata"/>): its own streaming cap
+/// plus the one byte that proves a body too large. The host's 1 MiB check then leaves the webhook alone, so a switched-off
+/// webhook answers its uniform 404 before any size check (AI-05 "before anything else", O4), and routing sets the server
+/// bound to this value.
+/// </summary>
+internal sealed class RecipientNoticeBodyLimit(long maxRequestBodySize) : IRequestSizeLimitMetadata
+{
+    public static RecipientNoticeBodyLimit WhatsApp { get; } = new(RecipientNoticeEndpointDefaults.WhatsAppBodyLimitBytes + 1L);
+
+    public static RecipientNoticeBodyLimit EmailEvents { get; } = new(RecipientNoticeEndpointDefaults.EmailEventsBodyLimitBytes + 1L);
+
+    public long? MaxRequestBodySize { get; } = maxRequestBodySize;
 }

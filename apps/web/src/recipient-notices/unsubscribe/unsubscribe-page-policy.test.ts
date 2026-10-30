@@ -1,6 +1,8 @@
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { describe, expect, it } from "vitest";
+import { skipsBffSessionBootstrap } from "../../auth/components/bff-session-bootstrap";
+import { registersServiceWorker } from "../../components/service-worker-registration";
 import { buildContentSecurityPolicy, isPrivateNoStorePath } from "../../security/security-headers";
 import { recipientUnsubscribeMetadata } from "./unsubscribe-metadata";
 import { recipientUnsubscribeTexts } from "./unsubscribe-texts";
@@ -49,6 +51,29 @@ describe("the e-mail unsubscribe page privacy policy (AI-07 /avisos/baja/:token)
     expect(read("src/app/avisos/baja/page.tsx")).toContain(
       "export const metadata: Metadata = recipientUnsubscribeMetadata;",
     );
+  });
+
+  it("keeps the root layout's session bootstrap, service worker and manifest off the page", () => {
+    // The root layout renders both components and the manifest link on every page; the page opts out of all three.
+    const layout = read("src/app/layout.tsx");
+    expect(layout).toContain("<ServiceWorkerRegistration />");
+    expect(layout).toContain("<BffSessionBootstrap />");
+    expect(layout).toContain('manifest: "/manifest.webmanifest",');
+    const token = "D".repeat(88);
+    for (const path of ["/avisos/baja", "/avisos/baja/", `/avisos/baja/${token}`, "/avisos/baja/x"]) {
+      expect(skipsBffSessionBootstrap(path), path).toBe(true);
+      expect(registersServiceWorker(path), path).toBe(false);
+    }
+    for (const path of ["/", "/ops", "/driver/stops", "/avisos", "/avisos/bajas"]) {
+      expect(skipsBffSessionBootstrap(path), path).toBe(false);
+      expect(registersServiceWorker(path), path).toBe(true);
+    }
+    expect(read("src/auth/components/bff-session-bootstrap.tsx")).toContain("if (skipsBffSessionBootstrap(path)) {");
+    expect(read("src/components/service-worker-registration.tsx")).toContain(
+      'if ("serviceWorker" in navigator && registersServiceWorker(window.location.pathname)) {',
+    );
+    // The page's metadata replaces the root manifest with null, so Next emits no manifest link for it.
+    expect(recipientUnsubscribeMetadata.manifest).toBeNull();
   });
 
   it("uses no session, cookie, browser storage or brand", () => {

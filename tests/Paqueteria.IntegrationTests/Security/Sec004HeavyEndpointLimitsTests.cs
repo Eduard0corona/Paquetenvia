@@ -434,6 +434,47 @@ public sealed class Sec004HeavyEndpointLimitsTests
     }
 
     [Fact]
+    public void The_recipient_notice_limits_have_the_owners_numbers_in_the_shipped_configuration()
+    {
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 O3 "Los propuestos (Recommended)": per client network and 60 s,
+        // verifyMetaWhatsAppWebhook 10, receiveMetaWhatsAppWebhook 300, receiveAcsEmailEvents 120 and
+        // unsubscribeRecipientNotices 20. The shipped appsettings.json carries them, the composed registry applies them
+        // and the code defaults are the same numbers.
+        var shipped = new ConfigurationBuilder()
+            .AddJsonFile(Path.Combine(
+                Paqueteria.Infrastructure.Database.Baseline.RepositoryRootLocator.Find(AppContext.BaseDirectory), "src", "Paqueteria.Api", "appsettings.json"))
+            .Build();
+        var expected = new (string Key, string Policy, int Limit)[]
+        {
+            ("WhatsAppWebhookVerify", global::Notifications.Endpoints.RecipientNoticeEndpointDefaults.WhatsAppVerifyRateLimitPolicy, 10),
+            ("WhatsAppWebhook", global::Notifications.Endpoints.RecipientNoticeEndpointDefaults.WhatsAppWebhookRateLimitPolicy, 300),
+            ("EmailEvents", global::Notifications.Endpoints.RecipientNoticeEndpointDefaults.EmailEventsRateLimitPolicy, 120),
+            ("RecipientUnsubscribe", global::Notifications.Endpoints.RecipientNoticeEndpointDefaults.UnsubscribeRateLimitPolicy, 20),
+        };
+        using var host = new DeployedConfigurationFactory();
+        var registry = host.Services.GetRequiredService<RateLimitPolicyRegistry>();
+        var defaults = new Paqueteria.Api.Http.ApiRateLimitOptions();
+        foreach (var (key, name, limit) in expected)
+        {
+            Assert.Equal(limit.ToString(CultureInfo.InvariantCulture), shipped[$"RateLimits:{key}:PermitLimit"]);
+            Assert.Equal("60", shipped[$"RateLimits:{key}:WindowSeconds"]);
+            var policy = Assert.IsType<RateLimitPolicy>(registry.Find(name));
+            Assert.Equal(RateLimitPartitionKind.ClientNetwork, policy.Partition);
+            Assert.Equal(new FixedWindowLimit(limit, TimeSpan.FromSeconds(60)), policy.Limit(host.Services));
+            Assert.Null(policy.SharesWindowOf);
+            Assert.Null(policy.InFlightLimit);
+        }
+
+        Assert.Equal(
+            [10, 300, 120, 20],
+            new[] { defaults.WhatsAppWebhookVerify, defaults.WhatsAppWebhook, defaults.EmailEvents, defaults.RecipientUnsubscribe }
+                .Select(setting => setting.PermitLimit));
+        // O4: both webhooks are off as shipped, so their policies spend nothing; the unsubscribe has no switch.
+        Assert.All(expected.Take(3), item => Assert.False(registry.Find(item.Policy)!.IsActive!(host.Services)));
+        Assert.Null(registry.Find(expected[3].Policy)!.IsActive);
+    }
+
+    [Fact]
     public async Task The_summary_logs_one_line_per_rejecting_policy_with_registry_names_only()
     {
         var logs = new StructuredLogs();

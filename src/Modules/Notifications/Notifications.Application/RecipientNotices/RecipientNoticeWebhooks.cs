@@ -138,7 +138,7 @@ public static partial class MetaWhatsAppWebhookParser
         using (document)
         {
             var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Object)
+            if (root.ValueKind != JsonValueKind.Object || !WebhookJson.HasReadableStrings(root))
             {
                 return false;
             }
@@ -287,6 +287,52 @@ public static partial class MetaWhatsAppWebhookParser
 }
 
 /// <summary>
+/// The JSON rule both webhook readers share: JSON admits an escaped lone surrogate (<c>"\uD800"</c>) that
+/// System.Text.Json parses but cannot read as a string. A body with any such string, as a property name or a value, is
+/// malformed (the caller answers 400) instead of an exception and a 500.
+/// </summary>
+internal static class WebhookJson
+{
+    internal static bool HasReadableStrings(JsonElement element)
+    {
+        try
+        {
+            ReadEveryString(element);
+            return true;
+        }
+        catch (InvalidOperationException)
+        {
+            return false;
+        }
+    }
+
+    private static void ReadEveryString(JsonElement element)
+    {
+        switch (element.ValueKind)
+        {
+            case JsonValueKind.String:
+                _ = element.GetString();
+                break;
+            case JsonValueKind.Object:
+                foreach (var property in element.EnumerateObject())
+                {
+                    _ = property.Name;
+                    ReadEveryString(property.Value);
+                }
+
+                break;
+            case JsonValueKind.Array:
+                foreach (var item in element.EnumerateArray())
+                {
+                    ReadEveryString(item);
+                }
+
+                break;
+        }
+    }
+}
+
+/// <summary>
 /// AI-05 <c>receiveAcsEmailEvents</c> (AI-24 <c>recipient_notices.receipts.email</c>; O6 "Cuarentena = bloqueado; Expanded
 /// se ignora (Recommended)"): reads an Event Grid event schema body, an array of events. It is not an array: the caller
 /// answers 400. A <c>Microsoft.EventGrid.SubscriptionValidationEvent</c> gives the handshake code. Each
@@ -317,7 +363,7 @@ public static partial class AcsEmailEventsParser
         using (document)
         {
             var root = document.RootElement;
-            if (root.ValueKind != JsonValueKind.Array)
+            if (root.ValueKind != JsonValueKind.Array || !WebhookJson.HasReadableStrings(root))
             {
                 return false;
             }

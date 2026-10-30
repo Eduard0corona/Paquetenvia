@@ -320,6 +320,51 @@ public sealed class RecipientNoticeReceiptsPostgreSqlContractTests(PostgreSqlCon
     }
 
     [PostgreSqlContractFact]
+    public async Task Every_valid_batch_size_claims_after_the_clean_up_and_the_batch_is_clamped_to_200()
+    {
+        // Notifications:BatchSize admits 1 to 200 and the dispatcher passes it unchanged: the claim clamps the batch like
+        // security.claim_notifications_outbox instead of refusing it, so the expired-lease and stale clean-up always runs.
+        await DrainAutoRepliesAsync();
+        var store = ApiStore();
+        var worker = WorkerStore();
+        var now = DateTimeOffset.UtcNow;
+        Assert.Equal(RecipientInboundResult.AutoReplyRequested, await store.RecordWhatsAppInboundAsync(Inbound([Hash(1)], false, now.AddMinutes(-3)), CancellationToken.None));
+        var expired = Assert.Single(await worker.ClaimAutoRepliesAsync(1, TimeSpan.FromMinutes(1), CancellationToken.None));
+        await ExecuteAdminAsync(
+            "UPDATE notifications.recipient_auto_replies SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=@id",
+            new NpgsqlParameter("id", expired.RequestId));
+        var stale = new[] { Hash(1) };
+        Assert.Equal(RecipientInboundResult.AutoReplyRequested, await store.RecordWhatsAppInboundAsync(Inbound(stale, false, now.AddMinutes(-2)), CancellationToken.None));
+        var staleId = await AdminScalarAsync<Guid>(
+            $"SELECT id FROM notifications.recipient_auto_replies WHERE contact_hash='\\x{Convert.ToHexStringLower(stale[0].Hash)}'");
+        await ExecuteAdminAsync(
+            "UPDATE notifications.recipient_auto_replies SET received_at=clock_timestamp()-interval '23 hours 1 minute' WHERE id=@id",
+            new NpgsqlParameter("id", staleId));
+        var fresh = new[] { Hash(1) };
+        Assert.Equal(RecipientInboundResult.AutoReplyRequested, await store.RecordWhatsAppInboundAsync(Inbound(fresh, false, now), CancellationToken.None));
+
+        var claimed = Assert.Single(await worker.ClaimAutoRepliesAsync(150, TimeSpan.FromMinutes(1), CancellationToken.None));
+        Assert.NotEqual(expired.RequestId, claimed.RequestId);
+        Assert.NotEqual(staleId, claimed.RequestId);
+        Assert.Equal("FAILED:1:AMBIGUOUS_TIMEOUT:number=false:settled=true", await AutoReplyStateAsync(expired.RequestId));
+        Assert.Equal("DROPPED:0:AUTO_REPLY_STALE:number=false:settled=true", await AutoReplyStateAsync(staleId));
+        Assert.True(await worker.SettleAutoReplyAsync(claimed, RecipientAutoReplyOutcome.Sent, MessagingResultCodes.SyntheticAccepted, null, CancellationToken.None));
+
+        // 201 pending requests: the largest valid batch (200) and a larger argument both lease at most 200.
+        await ExecuteAdminAsync(
+            """
+            INSERT INTO notifications.recipient_auto_replies(
+              id,kind,contact_hash,contact_key_version,sealed_number,number_key_version,received_at,status,attempts,available_at)
+            SELECT gen_random_uuid(),'AUTO_REPLY',extensions.gen_random_bytes(32),1,decode('01','hex'),'ntf006-auto-reply-mock-v1',
+              clock_timestamp(),'PENDING',0,clock_timestamp()
+            FROM generate_series(1,201)
+            """);
+        Assert.Equal(200, (await worker.ClaimAutoRepliesAsync(500, TimeSpan.FromMinutes(1), CancellationToken.None)).Count);
+        Assert.Single(await worker.ClaimAutoRepliesAsync(200, TimeSpan.FromMinutes(1), CancellationToken.None));
+        await DrainAutoRepliesAsync();
+    }
+
+    [PostgreSqlContractFact]
     public async Task The_unsubscribe_reads_only_the_email_copy_of_that_organizations_email_notice()
     {
         await using var admin = await fixture.AdminDataSource.OpenConnectionAsync();

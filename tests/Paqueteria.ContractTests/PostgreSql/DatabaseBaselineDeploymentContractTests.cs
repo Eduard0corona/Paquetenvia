@@ -1284,6 +1284,50 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
                 .Single(state => state.Module == "Orders").Status;
     }
 
+    [PostgreSqlContractFact]
+    public async Task Azure_ownership_bridge_stops_the_notifications_lane_without_set_authority_over_the_receipt_executor()
+    {
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: the receipt step creates its functions as
+        // paqueteria_notification_receipt_executor, so the Notifications bridge (from Pending) checks SET over it first.
+        await using var environment = await new AzureLikeEnvironment(fixture).InitializeAsync("bridgentfreceipts");
+        var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+        await new DatabaseBaselineDeployer().ApplyAsync(baseline, environment.DeploymentConnectionString, ownershipBridge: Bridge);
+        var coordinator = new ModuleMigrationCoordinator();
+        Assert.Equal("PENDING", await NotificationsLaneAsync());
+
+        await environment.AdminExecuteAsync(
+            $"REVOKE SET OPTION FOR paqueteria_notification_receipt_executor FROM {environment.Login}");
+        var capability = await Assert.ThrowsAsync<InvalidOperationException>(() =>
+            coordinator.ApplyAsync(environment.DeploymentConnectionString, CancellationToken.None, azureOwnershipBridge: true));
+        Assert.Equal(
+            "E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles=paqueteria_notification_receipt_executor; STOP_FOR_CONTRACT_REVIEW",
+            capability.Message);
+        // Nothing of the lane was written: still Pending, no store, no temporary CREATE left behind.
+        Assert.Equal("PENDING", await NotificationsLaneAsync());
+        Assert.True(await environment.ScalarAsync("""
+            SELECT to_regclass('notifications.recipient_auto_replies') IS NULL
+               AND to_regprocedure('security.record_messaging_receipt(text,text,text,text,timestamptz)') IS NULL
+               AND NOT has_schema_privilege('paqueteria_outbox_executor','security','CREATE')
+               AND NOT has_schema_privilege('paqueteria_outbox_executor','notifications','CREATE')
+            """));
+
+        await environment.AdminExecuteAsync(
+            $"GRANT paqueteria_notification_receipt_executor TO {environment.Login} WITH SET TRUE");
+        await coordinator.ApplyAsync(environment.DeploymentConnectionString, CancellationToken.None, azureOwnershipBridge: true);
+        Assert.All(await coordinator.AssertAsync(environment.DeploymentConnectionString, CancellationToken.None),
+            state => Assert.Equal("APPLIED", state.Status));
+        Assert.Equal(
+            "paqueteria_notification_receipt_executor",
+            await environment.TextAsync(
+                "SELECT pg_get_userbyid(proowner) FROM pg_proc WHERE oid='security.record_messaging_receipt(text,text,text,text,timestamptz)'::regprocedure"));
+        Assert.False(await environment.ScalarAsync(
+            "SELECT has_schema_privilege('paqueteria_notification_receipt_executor','security','CREATE')"));
+
+        async Task<string> NotificationsLaneAsync() =>
+            (await coordinator.PlanAsync(environment.DeploymentConnectionString, CancellationToken.None))
+                .Single(state => state.Module == "Notifications").Status;
+    }
+
     private static PostgresException FindPostgresException(Exception exception)
     {
         for (Exception? current = exception; current is not null; current = current.InnerException)

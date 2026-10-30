@@ -12,6 +12,18 @@ AI-08 NTF-006.
 por correo no tiene interruptor (O4): sin `ContactLookup:Keys` todo enlace es el 404 uniforme. GATE-004 y GATE-007
 siguen abiertas.
 
+## Configuración (solo nombres de llave)
+
+Los valores vienen de Key Vault o del entorno (NTF-008); ninguno se escribe en este documento ni en un log.
+
+- `Messaging:WhatsApp:Webhook`: `Enabled`, `NumberSealer` (`Disabled`, `Mock` o `AzureKeyVault`), `AppSecret` y
+  `PreviousAppSecret`, `VerifyToken` y `PreviousVerifyToken`, `PhoneNumberId`.
+- `Messaging:Email:Events`: `Enabled`, `SourceResourceId`, `Secret` y `PreviousSecret`.
+- SEC-004 (O3): `RateLimits:WhatsAppWebhookVerify`, `RateLimits:WhatsAppWebhook`, `RateLimits:EmailEvents` y
+  `RateLimits:RecipientUnsubscribe`, cada una con `PermitLimit` y `WindowSeconds`.
+- La API usa además `PiiProtection:RecipientNoticeKey` (solo envolver, para sellar el número de la respuesta automática)
+  y `ContactLookup:Keys` (los hash de las bajas y la búsqueda de la baja por correo).
+
 ## Superficie HTTP (API)
 
 Proyecto nuevo `Notifications.Endpoints` (capa Endpoints de AI-13 §1). Las cuatro operaciones son anónimas (sin sesión,
@@ -26,7 +38,11 @@ token, un secreto, una referencia o un texto recibido.
 | `unsubscribeRecipientNotices` | `POST /api/v1/recipient-notices/unsubscribe/{token}` | 20, con el 429 uniforme de `publicTracking` | cuerpo vacío, `List-Unsubscribe=One-Click` (formulario o multipart) o `{}` (si no, 400; más de 1 KiB, 413); 204 también si ya estaba; 404 y 503 uniformes sin `traceId`; sin GET ni redirección |
 
 - O4: mientras un webhook está apagado responde siempre el 404 uniforme y nunca 429: su política de SEC-004 tiene
-  `RateLimitPolicy.IsActive`, y una petición a un webhook apagado cae en la partición sin límite del registro.
+  `RateLimitPolicy.IsActive`, y una petición a un webhook apagado cae en la partición sin límite del registro. Tampoco
+  responde 413 por el límite de 1 MiB del host: cada webhook declara su propio límite (`IRequestSizeLimitMetadata`, su
+  tope más un byte), así que nada corre antes del interruptor.
+- Un cuerpo JSON con una cadena que no se puede leer (un sustituto suelto escapado, `"\uD800"`) es un cuerpo mal formado
+  (400) en ambos lectores, también en el handshake anónimo de Event Grid; nunca un 500.
 - O11 elección 7: el token de baja (ruta) y toda la consulta de la verificación (`hub.verify_token`) se quitan del
   destino de la petición antes de que el hosting lo registre (`IRequestTargetRedactor`); cada operación lee el original
   de una característica de la petición.
@@ -58,7 +74,8 @@ token, un secreto, una referencia o un texto recibido.
 ## Worker: el almacén de respuestas automáticas
 
 `RecipientAutoReplyDispatcher` (en el carril Notifications, con su `Provider`, lote, lease y espera adaptativa; una
-traza raíz por ciclo) toma lotes con `security.claim_recipient_auto_replies` (un `lease_token` por lote) y cada
+traza raíz por ciclo) toma lotes con `security.claim_recipient_auto_replies` (un `lease_token` por lote; el lote se
+acota a 1..200 como `security.claim_notifications_outbox`, el rango de `Notifications:BatchSize`) y cada
 solicitud se resuelve en `RecipientAutoReplyProcessor`, sin transacción abierta durante la llamada:
 
 - Avisos o WhatsApp apagados: `DROPPED` con `MESSAGING_CHANNEL_DISABLED`, sin llamada y con el número borrado (O7).
@@ -74,7 +91,10 @@ solicitud se resuelve en `RecipientAutoReplyProcessor`, sin transacción abierta
 Ida, vuelta e ida probadas en PostgreSQL 18 y PostGIS 3.6 (`NotificationsMigrationGuardPostgreSqlTests`):
 
 - El rol `paqueteria_notification_receipt_executor` es DDL de AI-18 (NOLOGIN BYPASSRLS, revocado de `paqueteria_app`,
-  `paqueteria_worker` y `paqueteria_realtime`); el paso lo crea idempotente para instalaciones previas.
+  `paqueteria_worker` y `paqueteria_realtime`); el paso lo crea idempotente para instalaciones previas. En Azure, el
+  puente E-002 del carril (solo desde Pending) comprueba primero SET sobre el rol y sin él se detiene con
+  `E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles=paqueteria_notification_receipt_executor` sin escribir nada; un carril ya
+  aplicado se detiene con `E002_ROUTINE_MAP_STATE_UNRESOLVED`, como antes.
 - `notifications.recipient_auto_replies` (AI-06, byte a byte), FORCE RLS sin política y sin privilegios para los roles
   de runtime.
 - Cinco funciones del ejecutor, SECURITY DEFINER con `search_path` fijo, sin SQL dinámico ni RETURNING: tres para
@@ -90,7 +110,9 @@ Página pública con el encabezado "Seguimiento de envío", el botón "Dejar de 
 O9. Abrirla no hace nada; el botón manda `{}` una vez, sin credenciales, referrer ni caché, y nunca sigue una
 redirección. El token se lee solo en el navegador (la reescritura `/avisos/baja/:token` → `/avisos/baja` sirve una página
 genérica), no se registra en logs de Next, la página es `no-store`, `noindex`, sin manifiesto, sin almacenamiento y el
-Service Worker la deja solo en red. El aviso de espera es el común de SEC-004.
+Service Worker la deja solo en red. Los componentes del layout raíz no la tocan: `BffSessionBootstrap` no consulta la
+sesión privada (como en `/track`) y `ServiceWorkerRegistration` no registra el Service Worker en esa ruta. El aviso de
+espera es el común de SEC-004.
 
 ## Pruebas
 

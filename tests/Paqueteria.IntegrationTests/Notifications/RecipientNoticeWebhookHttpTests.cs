@@ -80,6 +80,30 @@ public sealed class RecipientNoticeWebhookHttpTests
             Assert.Equal(HttpStatusCode.NotFound, events.StatusCode);
         }
 
+        // A declared body above the host's 1 MiB bound is still the uniform 404, not 413: the webhooks declare their own
+        // bound, so nothing runs before the switch (AI-05 "before anything else").
+        var huge = new byte[2_000_000];
+        using (var verifyHuge = Request(HttpMethod.Get, Verification(VerifyToken), "192.0.2.13"))
+        {
+            verifyHuge.Content = new ByteArrayContent(huge);
+            using var response = await client.SendAsync(verifyHuge);
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        }
+
+        using (var metaHuge = await client.SendAsync(MetaRequest(huge, Signature(AppSecret, huge), "192.0.2.13")))
+        {
+            Assert.Equal(HttpStatusCode.NotFound, metaHuge.StatusCode);
+        }
+
+        using (var eventsHuge = Request(HttpMethod.Post, EventsPath, "192.0.2.13"))
+        {
+            eventsHuge.Content = new ByteArrayContent(huge);
+            eventsHuge.Content.Headers.ContentType = new MediaTypeHeaderValue("application/json");
+            eventsHuge.Headers.Add("X-Paquetenvia-Event-Secret", EventSecret);
+            using var response = await client.SendAsync(eventsHuge);
+            Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+        }
+
         Assert.Equal(0, factory.Store.Calls);
     }
 
@@ -287,6 +311,40 @@ public sealed class RecipientNoticeWebhookHttpTests
 
         Assert.Equal(calls, factory.Store.Calls);
         AssertNoSecretLogged(factory, EventSecret, PreviousEventSecret, SyntheticEmail);
+    }
+
+    [Fact]
+    public async Task A_body_with_an_unreadable_string_is_a_400_on_the_anonymous_handshake_and_behind_the_signature()
+    {
+        // An escaped lone surrogate parses as JSON but cannot be read as a string: the anonymous Event Grid handshake
+        // (no secret) and a validly signed Meta body answer 400, never 500, and log no error.
+        await using var factory = new RecipientNoticeFactory(enabled: true);
+        using var client = factory.CreateClient(new WebApplicationFactoryClientOptions { AllowAutoRedirect = false });
+
+        var handshake = EventsRequest("""[{"eventType":"\uD800","data":{}}]""", secret: null, "198.51.100.70");
+        handshake.Headers.Add("aeg-event-type", "SubscriptionValidation");
+        using (var answer = await client.SendAsync(handshake))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, answer.StatusCode);
+        }
+
+        using (var delivery = await client.SendAsync(EventsRequest(
+            """[{"eventType":"Microsoft.Communication.EmailDeliveryReportReceived","data":{"messageId":"\uDC00"}}]""",
+            EventSecret,
+            "198.51.100.71")))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, delivery.StatusCode);
+        }
+
+        var meta = Encoding.UTF8.GetBytes("""{"object":"whatsapp_business_account","entry":[],"extra":"\uD800"}""");
+        using (var signed = await client.SendAsync(MetaRequest(meta, Signature(AppSecret, meta), "203.0.113.70")))
+        {
+            Assert.Equal(HttpStatusCode.BadRequest, signed.StatusCode);
+        }
+
+        Assert.Equal(0, factory.Store.Calls);
+        Assert.DoesNotContain(factory.Logs.Entries, entry =>
+            entry.Contains(" Error ", StringComparison.Ordinal) || entry.Contains(" Critical ", StringComparison.Ordinal));
     }
 
     // ------------------------------------------------------------------ the e-mail unsubscribe (O9, O11 choices 1 and 7)
