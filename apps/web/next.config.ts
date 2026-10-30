@@ -180,7 +180,8 @@ const nextConfig: NextConfig = {
   agentRules: false,
   logging: {
     incomingRequests: {
-      ignore: [/^\/track(?:\/|$)/],
+      // The tracking token and the e-mail unsubscribe token (AI-07 /avisos/baja/:token) never reach a log line.
+      ignore: [/^\/track(?:\/|$)/, /^\/avisos\/baja(?:\/|$)/],
     },
   },
   async rewrites() {
@@ -188,6 +189,10 @@ const nextConfig: NextConfig = {
       {
         source: "/track/:token",
         destination: "/track",
+      },
+      {
+        source: "/avisos/baja/:token",
+        destination: "/avisos/baja",
       },
       ...apiProxyRewrites,
     ];
@@ -213,6 +218,7 @@ const nextConfig: NextConfig = {
         headers: [{ key: "Permissions-Policy", value: driverPermissionsPolicy }],
       },
       { source: "/track/:path*", headers: privateNoStore },
+      { source: "/avisos/baja/:path*", headers: privateNoStore },
       { source: "/ops/:path*", headers: privateNoStore },
       { source: "/finance/:path*", headers: privateNoStore },
     ];

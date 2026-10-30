@@ -367,6 +367,89 @@ def realtime_dispatcher_errors(role_sql: str) -> list[str]:
     return errors
 
 
+# NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O5 "Ampliar AI-18", O10, O11 choice 10): the receipt executor of AI-08
+# NTF-006. AI-18 declares the role as baseline DDL with no grant at all; its exact privileges are declared, as comments of
+# recipient notices step 3, byte for byte as the Notifications lane step 20261029000100_AddRecipientNoticeReceipts
+# issues and verifies them against the catalog.
+RECEIPT_EXECUTOR = "paqueteria_notification_receipt_executor"
+
+RECEIPT_EXECUTOR_GRANTS = [
+    "GRANT USAGE ON SCHEMA notifications,security TO paqueteria_notification_receipt_executor;",
+    "GRANT SELECT (id,owner_org_id,channel,status,provider_reference,version,attempts) ON notifications.notifications TO paqueteria_notification_receipt_executor;",
+    "GRANT UPDATE (status,delivered_at,version,updated_at,last_provider_attempt_code) ON notifications.notifications TO paqueteria_notification_receipt_executor;",
+    "GRANT INSERT (id,owner_org_id,notification_id,version,status,attempts,provider_attempt_code,occurred_at) ON notifications.notification_status_events TO paqueteria_notification_receipt_executor;",
+    "GRANT SELECT (contact_hash,channel,source,recorded_at) ON notifications.recipient_opt_outs TO paqueteria_notification_receipt_executor;",
+    "GRANT INSERT (contact_hash,channel,key_version,source,recorded_at) ON notifications.recipient_opt_outs TO paqueteria_notification_receipt_executor;",
+    "GRANT SELECT (id,kind,contact_hash,sealed_number,number_key_version,received_at,status,attempts,available_at,lease_token,lease_expires_at) ON notifications.recipient_auto_replies TO paqueteria_notification_receipt_executor;",
+    "GRANT INSERT (id,kind,contact_hash,contact_key_version,sealed_number,number_key_version,received_at,status,attempts,available_at) ON notifications.recipient_auto_replies TO paqueteria_notification_receipt_executor;",
+    "GRANT UPDATE (status,attempts,available_at,lease_token,lease_expires_at,last_code,settled_at,sealed_number,number_key_version) ON notifications.recipient_auto_replies TO paqueteria_notification_receipt_executor;",
+]
+
+RECEIPT_EXECUTOR_EMIT_GRANT = (
+    "GRANT EXECUTE ON FUNCTION security.emit_notification_status_changed(uuid,uuid,integer,text,text,integer,timestamptz) TO paqueteria_notification_receipt_executor;"
+)
+
+RECEIPT_EXECUTOR_FUNCTIONS = [
+    "security.record_messaging_receipt(text,text,text,text,timestamptz)",
+    "security.record_recipient_opt_out(text,text,bytea,integer,bytea[])",
+    "security.request_recipient_auto_reply(uuid,text,bytea,integer,bytea[],bytea,text,timestamptz)",
+    "security.claim_recipient_auto_replies(integer,interval)",
+    "security.settle_recipient_auto_reply(uuid,uuid,text,text,timestamptz)",
+]
+
+AUTO_REPLY_STORE_FRAGMENTS = [
+    "--   CREATE TABLE notifications.recipient_auto_replies (",
+    "--   ALTER TABLE notifications.recipient_auto_replies ENABLE ROW LEVEL SECURITY;",
+    "--   ALTER TABLE notifications.recipient_auto_replies FORCE ROW LEVEL SECURITY;",
+    "--   REVOKE ALL ON notifications.recipient_auto_replies FROM PUBLIC,paqueteria_app,paqueteria_worker;",
+    "20261029000100_AddRecipientNoticeReceipts",
+]
+
+
+def receipt_executor_errors(schema_sql: str, role_sql: str) -> list[str]:
+    """NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: the receipt executor is a NOLOGIN BYPASSRLS role granted to no one,
+    with no executable AI-18 grant; its declared step 3 privileges are exactly the column-limited set (plus EXECUTE on
+    the existing status-changed writer, O5), and the automatic-reply store is a lane-installed AI-06 declaration."""
+    errors = []
+    executable_roles = SQL_LINE_COMMENT.sub("", role_sql)
+    executable_schema = SQL_LINE_COMMENT.sub("", schema_sql)
+    for fragment in [
+        f"CREATE ROLE {RECEIPT_EXECUTOR} NOLOGIN BYPASSRLS;",
+        f"REVOKE {RECEIPT_EXECUTOR} FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;",
+        "NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25",
+        "20261029000100_AddRecipientNoticeReceipts",
+        "Ampliar AI-18 (Recommended)",
+        *RECEIPT_EXECUTOR_FUNCTIONS,
+    ]:
+        if fragment not in role_sql:
+            errors.append(f"Missing receipt executor contract in AI-18: {fragment}")
+    for fragment in [f"CREATE ROLE {RECEIPT_EXECUTOR} NOLOGIN BYPASSRLS;",
+                     f"REVOKE {RECEIPT_EXECUTOR} FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;"]:
+        if fragment not in executable_roles:
+            errors.append(f"The receipt executor statement must be executable AI-18 DDL: {fragment}")
+    if re.search(rf"GRANT\s+{RECEIPT_EXECUTOR}\s+TO", executable_roles):
+        errors.append("Receipt executor membership granted contrary to NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25")
+    if grants_to_role(role_sql, RECEIPT_EXECUTOR):
+        errors.append("The receipt executor is granted by its Notifications lane step, never by AI-18: "
+                      f"{grants_to_role(role_sql, RECEIPT_EXECUTOR)}")
+    declared = [
+        " ".join(line[len("--      "):].split())
+        for line in role_sql.splitlines()
+        if line.startswith("--      GRANT ") and RECEIPT_EXECUTOR in line
+    ]
+    expected = RECEIPT_EXECUTOR_GRANTS + [RECEIPT_EXECUTOR_EMIT_GRANT]
+    if declared != expected:
+        errors.append(f"Receipt executor declared grants differ from the contract: {declared}")
+    if re.search(rf"ALTER\s+(ROLE|TABLE)[^;]*OWNER\s+TO\s+{RECEIPT_EXECUTOR}", executable_roles):
+        errors.append("The receipt executor owns only its lane functions")
+    for fragment in AUTO_REPLY_STORE_FRAGMENTS:
+        if fragment not in schema_sql:
+            errors.append(f"Missing automatic-reply store declaration in AI-06: {fragment}")
+    if re.search(r"CREATE\s+TABLE\s+notifications\.recipient_auto_replies\b", executable_schema):
+        errors.append("The automatic-reply store is installed by its Notifications lane step, never by AI-06")
+    return errors
+
+
 def load_yaml(relative: str) -> Any:
     return yaml.safe_load((ROOT / relative).read_text(encoding="utf-8"))
 
@@ -745,7 +828,10 @@ def main() -> int:
         "GRANT UPDATE (is_default) ON organizations.organization_memberships TO paqueteria_registration_executor;",
         "GRANT UPDATE (status,expires_at,accepted_user_id,accepted_at,revoked_at) ON organizations.pending_memberships TO paqueteria_registration_executor;",
         "GRANT UPDATE (ticket_ciphertext,revoked_at) ON identity.bff_sessions TO paqueteria_session_executor;",
-    ] + MASTER_DATA_UPDATE_GRANTS:
+    ] + MASTER_DATA_UPDATE_GRANTS + [
+        # NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: declared (comments of recipient notices step 3), issued by the lane.
+        statement for statement in RECEIPT_EXECUTOR_GRANTS if statement.startswith("GRANT UPDATE (")
+    ]:
         errors.append(
             f"Column UPDATE grants differ from the ADR-034, OPS-003, REG-001 and BFF session grants: {column_update_grants}"
         )
@@ -843,6 +929,8 @@ def main() -> int:
     checks.append("Auto-close executor: dedicated NOLOGIN role, two column grants, lane-granted Worker-only discovery function")
     errors.extend(realtime_dispatcher_errors(role_sql))
     checks.append("Realtime dispatcher role: dedicated NOLOGIN NOBYPASSRLS runtime role, no AI-18 grant, lane-granted lease-token functions")
+    errors.extend(receipt_executor_errors(sql, role_sql))
+    checks.append("Receipt executor: dedicated NOLOGIN role granted to no one, no AI-18 grant, exact declared column grants, lane-installed store")
     checks.append("BFF session store: pre-tenant table, session executor grants only, function-only runtime access")
     # D8-OUTBOX-LANE-DISPATCH: the DISPATCH lane is installed after the baseline by a module lane, so
     # the role model records its contract; it must never grant the lane to anyone but the Worker.

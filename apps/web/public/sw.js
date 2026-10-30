@@ -65,6 +65,8 @@ function mustUseNetworkOnly(request) {
     url.pathname.startsWith("/finance/") ||
     url.pathname === "/track" ||
     url.pathname.startsWith("/track/") ||
+    url.pathname === "/avisos/baja" ||
+    url.pathname.startsWith("/avisos/baja/") ||
     url.pathname.startsWith("/api/v1/") ||
     url.pathname.startsWith("/hubs/") ||
     url.pathname === "/login" ||

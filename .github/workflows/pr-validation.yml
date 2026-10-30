@@ -262,13 +262,13 @@ jobs:
         shell: bash
         run: |
           actual="$(sha256sum ./docs/normative/v0.6/database/AI-06_SCHEMA.sql | cut -d ' ' -f 1)"
-          test "$actual" = "6e0294fa25a6d8ddc5e63f5e2de191e41130a0f505ae9fca97e79fcd477d19da"
+          test "$actual" = "b83ed5283e4fd03a4cf6afc958345fe45556fb42b2a79fc13c0fd973f8eed32f"
 
       - name: Verify AI-18 remains unchanged
         shell: bash
         run: |
           actual="$(sha256sum ./docs/normative/v0.6/database/AI-18_DATABASE_ROLE_MODEL.sql | cut -d ' ' -f 1)"
-          test "$actual" = "47be7b53cbb27a173277258ca0f3ff1035ef49e8ceb4ba93f210ac5dbc9b6bda"
+          test "$actual" = "9c9fd48b8c95457b9b9b26600c0db6fa75976060e904206414a721070fd281e4"
 
       - name: Test CI tooling
         run: python -m unittest discover -s ./tools/ci -p "test_*.py" -v

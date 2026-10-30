@@ -49,9 +49,9 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
         // INC-001 incident evidence table, the SCL-001 key ring and their migration history lanes, the
         // SET-001 Finance history lane, the platform evolution history lane of the 2026-09-27 pilot
         // contract deltas, the Pricing lane's MDM-001 operator reference table, the Drivers lane's VOICE-001
-        // recipient call requests, the Notifications lane's NTF-RECIPIENT-NOTICES-2026-10-20 opt-out store and the
-        // Orders lane's AI-08 NTF-004 WhatsApp consent record.
-        Assert.Equal(61, await ScalarAsync<int>("""
+        // recipient call requests, the Notifications lane's NTF-RECIPIENT-NOTICES-2026-10-20 opt-out store and AI-08 NTF-006
+        // automatic-reply store, and the Orders lane's AI-08 NTF-004 WhatsApp consent record.
+        Assert.Equal(62, await ScalarAsync<int>("""
             SELECT count(*)::integer
             FROM pg_class c
             JOIN pg_namespace n ON n.oid=c.relnamespace
@@ -60,10 +60,11 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
 
         // 42 tenant tables with a policy (organizations.pending_memberships, VOICE-001's
         // drivers.recipient_call_requests and NTF-004's orders.recipient_notice_consents included), the two pre-tenant BFF
-        // tables and the platform-wide
-        // NTF-RECIPIENT-NOTICES-2026-10-20 opt-out store forced without any policy, and MDM-001's deployment marker and
-        // operator reference table, each forced with one policy that admits only paqueteria_migrator.
-        Assert.Equal(47, await ScalarAsync<int>("""
+        // tables, the platform-wide
+        // NTF-RECIPIENT-NOTICES-2026-10-20 opt-out store and the AI-08 NTF-006 automatic-reply store forced without any
+        // policy, and MDM-001's deployment marker and operator reference table, each forced with one policy that admits
+        // only paqueteria_migrator.
+        Assert.Equal(48, await ScalarAsync<int>("""
             SELECT count(*)::integer
             FROM pg_class c
             JOIN pg_namespace n ON n.oid=c.relnamespace

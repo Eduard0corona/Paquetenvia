@@ -55,6 +55,9 @@ public sealed partial class TraceCorrelationArchitectureTests
             ["src/Modules/Custody/Custody.Infrastructure/Proofs/ProofValidationWorker.cs"] = "TraceCorrelation.StartPollCycle(",
             ["src/Modules/Notifications/Notifications.Infrastructure/Dispatching/NotificationsOutboxDispatcher.cs"] =
                 "TraceCorrelation.StartOutboxDispatchCycle(",
+            // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: the automatic-reply store is a poll, not an outbox lane.
+            ["src/Modules/Notifications/Notifications.Infrastructure/RecipientNotices/RecipientAutoReplies.cs"] =
+                "TraceCorrelation.StartPollCycle(",
             ["src/Modules/Dispatch/Dispatch.Infrastructure/Lifecycle/AssignmentLifecycleProcessor.cs"] =
                 "TraceCorrelation.StartOutboxDispatchCycle(",
             ["src/Modules/Realtime/Realtime.Infrastructure/Dispatching/RealtimeOutboxDispatchers.cs"] =

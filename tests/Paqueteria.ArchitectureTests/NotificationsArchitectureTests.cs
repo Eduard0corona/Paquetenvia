@@ -5,7 +5,7 @@ namespace Paqueteria.ArchitectureTests;
 public sealed class NotificationsArchitectureTests
 {
     [Fact]
-    public void Notifications_has_three_layers_and_no_endpoint_or_web_dependency()
+    public void Notifications_has_the_module_layers_and_no_outbound_http_dependency()
     {
         var moduleRoot = TestRepository.GetPath("src/Modules/Notifications");
         var projects = Directory.GetFiles(moduleRoot, "*.csproj", SearchOption.AllDirectories)
@@ -13,8 +13,15 @@ public sealed class NotificationsArchitectureTests
             .Order(StringComparer.Ordinal)
             .ToArray();
 
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006) adds the AI-13 section 1 Endpoints layer for the
+        // provider webhooks and the e-mail unsubscribe; provider calls stay in the shared messaging adapters.
         Assert.Equal(
-            ["Notifications.Application.csproj", "Notifications.Domain.csproj", "Notifications.Infrastructure.csproj"],
+            [
+                "Notifications.Application.csproj",
+                "Notifications.Domain.csproj",
+                "Notifications.Endpoints.csproj",
+                "Notifications.Infrastructure.csproj",
+            ],
             projects);
         var source = string.Join('\n', Directory.GetFiles(moduleRoot, "*.cs", SearchOption.AllDirectories)
             .Where(path => !path.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.OrdinalIgnoreCase) &&

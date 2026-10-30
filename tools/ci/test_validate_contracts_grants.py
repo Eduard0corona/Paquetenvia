@@ -137,6 +137,45 @@ class ExecutorGrantRuleTests(unittest.TestCase):
         commented = self.role_sql + "\n-- GRANT SELECT ON orders.orders TO paqueteria_realtime;\n"
         self.assertEqual([], self.validator.realtime_dispatcher_errors(commented))
 
+    def test_receipt_executor_contract_holds_and_any_widening_fails(self) -> None:
+        """NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: NOLOGIN BYPASSRLS, granted to no one, no AI-18 grant, and the
+        declared step 3 grants are exactly the column-limited set plus EXECUTE on the status-changed writer (O5)."""
+        self.assertEqual([], self.validator.receipt_executor_errors(self.schema_sql, self.role_sql))
+        for widening in [
+            "GRANT SELECT ON notifications.notifications TO paqueteria_notification_receipt_executor;",
+            "GRANT INSERT ON platform.outbox_events TO paqueteria_notification_receipt_executor;",
+            "GRANT SELECT ON orders.orders TO paqueteria_app, paqueteria_notification_receipt_executor;",
+            "GRANT paqueteria_notification_receipt_executor TO paqueteria_app;",
+            "GRANT paqueteria_notification_receipt_executor TO paqueteria_worker;",
+            "ALTER TABLE notifications.recipient_opt_outs OWNER TO paqueteria_notification_receipt_executor;",
+        ]:
+            with self.subTest(widening=widening):
+                widened = self.role_sql + "\n" + widening + "\n"
+                self.assertTrue(self.validator.receipt_executor_errors(self.schema_sql, widened))
+        # A widened declaration (a commented grant of the step) fails too: the declared set is exact.
+        declared_widening = self.role_sql.replace(
+            "--      GRANT SELECT (id,owner_org_id,channel,status,provider_reference,version,attempts) ON notifications.notifications",
+            "--      GRANT SELECT (id,owner_org_id,channel,status,provider_reference,version,attempts,recipient_ciphertext) ON notifications.notifications",
+        )
+        self.assertNotEqual(declared_widening, self.role_sql)
+        self.assertTrue(self.validator.receipt_executor_errors(self.schema_sql, declared_widening))
+        bypass = self.role_sql.replace(
+            "CREATE ROLE paqueteria_notification_receipt_executor NOLOGIN BYPASSRLS;",
+            "CREATE ROLE paqueteria_notification_receipt_executor LOGIN BYPASSRLS;",
+        )
+        self.assertNotEqual(bypass, self.role_sql)
+        self.assertTrue(self.validator.receipt_executor_errors(self.schema_sql, bypass))
+        unrevoked = self.role_sql.replace(
+            "REVOKE paqueteria_notification_receipt_executor FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;",
+            "",
+        )
+        self.assertNotEqual(unrevoked, self.role_sql)
+        self.assertTrue(self.validator.receipt_executor_errors(self.schema_sql, unrevoked))
+        installed_by_baseline = self.schema_sql + "\nCREATE TABLE notifications.recipient_auto_replies (id uuid);\n"
+        self.assertTrue(self.validator.receipt_executor_errors(installed_by_baseline, self.role_sql))
+        commented = self.role_sql + "\n-- GRANT SELECT ON orders.orders TO paqueteria_notification_receipt_executor;\n"
+        self.assertEqual([], self.validator.receipt_executor_errors(self.schema_sql, commented))
+
     def test_multi_grantee_grants_fail_for_either_executor(self) -> None:
         for widening in [
             "GRANT SELECT ON orders.order_events TO paqueteria_app, paqueteria_cleanup_executor;",

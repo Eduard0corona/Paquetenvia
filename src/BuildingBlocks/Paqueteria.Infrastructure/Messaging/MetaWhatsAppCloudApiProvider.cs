@@ -10,9 +10,10 @@ namespace Paqueteria.Infrastructure.Messaging;
 
 /// <summary>
 /// GATE-004-CHANNELS WhatsApp adapter over the Meta WhatsApp Cloud API
-/// (<c>POST {BaseUri}/{ApiVersion}/{PhoneNumberId}/messages</c>, template messages only). Business-initiated
-/// messages must use an approved template, so free-form text is not offered. The Cloud API has no
-/// idempotency key: an ambiguous timeout retried by the outbox may deliver twice.
+/// (<c>POST {BaseUri}/{ApiVersion}/{PhoneNumberId}/messages</c>). Business-initiated messages use an approved template;
+/// the only free-form text is the fixed answer to an inbound message inside its 24-hour customer service window
+/// (<see cref="MessagingRequest.FreeFormText"/>, AI-08 NTF-006). The Cloud API has no idempotency key: an ambiguous
+/// timeout retried by the outbox may deliver twice.
 /// </summary>
 internal sealed class MetaWhatsAppCloudApiProvider(
     IHttpClientFactory httpClientFactory,
@@ -30,36 +31,21 @@ internal sealed class MetaWhatsAppCloudApiProvider(
 
     internal MessagingProviderGuard Guard => _guard;
 
-    // Meta error codes (https://developers.facebook.com/docs/whatsapp/cloud-api/support/error-codes).
-    private static readonly HashSet<long> TransientCodes =
-    [
-        1,      // API unknown
-        2,      // API service
-        4,      // API too many calls
-        80007,  // WABA rate limit
-        130429, // throughput rate limit
-        131000, // something went wrong
-        131016, // service unavailable
-        131048, // spam rate limit
-        131056, // business/consumer pair rate limit
-        131057, // account in maintenance mode
-        133004, // server temporarily unavailable
-    ];
-
-    private static readonly HashSet<long> ThrottleCodes = [4, 80007, 130429, 131048, 131056];
-
     public MessagingChannel Channel => MessagingChannel.WhatsApp;
 
     public async ValueTask<MessagingResult> SendAsync(MessagingRequest request, CancellationToken cancellationToken)
     {
         var channel = options.Value.WhatsApp;
         var meta = channel.MetaCloudApi;
-        if (!channel.Templates.TryGetValue(request.TemplateKey, out var template))
+        WhatsAppTemplateOptions? template = null;
+        if (request.FreeFormText is null && !channel.Templates.TryGetValue(request.TemplateKey, out template))
         {
             return Log(new(MessagingOutcome.PermanentFailure, MessagingResultCodes.TemplateNotConfigured), null);
         }
 
-        if (!MessagingHttp.AreParametersValid(request.Parameters, template.ParameterCount) ||
+        if ((template is null
+                ? !MessagingHttp.IsFreeFormTextValid(request)
+                : !MessagingHttp.AreParametersValid(request.Parameters, template.ParameterCount)) ||
             !MessagingHttp.AreExtrasValid(request))
         {
             return Log(new(MessagingOutcome.PermanentFailure, MessagingResultCodes.TemplateParametersInvalid), null);
@@ -75,9 +61,20 @@ internal sealed class MetaWhatsAppCloudApiProvider(
             ["messaging_product"] = "whatsapp",
             ["recipient_type"] = "individual",
             ["to"] = to,
-            ["type"] = "template",
-            ["template"] = BuildTemplate(template, request),
         };
+        if (template is null)
+        {
+            // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-24 recipient_notices.auto_reply.how): a free-form text inside
+            // the customer service window the inbound message opened, without a link preview.
+            body["type"] = "text";
+            body["text"] = new JsonObject { ["preview_url"] = false, ["body"] = request.FreeFormText };
+        }
+        else
+        {
+            body["type"] = "template";
+            body["template"] = BuildTemplate(template, request);
+        }
+
         var uri = new Uri(
             $"{meta.BaseUri.TrimEnd('/')}/{Uri.EscapeDataString(meta.ApiVersion)}/{Uri.EscapeDataString(meta.PhoneNumberId)}/messages",
             UriKind.Absolute);
@@ -130,24 +127,18 @@ internal sealed class MetaWhatsAppCloudApiProvider(
             return MessagingHttp.ClassifyStatus(response.StatusCode, response.Headers, time);
         }
 
-        if (TransientCodes.Contains(code.Value))
+        if (MetaWhatsAppErrorCodes.IsTransient(code.Value))
         {
             return new(
                 MessagingOutcome.TransientFailure,
-                ThrottleCodes.Contains(code.Value) ? MessagingResultCodes.RateLimited : MessagingResultCodes.Unavailable,
+                MetaWhatsAppErrorCodes.Classify(code.Value),
                 RetryAfter: MessagingHttp.ReadRetryAfter(response.Headers, time));
         }
 
-        return code.Value switch
-        {
-            190 or 0 or 3 or 10 or (>= 200 and <= 299) => new(MessagingOutcome.PermanentFailure, MessagingResultCodes.AuthenticationFailed),
-            131026 or 131030 or 133010 => new(MessagingOutcome.PermanentFailure, MessagingResultCodes.RecipientUndeliverable),
-            131047 => new(MessagingOutcome.PermanentFailure, MessagingResultCodes.ReengagementRequired),
-            131008 or 131009 or (>= 132000 and <= 132999) => new(MessagingOutcome.PermanentFailure, MessagingResultCodes.ProviderTemplateRejected),
-            368 or 131031 or 131049 or 131050 => new(MessagingOutcome.PermanentFailure, MessagingResultCodes.PolicyBlocked),
-            _ when MessagingHttp.IsServerOrThrottle(response.StatusCode) => MessagingHttp.ClassifyStatus(response.StatusCode, response.Headers, time),
-            _ => new(MessagingOutcome.PermanentFailure, MessagingResultCodes.Rejected),
-        };
+        var classified = MetaWhatsAppErrorCodes.Classify(code.Value);
+        return classified == MessagingResultCodes.Rejected && MessagingHttp.IsServerOrThrottle(response.StatusCode)
+            ? MessagingHttp.ClassifyStatus(response.StatusCode, response.Headers, time)
+            : new(MessagingOutcome.PermanentFailure, classified);
     }
 
     /// <summary>

@@ -120,6 +120,7 @@ public sealed class RealtimeOutboxReadinessPostgreSqlTests(
     [InlineData("paqueteria_master_data_loader")]
     [InlineData("paqueteria_operator_outbox_executor")]
     [InlineData("paqueteria_auto_close_executor")]
+    [InlineData("paqueteria_notification_receipt_executor")]
     public async Task A_realtime_login_that_can_also_assume_another_role_is_unhealthy(string role)
     {
         var before = await database.ReadOutboxStateSnapshotAsync();

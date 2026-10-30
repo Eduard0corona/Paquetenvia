@@ -94,7 +94,9 @@
       "name": "WEB_TRACKING",
       "patterns": [
         "apps/web/src/tracking/**",
-        "apps/web/src/app/track/**"
+        "apps/web/src/app/track/**",
+        "apps/web/src/recipient-notices/**",
+        "apps/web/src/app/avisos/**"
       ],
       "jobs": [
         "web",

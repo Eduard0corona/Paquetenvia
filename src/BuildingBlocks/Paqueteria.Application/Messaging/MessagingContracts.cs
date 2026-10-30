@@ -80,7 +80,16 @@ public sealed record MessagingRequest(
     /// </summary>
     public string? OneClickUnsubscribeUrl { get; init; }
 
-    /// <summary>Recipient, parameters, button suffix and unsubscribe URL are never printed here.</summary>
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-24 <c>recipient_notices.auto_reply</c> and
+    /// <c>opt_out.confirmation</c>; AI-08 NTF-006): a free-form text message instead of a template, sent only inside the
+    /// 24-hour customer service window an inbound message opened. It is one of the fixed texts the platform answers
+    /// with, never a recipient's text, and it is never logged. WhatsApp only, with no parameter and no button; the
+    /// template key then only names the fixed text.
+    /// </summary>
+    public string? FreeFormText { get; init; }
+
+    /// <summary>Recipient, parameters, button suffix, unsubscribe URL and free-form text are never printed here.</summary>
     public override string ToString() => $"MessagingRequest {{ Channel = {Channel}, TemplateKey = {TemplateKey} }}";
 }
 
@@ -127,6 +136,54 @@ public static class MessagingResultCodes
         ResponseInvalid, RecipientUndeliverable, ReengagementRequired, ProviderTemplateRejected,
         PolicyBlocked, CircuitOpen, ConcurrencyLimited,
     };
+}
+
+/// <summary>
+/// GATE-004-CHANNELS and AI-24 <c>recipient_notices.receipts.whatsapp</c>: the Meta error code classifier, shared by the
+/// send adapter and the delivery receipts of the WhatsApp webhook (a <c>failed</c> status carries the same codes). It
+/// returns the transient flag and one closed <see cref="MessagingResultCodes"/> code; a code it does not know is a
+/// permanent rejection.
+/// </summary>
+public static class MetaWhatsAppErrorCodes
+{
+    // Meta error codes (https://developers.facebook.com/docs/whatsapp/cloud-api/support/error-codes).
+    private static readonly HashSet<long> TransientCodes =
+    [
+        1,      // API unknown
+        2,      // API service
+        4,      // API too many calls
+        80007,  // WABA rate limit
+        130429, // throughput rate limit
+        131000, // something went wrong
+        131016, // service unavailable
+        131048, // spam rate limit
+        131056, // business/consumer pair rate limit
+        131057, // account in maintenance mode
+        133004, // server temporarily unavailable
+    ];
+
+    private static readonly HashSet<long> ThrottleCodes = [4, 80007, 130429, 131048, 131056];
+
+    public static bool IsTransient(long code) => TransientCodes.Contains(code);
+
+    /// <summary>The closed code of a Meta error code; <see cref="IsTransient"/> says whether a send may be retried.</summary>
+    public static string Classify(long code)
+    {
+        if (TransientCodes.Contains(code))
+        {
+            return ThrottleCodes.Contains(code) ? MessagingResultCodes.RateLimited : MessagingResultCodes.Unavailable;
+        }
+
+        return code switch
+        {
+            190 or 0 or 3 or 10 or (>= 200 and <= 299) => MessagingResultCodes.AuthenticationFailed,
+            131026 or 131030 or 133010 => MessagingResultCodes.RecipientUndeliverable,
+            131047 => MessagingResultCodes.ReengagementRequired,
+            131008 or 131009 or (>= 132000 and <= 132999) => MessagingResultCodes.ProviderTemplateRejected,
+            368 or 131031 or 131049 or 131050 => MessagingResultCodes.PolicyBlocked,
+            _ => MessagingResultCodes.Rejected,
+        };
+    }
 }
 
 /// <summary>

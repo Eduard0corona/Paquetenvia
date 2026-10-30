@@ -1944,7 +1944,7 @@ items:
   - architecture - no PII log dimensions, only these readers decrypt, HTTP client loggers removed
   approval_gate: GATE-004 and GATE-007
 - id: NTF-006
-  decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner; E4-P8 and E4-P9)
+  decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner; E4-P8 and E4-P9) and NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (project owner; O2 to O11)
   epic: Notifications
   release: MVP-1
   title: Acuses de entrega, bajas y respuesta automática
@@ -1958,14 +1958,15 @@ items:
   - the exact grant set of the new executor in docs/normative/v0.6/tools/validate_contracts.py and DatabaseBaselineAssertions
   acceptance_criteria:
   - 'DECIDED NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P8 "Las tres vías (Recommended)", E4-P9 "Respuesta automática (Recommended)", E4-P15 "Sí, una línea (Recommended)")'
+  - 'DECIDED NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O2 "Secreto en un encabezado (Recommended)", O3 "Los propuestos (Recommended)", O4 "404 siempre; baja sin interruptor (Recommended)", O5 "Ampliar AI-18 (Recommended)", O6 "Cuarentena = bloqueado; Expanded se ignora (Recommended)", O7 "Aprobar lo propuesto (Recommended)", O8 "Registrar al cerrar las compuertas (Recommended)", O9 "Aprobar estos textos (Recommended)", O10 "Sí, el registro de la baja basta (Recommended)", O11 "Aprobarlas todas (Recommended)") - Event Grid deliveries carry a Key Vault secret header compared in constant time, two slots, before the body is read; SEC-004 per client network per 60 seconds: verifyMetaWhatsAppWebhook 10, receiveMetaWhatsAppWebhook 300, receiveAcsEmailEvents 120, unsubscribeRecipientNotices 20 with the uniform public 429; a switched-off webhook is always the uniform 404, never 429, and the unsubscribe has no switch; a FAILED receipt records its code and the status-changed row comes from the existing writer; Quarantined is FAILED MESSAGING_POLICY_BLOCKED and Expanded is ignored; the automatic reply ignores quiet hours, is dropped with its number erased while notices or WhatsApp are off and has no daily cap; the webhooks are registered after the gates close; the /avisos/baja/:token texts of AI-07; a recipient opt-out writes no audit row; and the eleven technical choices of O11'
   - every webhook checks its signature or authentication in constant time before parsing and is a uniform 404 while off
   - receipts only move forward and ignore unknown references; repeated receipts change nothing
   - an opt-out is global, kept as a keyed hash only, and honoured by the next send
   - one automatic reply per contact in 24 hours, inside the customer service window, sent by the Worker; the inbound text and the number are never stored in clear or logged
   - a WhatsApp opt-out by message gets the one confirmation "Listo. Ya no recibirás avisos en este número." only when it records the opt-out, through the automatic-reply path and outside its 24-hour limit; the e-mail page and "Detener avisos" send no message
-  - the ACS delivery authentication (Entra or a secret header) is chosen and recorded in this change, and the SEC-004 budgets of the four anonymous operations are asked to the owner before it merges
+  - the ACS delivery authentication is a Key Vault secret header (O2), recorded in this change, and the SEC-004 budgets of the four anonymous operations are the owner's (O3)
   required_tests:
-  - signature vectors (valid, invalid, replayed, oversized) and the Event Grid handshake
+  - signature vectors (valid, invalid, a validly signed duplicate that changes nothing - the "replayed" vector, O11 choice 11 - and oversized) and the Event Grid handshake
   - forward-only and idempotent receipts; opt-out honoured by the next send; automatic reply limits
   - no recipient stored or logged; rate limits; 404 when off
   approval_gate: GATE-004
@@ -2004,10 +2005,10 @@ items:
   - NTF-007
   - ENV-001
   expected_outputs:
-  - apps.bicep Key Vault mappings for the Worker (public-tracking-link-key, paquetenvia-contact-lookup-key-1, the WhatsApp token and phone number id) and the API (paquetenvia-contact-lookup-key-1, the Meta app secret, the webhook verify token)
-  - an unwrap-only role for the Worker and a wrap-only role for the API on recipient-notice-kek, the least-privilege ACS role of the Worker, the Event Grid subscription and the webhook URLs, with the pilot guard allowlists
+  - apps.bicep Key Vault mappings for the Worker (public-tracking-link-key, paquetenvia-contact-lookup-key-1, the WhatsApp token and phone number id) and the API (paquetenvia-contact-lookup-key-1, the Meta app secret and the webhook verify token with their previous slots, the Event Grid delivery secret with its previous slot, the WhatsApp phone_number_id and the Azure resource id of the Communication Services resource; NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 O11 choice 11)
+  - an unwrap-only role for the Worker and a wrap-only role for the API on recipient-notice-kek, the least-privilege ACS role of the Worker and the webhook URLs, with the pilot guard allowlists; the Event Grid subscription prepared behind a phase parameter (like the custom domain) and created only by the gate-closing change, because Event Grid validates it against a webhook that stays off until then (O8 "Registrar al cerrar las compuertas (Recommended)")
   - Notifications__RecipientNotices__ and Messaging__ platform-managed in tools/azr-001/env001_pilot_guards.py
-  - the owner guide for Meta (display name = the legal name of the company, E4-P7), ACS (avisos@paquetenvia.com, display name Seguimiento de envío, E4-P12) and DNS
+  - the owner guide for Meta (display name = the legal name of the company, E4-P7), ACS (avisos@paquetenvia.com, display name Seguimiento de envío, E4-P12) and DNS, with the registration of the Meta callback as a step after the gate-closing change (O8)
   acceptance_criteria:
   - 'DECIDED NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P7 "La razón social (Recommended)", E4-P12 "avisos@paquetenvia.com (Recommended)")'
   - only after the owner created the secrets, the key and the resources (a mapped secret that does not exist stops the Worker)

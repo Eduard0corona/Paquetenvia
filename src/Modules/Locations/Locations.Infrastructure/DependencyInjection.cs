@@ -4,6 +4,7 @@ using Locations.Infrastructure.Geocoding;
 using Locations.Infrastructure.Geocoding.GoogleMaps;
 using Locations.Infrastructure.Locations;
 using Locations.Infrastructure.Persistence;
+using Locations.Infrastructure.RecipientNotices;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
@@ -14,6 +15,7 @@ using Npgsql;
 using Paqueteria.Application;
 using Paqueteria.Application.Auditing;
 using Paqueteria.Application.Locations;
+using Paqueteria.Application.RecipientNotices;
 using Paqueteria.Application.Security;
 using Paqueteria.Infrastructure;
 using Paqueteria.Infrastructure.Auditing;
@@ -141,6 +143,20 @@ public static class DependencyInjection
                 LocationPiiProtectorKind.Mock => serviceProvider.GetRequiredService<SyntheticLocationPiiReader>(),
                 LocationPiiProtectorKind.AzureKeyVault => serviceProvider.GetRequiredService<EnvelopeLocationPiiReader>(),
                 _ => serviceProvider.GetRequiredService<DisabledLocationPiiReader>(),
+            });
+
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O11 choice 1): the e-mail unsubscribe opens the destination e-mail
+        // with the PII key the way it was protected, from the same bound option.
+        services.AddSingleton<DisabledRecipientEmailOpener>();
+        services.AddSingleton<SyntheticRecipientEmailOpener>();
+        services.AddSingleton(serviceProvider =>
+            new EnvelopeRecipientEmailOpener(serviceProvider.GetRequiredService<IPiiEnvelopeProtector>()));
+        services.AddScoped<IRecipientEmailOpener>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<LocationsOptions>>().Value.PiiProtector switch
+            {
+                LocationPiiProtectorKind.Mock => serviceProvider.GetRequiredService<SyntheticRecipientEmailOpener>(),
+                LocationPiiProtectorKind.AzureKeyVault => serviceProvider.GetRequiredService<EnvelopeRecipientEmailOpener>(),
+                _ => serviceProvider.GetRequiredService<DisabledRecipientEmailOpener>(),
             });
 
         services.AddSingleton<DisabledLocationService>();

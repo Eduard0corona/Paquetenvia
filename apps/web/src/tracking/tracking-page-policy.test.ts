@@ -29,7 +29,7 @@ describe("public tracking page privacy policy", () => {
   });
 
   it("redacts incoming tracking paths and rewrites to a generic shell", () => {
-    expect(config).toContain("ignore: [/^\\/track(?:\\/|$)/]");
+    expect(config).toContain("ignore: [/^\\/track(?:\\/|$)/, /^\\/avisos\\/baja(?:\\/|$)/]");
     expect(config).toContain('source: "/track/:token"');
     expect(config).toContain('destination: "/track"');
   });

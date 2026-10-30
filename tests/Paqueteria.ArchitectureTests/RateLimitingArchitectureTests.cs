@@ -62,7 +62,9 @@ public sealed partial class RateLimitingArchitectureTests
         // PR 2: publicTracking, publishDriverLocation and the three hubs. PR 3: previewOrderCsv, commitOrderCsv,
         // exportSettlementCsv, createLocation, createProofUploadSession, finalizeProof, the dashboard,
         // getOperationsQueueCounts, listOrders, createQuote, listAssignableDrivers and startAuthCenterSignIn.
-        Assert.Equal(17, requirements.Length);
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O3): verifyMetaWhatsAppWebhook, receiveMetaWhatsAppWebhook,
+        // receiveAcsEmailEvents and unsubscribeRecipientNotices.
+        Assert.Equal(21, requirements.Length);
         Assert.All(requirements, requirement => Assert.Matches(@"^[A-Za-z]+\.[A-Za-z]*RateLimitPolicy$", requirement.Value));
         Assert.All(requirements, requirement => Assert.StartsWith("src/Modules/", requirement.Path, StringComparison.Ordinal));
 

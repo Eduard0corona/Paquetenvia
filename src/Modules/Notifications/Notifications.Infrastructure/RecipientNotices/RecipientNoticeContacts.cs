@@ -1,3 +1,4 @@
+using Notifications.Application.RecipientNotices;
 using Paqueteria.Application.RecipientNotices;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
@@ -126,6 +127,57 @@ internal sealed class RecipientNoticeContactResolver(
 
         return RecipientEmailPolicy.TryNormalize(opened, out var email)
             ? RecipientNoticeContact.Resolved(email)
+            : RecipientNoticeContact.Unusable;
+    }
+}
+
+/// <summary>
+/// NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O11 choice 10; AI-24 <c>recipient_notices.auto_reply.path</c>): the sender
+/// number of a leased automatic-reply request, in memory only. On a synthetic WhatsApp provider it is the AI-24
+/// placeholder and nothing is decrypted; on the real provider the sealed copy is opened with the unwrap-only notice key,
+/// bound to <see cref="RecipientAutoReplyNumbers.PlatformBindingId"/> and the request id, and normalized to E.164
+/// <c>+52</c>. A copy that is malformed, altered, bound elsewhere or under a key version the Worker cannot open is
+/// unusable; an unreachable Key Vault is unavailable.
+/// </summary>
+internal sealed class RecipientAutoReplyNumberResolver(IOptions<MessagingOptions> messaging, IServiceProvider services)
+{
+    public async Task<RecipientNoticeContact> ResolveAsync(
+        ClaimedRecipientAutoReply request,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(request);
+        if (RecipientNoticeProviders.IsSynthetic(messaging.Value, MessagingChannel.WhatsApp))
+        {
+            return RecipientNoticeContact.Resolved(RecipientNoticeContactResolver.SyntheticPhone);
+        }
+
+        if (!RecipientNoticeProviders.IsReal(messaging.Value, MessagingChannel.WhatsApp))
+        {
+            return RecipientNoticeContact.Unusable;
+        }
+
+        var opener = services.GetRequiredService<IRecipientNoticeEnvelopeOpener>();
+        string opened;
+        try
+        {
+            opened = await opener.OpenAsync(
+                new PiiBinding(RecipientAutoReplyNumbers.PlatformBindingId, request.RequestId),
+                RecipientAutoReplyNumbers.Purpose,
+                request.SealedNumber,
+                request.NumberKeyVersion,
+                cancellationToken);
+        }
+        catch (PiiCiphertextRejectedException)
+        {
+            return RecipientNoticeContact.Unusable;
+        }
+        catch (PiiProtectionUnavailableException)
+        {
+            return RecipientNoticeContact.Unavailable;
+        }
+
+        return RecipientContactValue.TryNormalize(RecipientContactChannel.WhatsApp, opened, out var number)
+            ? RecipientNoticeContact.Resolved(number)
             : RecipientNoticeContact.Unusable;
     }
 }
