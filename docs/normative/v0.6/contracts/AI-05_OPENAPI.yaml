@@ -1436,6 +1436,125 @@ paths:
           $ref: '#/components/responses/TrackingLinkConflict'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /orders/{orderId}/recipient-notices:
+    get:
+      tags:
+      - Orders
+      operationId: listOrderRecipientNotices
+      description: >-
+        NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P8) and NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (AI-08 NTF-007;
+        x-pilot-contract-deltas NTF-RECIPIENT-NOTICES, part NTF-007; AI-24 recipient_notices.dispatcher_view; AI-07
+        /ops/orders/:id recipient_notices) - the recipient notices of one order, for the order detail panel "Avisos al
+        destinatario". One tenant transaction of the organization selected with X-Organization-Id reads them only when
+        that organization owns the order (T6 choice 2): one item per notice and channel, WHATSAPP or EMAIL (an IN_APP
+        notification is never listed), ordered by creation and WhatsApp before e-mail, at most 100 and without
+        pagination. whatsapp_consent_attested says whether the order recorded the WhatsApp consent box (current
+        version); email_on_file whether the destination keeps a recipient e-mail under the PII key, the one "Detener
+        avisos" opts out, even before its notice copy exists (T6 choice 3); nothing is decrypted. last_code is the last
+        code the notice recorded, from the closed set of RecipientNotice.last_code (T6 choice 4); a stored value outside
+        the closed sets fails closed as 503 and is never passed on. No scheduled time is answered (T2 "Sin hora, con
+        nota (Recommended)"): a PENDING notice leaves inside the 08:00 to 21:00 America/Mazatlan window of AI-24
+        recipient_notices.quiet_hours, which the panel states in a fixed line. Never the phone, the e-mail, the link or
+        a template parameter. DISPATCHER members and PLATFORM_ADMIN members with a satisfied MFA challenge only
+        (x-capability-matrix recipient_notice_operations; 403 MFA_REQUIRED when only the second factor is missing),
+        decided before any order is read; a malformed, missing or other-organization order, and an order the selected
+        organization only operates, is the uniform 404. No switch: while Notifications:RecipientNotices:Enabled is
+        false no notice is created and the list is empty. Not limited under SEC-004 (T6 choice 10). Cache-Control
+        no-store.
+      x-authorization-precedence: capability-before-persisted-state
+      x-capability-protected-state:
+      - order
+      - notification
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: The recipient notices of the order and the two booleans of the panel
+          headers:
+            Cache-Control:
+              description: NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (T6 choice 2); no cache keeps the panel.
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecipientNoticeList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /orders/{orderId}/recipient-notices/stop:
+    post:
+      tags:
+      - Orders
+      operationId: stopOrderRecipientNotices
+      description: >-
+        NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P8 "Las tres vías (Recommended)", E4-P16) and
+        NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (AI-08 NTF-007; AI-24 recipient_notices.opt_out.dispatcher) - the button
+        "Detener avisos" of the order detail, for a recipient who asks by phone. It takes no body and no query; one
+        valid Idempotency-Key is required, and anything else is 409 INVALID_REQUEST before the capability or any state
+        is read. Then, in this order (T6 choice 5): the capability (DISPATCHER members and PLATFORM_ADMIN members with a
+        satisfied MFA challenge, x-capability-matrix recipient_notice_operations; 403 MFA_REQUIRED when only the second
+        factor is missing); one tenant transaction of the selected organization that returns the stored answer of the
+        same key, or reads the PII ciphertexts of the destination phone and e-mail of an order that organization owns
+        (else the uniform 404, as listOrderRecipientNotices), and commits; with no transaction open, both are opened in
+        memory with the API's PII key (purposes locations.phone and locations.email, as VOICE-001 and
+        unsubscribeRecipientNotices), never with the recipient-notice key, and hashed under every configured contact
+        lookup key version (AI-24 recipient_notices.opt_out.hash); then one transaction records the WHATSAPP opt-out of
+        the phone and the EMAIL opt-out of the e-mail through security.record_recipient_opt_out (source DISPATCHER;
+        global, every organization, E4-P8), the audit row RECIPIENT_NOTICES_STOPPED of the order with the
+        Idempotency-Key as its request_id and the channels only (T6 choice 7), and the stored answer. A phone or e-mail
+        that cannot be opened or used leaves its channel out; with none left the answer is 409
+        RECIPIENT_CONTACT_UNAVAILABLE and nothing is recorded or audited; without the PII key or the contact lookup key
+        it is 503 (T6 choice 8). The 200 names the channels whose opt-out is on record - WHATSAPP when the order has a
+        usable phone, EMAIL when it has a usable e-mail - also when it already was, so no opt-out made through another
+        organization shows (T6 choice 6), and recorded_at is the server time of this action. A replay of the same key
+        by the same person for the same order returns the stored answer and writes nothing; the key used for another
+        order or by another person is 409 IDEMPOTENCY_CONFLICT; another press (a new key) is audited again and changes
+        nothing for the recipient (T3 "Mensaje y botón siempre (Recommended)"). It is offered to the owner organization
+        even when the order has no notice and no consent box, because the opt-out is global (T6 choice 13). It cancels
+        nothing itself: every PENDING notice of that contact ends CANCELLED with RECIPIENT_OPTED_OUT when its send comes
+        (AI-24 recipient_notices.opt_out.check). It sends nothing to the recipient (opt_out.confirmation.other_paths)
+        and, during the pilot, cannot be undone (E4-P16). No switch, and not limited under SEC-004 (T6 choice 10).
+        Cache-Control no-store.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-shape-validation: invalid-request-without-productive-transaction
+      x-capability-protected-state:
+      - order
+      - location_contact
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/OrderId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The channels whose opt-out is on record and the time of this action
+          headers:
+            Cache-Control:
+              description: NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (T6 choice 5); no cache keeps the answer.
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecipientNoticeStopResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/RecipientNoticeStopConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /organizations/{organizationId}/audit:
     get:
       tags:
@@ -4001,6 +4120,17 @@ components:
         application/problem+json:
           schema:
             $ref: '#/components/schemas/RecipientCallConflictProblem'
+    RecipientNoticeStopConflict:
+      description: >-
+        NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 - stopOrderRecipientNotices conflict identified by a stable code.
+        INVALID_REQUEST (a missing, repeated or malformed Idempotency-Key, a query or a body) is decided before any
+        state is read; IDEMPOTENCY_CONFLICT (the key was used for another order or by another person);
+        RECIPIENT_CONTACT_UNAVAILABLE (neither the phone nor the e-mail of the destination can be used; nothing was
+        recorded or audited). Never carries a phone, an e-mail or a hash.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/RecipientNoticeStopConflictProblem'
     VoiceWebhookMalformed:
       description: VOICE-001 webhook that is not a well-formed application/x-www-form-urlencoded Twilio request.
       content:
@@ -8176,6 +8306,181 @@ components:
           type: string
           enum:
           - TRACKING_LINK_ORDER_FINISHED
+    RecipientNoticeList:
+      type: object
+      additionalProperties: false
+      description: >-
+        NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (AI-08 NTF-007, T6 choices 2 and 3) - the recipient notices of one order,
+        ordered by creation and WhatsApp before e-mail, at most 100, and the two booleans of the panel. Never the
+        phone, the e-mail, the link or a template parameter.
+      required:
+      - items
+      - whatsapp_consent_attested
+      - email_on_file
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/RecipientNotice'
+        whatsapp_consent_attested:
+          type: boolean
+          description: The order recorded the WhatsApp consent box, version NTF-RECIPIENT-WHATSAPP-CONSENT-V1.
+        email_on_file:
+          type: boolean
+          description: >-
+            The destination keeps a recipient e-mail under the PII key (the one "Detener avisos" opts out), even
+            before its notice copy exists (T6 choice 3).
+    RecipientNotice:
+      type: object
+      additionalProperties: false
+      description: >-
+        NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 - one recipient notice on one channel. There is no scheduled time (T2
+        "Sin hora, con nota (Recommended)"); a PENDING notice leaves inside the 08:00 to 21:00 America/Mazatlan window.
+      required:
+      - notification_id
+      - notice
+      - channel
+      - status
+      - attempts
+      - last_code
+      - sent_at
+      - delivered_at
+      - updated_at
+      properties:
+        notification_id:
+          type: string
+          format: uuid
+        notice:
+          type: string
+          enum:
+          - TRACKING_LINK
+          - IN_TRANSIT
+          - DELIVERY_FAILED
+          - DELIVERED
+        channel:
+          type: string
+          enum:
+          - WHATSAPP
+          - EMAIL
+        status:
+          type: string
+          enum:
+          - PENDING
+          - SENT
+          - DELIVERED
+          - FAILED
+          - CANCELLED
+        attempts:
+          type: integer
+          format: int32
+          minimum: 0
+        last_code:
+          description: >-
+            T6 choice 4 - the last code the notice recorded, null before any: the closed MessagingResultCodes, the
+            lane's AMBIGUOUS_TIMEOUT, TRACKING_LINK_UNAVAILABLE and cancellation reasons, and MAX_ATTEMPTS_EXHAUSTED
+            (a send request that ran out of attempts). A stored code outside this set fails the read closed (503).
+          type:
+          - string
+          - 'null'
+          enum:
+          - MESSAGING_ACCEPTED
+          - MESSAGING_SYNTHETIC_ACCEPTED
+          - MESSAGING_SYNTHETIC_TRANSIENT
+          - MESSAGING_SYNTHETIC_PERMANENT
+          - MESSAGING_SYNTHETIC_AMBIGUOUS_TIMEOUT
+          - MESSAGING_CHANNEL_DISABLED
+          - MESSAGING_TEMPLATE_NOT_CONFIGURED
+          - MESSAGING_TEMPLATE_PARAMETERS_INVALID
+          - MESSAGING_RECIPIENT_INVALID
+          - MESSAGING_PROVIDER_TIMEOUT
+          - MESSAGING_PROVIDER_UNREACHABLE
+          - MESSAGING_PROVIDER_RATE_LIMITED
+          - MESSAGING_PROVIDER_UNAVAILABLE
+          - MESSAGING_PROVIDER_AUTH_FAILED
+          - MESSAGING_PROVIDER_REJECTED
+          - MESSAGING_PROVIDER_RESPONSE_INVALID
+          - MESSAGING_RECIPIENT_UNDELIVERABLE
+          - MESSAGING_REENGAGEMENT_REQUIRED
+          - MESSAGING_PROVIDER_TEMPLATE_REJECTED
+          - MESSAGING_POLICY_BLOCKED
+          - MESSAGING_PROVIDER_CIRCUIT_OPEN
+          - MESSAGING_PROVIDER_CONCURRENCY_LIMITED
+          - AMBIGUOUS_TIMEOUT
+          - TRACKING_LINK_UNAVAILABLE
+          - NOTICE_SUPERSEDED
+          - NOTICE_STALE
+          - NOTICE_LIMIT_REACHED
+          - RECIPIENT_OPTED_OUT
+          - MAX_ATTEMPTS_EXHAUSTED
+          - null
+        sent_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        delivered_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+          description: The time of the notice's last change, shown in America/Mazatlan.
+    RecipientNoticeStopResult:
+      type: object
+      additionalProperties: false
+      description: >-
+        NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (T6 choice 6) - the channels whose opt-out is on record for the order's
+        destination, recorded by this press or already there (never told apart), and the server time of this action.
+      required:
+      - order_id
+      - channels
+      - recorded_at
+      properties:
+        order_id:
+          type: string
+          format: uuid
+        channels:
+          type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+            - WHATSAPP
+            - EMAIL
+        recorded_at:
+          type: string
+          format: date-time
+    RecipientNoticeStopConflictProblem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - code
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          const: 409
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          enum:
+          - INVALID_REQUEST
+          - IDEMPOTENCY_CONFLICT
+          - RECIPIENT_CONTACT_UNAVAILABLE
     PublicTrackingProjection:
       type: object
       required:
@@ -8409,6 +8714,15 @@ x-capability-matrix:
     403 before anything is read
   dispatch_contact_operations:
     getMyDispatchContact: [DRIVER]
+  recipient_notice_operations_decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner, 2026-10-20, E4-P8 "Las tres vías
+    (Recommended)") with NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (project owner, 2026-10-30, round T) - the panel
+    "Avisos al destinatario" and "Detener avisos" follow the tracking_link_operations rule - DISPATCHER members without
+    MFA and PLATFORM_ADMIN members with a satisfied MFA challenge (403 MFA_REQUIRED when only the second factor is
+    missing), of the organization that owns the order only, decided before any order is read; every other role
+    receives the uniform 403, and an order the selected organization only operates is the uniform 404
+  recipient_notice_operations:
+    listOrderRecipientNotices: [DISPATCHER, PLATFORM_ADMIN]
+    stopOrderRecipientNotices: [DISPATCHER, PLATFORM_ADMIN]
 x-pilot-contract-deltas:
   purpose: Contract deltas recorded for the pilot. The HTTP surface above is unchanged until the implementing task publishes
     each delta together with code and tests. Every entry is an owner decision (DECIDED).
@@ -8699,9 +9013,12 @@ x-pilot-contract-deltas:
       the Notifications lane step 20261029000100_AddRecipientNoticeReceipts (the receipt executor's functions and the
       automatic-reply store) with its AI-06 and AI-18 declarations and baseline assertions, the Worker's
       automatic-reply sender and the public page /avisos/baja/:token (NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25, O2 to
-      O11); both webhook switches stay off (uniform 404); every other part is pending - nothing else below is served
-      or accepted yet; each part is published in this file together with its code and tests by the AI-08 item it
-      names; GATE-004 and GATE-007 stay open and every switch stays off
+      O11); both webhook switches stay off (uniform 404); part NTF-007 shipped by
+      feat/ntf-007-recipient-notice-panel together with its code and tests - listOrderRecipientNotices,
+      stopOrderRecipientNotices and x-capability-matrix recipient_notice_operations, with the Locations phone opener
+      under the PII key and the order detail panel "Avisos al destinatario" (NTF-RECIPIENT-NOTICE-PANEL-2026-10-30, T1
+      to T6; no migration, no new grant); every part below is now published in this file together with its code and
+      tests by the AI-08 item it names; GATE-004 and GATE-007 stay open and every switch stays off
     delta: recipient notices (TRACKING_LINK, IN_TRANSIT, DELIVERY_FAILED and DELIVERED) to the delivery recipient by
       WhatsApp and by e-mail; the parts below add an optional recipient e-mail, the WhatsApp consent, the dispatcher
       list and stop operations, the provider webhooks and the e-mail unsubscribe; every error keeps
@@ -8788,19 +9105,28 @@ x-pilot-contract-deltas:
       method_path: GET /orders/{orderId}/recipient-notices
       change: tag Orders; OrganizationContext and OrderId; 200 RecipientNoticeList with items (notification_id, notice,
         channel WHATSAPP or EMAIL, status PENDING, SENT, DELIVERED, FAILED or CANCELLED, attempts, last_code from the
-        closed MessagingResultCodes and notice code set, scheduled_for, sent_at, delivered_at, updated_at; ordered by
-        creation), whatsapp_consent_attested and email_on_file (booleans); never the phone, the e-mail, the link or a
-        template parameter; Cache-Control no-store; 401, 403 (MFA_REQUIRED when only the second factor is missing), the
-        uniform 404 (missing order, another organization or an order the selected organization only operates) and 503
+        explicit closed set of RecipientNotice.last_code - the closed MessagingResultCodes, the lane's AMBIGUOUS_TIMEOUT,
+        TRACKING_LINK_UNAVAILABLE and cancellation reasons, and MAX_ATTEMPTS_EXHAUSTED (NTF-RECIPIENT-NOTICE-PANEL-2026-10-30
+        T6 choice 4), sent_at, delivered_at, updated_at; ordered by creation, WhatsApp before e-mail, at most 100; no
+        scheduled time, T2 "Sin hora, con nota (Recommended)"), whatsapp_consent_attested and email_on_file (booleans,
+        the e-mail under the PII key, T6 choice 3); never the phone, the e-mail, the link or a template parameter;
+        Cache-Control no-store; 401, 403 (MFA_REQUIRED when only the second factor is missing), the uniform 404 (missing
+        order, another organization or an order the selected organization only operates) and 503 (also for a stored
+        value outside the closed sets)
     - item: NTF-007
       operation: stopOrderRecipientNotices
       method_path: POST /orders/{orderId}/recipient-notices/stop
       change: tag Orders; OrganizationContext, OrderId and the required Idempotency-Key, no body; records the WHATSAPP
         opt-out of the destination phone and, when there is one, the EMAIL opt-out of the destination e-mail (source
-        DISPATCHER; global, E4-P8), decrypting them in memory only, and audits RECIPIENT_NOTICES_STOPPED without any
-        value; 200 with order_id, the channels recorded and recorded_at; a replay returns the stored answer; 409
-        INVALID_REQUEST or IDEMPOTENCY_CONFLICT; 401, 403 (MFA_REQUIRED), the uniform 404 as listOrderRecipientNotices and
-        503 when the PII key or the contact lookup key is unavailable
+        DISPATCHER; global, E4-P8), decrypting them in memory only with the API's PII key outside any open transaction,
+        and audits RECIPIENT_NOTICES_STOPPED with the Idempotency-Key as request_id and the channels only, without any
+        value (NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 T6 choices 5 and 7); 200 RecipientNoticeStopResult with order_id,
+        the channels recorded - the channels whose contact is usable, named also when their opt-out was already on
+        record, so no opt-out made through another organization shows (T6 choice 6) - and recorded_at, the server time
+        of this action; a replay returns the stored answer; 409 INVALID_REQUEST, IDEMPOTENCY_CONFLICT or
+        RECIPIENT_CONTACT_UNAVAILABLE when no contact is usable, nothing recorded or audited (T6 choice 8);
+        Cache-Control no-store; 401, 403 (MFA_REQUIRED), the uniform 404 as listOrderRecipientNotices and 503 when the
+        PII key or the contact lookup key is unavailable
     - item: NTF-007
       operation: x-capability-matrix
       change: a new section recipient_notice_operations with listOrderRecipientNotices and stopOrderRecipientNotices for

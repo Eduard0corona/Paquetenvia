@@ -69,12 +69,19 @@ export interface ExternalOfferChangedPayload {
   readonly expires_at: string;
 }
 
+/**
+ * AI-12 NotificationStatusChanged. NTF-RECIPIENT-NOTICES-2026-10-20 (decided amendment, implemented by NTF-003): a v2
+ * recipient notice (channel WHATSAPP or EMAIL) also carries order_id and notice; both are absent (never null) on v1 and
+ * on IN_APP. Never a recipient, a template parameter, a link, a token or a result code.
+ */
 export interface NotificationStatusChangedPayload {
   readonly notification_id: Uuid;
   readonly channel: string;
   readonly status: string;
   readonly attempts: number;
   readonly occurred_at: string;
+  readonly order_id?: Uuid;
+  readonly notice?: string;
 }
 
 export interface PublicEtaChangedPayload {

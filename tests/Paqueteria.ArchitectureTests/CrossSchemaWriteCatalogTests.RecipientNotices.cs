@@ -56,6 +56,42 @@ public sealed partial class CrossSchemaWriteCatalogTests
         Assert.DoesNotContain(Scan(notifications), write => write.Target.StartsWith("orders.", StringComparison.Ordinal));
     }
 
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (AI-08 NTF-007; AI-13 §7.2 "las bajas escriben solo filas de Notifications más el
+    /// outbox y la auditoría compartidos, y leen Orders y Locations bajo RLS"): the dispatcher's panel and "Detener avisos" add
+    /// no flow and no cross-module write. The stop writes the opt-outs only through the receipt executor's
+    /// security.record_recipient_opt_out, the audit row only through the general writer and its stored answer in the shared
+    /// platform.idempotency_keys; Orders and Locations rows are only read.
+    /// </summary>
+    [Fact]
+    public void The_recipient_notice_panel_adds_no_flow_and_writes_only_its_own_and_the_shared_schemas()
+    {
+        Assert.Equal(6, Flows.Length);
+        Assert.Equal(8, Catalog.Length);
+        Assert.Empty(Violations(Scan(RuntimeSources()), Catalog));
+
+        var panel = RuntimeSources()
+            .Where(source => source.File.StartsWith(
+                "src/Modules/Notifications/Notifications.Infrastructure/RecipientNotices/Panel/", StringComparison.Ordinal))
+            .ToArray();
+        Assert.Equal(3, panel.Length);
+        Assert.Empty(Scan(panel));
+        var code = string.Join('\n', panel.Select(source => WithoutCommentLines(source.Code)));
+        Assert.Equal(
+            ["platform.idempotency_keys"],
+            PanelWritePattern().Matches(code).Select(match => match.Groups["target"].Value.ToLowerInvariant()).Distinct().ToArray());
+        Assert.Contains("SELECT security.record_recipient_opt_out(", code, StringComparison.Ordinal);
+        Assert.Contains("auditWriter.WriteAsync(", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("notice_phone_ciphertext", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("recipient_opt_outs", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("outbox_events", code, StringComparison.Ordinal);
+    }
+
+    [GeneratedRegex(
+        @"\b(?:INSERT\s+INTO|UPDATE|DELETE\s+FROM|MERGE\s+INTO)\s+(?:ONLY\s+)?(?<target>[A-Za-z_]+\s*\.\s*[A-Za-z_]+)",
+        RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
+    private static partial Regex PanelWritePattern();
+
     [GeneratedRegex(@"\bINSERT\s+INTO\s+orders\s*\.\s*recipient_notice_consents\b", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant)]
     private static partial Regex ConsentInsertPattern();
 

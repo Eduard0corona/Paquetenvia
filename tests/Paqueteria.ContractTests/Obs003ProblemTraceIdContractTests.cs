@@ -37,7 +37,7 @@ public sealed class Obs003ProblemTraceIdContractTests
             .Select(entry => (Name: Value(entry.Key), Schema: (YamlMappingNode)entry.Value))
             .ToArray();
 
-        Assert.Equal(16, schemas.Length);
+        Assert.Equal(17, schemas.Length);
         foreach (var (name, schema) in schemas)
         {
             Assert.False(schema.Children.ContainsKey(new YamlScalarNode("additionalProperties")), name);

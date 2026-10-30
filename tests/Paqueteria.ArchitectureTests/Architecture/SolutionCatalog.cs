@@ -231,6 +231,8 @@ internal static class SolutionCatalog
     /// <summary>
     /// NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006): the provider webhooks and the e-mail unsubscribe, the
     /// Notifications module's HTTP surface (AI-13 section 1). It reads only the Notifications application ports.
+    /// NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (AI-08 NTF-007) adds the dispatcher's tenant operations, which decide the
+    /// capability with the Organizations session and gate before any order is read, as the Custody endpoints do.
     /// </summary>
     internal static readonly ProjectComponent NotificationsEndpoints = Component(
         "Notifications.Endpoints",
@@ -238,7 +240,7 @@ internal static class SolutionCatalog
         typeof(Notifications.Endpoints.AssemblyReference).Assembly,
         "src/Modules/Notifications/Notifications.Endpoints/Notifications.Endpoints.csproj",
         "Notifications",
-        ["Notifications.Application", "Paqueteria.Application"]);
+        ["Notifications.Application", "Organizations.Application", "Organizations.Endpoints", "Paqueteria.Application"]);
 
     internal static readonly IReadOnlyList<ModuleDefinition> Modules =
     [

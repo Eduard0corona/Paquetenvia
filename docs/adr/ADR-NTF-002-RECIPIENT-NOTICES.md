@@ -1,8 +1,9 @@
 # ADR-NTF-002: avisos al destinatario por WhatsApp y correo
 
 - Estado: aceptado (NTF-RECIPIENT-NOTICES-2026-10-20; detallado por NTF-RECIPIENT-NOTICE-CAPS-2026-10-23,
-  NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 y NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25); implementado por partes (AI-08
-  NTF-002 a NTF-006) y **apagado**. GATE-004 y GATE-007 siguen abiertas.
+  NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23, NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 y
+  NTF-RECIPIENT-NOTICE-PANEL-2026-10-30); implementado por partes (AI-08 NTF-002 a NTF-007) y **apagado**. GATE-004 y
+  GATE-007 siguen abiertas.
 - Fecha: 2026-10-20
 - Alcance: contratos v0.6 (AI-03, AI-04, AI-05 `x-pilot-contract-deltas`, AI-06 y AI-18 como contrato declarado,
   AI-07, AI-08 NTF-002 a NTF-008, AI-09, AI-12, AI-13 §7.2 y AI-24 `recipient_notices`). El código llega con cada

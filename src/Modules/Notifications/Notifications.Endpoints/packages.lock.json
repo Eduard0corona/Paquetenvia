@@ -60,6 +60,14 @@
           "Paqueteria.Domain": "[1.0.0, )"
         }
       },
+      "organizations.endpoints": {
+        "type": "Project",
+        "dependencies": {
+          "Organizations.Application": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )",
+          "Paqueteria.Domain": "[1.0.0, )"
+        }
+      },
       "paqueteria.application": {
         "type": "Project",
         "dependencies": {

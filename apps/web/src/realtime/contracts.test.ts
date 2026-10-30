@@ -11,6 +11,7 @@ describe("SignalR contract constants", () => {
       "IncidentCreated.v1",
       "ExternalOfferChanged.v1",
       "NotificationStatusChanged.v1",
+      "NotificationStatusChanged.v2",
       "DriverLocationUpdated.v1",
       "PublicOrderStatusChanged.v1",
       "PublicEtaChanged.v1",

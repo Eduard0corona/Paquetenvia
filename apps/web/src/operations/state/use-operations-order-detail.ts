@@ -23,6 +23,11 @@ import {
   RefreshScopeChangedError,
   type RefreshRequirement,
 } from "./authoritative-refresh-coordinator";
+import {
+  isRecipientNoticeOfOrder,
+  strongerOrderDetailReload,
+  type OrderDetailReload,
+} from "./order-detail-reloads";
 import { ScreenReloads } from "./screen-reloads";
 import { isRateLimited } from "./tenant-error-messages";
 import {
@@ -49,7 +54,11 @@ export interface OperationsOrderDetailState {
   readonly error: string | null;
   readonly connection: string;
   readonly lastUpdated: Date | null;
+  /** Grows each time the panel "Avisos al destinatario" should be read again (each read of the order included). */
+  readonly noticesRevision: number;
   refresh(): void;
+  /** Reads the panel again (after "Detener avisos"); held during the server's wait like every other read. */
+  reloadNotices(): void;
 }
 
 export function useOperationsOrderDetail(
@@ -65,12 +74,16 @@ export function useOperationsOrderDetail(
   const [error, setError] = useState<string | null>(null);
   const [connectionState, setConnectionState] = useState("Sin sesión");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [noticesRevision, setNoticesRevision] = useState(0);
   const apiRef = useRef<OperationsDashboardApi | null>(null);
   const sessionRef = useRef<OperationsSession | null>(null);
   const connectionRef = useRef<ManagedRealtimeConnection | null>(null);
   // Owner answers Q9 (at most one realtime reload every 3 seconds), Q11 and Q14 (nothing is read during the
   // server's wait; the order is read once when it ends). Its reload is set from an effect below.
-  const [reloads] = useState(() => new ScreenReloads<"realtime">({ operations: orderDetailRateLimit }));
+  // T6 choice 9: a recipient notice reloads only its panel, gathered with the order's notices (250 ms, 3 s spacing).
+  const [reloads] = useState(
+    () => new ScreenReloads<OrderDetailReload>({ operations: orderDetailRateLimit, stronger: strongerOrderDetailReload }),
+  );
   // A reconnect waiting out the server's wait stops waiting on a session change or unmount.
   const waitAbortRef = useRef(new AbortController());
   const refreshCoordinatorRef = useRef(
@@ -123,6 +136,8 @@ export function useOperationsOrderDetail(
             setAccessUnavailable(false);
             setError(null);
             setLastUpdated(new Date(result.generatedAt));
+            // T6 choice 9: the panel is read with every read of the order.
+            setNoticesRevision((value) => value + 1);
           },
         });
       } catch (caught: unknown) {
@@ -161,14 +176,22 @@ export function useOperationsOrderDetail(
     [orderId, reloads],
   );
 
+  // The panel alone: counts for the spacing like every other reload of the screen.
+  const loadNotices = useCallback(() => {
+    if (blockedRef.current || sessionRef.current === null) return;
+    reloads.reloaded();
+    setNoticesRevision((value) => value + 1);
+  }, [reloads]);
+
   // The gathered realtime reload, and the one reload when the server's wait ends.
   useEffect(() => {
-    reloads.setReload(() => {
+    reloads.setReload((kind) => {
       const api = apiRef.current;
       const session = sessionRef.current;
-      if (api !== null && session !== null) void load(api, session);
+      if (kind === "notices") loadNotices();
+      else if (api !== null && session !== null) void load(api, session);
     });
-  }, [load, reloads]);
+  }, [load, loadNotices, reloads]);
 
   const start = useCallback(async () => {
     refreshScopeRef.current += 1;
@@ -201,6 +224,9 @@ export function useOperationsOrderDetail(
     const realtime = createOperationsDashboardRealtime(apiBaseUrl, session, {
       refreshOperations: () => reloads.notice("realtime", 250),
       refreshLocation: () => reloads.notice("realtime", 500),
+      notificationStatusChanged: (event) => {
+        if (isRecipientNoticeOfOrder(event, orderId)) reloads.notice("notices", 250);
+      },
       resynchronize: async () => {
         if (readOperationsSession() !== session) throw new Error("Session changed.");
         // SEC-004: the mandatory read waits out the server's wait instead of meeting the same 429.
@@ -233,7 +259,7 @@ export function useOperationsOrderDetail(
     } catch {
       setConnectionState("Sin conexión");
     }
-  }, [apiBaseUrl, load, reloads]);
+  }, [apiBaseUrl, load, orderId, reloads]);
 
   useEffect(() => {
     const initial = window.setTimeout(() => void start(), 0);
@@ -280,10 +306,15 @@ export function useOperationsOrderDetail(
     error,
     connection: connectionState,
     lastUpdated,
+    noticesRevision,
     refresh: () => {
       const api = apiRef.current;
       const session = sessionRef.current;
       if (api !== null && session !== null) void load(api, session);
+    },
+    reloadNotices: () => {
+      // SEC-004: during the server's wait the read is kept for when it ends, like the read after any other change.
+      if (reloads.admit("notices")) loadNotices();
     },
   };
 }

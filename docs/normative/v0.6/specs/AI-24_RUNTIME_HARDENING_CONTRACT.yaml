@@ -343,6 +343,7 @@ recipient_notices:
   - NTF-RECIPIENT-NOTICE-CAPS-2026-10-23
   - NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23
   - NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25
+  - NTF-RECIPIENT-NOTICE-PANEL-2026-10-30
   - GATE-004-CHANNELS
   - NTF-EMAIL-ACS-PILOT-2026-10-11
   - NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02
@@ -359,9 +360,11 @@ recipient_notices:
     lane table orders.recipient_notice_consents the Worker reads; NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23, N1 to N3)
     and AI-08 NTF-006 (the provider webhooks, the e-mail unsubscribe and its page, the receipt executor's Notifications
     lane step with the automatic-reply store and the Worker's automatic-reply sender;
-    NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25, O2 to O11), with every switch off and every provider Disabled; nothing is
-    configured or enabled. AI-08 NTF-007 and NTF-008 deliver the rest, each item with its own code and tests; only a later change that records the GATE-004 and GATE-007
-    resolution rows turns it on. GATE-004 and GATE-007 stay open
+    NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25, O2 to O11) and AI-08 NTF-007 (the dispatcher's list and "Detener avisos",
+    the Locations phone opener under the PII key and the order detail panel; NTF-RECIPIENT-NOTICE-PANEL-2026-10-30, T1
+    to T6), with every switch off and every provider Disabled; nothing is configured or enabled. AI-08 NTF-008 delivers
+    the rest with its own code and tests; only a later change that records the GATE-004 and GATE-007 resolution rows
+    turns it on. GATE-004 and GATE-007 stay open
   adr: docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md
   audience: the delivery recipient of the order only, reached at the contact of its destination location; never the
     sender or its business (E4-P13, out of this work until BUS-001), a driver or a dispatcher
@@ -698,9 +701,36 @@ recipient_notices:
     meaning: SENT means provider acceptance only until a receipt moves it on; while the webhooks are off no receipt
       arrives
   dispatcher_view:
+    decision: NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (T2 "Sin hora, con nota (Recommended)", T3 "Mensaje y botón siempre
+      (Recommended)", T6 "Aprobarlas todas (Recommended)")
     list: listOrderRecipientNotices - notice, channel, status, attempts, last code and times; never the recipient, the
-      link or a template parameter
+      link or a template parameter. Fields notification_id, notice, channel, status, attempts, last_code, sent_at,
+      delivered_at and updated_at, ordered by creation and WhatsApp before e-mail, at most 100, plus
+      whatsapp_consent_attested and email_on_file (the destination keeps an e-mail under the PII key, T6 choice 3); no
+      scheduled time (T2) - the quiet-hours time is only the available_at of the send request, which no runtime role
+      reads - so a PENDING notice reads "Pendiente" and the panel states the 08:00 to 21:00 window; last_code is the
+      closed MessagingResultCodes, the lane's codes and MAX_ATTEMPTS_EXHAUSTED, and anything else fails closed (T6
+      choice 4); one tenant transaction of the owner organization, nothing decrypted (T6 choice 2)
     stop: stopOrderRecipientNotices records the opt-outs of the contact of that order (opt_out.dispatcher)
+    stop_steps: T6 choice 5 - the capability and the Idempotency-Key before any read; one tenant transaction reads the
+      PII ciphertexts of the destination phone and e-mail and commits; with no transaction open the API opens them in
+      memory with its PII key (Locations' openers, as VOICE-001 and opt_out.email_link), never with the recipient-notice
+      key, and hashes each under every configured contact lookup key version (opt_out.hash and key_versions); one
+      transaction then records the opt-outs (source DISPATCHER), the audit row and the stored answer. A contact that
+      cannot be opened or used leaves its channel out; with none left the answer is 409 RECIPIENT_CONTACT_UNAVAILABLE
+      and nothing is recorded or audited; without the PII key or the contact lookup key it is 503 (T6 choice 8)
+    stop_answer: T6 choice 6 - the channels whose opt-out is on record (WHATSAPP when the order has a usable phone,
+      EMAIL when it has a usable e-mail), named also when they already were, so no opt-out made through another
+      organization shows; recorded_at is the server time of the action; the audit row RECIPIENT_NOTICES_STOPPED of the
+      order carries the Idempotency-Key as request_id and the channels only (T6 choice 7); a replay of the same key
+      writes nothing, another press is audited again and changes nothing for the recipient (T3); the button is offered
+      even when the order has no notice and no consent box, because the opt-out is global (T6 choice 13); the stop
+      cancels nothing itself - the Worker ends each PENDING notice of that contact CANCELLED with RECIPIENT_OPTED_OUT
+      when its send comes (opt_out.check)
+    synthetic: T6 choice 11 - with Locations:PiiProtector=Mock (Development, Testing, DEV_SYNTHETIC) nothing is
+      decrypted and the stop opts out the shared placeholders of contact.synthetic (+520000000002 and
+      destinatario@example.invalid), as the e-mail unsubscribe does; a stop there silences every synthetic notice of
+      that environment until its database is reset (a recorded risk); the pilot keeps Locations:PiiProtector=AzureKeyVault
     realtime: NotificationStatusChanged v2 (AI-12 decided amendment) carries order_id and notice, and the order detail
       reloads its panel (AI-07 /ops/orders/:id recipient_notices)
     roles: DISPATCHER members, and PLATFORM_ADMIN members with a satisfied MFA challenge, of the owner organization only
