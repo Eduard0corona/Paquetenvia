@@ -421,6 +421,81 @@ Para NuGet, `dotnet package list` sale con 1 cuando no alcanza el feed (escribe 
 metadata de un paquete, la herramienta sale con 0 y escribe el proyecto sin `frameworks`,
 exactamente igual que un reporte limpio.
 
+### Aviso conocido aceptado de minimatch (SEC-2026-16)
+
+`SEC-2026-16-MINIMATCH-GLOBPARTS-TRACKED` (Issue #324, rama `fix/security-2026-16-minimatch-tracked`,
+base `ece1c3e`) acepta `GHSA-g3hv-75wg-m249` (CVE-2026-118764, moderado, publicado el
+2026-10-30T23:09:55Z): `minimatch` `<11.0.1` puede gastar mucha CPU y memoria con un patrón glob hecho
+a propósito (`firstPhasePreProcess()` con `optimizationLevel >= 2`). Desde que se publicó, REL-000
+fallaba con `UNTRACKED_DEPENDENCY_ADVISORY` en todo PR a `development` (#323) y también en `main`.
+
+- **Alcance.** `apps/web/pnpm-lock.yaml` (`f944eecd…`) resuelve `minimatch` 3.1.5 por `eslint` 9.39.5,
+  `@eslint/config-array` 0.21.2, `@eslint/eslintrc` 3.3.6, `eslint-plugin-import` 2.32.0,
+  `eslint-plugin-jsx-a11y` 6.10.2 y `eslint-plugin-react` 7.37.5 (85 rutas), y 10.2.5 por
+  `@typescript-eslint/typescript-estree` 8.64.0 (11 rutas). Las 96 rutas empiezan en `eslint` o
+  `eslint-config-next`, ambas `devDependencies`; `minimatch` no está en el grafo de producción y
+  `pnpm audit --prod` no reporta nada. El código vulnerable no existe en 3.1.5, y en 10.2.5 ninguna
+  herramienta pasa `optimizationLevel`.
+- **Por qué no se remedia.** No hay 3.x ni 10.x corregido y ningún dependiente acepta `minimatch` 11, que
+  quita la exportación CommonJS llamable y `makeRe` que usan `eslint-plugin-import`, `jsx-a11y` y
+  `react`.
+- **Decisión.** El owner eligió "Aceptarlo como conocido" (X1, 2026-10-31, fila
+  `SEC-2026-16-MINIMATCH-KNOWN-ADVISORY-2026-10-31` del decision-log), como braces: un solo PR a
+  `development` con su fila y su entrada del CHANGELOG; `main` lo recibe en la próxima promoción. Si
+  fuera primero a `main`, el back-sync chocaría, porque la aceptación queda activa.
+- **Política.** La autorización activa sigue la forma de la de braces: modo `SECURITY_REMEDIATION`,
+  Issue #324, un aviso moderado en la base y en la rama, `apps/web/pnpm-lock.yaml` como único archivo de
+  dependencias permitido y ninguno requerido, el smoke de Sharp (0.35.5) y la lista exacta de archivos
+  que no son de dependencias. Esa lista suma esta nota, la fila del decision-log, el CHANGELOG, la
+  integridad normativa y los pins de las pruebas de arquitectura. Como el paquete tiene dos versiones con
+  varios padres, el aviso aceptado no declara una `lock_path` lineal sino `lock_parents`, los padres
+  exactos de cada versión. `rel000.py` exige la autorización campo por campo, sin campos de más y con el
+  aviso aceptado igual a `MINIMATCH_KNOWN_ADVISORY`. Sólo braces (retirada, con exactamente su aviso
+  aceptado) o SEC-2026-16 pueden declarar un aviso aceptado.
+- **Grafo.** `validate_known_advisory_dev_graph` corre sobre el lockfile de la base y el de la rama
+  (`validate_known_advisory_lock_graph` lo elige cuando el aviso declara `lock_parents`; braces sigue con
+  su validador de ruta lineal) y exige:
+  - un solo importer, sin `minimatch` entre sus dependencias directas;
+  - exactamente las versiones 3.1.5 y 10.2.5, en los paquetes y en las instantáneas;
+  - exactamente los padres declarados de cada versión;
+  - `minimatch` fuera del grafo de producción, calculado con `production_graph` de
+    `tools/ci/web_image_dependencies.py`, el mismo módulo que usa el smoke de las imágenes web;
+  - que toda instantánea que llega a `minimatch` cuelgue de una raíz del importer, que esas raíces sean
+    sólo `devDependencies` y que las rutas sean exactamente 96 (el recorrido reproduce las 96 rutas del
+    audit);
+  - como braces, el SHA-256 fijado del lockfile (`KNOWN_ADVISORY_LOCK_GRAPH_CHANGED`).
+
+  Cualquier otra forma falla con `KNOWN_ADVISORY_LOCK_PATH_INVALID`.
+- **Audit e Issue.** Cada audit que reporta el aviso debe reproducir exactamente
+  `KNOWN_ADVISORY_AUDIT_FIELDS`: paquete, severidad, `installed_versions` `["10.2.5", "3.1.5"]`, rangos,
+  transitivo y 96 rutas (si no, `KNOWN_ADVISORY_SCOPE_INVALID`). El Issue #324 se consulta una sola vez,
+  abierto, con su título exacto y sólo este GHSA (`KNOWN_ADVISORY_TRACKING_INVALID` o
+  `KNOWN_ADVISORY_ISSUE_STATE_INVALID`). Cualquier otro aviso o paquete sigue fallando cerrado.
+- **Diff.** `validate_minimatch_known_advisory_diff`, como el de braces: no cambia ningún archivo de
+  dependencias ni ningún archivo fuera de la lista exacta.
+- **Modos.** En su propio PR, REL-000 corre en `SECURITY_REMEDIATION` dentro de PR Validation hacia
+  `development`. La base autorizada debe ser el primer padre del merge probado: si `development` avanza
+  antes de la fusión, se mezcla y se fija la nueva base. El resultado esperado es
+  `REL000_SECURITY_REMEDIATION_READY_FOR_MERGE` con `REMEDIATED_PENDING_MERGE`. Después de la fusión,
+  todo PR que no toca las dependencias web corre en modo normal y queda `PASSED`, con el aviso visible en
+  `accepted_known_advisories` y en `known_security_issues` como `Issue #324`.
+- **Flujos y fixture.** La línea `REL000_REMEDIATION_ID` de ambos flujos (siguen idénticas) nombra la rama
+  y `tests/fixtures/rel-000/security-tracking.json` vincula el ID con el Issue #324 en
+  `remediation_issues` y en `known_advisory_issues`.
+- **Revinculación.** `rel000.py` fija el hash, los padres y el conteo de rutas, no sólo la política. Todo
+  cambio posterior de `apps/web/pnpm-lock.yaml` mueve el hash, y a menudo las rutas o los padres, así que
+  debe revincular la aceptación en `rel000.py` y en la política, o retirarla, como pasó tres veces con
+  braces. Como la política de la base probada también se valida, esa revinculación debe dejar que sólo
+  una base anterior conserve el grafo previo, como hicieron SEC-2026-11 y SEC-2026-14 con braces. Una
+  revisión del aviso que cambie sus campos de audit falla cerrado hasta revincularla o retirarla.
+- **Salida.** Si sale un 3.x o 10.x corregido, o los dependientes aceptan `minimatch>=11.0.1`, se remedia
+  como SEC-2026-15; si GitHub retira o acota el aviso, se retira como braces. Entonces se verifica el
+  audit en cero, se retira la aceptación y se cierra el Issue #324.
+- **Exposición residual.** El código vulnerable de 10.2.5 queda en las herramientas de lint (máquinas
+  locales y CI), alcanzable sólo con un patrón hostil y `optimizationLevel >= 2`. Las imágenes web de
+  `development` sólo llevan dependencias de producción (#311); una imagen construida desde `main` aún
+  lleva el `node_modules` de desarrollo hasta la próxima promoción, y `next start` nunca lo carga.
+
 ### Remediación pnpm de vite, vitest y Next.js (SEC-2026-14)
 
 `SEC-2026-14-VITE` (Issue #304, rama `fix/security-2026-14-vite`, base `c84ef92`) remedia nueve

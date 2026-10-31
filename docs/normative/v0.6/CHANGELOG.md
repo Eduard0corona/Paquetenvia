@@ -1,5 +1,32 @@
 # Changelog
 
+## Aviso conocido aceptado de minimatch (SEC-2026-16-MINIMATCH-KNOWN-ADVISORY-2026-10-31) — 2026-10-31
+
+- Respuesta literal del project owner (ronda X, pregunta X1, 2026-10-31), registrada en `decision-log.md` con su contexto,
+  el texto de la opción y las opciones no elegidas ("Remediar con la tabla" y "Esperar a upstream"): X1 "Aceptarlo como
+  conocido (Recommended)".
+- El aviso: `GHSA-g3hv-75wg-m249` (CVE-2026-118764, moderado). `minimatch` `<11.0.1` puede gastar mucha CPU y memoria con
+  un patrón glob hecho a propósito. En `apps/web/pnpm-lock.yaml` llegan `minimatch` 3.1.5 y 10.2.5 sólo por las
+  herramientas de lint, en 96 rutas de desarrollo; no está en el grafo de producción. No hay 3.x ni 10.x corregido y
+  ningún dependiente acepta `minimatch` 11. Desde que se publicó, REL-000 fallaba con `UNTRACKED_DEPENDENCY_ADVISORY` en
+  todo PR a `development` (#323).
+- REL-000: la autorización activa `SEC-2026-16-MINIMATCH-GLOBPARTS-TRACKED` (Issue #324, rama
+  `fix/security-2026-16-minimatch-tracked`) acepta el aviso sólo en `minimatch` 3.1.5 y 10.2.5, moderado, con los padres
+  exactos de cada versión, sus 96 rutas de desarrollo, fuera del grafo de producción y sobre el lockfile actual
+  (`f944eecd…`), mientras el Issue #324 siga abierto con su título exacto. `rel000.py` gana un validador de varias
+  versiones y varios padres que usa el grafo de producción de `tools/ci/web_image_dependencies.py`, la exclusividad
+  extendida (braces retirada o SEC-2026-16, cada una exacta) y un validador de diff que no admite cambios de
+  dependencias. Cualquier otra versión, padre, ruta de producción, conteo, hash, estado o título del Issue, campo del
+  audit u otro aviso falla cerrado.
+- La línea `REL000_REMEDIATION_ID` de ambos flujos nombra la rama y el fixture de tracking vincula el ID con el Issue #324.
+  Nota: `docs/development/rel-000-internal-release.md`.
+- Salida: un 3.x o 10.x corregido, o dependientes que acepten `minimatch>=11.0.1`, se remedian como SEC-2026-15; si GitHub
+  retira o acota el aviso, se retira como braces. Entonces se verifica el audit en cero, se retira la aceptación y se
+  cierra el Issue #324. Todo cambio posterior del lockfile debe revincular o retirar la aceptación.
+- Un solo PR a `development` con esta entrada y la fila del decision-log; `main` lo recibe en la próxima promoción.
+- Sin cambios en código de la aplicación, dependencias, lockfiles, `package.json`, workspace, migraciones, AI-04, AI-05,
+  AI-06, AI-12, AI-18, roles ni permisos.
+
 ## Avisos al destinatario: panel y "Detener avisos" (NTF-RECIPIENT-NOTICE-PANEL-2026-10-30, AI-08 NTF-007) — 2026-10-30
 
 - Respuestas literales del project owner (ronda T, preguntas T1 a T6, 2026-10-30), registradas en `decision-log.md` con
