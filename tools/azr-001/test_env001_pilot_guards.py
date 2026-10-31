@@ -1193,7 +1193,9 @@ elif args[:3] == ["keyvault", "secret", "set"]:
 elif args[:2] == ["resource", "show"]:
     path = os.path.join(state, "acs-id")
     if opt("--resource-type") != "Microsoft.Communication/communicationServices" or not os.path.exists(path):
-        print("ERROR: ResourceNotFound", file=sys.stderr); sys.exit(3)
+        # Like az: the error names the resource and the resource group.
+        print(f"ERROR: (ResourceNotFound) The Resource '{opt('--resource-type')}/{opt('--name')}' under resource group "
+              f"'{opt('--resource-group')}' was not found.", file=sys.stderr); sys.exit(3)
     print(open(path, encoding="utf-8").read())
 elif args[:3] == ["role", "definition", "list"]:
     path = os.path.join(state, "roles", opt("--name") + ".json")
@@ -1496,6 +1498,46 @@ class WorkflowRecipientNoticeSecretsTests(WorkflowStepHarness):
         self.assertNotEqual(0, result.returncode)
         self.assertFalse((self.state / "secrets" / guards.ACS_RESOURCE_ID_SECRET).exists())
         self.assertFalse((self.root / "runner" / "s").exists())
+        # A3: the az error names the resource; the step prints only its fixed message.
+        self.assertIn("::error::The id of the Communication Services resource named by PILOT_ACS_NAME could not be read",
+                      result.stdout)
+        self.assertNotIn("acs-pv-synthetic", result.stdout + result.stderr)
+        self.assertNotIn("ResourceNotFound", result.stdout + result.stderr)
+
+    def test_an_empty_resource_id_stops_before_storing_it(self):
+        (self.state / "acs-id").write_text("\n", encoding="utf-8")
+        result = self.run_generated()
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse((self.state / "secrets" / guards.ACS_RESOURCE_ID_SECRET).exists())
+        self.assertIn("could not be read", result.stdout)
+
+
+class WorkflowAcsResourceCheckTests(WorkflowStepHarness):
+    """W2 and W11 item 4: after the login the workflow checks that PILOT_ACS_NAME names an existing Communication Services
+    resource; neither the name nor the id is printed, not even the az error of a failed lookup (A3)."""
+
+    def setUp(self):
+        super().setUp()
+        self.step = workflow_step(lambda s: s.get("name") == "Check the Communication Services resource (PILOT_ACS_NAME)")
+
+    def run_check(self) -> subprocess.CompletedProcess:
+        return self.run_step(self.step, PILOT_ACS_NAME="acs-pv-synthetic", PILOT_RESOURCE_GROUP="rg-pv-pilot")
+
+    def test_an_existing_resource_passes_without_printing_its_id(self):
+        (self.state / "acs-id").write_text(SYNTHETIC_ACS_ID + "\n", encoding="utf-8")
+        result = self.run_check()
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("The Communication Services resource named by PILOT_ACS_NAME exists.", result.stdout)
+        self.assertNotIn(SYNTHETIC_ACS_ID, result.stdout + result.stderr)
+        self.assertNotIn("acs-pv-synthetic", result.stdout + result.stderr)
+
+    def test_a_missing_resource_stops_with_a_fixed_message(self):
+        result = self.run_check()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("::error::The Communication Services resource named by PILOT_ACS_NAME cannot be read in rg-pv-pilot",
+                      result.stdout)
+        self.assertNotIn("acs-pv-synthetic", result.stdout + result.stderr)
+        self.assertNotIn("ResourceNotFound", result.stdout + result.stderr)
 
 
 class WorkflowCustomRoleLookupTests(WorkflowStepHarness):
@@ -3446,7 +3488,7 @@ class TemplateGuardTests(unittest.TestCase):
                                   "must validate PILOT_ACS_NAME before azure/login"),
             "acs not checked": (text.replace("echo \"The Communication Services resource named by PILOT_ACS_NAME exists.\"", "true")
                                 .replace("if ! az resource show --resource-group \"${PILOT_RESOURCE_GROUP}\" --name \"${PILOT_ACS_NAME}\" \\\n"
-                                         "              --resource-type Microsoft.Communication/communicationServices --query id -o tsv --only-show-errors > /dev/null; then",
+                                         "              --resource-type Microsoft.Communication/communicationServices --query id -o tsv --only-show-errors > /dev/null 2>&1; then",
                                          "if false; then"),
                                 "must check that PILOT_ACS_NAME names an existing"),
             "secret not generated": (text.replace("whatsapp-app-secret-previous \\\n", "\\\n"), "window 1 (step id generated) must generate"),

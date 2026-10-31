@@ -114,6 +114,26 @@ public sealed class RecipientNoticePilotWiringNormativeTests
     }
 
     [Fact]
+    public void X2_going_back_across_the_wiring_change_is_recorded_and_documented()
+    {
+        var log = File.ReadAllText(RepositoryPaths.Normative("decision-log.md"));
+        var row = log.Split('\n').Single(line => line.StartsWith($"| 2026-10-31 | {DecisionId} |", StringComparison.Ordinal));
+        Assert.Contains(
+            "Round X (continued, asked and answered 2026-10-31, NTF-008 review), context verified before asking, verbatim:",
+            row,
+            StringComparison.Ordinal);
+        Assert.Contains("Answer: \"Documentarlo (Recommended)\"", row, StringComparison.Ordinal);
+        Assert.Contains("Not chosen: \"Hacerlo compatible\"", row, StringComparison.Ordinal);
+
+        var runbook = File.ReadAllText(Path.Combine(RepositoryPaths.Root, "docs", "operations", "env-001-pilot", "README.md"));
+        var start = runbook.IndexOf("### 6.3 Rollback", StringComparison.Ordinal);
+        var rollback = runbook[start..runbook.IndexOf("### 6.4 ", start, StringComparison.Ordinal)];
+        Assert.Contains("owner X2 \"Documentarlo (Recommended)\"", rollback, StringComparison.Ordinal);
+        Assert.Contains("revert the NTF-008 PR", rollback, StringComparison.Ordinal);
+        Assert.Contains("(13/13 green)", rollback, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void The_committed_pilot_templates_keep_every_recipient_notice_switch_off()
     {
         var pilot = Path.Combine(RepositoryPaths.Root, "deploy", "azure", "pilot");

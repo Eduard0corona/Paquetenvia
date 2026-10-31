@@ -36,6 +36,7 @@ Reglas de esta guía:
 | 9 | Plantillas de WhatsApp a Meta, después del abogado (W10) | Tras la respuesta de GATE-007 | El cambio de compuertas |
 | 10 | Qué decirle al orquestador | En cada paso | — |
 | 11 | Después del cambio de compuertas (no es parte de NTF-008) | Más tarde | — |
+| 12 | Riesgos que quedan | Léelo antes de fusionar | — |
 
 ---
 
@@ -71,7 +72,9 @@ Fuentes (consultadas el 2026-10-31):
 - Acciones para mandar correo con un rol propio: <https://learn.microsoft.com/en-us/azure/communication-services/quickstarts/email/send-email-smtp/smtp-authentication>
   (pestaña *Custom role*, actualizada 2026-09-23): `Microsoft.Communication/CommunicationServices/Read`,
   `Microsoft.Communication/CommunicationServices/Write` y `Microsoft.Communication/EmailServices/write`. Ninguna es
-  `ListKeys` ni `RegenerateKey`, así que el Worker nunca puede leer ni cambiar las claves de ACS.
+  `ListKeys` ni `RegenerateKey`, así que el Worker nunca puede leer ni cambiar las claves de ACS. Ojo: estas acciones
+  vienen de la página de SMTP, y `CommunicationServices/Write` también permite cambiar la configuración del recurso, más
+  que "solo mandar" (riesgo 2 del paso 12).
 
 ### 2.1 Rol "solo abrir" para el Worker sobre la llave de avisos
 
@@ -125,40 +128,60 @@ UNWRAP_ID="$(az role definition list --custom-role-only true \
   --name "Paquetenvia Pilot Recipient Notice Unwrap" --scope "$RG_ID" --query "[0].name" -o tsv)"
 SENDER_ID="$(az role definition list --custom-role-only true \
   --name "Paquetenvia Pilot Email Sender" --scope "$RG_ID" --query "[0].name" -o tsv)"
-for id in "$TAG_READER_ID" "$UNWRAP_ID" "$SENDER_ID"; do [[ -n "$id" ]] || echo "falta un rol; espera 1-2 minutos y repite"; done
+# Se detiene (exit 1 dentro del paréntesis, sin cerrar Cloud Shell) si falta un id o no es un GUID.
+( for id in "$TAG_READER_ID" "$UNWRAP_ID" "$SENDER_ID"; do
+    [[ "$id" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] || {
+      echo "ALTO: falta un rol propio; espera 1-2 minutos y repite el paso 2.3. No sigas al 2.4."; exit 1; }
+  done
+  echo "Los tres ids existen: sigue al paso 2.4." )
 ```
 
-No copies estos ids a ningún lado: se usan solo en el paso siguiente, en la misma sesión de Cloud Shell.
+Si ves **ALTO**, no pases al paso 2.4 (de todos modos el 2.4 se niega a borrar nada si falta un id). No copies estos
+ids a ningún lado: se usan solo en el paso siguiente, en la misma sesión de Cloud Shell.
 
 ### 2.4 Volver a crear la condición del deployer
 
 La asignación *Role Based Access Control Administrator* del deployer (`bootstrap.md` §5) admite hoy 7 roles. Las
 plantillas de NTF-008 asignan tres roles más: *Key Vault Reader* y los dos roles propios. Una condición de Azure no se
 edita por partes, así que borras esa asignación y la creas otra vez con la lista ampliada (10 roles). El rol
-*Contributor* del deployer no se toca.
+*Contributor* del deployer no se toca. El bloque revisa primero que existan el grupo de recursos, el deployer y los tres
+ids del paso 2.3; si falta uno, escribe **ALTO** y no borra nada.
 
 ```bash
 APP_ID="$(az ad app list --display-name "paquetenvia-pilot-deployer" --query "[0].appId" -o tsv)"
 SP_OBJECT_ID="$(az ad sp show --id "$APP_ID" --query id -o tsv)"
 
-az role assignment delete --assignee "$SP_OBJECT_ID" \
-  --role "Role Based Access Control Administrator" --scope "$RG_ID"
-
 # AcrPull, Storage Blob Data Contributor, Storage Blob Delegator, Key Vault Secrets User, Key Vault Secrets Officer,
 # Key Vault Crypto Service Encryption User, Key Vault Reader (NTF-008) y los tres roles propios.
 ALLOWED="7f951dda-4ed3-4680-a7ca-43fe172d538d, ba92f5b4-2d11-453d-a403-e96b0029c9fe, db58b8e5-c6ad-4a2a-8342-4190687cbf4a, 4633458b-17de-408a-b874-0445c86b69e6, b86a8fe4-44ce-4948-aee5-eccb2c155cd7, e147488a-f6f5-4113-8e2d-b22465e65bf6, 21090545-7ca7-4776-b22c-e363652d74d2, ${TAG_READER_ID}, ${UNWRAP_ID}, ${SENDER_ID}"
 CONDITION="((!(ActionMatches{'Microsoft.Authorization/roleAssignments/write'})) OR (@Request[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${ALLOWED}})) AND ((!(ActionMatches{'Microsoft.Authorization/roleAssignments/delete'})) OR (@Resource[Microsoft.Authorization/roleAssignments:RoleDefinitionId] ForAnyOfAnyValues:GuidEquals {${ALLOWED}}))"
-az role assignment create --assignee-object-id "$SP_OBJECT_ID" --assignee-principal-type ServicePrincipal \
-  --role "Role Based Access Control Administrator" --scope "$RG_ID" \
-  --condition "$CONDITION" --condition-version "2.0" --output none
+
+# Se niega a borrar nada si falta el grupo de recursos, el deployer o uno de los tres ids (un id vacío dejaría al
+# deployer sin poder asignar ese rol).
+GUID='^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+if [[ "${RG_ID:-}" == */resourceGroups/rg-pv-pilot && "${SP_OBJECT_ID:-}" =~ $GUID && "${TAG_READER_ID:-}" =~ $GUID \
+      && "${UNWRAP_ID:-}" =~ $GUID && "${SENDER_ID:-}" =~ $GUID ]]; then
+  az role assignment delete --assignee "$SP_OBJECT_ID" \
+    --role "Role Based Access Control Administrator" --scope "$RG_ID"
+  az role assignment create --assignee-object-id "$SP_OBJECT_ID" --assignee-principal-type ServicePrincipal \
+    --role "Role Based Access Control Administrator" --scope "$RG_ID" \
+    --condition "$CONDITION" --condition-version "2.0" --output none
+else
+  echo "ALTO: falta RG_ID, el deployer o un id del paso 2.3. No se borró nada; repite los pasos 2.3 y 2.4 en la misma sesión."
+fi
 ```
+
+Si la creación falla después del borrado (por ejemplo, por un error al pegar), el deployer queda sin *Role Based
+Access Control Administrator* hasta que la vuelvas a crear: repite solo el bloque `az role assignment create` con las
+mismas variables. Mientras tanto un despliegue fallaría al asignar roles, sin dar permisos de más.
 
 ### 2.5 Comprobar
 
 ```bash
 az role assignment list --assignee "$SP_OBJECT_ID" --all \
   --query "[].{role:roleDefinitionName,scope:scope,condition:condition!=null}" -o table
-# Dos filas sobre rg-pv-pilot: Contributor y Role Based Access Control Administrator (condition = True).
+# Tres filas: Contributor y Role Based Access Control Administrator (condition = True) sobre rg-pv-pilot, y
+# Key Vault Secrets Officer sobre la bóveda kv-pvp-<sufijo> (la crea el primer despliegue para escribir los secretos).
 ```
 
 El deployer sigue sin poder conceder Owner, Contributor, User Access Administrator ni Storage Blob Data Owner.
@@ -299,11 +322,19 @@ Todo se hace en el recurso **Email Communication Services** del portal de Azure:
 3. **Límites de envío más altos.** Microsoft solo deja agregar remitentes propios (MailFrom) en un dominio propio "with
    higher than default sending limits"; con los límites por omisión solo existe la dirección `donotreply` del dominio
    (<https://learn.microsoft.com/en-us/azure/communication-services/quickstarts/email/add-multiple-senders>, actualizada
-   2026-09-23). Pide el aumento con un ticket de soporte, con el formulario de
-   <https://learn.microsoft.com/en-us/azure/communication-services/concepts/email/email-quota-increase> (tipo de correo:
-   transaccional; volumen: unas 20 entregas al día; bajas: enlace de un clic y `List-Unsubscribe`; rebotes: los acuses
-   los marcan `FAILED`). Microsoft lo revisa a mano y puede tardar hasta 72 horas. **No uses `donotreply` en su lugar:**
-   si Microsoft rechaza el aumento, avísale al orquestador, porque cambiaría E4-P12.
+   2026-09-23). El aumento se pide con un ticket de soporte y la información que lista
+   <https://learn.microsoft.com/en-us/azure/communication-services/concepts/email/email-quota-increase> (actualizada
+   2026-09-23, consultada 2026-10-31); para este piloto: tipo de correo transaccional, unas 20 entregas al día, bajas con
+   enlace de un clic y `List-Unsubscribe`, y los acuses de rebote marcan el aviso `FAILED`. Esa página dice que la
+   solicitud no se aprueba sola: "Email quota increase requests aren't automatically approved. The reviewing team
+   considers your overall sender reputation when determining approval status", con una tasa de fallas de entrega
+   "below 2%". También pide construir esa reputación antes, "by sending legitimate production workload emails", y el
+   formulario pregunta si el dominio ya "is already set up and currently used for sending messages". `paquetenvia.com`
+   todavía no manda correo, así que Microsoft puede rechazar o posponer el aumento. La misma página recomienda un
+   registro MX para la reputación; esta guía no lo crea porque E4-P12 no quiere buzón de respuestas (punto 5).
+   **No uses `donotreply` en su lugar.** Si Microsoft rechaza o pospone el aumento, o pide el registro MX, **detente y
+   avísale al orquestador**: hace falta una decisión nueva tuya sobre E4-P12, y como NTF-008 espera a los pasos 1 a 8
+   (W3), el PR sigue en borrador hasta esa decisión.
 4. *MailFrom addresses → Add*: dirección `avisos`, nombre visible `Seguimiento de envío`.
 5. Deja apagado *User engagement tracking* (AI-24: "plain text only, engagement tracking off"). No crees un buzón,
    un `Reply-To` ni un registro MX: nadie recibe respuestas en esta dirección.
@@ -313,7 +344,8 @@ Todo se hace en el recurso **Email Communication Services** del portal de Azure:
    manda con su identidad administrada y el rol del paso 2.2.
 
 **Dile al orquestador:** "Dominio paquetenvia.com verificado en ACS (Domain, SPF, DKIM, DKIM2): sí; aumento de
-límites: pedido / aprobado; remitente avisos con nombre «Seguimiento de envío»: sí; dominio conectado: sí".
+límites: pedido / aprobado / rechazado / pospuesto; remitente avisos con nombre «Seguimiento de envío»: sí; dominio
+conectado: sí".
 
 ## 7. DNS de `paquetenvia.com`: SPF, DKIM y DMARC en cuarentena (W9)
 
@@ -349,9 +381,19 @@ DMARC antes: sí/no".
 W8 "Tú en Cloud Shell antes de fusionar (Recommended)": "La guía trae los comandos; pegas en el PR solo los conteos de
 cambios". Hazlo al final, con los pasos 1 a 7 hechos. Cloud Shell trae `az` (con Bicep) y `gh`.
 
+El what-if debe describir lo que desplegará la fusión, no la rama sola: la rama no trae los valores del primer
+despliegue que fusionaste en `development` (`web.parameters.json`, `observability.parameters.json`). Por eso usa la
+**referencia de fusión del PR de NTF-008** (`pull/<número>/merge`, la que GitHub arma con la rama encima del
+`development` de hoy) y comprueba antes que ya trae tus valores. Si una de las dos comprobaciones falla, `development`
+todavía no los tiene o el PR tiene un conflicto: detente y avísale al orquestador.
+
 ```bash
 gh auth login
-gh repo clone Eduard0corona/Paquetenvia -- --branch feat/ntf-008-pilot-notice-wiring --depth 1 && cd Paquetenvia
+gh repo clone Eduard0corona/Paquetenvia -- --depth 1 && cd Paquetenvia
+PR="$(gh pr list --repo Eduard0corona/Paquetenvia --head feat/ntf-008-pilot-notice-wiring --json number --jq '.[0].number')"
+git fetch --depth 1 origin "pull/${PR}/merge" && git checkout --detach FETCH_HEAD
+python3 tools/azr-001/env001_pilot_guards.py web-check --file deploy/azure/pilot/web.parameters.json
+python3 tools/azr-001/env001_pilot_guards.py observability-check --file deploy/azure/pilot/observability.parameters.json
 
 UNWRAP_ROLE="$(az role definition list --custom-role-only true --name "Paquetenvia Pilot Recipient Notice Unwrap" --scope "$RG_ID" --query "[0].id" -o tsv)"
 SENDER_ROLE="$(az role definition list --custom-role-only true --name "Paquetenvia Pilot Email Sender" --scope "$RG_ID" --query "[0].id" -o tsv)"
@@ -379,11 +421,19 @@ echo "== apps"; counts apps "apiImage=$(image ca-pv-pilot-api)" "workerImage=$(i
 echo "== events"; counts events "acsName=${ACS}"
 ```
 
-Qué esperar, aproximadamente: en `security`, *Create* para la llave `recipient-notice-kek` y sus dos asignaciones; en
-`apps`, *Create* para las asignaciones por secreto nuevas y la del rol de correo, y *Modify* para la API y el Worker;
-en `events`, ningún cambio (`emailEventsPhase=none`). El what-if de `apps` puede marcar como *Create*, o como aviso,
-las asignaciones sobre los siete secretos que todavía no existen: el workflow los genera en la ventana 1 del primer
-despliegue con NTF-008, antes de la etapa 4.
+Qué esperar (los *NoChange* dependen de lo que ya existe; Azure a veces marca *Modify* sin cambio real):
+
+- `security`: **Create 4**. Tres son de NTF-008: la llave `recipient-notice-kek`, *Key Vault Reader* de la API y el rol
+  "solo abrir" del Worker sobre ella. La cuarta es *Key Vault Secrets Officer* sobre la bóveda **para tu usuario**: la
+  plantilla da ese rol a quien despliega (`deployer()`), que en el workflow es el deployer y en Cloud Shell eres tú. El
+  what-if no crea nada y el workflow no crea esa fila; no la cuentes como un cambio de NTF-008.
+- `apps`: **Create 14** (nueve asignaciones por secreto nuevas de la API, cuatro del Worker y la del rol de correo
+  sobre ACS) y **Modify 2** (la API y el Worker). El what-if puede marcar con un aviso las asignaciones sobre los siete
+  secretos que todavía no existen: el workflow los genera en la ventana 1 del primer despliegue con NTF-008, antes de
+  la etapa 4.
+- `events`: ningún cambio (`emailEventsPhase=none`).
+
+Si los *Create* no coinciden, pega los conteos de todas formas y dilo: el orquestador lo revisa antes de fusionar.
 
 Pega en el PR **solo los conteos** (por ejemplo "security: Create 3, Modify 1, NoChange 4") y, si apareció, el texto
 del aviso sin ids ni nombres. Nunca pegues la salida completa: lleva ids de suscripción y nombres de recursos.
@@ -418,7 +468,7 @@ aprobados entran en el cambio de compuertas.
 | 3 | `PILOT_ACS_NAME` creada (sin el nombre) |
 | 4 | Los 3 secretos de Meta existen en Key Vault; el token se generó sin caducidad y solo con `whatsapp_business_messaging` |
 | 5 | Verificación del negocio y nombre visible: estado |
-| 6 | Dominio verificado; aumento de límites pedido/aprobado; remitente `avisos` con «Seguimiento de envío»; dominio conectado |
+| 6 | Dominio verificado; aumento de límites pedido/aprobado/rechazado/pospuesto (rechazado o pospuesto: decisión nueva sobre E4-P12); remitente `avisos` con «Seguimiento de envío»; dominio conectado |
 | 7 | Registros DNS creados; si ya había SPF o DMARC |
 | 8 | Conteos del what-if pegados en el PR |
 | 9 | Los cuatro nombres de plantilla y su estado |
@@ -444,3 +494,19 @@ compuertas (Recommended)"; W11 punto 10). Queda aquí para que no se olvide el o
    campo `messages`; pasa la app a modo *Live* (puede pedir la URL del aviso de privacidad de GATE-007).
 3. Prueba de punta a punta con una orden de prueba a un teléfono y un correo tuyos. No pruebes BAJA, la baja por
    correo ni «Detener avisos» con un contacto que vayas a necesitar: en el piloto la baja es definitiva (E4-P16).
+
+## 12. Riesgos que quedan
+
+Nadie los pudo comprobar sin Azure; por eso quedan escritos aquí y en el PR.
+
+1. **El tipo de tema de Event Grid no está confirmado.** `events.bicep` crea el tema de sistema del recurso de ACS con
+   `topicType` `Microsoft.Communication.CommunicationServices`; ninguna página de Microsoft Learn consultada lo muestra
+   escrito así. Solo se usa con `emailEventsPhase=subscribe`, en el cambio de compuertas (paso 11), no en NTF-008. Si
+   ese despliegue falla en la etapa 6, la causa probable es este valor: la etapa 6 corre después de que la API y el
+   Worker ya están sanos, y el cambio de compuertas lo corrige.
+2. **El rol de correo viene de la página de SMTP.** Las tres acciones de "Paquetenvia Pilot Email Sender" (paso 2.2)
+   son las que Microsoft Learn da para mandar correo por SMTP con un rol propio. Que basten para la API REST de correo
+   con la identidad administrada del Worker se comprueba con el primer envío real, después del cambio de compuertas.
+   Además, `Microsoft.Communication/CommunicationServices/Write` también deja cambiar la configuración del recurso de
+   ACS (más que "solo mandar"); nunca da `ListKeys` ni `RegenerateKey`. Si el primer envío falla por permisos, el rol se
+   corrige en el cambio de compuertas con una decisión nueva.

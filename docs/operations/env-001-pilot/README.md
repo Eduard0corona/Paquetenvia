@@ -509,7 +509,10 @@ Two further caveats:
 
 1. The owner runs [`bootstrap.md`](bootstrap.md) once. It creates the resource group in
    `mexicocentral`, the OIDC app registration and federated credential, the roles and the custom role,
-   and the `azure-pilot` GitHub Environment with its variables.
+   and the `azure-pilot` GitHub Environment with its variables. Since NTF-008 the run also needs, before it touches
+   Azure, the `PILOT_ACS_NAME` variable and, before stage 1, the two recipient-notice custom roles
+   (`Paquetenvia Pilot Recipient Notice Unwrap`, `Paquetenvia Pilot Email Sender`) with the deployer's condition widened
+   to 10 roles ([`guia-owner-avisos.md`](guia-owner-avisos.md) pasos 2 and 3).
 2. The owner records the GATE-007 and GATE-012 decisions (or explicit scopes) in `decision-log.md`,
    then sets `PILOT_GATE_007_DECISION` / `PILOT_GATE_012_DECISION` to those row ids.
    `PILOT_GATE_012_DECISION=GATE-012-PILOT-SCOPE` is already approved (owner, 2026-09-28).
@@ -549,13 +552,16 @@ Two further caveats:
    - The run summary lists the four digests it deploys (API, Worker, Web, DB ops), whether each was built by this run
      or reused, and the revision that serves each app.
 6. The first run creates the vault, then stops with *"lacks authcenter-paquetenvia-client-secret"*. The
-   workflow requires four owner secrets and reports the first one missing. Write all four straight into
+   workflow requires seven owner secrets and reports the first one missing. Write all seven straight into
    the vault (§6.6) and run again:
    - `authcenter-paquetenvia-client-secret`;
    - `google-maps-api-key`;
    - `public-tracking-link-key`;
    - `paquetenvia-telemetry-pseudonym-key-1` (OBS-003; also needed by a vault populated before OBS-003: the
-     next run stops with *"lacks paquetenvia-telemetry-pseudonym-key-1"* until it exists).
+     next run stops with *"lacks paquetenvia-telemetry-pseudonym-key-1"* until it exists);
+   - since NTF-008, the three Meta values `whatsapp-cloud-api-token`, `whatsapp-phone-number-id` and
+     `whatsapp-app-secret` ([`guia-owner-avisos.md`](guia-owner-avisos.md) paso 4). The same run generates the seven
+     recipient-notice secrets nobody types (§4).
 7. The run summary shows the DNS records. At the DNS host of `paquetenvia.com`, create:
    - `A` `@` → the environment static IP;
    - `TXT` `asuid` → the custom-domain verification id.
@@ -710,6 +716,14 @@ Consequences:
   never deployed, or an image someone unlocked and deleted) is built again, on the bases of the day. In single
   revision mode the new revisions replace the current ones only once they are ready; if they never are, the revision
   check fails the run and the current revisions keep serving. A base image patch needs a new commit (§6.2).
+- **Across NTF-008** (NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31, owner X2 "Documentarlo (Recommended)"): going
+  back to a commit from before NTF-008 is not a dispatch with that SHA. The workflow runs the guards from `main`
+  against the tested commit; they expect `events.bicep` (P00) and check P28 to P30, and stages 1 and 4 pass parameters
+  the older templates do not declare (`recipientNoticeUnwrapRoleDefinitionId`, `recipientNoticeKeyUri`, `acsName`,
+  `acsEmailSenderRoleDefinitionId`), so such a run stops before it touches Azure (it fails closed; nothing breaks).
+  To go back across NTF-008, revert the NTF-008 PR, promote the revert to `main`, wait for the Foundation CI push run
+  on `main` (13/13 green) and deploy that commit (§6.1 steps 4 and 5). The key, the role assignments and the secrets
+  NTF-008 created stay in Azure, unread, until the owner removes them.
 - **Database:** migrations are forward-only in the pilot. An application rollback is only safe while
   the older code still works with the newer schema; every lane is additive, see each lane's rollback
   notes. For data loss or a bad migration, use a point-in-time restore (§6.4). The template tooling
@@ -925,6 +939,10 @@ az keyvault secret set --vault-name <kv> --name paquetenvia-telemetry-pseudonym-
 shred -u /tmp/tp
 bash deploy/azure/pilot/kv-firewall.sh close <kv>
 ```
+
+Since NTF-008 the owner also writes the three Meta values of the recipient notices, `whatsapp-cloud-api-token`,
+`whatsapp-phone-number-id` and `whatsapp-app-secret`, the same way: [`guia-owner-avisos.md`](guia-owner-avisos.md)
+paso 4.5 (in Spanish) has the commands.
 
 `public-tracking-link-key` derives every public tracking link (HMAC-SHA256; only the SHA-256 of each
 link is stored). Write it once and keep it: replacing the value under the same version makes the API
@@ -1384,10 +1402,15 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
   - that *Key Vault Reader* on the key lets the API read the public part of `recipient-notice-kek` (`keys/read`) and
     the custom unwrap role lets the Worker unwrap with it;
   - that the three ACS actions of `Paquetenvia Pilot Email Sender` suffice for the Email REST API with a managed
-    identity (Microsoft Learn gives them for SMTP with an Entra application);
+    identity (Microsoft Learn gives them for SMTP with an Entra application), and that
+    `Microsoft.Communication/CommunicationServices/Write` in them also lets the Worker change the resource's
+    configuration, more than "only send" (a residual risk; never `ListKeys` or `RegenerateKey`);
   - ARM acceptance of the role assignment on the `existing` Communication Services resource and of the Event Grid
     system topic and subscription (`2025-02-15`, location `global`, static secret delivery attribute), and the
     `az deployment group what-if` the owner runs (W8);
+  - the system topic's `topicType` `Microsoft.Communication.CommunicationServices`, which no Microsoft Learn page read
+    shows written that way; it is used only with `emailEventsPhase=subscribe`, in the gate-closing change, where stage 6
+    runs after the API and the Worker are healthy;
   - the Event Grid validation handshake against the live API (NTF-006 answers it without the secret header and
     accepts only the topic stored in `acs-communication-resource-id`); the gate-closing change creates the subscription.
 - OBS-003:

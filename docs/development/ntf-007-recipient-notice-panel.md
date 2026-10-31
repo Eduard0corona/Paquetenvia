@@ -111,8 +111,9 @@ cuando le toca salir (AI-24 `opt_out.check`). No le manda nada al destinatario y
 - Los avisos pendientes siguen diciendo "Pendiente" hasta su hora de envío (posiblemente las 8:00 siguientes).
 - En desarrollo y `DEV_SYNTHETIC` una baja cae sobre los marcadores comunes y silencia los avisos de prueba de ese
   ambiente hasta reiniciar su base (T6, punto 11).
-- La casilla y el correo pueden decir "permitido" y "registrado" sin que exista ningún aviso: sin la copia para avisos
-  (NTF-008) el Worker no envía.
+- La casilla y el correo pueden decir "permitido" y "registrado" sin que exista ningún aviso: sin la copia para avisos,
+  que la API guarda solo desde el cambio que cierre GATE-004 y GATE-007 (NTF-008 conecta la llave pero la deja apagada,
+  decisión W4), el Worker no envía.
 - Cada baja cuesta hasta dos aperturas en Key Vault y no tiene límite de SEC-004.
 
 ## Reversión

@@ -12,6 +12,11 @@
   `NTF-RECIPIENT-NOTICES-2026-10-20` (E4-P2, E4-P7 y E4-P12) y `NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25` (O8 y O11
   elección 11). El PR queda en borrador hasta que el owner confirme el primer despliegue del piloto y todos los recursos
   de Azure, Meta y DNS (V1, W3).
+- Respuesta literal del project owner tras la revisión independiente del PR (ronda X, continuación, pregunta X2,
+  2026-10-31), añadida a la misma fila con su contexto, el texto de la opción y la opción no elegida ("Hacerlo
+  compatible"): X2 "Documentarlo (Recommended)". `docs/operations/env-001-pilot/README.md` §6.3 y la sección de
+  reversión del PR dicen que regresar a un commit anterior a NTF-008 es revertir el PR, esperar la certificación 13/13
+  de `main` y desplegar; las guardas y el workflow no cambian.
 - AI-08 NTF-008 gana su criterio `DECIDED`; sus textos dicen ahora que la API tiene *Key Vault Reader* sobre la llave de
   avisos (cierra en su propio proceso con la parte pública) y el Worker un rol propio que solo abre (W5), que la
   plantilla crea la llave y el workflow los siete secretos que nadie escribe (W7), que `Locations:NoticeKeyProtector`

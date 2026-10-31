@@ -64,10 +64,17 @@ comentarios corregidos por W4), sin dependencias nuevas. GATE-004 y GATE-007 sig
 - **El rol de correo** es el mínimo que documenta Microsoft para mandar correo con un rol propio (página de SMTP); incluye
   `CommunicationServices/Write`, que también permite cambiar la configuración del recurso. Nunca incluye `ListKeys` ni
   `RegenerateKey`. Que baste para la API REST de correo con identidad administrada se comprueba con el primer envío real.
+- **El tipo del tema de Event Grid** (`topicType` `Microsoft.Communication.CommunicationServices` en `events.bicep`) no
+  está confirmado: ninguna página de Microsoft Learn consultada lo muestra escrito así. Solo se usa con
+  `emailEventsPhase=subscribe`, en el cambio de compuertas; la etapa 6 corre después de que la API y el Worker ya están
+  sanos.
 - **Key Vault Reader** incluye además acciones de control (`Microsoft.Support/*`, alertas clásicas y lectura de
   asignaciones) sobre el ámbito de la llave; ninguna lee un secreto ni la parte privada de la llave.
-- **Remitente `avisos@`**: depende de que Microsoft apruebe el aumento de límites (revisión manual, hasta 72 horas, mira
-  la reputación del dominio). Si lo rechaza, hace falta una decisión nueva sobre E4-P12. Microsoft recomienda un registro
+- **Remitente `avisos@`**: depende de que Microsoft apruebe el aumento de límites. La página de Microsoft Learn
+  (email-quota-increase, actualizada 2026-09-23) dice que no se aprueba solo, que mira la reputación del remitente
+  (fallas de entrega "below 2%") y pide construirla antes mandando correo real; `paquetenvia.com` todavía no manda nada,
+  así que puede haber un rechazo. Si lo rechaza o lo pospone, hace falta una decisión nueva sobre E4-P12 y el PR sigue
+  en borrador (W3). Microsoft recomienda un registro
   MX para la reputación, y E4-P12 no quiere buzón de respuestas: sin MX algunos proveedores pueden marcar más correos
   como spam.
 - **What-if previo**: los siete secretos que genera el workflow no existen hasta el primer despliegue con NTF-008, así
@@ -86,3 +93,8 @@ Revertir el PR quita de las plantillas los mapeos, los roles y la plantilla de e
 la API y el Worker sin ellos. El despliegue es incremental: la llave, las asignaciones de roles y los secretos ya creados
 se quedan en Azure hasta que el owner los quite (la bóveda tiene purge protection; nunca se borran secretos), y nadie los
 lee. Ningún dato ni migración cambia.
+
+Regresar a un commit anterior a NTF-008 ya no es volver a despachar el despliegue con ese commit (README §6.3): las
+guardas de `main` exigen `events.bicep` y P28 a P30, y las etapas 1 y 4 pasan parámetros que las plantillas viejas no
+declaran, así que esa corrida se detiene antes de tocar Azure. Decisión X2 "Documentarlo (Recommended)": regresar es
+revertir el PR, esperar la certificación 13/13 de `main` y desplegar; las guardas no cambian.

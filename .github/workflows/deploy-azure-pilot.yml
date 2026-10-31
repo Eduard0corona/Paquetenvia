@@ -286,13 +286,15 @@ jobs:
 
       # NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (W2, W11 item 4): the Communication Services resource named by
       # PILOT_ACS_NAME must already exist in the pilot resource group (the owner created it, NTF-EMAIL-ACS-PILOT-2026-10-11);
-      # a mistyped name stops here, before anything is deployed. The name and the id are never printed.
+      # a mistyped name stops here, before anything is deployed. The name and the id are never printed: the lookup's output
+      # and its az error (which would name the resource and the subscription) both go to /dev/null, and a failure prints a
+      # fixed message.
       - name: Check the Communication Services resource (PILOT_ACS_NAME)
         shell: bash
         run: |
           set -euo pipefail
           if ! az resource show --resource-group "${PILOT_RESOURCE_GROUP}" --name "${PILOT_ACS_NAME}" \
-              --resource-type Microsoft.Communication/communicationServices --query id -o tsv --only-show-errors > /dev/null; then
+              --resource-type Microsoft.Communication/communicationServices --query id -o tsv --only-show-errors > /dev/null 2>&1; then
             echo "::error::The Communication Services resource named by PILOT_ACS_NAME cannot be read in ${PILOT_RESOURCE_GROUP} (guia-owner-avisos.md, paso 3)."
             exit 1
           fi
@@ -382,12 +384,18 @@ jobs:
             fi
           done
           # The Azure resource id of the Communication Services resource named by PILOT_ACS_NAME (the API accepts only its
-          # e-mail events), stored once as Azure reports it; it holds the subscription id, so it is never printed.
+          # e-mail events), stored once as Azure reports it. It holds the subscription id, so it is never printed: it passes
+          # through a shell variable and the file put_secret shreds, the lookup's az error (which would name the resource and
+          # the subscription) goes to /dev/null, and a failure prints a fixed message.
           if ! has_secret acs-communication-resource-id; then
-            az resource show --resource-group "${PILOT_RESOURCE_GROUP}" --name "${PILOT_ACS_NAME}" \
-              --resource-type Microsoft.Communication/communicationServices --query id -o tsv --only-show-errors \
-              | tr -d '\r\n' > "${RUNNER_TEMP}/s"
-            [[ -s "${RUNNER_TEMP}/s" ]] || { echo "::error::the Communication Services resource id could not be read"; exit 1; }
+            if ! acs_id="$(az resource show --resource-group "${PILOT_RESOURCE_GROUP}" --name "${PILOT_ACS_NAME}" \
+                --resource-type Microsoft.Communication/communicationServices --query id -o tsv --only-show-errors 2> /dev/null)" \
+                || [[ -z "${acs_id//[$'\r\n']/}" ]]; then
+              echo "::error::The id of the Communication Services resource named by PILOT_ACS_NAME could not be read (guia-owner-avisos.md, paso 3)."
+              exit 1
+            fi
+            printf '%s' "${acs_id//[$'\r\n']/}" > "${RUNNER_TEMP}/s"
+            unset acs_id
             put_secret acs-communication-resource-id "${RUNNER_TEMP}/s"
             echo "Stored acs-communication-resource-id (from PILOT_ACS_NAME)."
           fi
