@@ -8,6 +8,7 @@ import copy
 import datetime as dt
 import glob
 import hashlib
+import importlib.util
 import json
 import os
 import re
@@ -173,6 +174,97 @@ KNOWN_ADVISORY_AUDIT_FIELDS = (
     "direct_or_transitive",
     "dependency_path_count",
 )
+MINIMATCH_KNOWN_ADVISORY_ID = "SEC-2026-16-MINIMATCH-GLOBPARTS-TRACKED"
+MINIMATCH_KNOWN_ADVISORY_BRANCH = "fix/security-2026-16-minimatch-tracked"
+MINIMATCH_KNOWN_ADVISORY_ISSUE = 324
+MINIMATCH_KNOWN_ADVISORY_ISSUE_TITLE = (
+    "SEC-2026-16: track minimatch globparts advisory until a compatible patched release ships"
+)
+MINIMATCH_KNOWN_ADVISORY_EXIT_CONDITION = (
+    "When a patched minimatch 3.x or 10.x is published on npm, or the dependents (eslint, "
+    "@eslint/config-array, @eslint/eslintrc, eslint-plugin-import, eslint-plugin-jsx-a11y, "
+    "eslint-plugin-react and @typescript-eslint/typescript-estree) accept minimatch>=11.0.1: "
+    "remediate it through the SEC-2026-15 (zod) route. When GitHub withdraws or narrows "
+    "GHSA-g3hv-75wg-m249: retire this acceptance as SEC-2026-10 (braces) was retired. Then "
+    "verify a zero audit, retire this accepted known advisory and close Issue #324."
+)
+# Exact accepted known advisory (owner decision X1, "Aceptarlo como conocido", 2026-10-31):
+# no minimatch 3.x or 10.x release patches GHSA-g3hv-75wg-m249 and no dependent accepts
+# minimatch 11, so the advisory is tolerated only on this package, severity, the two installed
+# versions, their exact lockfile parents, the 96 development-only paths and the pinned graph.
+# Unlike braces it resolves to two versions with several parents, so it declares the parent set
+# of each version (lock_parents) instead of a single linear lock_path.
+MINIMATCH_KNOWN_ADVISORY = {
+    "advisory_id": "GHSA-g3hv-75wg-m249",
+    "package": "minimatch",
+    "severity": "moderate",
+    "installed_versions": ["10.2.5", "3.1.5"],
+    "affected_range": "<11.0.1",
+    "patched_range": ">=11.0.1",
+    "direct_or_transitive": "transitive",
+    "dependency_path_count": 96,
+    "dependency_scope": "dev",
+    "lock_parents": {
+        "10.2.5": ["@typescript-eslint/typescript-estree@8.64.0"],
+        "3.1.5": [
+            "@eslint/config-array@0.21.2",
+            "@eslint/eslintrc@3.3.6",
+            "eslint-plugin-import@2.32.0",
+            "eslint-plugin-jsx-a11y@6.10.2",
+            "eslint-plugin-react@7.37.5",
+            "eslint@9.39.5",
+        ],
+    },
+    "lockfile": "apps/web/pnpm-lock.yaml",
+    "expected_lockfile_sha256": "f944eecd2b6dd09f39fbe06677be038e6e38bdbcaca901da330353f02f0b5aa4",
+    "tracked_issue": MINIMATCH_KNOWN_ADVISORY_ISSUE,
+    "tracked_issue_title": MINIMATCH_KNOWN_ADVISORY_ISSUE_TITLE,
+    "exit_condition": MINIMATCH_KNOWN_ADVISORY_EXIT_CONDITION,
+}
+# The acceptance changes no dependency file. Besides its REL-000 files it carries its
+# decision-log row and CHANGELOG entry, the regenerated normative integrity and the
+# architecture-test pins of that integrity.
+MINIMATCH_KNOWN_ADVISORY_NON_DEPENDENCY_FILES = [
+    ".github/workflows/ci.yml",
+    ".github/workflows/pr-validation.yml",
+    "docs/development/rel-000-internal-release.md",
+    "docs/normative/v0.6/CHANGELOG.md",
+    "docs/normative/v0.6/CHECKSUMS_SHA256.txt",
+    "docs/normative/v0.6/MANIFEST.json",
+    "docs/normative/v0.6/decision-log.md",
+    "tests/Paqueteria.ArchitectureTests/SyntheticEnvironmentArchitectureTests.cs",
+    "tests/fixtures/rel-000/security-tracking.json",
+    "tools/rel-000/rel000.py",
+    "tools/rel-000/security-remediation-policy.json",
+    "tools/rel-000/test_rel000.py",
+]
+MINIMATCH_KNOWN_ADVISORY_TOTALS = {"total": 1, "critical": 0, "high": 0, "moderate": 1, "low": 0}
+# The exact fields of the active SEC-2026-16 authorization, nothing more.
+MINIMATCH_KNOWN_ADVISORY_AUTHORIZATION_FIELDS = frozenset(
+    {
+        "id",
+        "mode",
+        "authorized_base_sha",
+        "authorized_source_branch",
+        "tracked_issue",
+        "tracked_issue_title",
+        "issue_advisories",
+        "expected_base_advisories",
+        "expected_base_packages",
+        "expected_base_totals",
+        "expected_branch_totals",
+        "allowed_direct_packages",
+        "allowed_dependency_files",
+        "required_dependency_files",
+        "allowed_non_dependency_files",
+        "accepted_known_advisory",
+        "target_sharp_version",
+        "require_sharp_runtime_smoke",
+        "prohibited_prereleases",
+        "manual_lockfile_edits_allowed",
+    }
+)
+MINIMATCH_KNOWN_ADVISORY_TARGET_SHARP_VERSION = "0.35.5"
 NEXT_SHARP_SOURCEMAP_REMEDIATION_ID = "SEC-2026-11-NEXT-SHARP-SOURCEMAP"
 # Exact SEC-2026-11 graph: the only packages whose lockfile versions may move.
 NEXT_SHARP_SOURCEMAP_LOCK_VERSION_REPLACEMENTS = {
@@ -1107,6 +1199,26 @@ def load_remediation_policy(path: Path) -> dict[str, Any]:
     return validate_remediation_policy(load_json(path))
 
 
+def _retired_braces_accepted_known_advisory_is_exact(accepted: Any) -> bool:
+    """The retired braces entry keeps the accepted advisory the exact braces check accepts.
+
+    It is the same check the active braces authorization passes on its current graph
+    (BRACES_KNOWN_ADVISORY, a pinned hash and its exit condition); its retirement changed none
+    of those values.
+    """
+
+    return (
+        isinstance(accepted, dict)
+        and set(accepted) == {*BRACES_KNOWN_ADVISORY, "expected_lockfile_sha256", "exit_condition"}
+        and all(accepted.get(key) == value for key, value in BRACES_KNOWN_ADVISORY.items())
+        and re.fullmatch(r"[0-9a-f]{64}", str(accepted.get("expected_lockfile_sha256", "")))
+        is not None
+        and isinstance(accepted.get("exit_condition"), str)
+        and "braces>=3.0.4" in accepted["exit_condition"]
+        and f"Issue #{BRACES_KNOWN_ADVISORY_ISSUE}" in accepted["exit_condition"]
+    )
+
+
 def validate_remediation_policy(policy: Any, *, base_policy: bool = False) -> dict[str, Any]:
     """Validate the remediation policy field by field.
 
@@ -1480,6 +1592,38 @@ def validate_remediation_policy(policy: Any, *, base_policy: bool = False) -> di
                 fail(
                     "REMEDIATION_POLICY_INVALID",
                     "The braces accepted known advisory authorization is incomplete or inconsistent.",
+                )
+        if authorization.get("id") == MINIMATCH_KNOWN_ADVISORY_ID:
+            advisory_id = MINIMATCH_KNOWN_ADVISORY["advisory_id"]
+            if (
+                set(authorization) != MINIMATCH_KNOWN_ADVISORY_AUTHORIZATION_FIELDS
+                or authorization.get("authorized_source_branch") != MINIMATCH_KNOWN_ADVISORY_BRANCH
+                or authorization.get("tracked_issue") != MINIMATCH_KNOWN_ADVISORY_ISSUE
+                or authorization.get("tracked_issue_title") != MINIMATCH_KNOWN_ADVISORY_ISSUE_TITLE
+                or authorization.get("issue_advisories")
+                != {str(MINIMATCH_KNOWN_ADVISORY_ISSUE): [advisory_id]}
+                or authorization.get("expected_base_advisories") != [advisory_id]
+                or authorization.get("expected_base_packages")
+                != {advisory_id: MINIMATCH_KNOWN_ADVISORY["package"]}
+                or authorization.get("expected_base_totals") != MINIMATCH_KNOWN_ADVISORY_TOTALS
+                or authorization.get("expected_branch_totals") != MINIMATCH_KNOWN_ADVISORY_TOTALS
+                or authorization.get("allowed_direct_packages") != []
+                or authorization.get("allowed_dependency_files")
+                != [MINIMATCH_KNOWN_ADVISORY["lockfile"]]
+                or authorization.get("required_dependency_files") != []
+                or authorization.get("allowed_non_dependency_files")
+                != MINIMATCH_KNOWN_ADVISORY_NON_DEPENDENCY_FILES
+                or authorization.get("accepted_known_advisory") != MINIMATCH_KNOWN_ADVISORY
+                or authorization.get("target_sharp_version")
+                != MINIMATCH_KNOWN_ADVISORY_TARGET_SHARP_VERSION
+                or authorization.get("require_sharp_runtime_smoke") is not True
+                or authorization.get("prohibited_prereleases") is not True
+                or authorization.get("manual_lockfile_edits_allowed") is not False
+            ):
+                fail(
+                    "REMEDIATION_POLICY_INVALID",
+                    "The minimatch accepted known advisory authorization is incomplete or "
+                    "inconsistent.",
                 )
         if authorization.get("id") == NEXT_SHARP_SOURCEMAP_REMEDIATION_ID:
             tracked_ids = [
@@ -1857,14 +2001,37 @@ def validate_remediation_policy(policy: Any, *, base_policy: bool = False) -> di
                     "REMEDIATION_POLICY_INVALID",
                     "The zod remediation authorization is incomplete or inconsistent.",
                 )
-    # An accepted known advisory exists only under its own exact authorization.
+    # An accepted known advisory exists only under its own exact authorization: the braces
+    # acceptance (SEC-2026-10, historical since its retirement and checked exactly above while
+    # active) or SEC-2026-16, each with exactly its own accepted advisory in either registry.
     for authorization in [*historical, *active]:
-        if "accepted_known_advisory" in authorization and authorization.get("id") != (
-            BRACES_KNOWN_ADVISORY_ID
+        if "accepted_known_advisory" in authorization and authorization.get("id") not in (
+            BRACES_KNOWN_ADVISORY_ID,
+            MINIMATCH_KNOWN_ADVISORY_ID,
         ):
             fail(
                 "REMEDIATION_POLICY_INVALID",
-                "Only the exact braces authorization may declare an accepted known advisory.",
+                "Only the exact braces or SEC-2026-16 authorization may declare an accepted "
+                "known advisory.",
+            )
+        if (
+            authorization.get("id") == BRACES_KNOWN_ADVISORY_ID
+            and any(authorization is item for item in historical)
+            and not _retired_braces_accepted_known_advisory_is_exact(
+                authorization.get("accepted_known_advisory")
+            )
+        ):
+            fail(
+                "REMEDIATION_POLICY_INVALID",
+                "The retired braces authorization must keep exactly its accepted known advisory.",
+            )
+        if (
+            authorization.get("id") == MINIMATCH_KNOWN_ADVISORY_ID
+            and authorization.get("accepted_known_advisory") != MINIMATCH_KNOWN_ADVISORY
+        ):
+            fail(
+                "REMEDIATION_POLICY_INVALID",
+                "The SEC-2026-16 authorization must declare exactly its accepted known advisory.",
             )
         # Citing an accepted advisory in another tracking Issue exists only under the exact
         # SEC-2026-11 authorization.
@@ -7819,10 +7986,227 @@ def validate_known_advisory_lock_path(lock_text: str, accepted: dict[str, Any]) 
             )
 
 
+_WEB_IMAGE_DEPENDENCIES_PATH = Path(__file__).resolve().parents[1] / "ci" / "web_image_dependencies.py"
+_web_image_dependencies_module: Any = None
+
+
+def web_image_dependencies() -> Any:
+    """The production-graph logic the web image smoke runs (tools/ci/web_image_dependencies.py).
+
+    REL-000 reuses that module itself instead of a second reading of the lockfile, so "outside
+    the production graph" means here exactly what the image smoke enforces.
+    """
+
+    global _web_image_dependencies_module
+    if _web_image_dependencies_module is None:
+        try:
+            import yaml  # noqa: F401  (the module parses the lockfile with PyYAML)
+        except ImportError as exc:
+            fail(
+                "YAML_PARSER_UNAVAILABLE",
+                "PyYAML is required to read the web production graph.",
+                error=str(exc),
+            )
+        spec = importlib.util.spec_from_file_location(
+            "paquetenvia_web_image_dependencies", _WEB_IMAGE_DEPENDENCIES_PATH
+        )
+        if spec is None or spec.loader is None or not _WEB_IMAGE_DEPENDENCIES_PATH.is_file():
+            fail(
+                "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+                "The web production-graph module is unavailable.",
+            )
+        module = importlib.util.module_from_spec(spec)
+        # Its dataclasses resolve their annotations through sys.modules.
+        sys.modules[spec.name] = module
+        try:
+            spec.loader.exec_module(module)
+        except BaseException:
+            sys.modules.pop(spec.name, None)
+            raise
+        _web_image_dependencies_module = module
+    return _web_image_dependencies_module
+
+
+def known_advisory_dev_paths(
+    lockfile: dict[str, Any], package: str, limit: int
+) -> tuple[set[tuple[str, str]], list[str]]:
+    """The importer roots that reach `package` and the distinct paths to it.
+
+    A path runs from an importer dependency through snapshot dependencies (the links the
+    production graph follows) to a `package` snapshot, never visiting a snapshot twice, and stops
+    at the package. It is written as pnpm audit writes it (`.>root>...>package`). Only snapshots
+    that can reach the package are walked, and the walk stops once it has more than `limit`.
+    """
+
+    graph = web_image_dependencies()
+    snapshots = lockfile.get("snapshots") or {}
+    # Each snapshot's links as (dependency name, snapshot key); the name is what an audit path shows.
+    children: dict[str, list[tuple[str, str]]] = {}
+    for key, snapshot in snapshots.items():
+        for section in ("dependencies", "optionalDependencies"):
+            for name, reference in ((snapshot or {}).get(section) or {}).items():
+                children.setdefault(key, []).append(
+                    (name, graph.dependency_key(name, str(reference)))
+                )
+    parents: dict[str, set[str]] = {}
+    for key, linked in children.items():
+        for _, child in linked:
+            parents.setdefault(child, set()).add(key)
+    targets = {key for key in snapshots if graph.package_of(key)[0] == package}
+    reaching = set(targets)
+    pending = list(targets)
+    while pending:
+        for parent in parents.get(pending.pop(), set()):
+            if parent not in reaching:
+                reaching.add(parent)
+                pending.append(parent)
+    importer = lockfile["importers"]["."]
+    roots: set[tuple[str, str]] = set()
+    root_keys: list[tuple[str, str]] = []
+    for section in ("dependencies", "devDependencies", "optionalDependencies"):
+        for name, spec in (importer.get(section) or {}).items():
+            key = graph.dependency_key(name, str((spec or {}).get("version")))
+            if key in reaching:
+                roots.add((section, name))
+                root_keys.append((name, key))
+    # Every snapshot that leads to the package must itself hang from a root that reaches it.
+    linked_from_roots = {key for _, key in root_keys}
+    pending = list(linked_from_roots)
+    while pending:
+        for _, child in children.get(pending.pop(), []):
+            if child in reaching and child not in linked_from_roots:
+                linked_from_roots.add(child)
+                pending.append(child)
+    if reaching - linked_from_roots:
+        fail(
+            "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+            "The accepted known advisory is reachable from a snapshot outside the importer graph.",
+            package=package,
+        )
+    paths: list[str] = []
+
+    def walk(key: str, names: list[str], trail: set[str]) -> None:
+        if len(paths) > limit:
+            return
+        if key in targets:
+            paths.append(">".join([".", *names]))
+            return
+        for name, child in children.get(key, []):
+            if child in reaching and child not in trail:
+                trail.add(child)
+                walk(child, [*names, name], trail)
+                trail.discard(child)
+
+    for name, key in root_keys:
+        walk(key, [name], {key})
+    return roots, paths
+
+
+def validate_known_advisory_dev_graph(lock_bytes: bytes, accepted: dict[str, Any]) -> None:
+    """Prove a package that resolves to several versions is reachable only in development.
+
+    The package must resolve to exactly its accepted versions, each linked by exactly its
+    accepted parents; it must be outside the lockfile's production graph (the graph the web
+    image smoke enforces); every path to it must start at a development dependency of the
+    single importer; and the number of paths must be the accepted path count.
+    """
+
+    lock_text = lock_bytes.decode("utf-8")
+    package = accepted["package"]
+    importer = _lock_importer_dependencies(lock_text)
+    if set(importer) != {"."}:
+        fail(
+            "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+            "The accepted known advisory requires the single web importer.",
+        )
+    if any(package in names for names in importer["."].values()):
+        fail(
+            "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+            "The accepted known advisory package became a direct dependency.",
+            package=package,
+        )
+    versions = set(accepted["installed_versions"])
+    dependents = _lock_snapshot_dependents(lock_text)
+    linked_versions = {
+        key[len(package) + 1 :] for key in dependents if _lock_package_name(key) == package
+    }
+    if (
+        _lock_key_versions(lock_text, package) != versions
+        or linked_versions != versions
+        or set(accepted["lock_parents"]) != versions
+    ):
+        fail(
+            "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+            "The accepted known advisory package resolves to a different version set.",
+            package=package,
+            expected=sorted(versions),
+            actual=sorted(_lock_key_versions(lock_text, package) | linked_versions),
+        )
+    for version, expected_parents in sorted(accepted["lock_parents"].items()):
+        node = f"{package}@{version}"
+        actual = dependents.get(node, set())
+        if actual != set(expected_parents):
+            fail(
+                "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+                "The accepted known advisory parents changed.",
+                package=node,
+                expected=sorted(expected_parents),
+                actual=sorted(actual),
+            )
+    graph = web_image_dependencies()
+    import yaml
+
+    expected_count = accepted["dependency_path_count"]
+    try:
+        lockfile = yaml.safe_load(lock_text)
+        production = graph.production_graph(lockfile)
+        in_production = sorted(key for key in production if graph.package_of(key)[0] == package)
+        if in_production:
+            fail(
+                "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+                "The accepted known advisory package is in the production graph.",
+                package=package,
+                snapshots=in_production,
+            )
+        roots, paths = known_advisory_dev_paths(lockfile, package, expected_count)
+    except (yaml.YAMLError, AttributeError, KeyError, TypeError, ValueError) as exc:
+        fail(
+            "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+            "The accepted known advisory lockfile graph cannot be read.",
+            error=str(exc),
+        )
+    root_sections = importer["."]
+    if not roots or any(
+        section != "devDependencies"
+        or any(
+            name in root_sections.get(other, set())
+            for other in ("dependencies", "optionalDependencies", "peerDependencies")
+        )
+        for section, name in roots
+    ):
+        fail(
+            "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+            "The accepted known advisory is no longer reachable only as a development dependency.",
+            package=package,
+            roots=sorted(f"{section}:{name}" for section, name in roots),
+        )
+    if len(paths) != expected_count:
+        fail(
+            "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+            "The accepted known advisory dependency path count changed.",
+            package=package,
+            expected=expected_count,
+            actual=len(paths) if len(paths) <= expected_count else f">{expected_count}",
+        )
+
+
 def validate_known_advisory_lock_graph(
     lock_bytes: bytes, accepted: dict[str, Any], label: str
 ) -> str:
-    validate_known_advisory_lock_path(lock_bytes.decode("utf-8"), accepted)
+    if "lock_parents" in accepted:
+        validate_known_advisory_dev_graph(lock_bytes, accepted)
+    else:
+        validate_known_advisory_lock_path(lock_bytes.decode("utf-8"), accepted)
     lock_hash = hashlib.sha256(lock_bytes).hexdigest()
     if lock_hash != accepted["expected_lockfile_sha256"]:
         fail(
@@ -7962,6 +8346,44 @@ def validate_braces_known_advisory_diff(
         fail(
             "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
             "The braces known advisory authorization changed a file outside its exact scope.",
+            files=unexpected,
+        )
+    accepted = authorization["accepted_known_advisory"]
+    lock_hash = validate_known_advisory_lock_graph(
+        (repository_root / accepted["lockfile"]).read_bytes(), accepted, "branch"
+    )
+    return {
+        "remediation_id": authorization["id"],
+        "dependency_manifest_changed": False,
+        "dependency_lockfile_changed": False,
+        "dependency_workspace_changed": False,
+        "dependency_diff_against_base": "AUTHORIZED_SECURITY_REMEDIATION",
+        "changed_dependency_files": [],
+        "lockfile_consistency_verified": True,
+        "lockfile_sha256": lock_hash,
+        "vulnerable_lock_versions": [],
+    }
+
+
+def validate_minimatch_known_advisory_diff(
+    repository_root: Path,
+    all_changed: list[str],
+    changed_dependency_files: list[str],
+    authorization: dict[str, Any],
+) -> dict[str, Any]:
+    """The SEC-2026-16 acceptance changes no dependency file and only its exact files."""
+
+    if changed_dependency_files:
+        fail(
+            "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
+            "The minimatch known advisory authorization must not change dependency files.",
+            actual=changed_dependency_files,
+        )
+    unexpected = sorted(set(all_changed) - set(authorization["allowed_non_dependency_files"]))
+    if unexpected:
+        fail(
+            "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+            "The minimatch known advisory authorization changed a file outside its exact scope.",
             files=unexpected,
         )
     accepted = authorization["accepted_known_advisory"]
@@ -9179,6 +9601,13 @@ def validate_dependency_diff(
         )
     if authorization is not None and authorization.get("id") == BRACES_KNOWN_ADVISORY_ID:
         return validate_braces_known_advisory_diff(
+            repository_root,
+            all_changed,
+            changed,
+            authorization,
+        )
+    if authorization is not None and authorization.get("id") == MINIMATCH_KNOWN_ADVISORY_ID:
+        return validate_minimatch_known_advisory_diff(
             repository_root,
             all_changed,
             changed,

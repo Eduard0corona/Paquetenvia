@@ -5983,8 +5983,10 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
 
     def test_web_transitive_authorization_remains_active_and_unchanged(self):
         policy = self.policy()
+        # SEC-2026-16 (minimatch) is the only other active authorization: an accepted known
+        # advisory that stays active while Issue #324 is open.
         self.assertEqual(
-            {rel000.WEB_TRANSITIVE_REMEDIATION_ID},
+            {rel000.WEB_TRANSITIVE_REMEDIATION_ID, rel000.MINIMATCH_KNOWN_ADVISORY_ID},
             {item["id"] for item in policy["active_remediations"]},
         )
         historical = {item["id"]: item for item in policy["historical_remediations"]}
@@ -6284,7 +6286,15 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
             rel000.OPENAPI_YAMLREADER_REMEDIATION_ID, fixture["remediation_issues"]
         )
         self.assertNotIn(rel000.BRACES_KNOWN_ADVISORY_ID, fixture["remediation_issues"])
-        self.assertEqual({}, fixture["known_advisory_issues"])
+        # Only the active SEC-2026-16 acceptance binds its Issue (see MinimatchKnownAdvisoryTests).
+        self.assertEqual(
+            {rel000.MINIMATCH_KNOWN_ADVISORY_ID: rel000.MINIMATCH_KNOWN_ADVISORY_ISSUE},
+            fixture["remediation_issues"],
+        )
+        self.assertEqual(
+            {rel000.MINIMATCH_KNOWN_ADVISORY_ID: rel000.MINIMATCH_KNOWN_ADVISORY_ISSUE},
+            fixture["known_advisory_issues"],
+        )
         self.assertIn("fix/security-2026-08-web-transitives", workflow)
         self.assertIn("SEC-2026-08-SECURITY-BASELINE", workflow)
         self.assertNotIn("github.head_ref == 'fix/security-sharp-035-override'", workflow)
@@ -7497,8 +7507,9 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
             ],
             list(retired)[:8],
         )
+        # SEC-2026-16 (minimatch) is a separate acceptance, active after SEC-2026-08.
         self.assertEqual(
-            [rel000.WEB_TRANSITIVE_REMEDIATION_ID],
+            [rel000.WEB_TRANSITIVE_REMEDIATION_ID, rel000.MINIMATCH_KNOWN_ADVISORY_ID],
             [item["id"] for item in policy["active_remediations"]],
         )
         self.assert_reason(
@@ -7879,14 +7890,26 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
                     "&& 'SEC-2026-10-BRACES-DOS-TRACKED'",
                     workflow,
                 )
-        # The checkout keeps the known-advisory plumbing, now with nothing to consult.
+        # The checkout keeps the known-advisory plumbing; braces is gone from it and only the
+        # SEC-2026-16 acceptance (Issue #324) is consulted.
         fixture = json.loads(
             (REPOSITORY_ROOT / "tests/fixtures/rel-000/security-tracking.json").read_text(
                 encoding="utf-8"
             )
         )
-        self.assertEqual({}, fixture["remediation_issues"])
-        self.assertEqual({}, fixture["known_advisory_issues"])
+        self.assertEqual(
+            {rel000.MINIMATCH_KNOWN_ADVISORY_ID: rel000.MINIMATCH_KNOWN_ADVISORY_ISSUE},
+            fixture["remediation_issues"],
+        )
+        self.assertEqual(
+            {rel000.MINIMATCH_KNOWN_ADVISORY_ID: rel000.MINIMATCH_KNOWN_ADVISORY_ISSUE},
+            fixture["known_advisory_issues"],
+        )
+        for name in ("ci.yml", "pr-validation.yml"):
+            workflow = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            with self.subTest(workflow=name, braces_unbound=True):
+                self.assertNotIn("fix/security-2026-10-braces-dos-tracked", workflow)
+                self.assertNotIn(rel000.BRACES_KNOWN_ADVISORY_ID, workflow)
         for name in ("ci.yml", "pr-validation.yml"):
             workflow = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
             with self.subTest(workflow=name, checkout=True):
@@ -8199,6 +8222,1188 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
             [],
         )
         self.assertEqual("BLOCKED", blocked["dependency_security_status"])
+
+
+class MinimatchKnownAdvisoryTests(unittest.TestCase):
+    """SEC-2026-16: minimatch GHSA-g3hv-75wg-m249 accepted as a tracked known advisory.
+
+    No minimatch 3.x or 10.x release patches the advisory and no dependent accepts minimatch 11,
+    so the owner accepted it (decision X1, "Aceptarlo como conocido", 2026-10-31) only on its
+    exact package, severity, the two installed versions 3.1.5 and 10.2.5, their exact lockfile
+    parents, its 96 development-only paths, the pinned lockfile and open Issue #324. Unlike
+    braces it resolves to two versions with several parents, so it declares the parent set of
+    each version (lock_parents) and REL-000 proves the package is outside the production graph
+    with the web image smoke's own module. Everything else fails closed.
+    """
+
+    ADVISORY = "GHSA-g3hv-75wg-m249"
+    LOCKFILE = "apps/web/pnpm-lock.yaml"
+    # Sanitized pnpm 11.15.1 audit of the development lockfile (f944eecd), byte-for-byte what
+    # `rel000.py sanitize-audit` produces for the REL-000 base audit on 2026-10-31.
+    REAL_DEVELOPMENT_BASE_AUDIT = {
+        "format_version": "paquetenvia-rel000-audit-v1",
+        "command_executed": True,
+        "command_exit_code": 1,
+        "parse_succeeded": True,
+        "totals": {"critical": 0, "high": 0, "moderate": 1, "low": 0, "total": 1},
+        "affected_packages": ["minimatch"],
+        "advisories": [
+            {
+                "advisory_id": "GHSA-g3hv-75wg-m249",
+                "package": "minimatch",
+                "installed_versions": ["10.2.5", "3.1.5"],
+                "severity": "moderate",
+                "affected_range": "<11.0.1",
+                "patched_range": ">=11.0.1",
+                "direct_or_transitive": "transitive",
+                "dependency_path_count": 96,
+                "fix_available": True,
+                "fix_compatibility": "requires_compatibility_assessment",
+            }
+        ],
+    }
+    # The 96 paths of the raw `pnpm audit --json` report for that lockfile (all `dev: true`).
+    MINIMATCH_3_1_5_AUDIT_PATHS = [
+        ".>eslint>@eslint/config-array>minimatch",
+        ".>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint>minimatch",
+        ".>eslint-config-next>@next/eslint-plugin-next>@eslint-community/eslint-utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>@next/eslint-plugin-next>@eslint-community/eslint-utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>@next/eslint-plugin-next>@eslint-community/eslint-utils>eslint>minimatch",
+        ".>eslint-config-next>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint-module-utils>@typescript-eslint/parser>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint-module-utils>@typescript-eslint/parser>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint-module-utils>@typescript-eslint/parser>eslint>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint-module-utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint-module-utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint-module-utils>eslint>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>@typescript-eslint/parser>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>@typescript-eslint/parser>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>@typescript-eslint/parser>eslint>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>@typescript-eslint/parser>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>@typescript-eslint/parser>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>@typescript-eslint/parser>eslint>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>eslint>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>eslint-import-resolver-typescript>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>eslint-import-resolver-typescript>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>eslint-import-resolver-typescript>eslint>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>@typescript-eslint/parser>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>@typescript-eslint/parser>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>@typescript-eslint/parser>eslint>minimatch",
+        ".>eslint-config-next>eslint-plugin-jsx-a11y>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-plugin-jsx-a11y>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-plugin-jsx-a11y>eslint>minimatch",
+        ".>eslint-config-next>eslint-plugin-jsx-a11y>minimatch",
+        ".>eslint-config-next>eslint-plugin-react>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-plugin-react>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-plugin-react>eslint>minimatch",
+        ".>eslint-config-next>eslint-plugin-react>minimatch",
+        ".>eslint-config-next>eslint-plugin-react-hooks>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-plugin-react-hooks>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-plugin-react-hooks>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/parser>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/parser>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/parser>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>@typescript-eslint/utils>@eslint-community/eslint-utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>@typescript-eslint/utils>@eslint-community/eslint-utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>@typescript-eslint/utils>@eslint-community/eslint-utils>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>@typescript-eslint/utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>@typescript-eslint/utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>@typescript-eslint/utils>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/utils>@eslint-community/eslint-utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/utils>@eslint-community/eslint-utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/utils>@eslint-community/eslint-utils>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/utils>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/parser>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/parser>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/parser>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/utils>@eslint-community/eslint-utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/utils>@eslint-community/eslint-utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/utils>@eslint-community/eslint-utils>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/utils>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>eslint>minimatch",
+    ]
+    MINIMATCH_10_2_5_AUDIT_PATHS = [
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint-module-utils>@typescript-eslint/parser>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>@typescript-eslint/parser>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>@typescript-eslint/parser>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>@typescript-eslint/parser>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/parser>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>@typescript-eslint/utils>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/utils>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/parser>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/utils>@typescript-eslint/typescript-estree>minimatch",
+    ]
+
+    @classmethod
+    def real_raw_audit(cls) -> dict[str, Any]:
+        return {
+            "advisories": {
+                "1244012": {
+                    "findings": [
+                        {
+                            "version": version,
+                            "paths": list(paths),
+                            "dev": True,
+                            "optional": False,
+                            "bundled": False,
+                        }
+                        for version, paths in (
+                            ("3.1.5", cls.MINIMATCH_3_1_5_AUDIT_PATHS),
+                            ("10.2.5", cls.MINIMATCH_10_2_5_AUDIT_PATHS),
+                        )
+                    ],
+                    "id": 1244012,
+                    "title": "minimatch has potential denial of service via globparts amplification",
+                    "module_name": "minimatch",
+                    "vulnerable_versions": "<11.0.1",
+                    "patched_versions": ">=11.0.1",
+                    "severity": "moderate",
+                    "cwe": "CWE-405",
+                    "github_advisory_id": "GHSA-g3hv-75wg-m249",
+                    "url": "https://github.com/advisories/GHSA-g3hv-75wg-m249",
+                }
+            },
+            "metadata": {
+                "vulnerabilities": {"info": 0, "low": 0, "moderate": 1, "high": 0, "critical": 0},
+                "dependencies": 75,
+                "devDependencies": 363,
+                "optionalDependencies": 94,
+                "totalDependencies": 475,
+            },
+        }
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-minimatch-known-tests-")
+        self.root = Path(self.temp.name)
+        self.repository_policy_path = REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH
+        self.policy_value = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def policy(self):
+        return rel000.load_remediation_policy(self.repository_policy_path)
+
+    def authorization(self) -> dict[str, Any]:
+        return copy.deepcopy(
+            next(
+                item
+                for item in self.policy_value["active_remediations"]
+                if item["id"] == rel000.MINIMATCH_KNOWN_ADVISORY_ID
+            )
+        )
+
+    def accepted_advisory(self) -> dict[str, Any]:
+        return self.authorization()["accepted_known_advisory"]
+
+    def policy_with(self, mutate) -> Path:
+        value = copy.deepcopy(self.policy_value)
+        mutate(value)
+        path = self.root / "policy.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return path
+
+    def lock(self) -> bytes:
+        """The graph the advisory was accepted on: the checkout's lockfile, by its pinned hash."""
+
+        lock = (REPOSITORY_ROOT / self.LOCKFILE).read_bytes()
+        self.assertEqual(
+            self.accepted_advisory()["expected_lockfile_sha256"], hashlib.sha256(lock).hexdigest()
+        )
+        return lock
+
+    def mutated_lock(self, old: str, new: str) -> bytes:
+        text = self.lock().decode("utf-8")
+        self.assertEqual(1, text.count(old), old)
+        return text.replace(old, new).encode("utf-8")
+
+    def repo(self, base_lock: bytes | None = None, branch_lock: bytes | None = None):
+        """A repository whose base is the authorized base and whose branch is the checkout."""
+
+        authorization = self.authorization()
+        root = Path(tempfile.mkdtemp(prefix="repo-", dir=self.root))
+        for relative in [self.LOCKFILE, *authorization["allowed_non_dependency_files"]]:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(
+                (base_lock if base_lock is not None else self.lock())
+                if relative == self.LOCKFILE
+                else subprocess.check_output(
+                    ["git", "show", f"{authorization['authorized_base_sha']}:{relative}"],
+                    cwd=REPOSITORY_ROOT,
+                )
+            )
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "rel000@example.invalid"], cwd=root, check=True
+        )
+        subprocess.run(["git", "config", "user.name", "REL-000 Tests"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        for relative in authorization["allowed_non_dependency_files"]:
+            (root / relative).write_bytes((REPOSITORY_ROOT / relative).read_bytes())
+        (root / self.LOCKFILE).write_bytes(branch_lock if branch_lock is not None else self.lock())
+        return root, base
+
+    def known_issue(self, **changes):
+        issue = {
+            "number": rel000.MINIMATCH_KNOWN_ADVISORY_ISSUE,
+            "state": "OPEN",
+            "title": rel000.MINIMATCH_KNOWN_ADVISORY_ISSUE_TITLE,
+            "url": "https://github.com/example/issues/324",
+            "tracked_advisory_ids": [self.ADVISORY.upper()],
+        }
+        issue.update(changes)
+        return issue
+
+    def normal_tracking(self, known_issues=None):
+        """The development PR tracking input: Issues #38 and #40 (both CLOSED) plus the known Issue."""
+
+        web = next(
+            item
+            for item in self.policy_value["active_remediations"]
+            if item["id"] == rel000.WEB_TRANSITIVE_REMEDIATION_ID
+        )
+        return {
+            "number": 38,
+            "state": "CLOSED",
+            "title": web["tracked_issue_title"],
+            "url": "https://github.com/example/issues/38",
+            "tracked_advisory_ids": web["issue_advisories"]["38"],
+            "related_issue": {
+                "number": 40,
+                "state": "CLOSED",
+                "title": web["related_tracked_issue_title"],
+                "url": "https://github.com/example/issues/40",
+                "tracked_advisory_ids": web["issue_advisories"]["40"],
+            },
+            "known_advisory_issues": [self.known_issue()] if known_issues is None else known_issues,
+        }
+
+    def remediation_tracking(self, **changes):
+        """The tracking input of this branch: the remediation Issue is #324 itself."""
+
+        tracking = self.known_issue(**changes)
+        tracking["related_issue"] = self.normal_tracking()["related_issue"]
+        tracking["known_advisory_issues"] = [self.known_issue(**changes)]
+        return tracking
+
+    @staticmethod
+    def issue5():
+        return {
+            "number": 5,
+            "state": "CLOSED",
+            "title": "Sharp historical remediation",
+            "url": "https://github.com/example/issues/5",
+            "tracked_advisory_ids": [rel000.ISSUE5_ADVISORY],
+        }
+
+    def real_audit(self, mutate=None):
+        audit = copy.deepcopy(self.REAL_DEVELOPMENT_BASE_AUDIT)
+        if mutate is not None:
+            mutate(audit["advisories"][0])
+        return audit
+
+    @staticmethod
+    def with_advisory(audit, advisory):
+        audit = copy.deepcopy(audit)
+        audit["advisories"].append(advisory)
+        audit["affected_packages"] = sorted({*audit["affected_packages"], advisory["package"]})
+        audit["totals"][advisory["severity"]] += 1
+        audit["totals"]["total"] += 1
+        return audit
+
+    @staticmethod
+    def empty_audit():
+        return {
+            "format_version": "paquetenvia-rel000-audit-v1",
+            "command_executed": True,
+            "command_exit_code": 0,
+            "parse_succeeded": True,
+            "totals": {"critical": 0, "high": 0, "moderate": 0, "low": 0, "total": 0},
+            "affected_packages": [],
+            "advisories": [],
+        }
+
+    def accepted(self, root, base, tracking, base_audit=None, branch_audit=None, policy=None):
+        return rel000.resolve_accepted_known_advisories(
+            root,
+            base,
+            policy if policy is not None else self.policy(),
+            tracking,
+            base_audit if base_audit is not None else self.real_audit(),
+            branch_audit if branch_audit is not None else self.real_audit(),
+        )
+
+    def normal(self, base_audit=None, branch_audit=None, tracking=None, accepted=None):
+        root, base = self.repo()
+        tracking = tracking if tracking is not None else self.normal_tracking()
+        base_audit = base_audit if base_audit is not None else self.real_audit()
+        branch_audit = branch_audit if branch_audit is not None else self.real_audit()
+        if accepted is None:
+            accepted = self.accepted(root, base, tracking, base_audit, branch_audit)
+        return rel000.validate_issue_and_audit(
+            self.issue5(),
+            tracking,
+            base_audit,
+            branch_audit,
+            {"dependency_diff_against_base": "CLEAN", "vulnerable_lock_versions": []},
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            None,
+            accepted,
+        )
+
+    def test_policy_carries_the_exact_active_authorization(self):
+        policy = self.policy()
+        authorization = self.authorization()
+        self.assertEqual(
+            [rel000.WEB_TRANSITIVE_REMEDIATION_ID, rel000.MINIMATCH_KNOWN_ADVISORY_ID],
+            [item["id"] for item in policy["active_remediations"]],
+        )
+        self.assertEqual(rel000.MINIMATCH_KNOWN_ADVISORY_AUTHORIZATION_FIELDS, set(authorization))
+        self.assertEqual(rel000.MINIMATCH_KNOWN_ADVISORY, authorization["accepted_known_advisory"])
+        accepted = authorization["accepted_known_advisory"]
+        self.assertEqual(
+            (self.ADVISORY, "minimatch", "moderate", ["10.2.5", "3.1.5"], 96, "dev"),
+            (
+                accepted["advisory_id"],
+                accepted["package"],
+                accepted["severity"],
+                accepted["installed_versions"],
+                accepted["dependency_path_count"],
+                accepted["dependency_scope"],
+            ),
+        )
+        self.assertEqual(
+            {
+                "3.1.5": [
+                    "@eslint/config-array@0.21.2",
+                    "@eslint/eslintrc@3.3.6",
+                    "eslint-plugin-import@2.32.0",
+                    "eslint-plugin-jsx-a11y@6.10.2",
+                    "eslint-plugin-react@7.37.5",
+                    "eslint@9.39.5",
+                ],
+                "10.2.5": ["@typescript-eslint/typescript-estree@8.64.0"],
+            },
+            accepted["lock_parents"],
+        )
+        self.assertEqual(
+            "f944eecd2b6dd09f39fbe06677be038e6e38bdbcaca901da330353f02f0b5aa4",
+            accepted["expected_lockfile_sha256"],
+        )
+        self.assertEqual(
+            (324, "SEC-2026-16: track minimatch globparts advisory until a compatible patched release ships"),
+            (accepted["tracked_issue"], accepted["tracked_issue_title"]),
+        )
+        self.assertEqual(
+            (authorization["tracked_issue"], authorization["tracked_issue_title"]),
+            (accepted["tracked_issue"], accepted["tracked_issue_title"]),
+        )
+        self.assertEqual("fix/security-2026-16-minimatch-tracked", authorization["authorized_source_branch"])
+        # The acceptance changes no dependency file: the lockfile is the only dependency file it
+        # names, and it must stay as it is.
+        self.assertEqual(["apps/web/pnpm-lock.yaml"], authorization["allowed_dependency_files"])
+        self.assertEqual([], authorization["required_dependency_files"])
+
+    def test_mode_requires_the_exact_branch_id_and_base(self):
+        policy = self.policy()
+        authorization = self.authorization()
+        branch = authorization["authorized_source_branch"]
+        self.assertEqual(
+            rel000.SECURITY_REMEDIATION,
+            rel000.resolve_rel000_mode(policy, branch, authorization["id"]),
+        )
+        self.assertIsNotNone(
+            rel000.validate_mode_authorization(
+                rel000.SECURITY_REMEDIATION,
+                policy,
+                branch,
+                authorization["authorized_base_sha"],
+                authorization["id"],
+            )
+        )
+        self.assert_reason(
+            "REMEDIATION_ID_REQUIRED", lambda: rel000.resolve_rel000_mode(policy, branch)
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE, rel000.resolve_rel000_mode(policy, "feature/other", "")
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(policy, "feature/other", authorization["id"]),
+        )
+        self.assert_reason(
+            "SECURITY_REMEDIATION_BASE_MISMATCH",
+            lambda: rel000.validate_mode_authorization(
+                rel000.SECURITY_REMEDIATION, policy, branch, "0" * 40, authorization["id"]
+            ),
+        )
+
+    def test_authorization_is_exact_and_tampering_is_rejected(self):
+        def minimatch(value):
+            return next(
+                item
+                for item in value["active_remediations"]
+                if item["id"] == rel000.MINIMATCH_KNOWN_ADVISORY_ID
+            )
+
+        def accepted(value):
+            return minimatch(value)["accepted_known_advisory"]
+
+        def move_to_historical(value, mutate=None):
+            entry = minimatch(value)
+            value["active_remediations"].remove(entry)
+            if mutate is not None:
+                mutate(entry)
+            value["historical_remediations"].append(entry)
+
+        mutations = {
+            "other Issue": lambda value: minimatch(value).update(tracked_issue=180),
+            "retitled Issue": lambda value: minimatch(value).update(tracked_issue_title="other"),
+            "other branch": lambda value: minimatch(value).update(
+                authorized_source_branch="fix/security-2026-16-other"
+            ),
+            "Issue tracks another GHSA": lambda value: minimatch(value)["issue_advisories"]["324"].append(
+                "GHSA-aaaa-bbbb-cccc"
+            ),
+            "another base advisory": lambda value: minimatch(value)["expected_base_advisories"].append(
+                "GHSA-aaaa-bbbb-cccc"
+            ),
+            "another base package": lambda value: minimatch(value)["expected_base_packages"].update(
+                {self.ADVISORY: "brace-expansion"}
+            ),
+            "other base totals": lambda value: minimatch(value)["expected_base_totals"].update(
+                moderate=2, total=2
+            ),
+            "other branch totals": lambda value: minimatch(value)["expected_branch_totals"].update(
+                moderate=0, total=0
+            ),
+            "direct package": lambda value: minimatch(value)["allowed_direct_packages"].append(
+                "minimatch"
+            ),
+            "manifest allowed": lambda value: minimatch(value)["allowed_dependency_files"].append(
+                "apps/web/package.json"
+            ),
+            "lockfile required": lambda value: minimatch(value)["required_dependency_files"].append(
+                "apps/web/pnpm-lock.yaml"
+            ),
+            "another file": lambda value: minimatch(value)["allowed_non_dependency_files"].append(
+                "apps/web/next.config.ts"
+            ),
+            "related Issue": lambda value: minimatch(value).update(related_tracked_issue=40),
+            "base severities": lambda value: minimatch(value).update(
+                expected_base_severities={self.ADVISORY: "moderate"}
+            ),
+            "base binding": lambda value: minimatch(value).update(
+                known_advisory_base_binding=copy.deepcopy(rel000.ZOD_KNOWN_ADVISORY_BASE_BINDING)
+            ),
+            "other Sharp version": lambda value: minimatch(value).update(target_sharp_version="0.35.4"),
+            "no Sharp smoke": lambda value: minimatch(value).update(require_sharp_runtime_smoke=False),
+            "prereleases": lambda value: minimatch(value).update(prohibited_prereleases=False),
+            "manual lockfile edits": lambda value: minimatch(value).update(
+                manual_lockfile_edits_allowed=True
+            ),
+            "accepted: another package": lambda value: accepted(value).update(package="brace-expansion"),
+            "accepted: other advisory": lambda value: accepted(value).update(
+                advisory_id="GHSA-aaaa-bbbb-cccc"
+            ),
+            "accepted: higher severity": lambda value: accepted(value).update(severity="high"),
+            "accepted: lower severity": lambda value: accepted(value).update(severity="low"),
+            "accepted: another version added": lambda value: accepted(value)["installed_versions"].append(
+                "9.0.5"
+            ),
+            "accepted: a version dropped": lambda value: accepted(value).update(
+                installed_versions=["3.1.5"]
+            ),
+            "accepted: other version": lambda value: accepted(value).update(
+                installed_versions=["10.2.6", "3.1.5"]
+            ),
+            "accepted: other affected range": lambda value: accepted(value).update(
+                affected_range="<10.2.7"
+            ),
+            "accepted: other patched range": lambda value: accepted(value).update(
+                patched_range=">=10.2.7"
+            ),
+            "accepted: direct": lambda value: accepted(value).update(direct_or_transitive="direct"),
+            "accepted: path count 95": lambda value: accepted(value).update(dependency_path_count=95),
+            "accepted: path count 97": lambda value: accepted(value).update(dependency_path_count=97),
+            "accepted: production scope": lambda value: accepted(value).update(dependency_scope="prod"),
+            "accepted: extra parent": lambda value: accepted(value)["lock_parents"]["3.1.5"].append(
+                "glob@7.2.3"
+            ),
+            "accepted: missing parent": lambda value: accepted(value)["lock_parents"]["3.1.5"].remove(
+                "eslint@9.39.5"
+            ),
+            "accepted: parent of another version": lambda value: accepted(value)["lock_parents"].update(
+                {"9.0.5": ["eslint@9.39.5"]}
+            ),
+            "accepted: linear path": lambda value: accepted(value).update(
+                lock_path=["eslint@9.39.5", "minimatch@3.1.5"]
+            ),
+            "accepted: other lockfile": lambda value: accepted(value).update(lockfile="pnpm-lock.yaml"),
+            "accepted: other hash": lambda value: accepted(value).update(
+                expected_lockfile_sha256="0" * 64
+            ),
+            "accepted: other Issue": lambda value: accepted(value).update(tracked_issue=180),
+            "accepted: retitled Issue": lambda value: accepted(value).update(tracked_issue_title="other"),
+            "accepted: other exit": lambda value: accepted(value).update(exit_condition="never"),
+            "accepted: extra field": lambda value: accepted(value).update(extra=True),
+            "accepted: removed": lambda value: minimatch(value).pop("accepted_known_advisory"),
+            "accepted on another authorization": lambda value: value["active_remediations"][0].update(
+                accepted_known_advisory=copy.deepcopy(accepted(value))
+            ),
+            "accepted on a historical remediation": lambda value: value["historical_remediations"][0].update(
+                accepted_known_advisory=copy.deepcopy(accepted(value))
+            ),
+            "historical with another accepted advisory": lambda value: move_to_historical(
+                value,
+                lambda entry: entry["accepted_known_advisory"].update(installed_versions=["3.1.5"]),
+            ),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(mutation=name):
+                path = self.policy_with(mutate)
+                self.assert_reason(
+                    "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+                )
+
+    def test_braces_history_still_loads_and_replays(self):
+        """Braces stays historical and exact; its replays and its path validator are unchanged."""
+
+        policy = self.policy()
+        retired = next(
+            item
+            for item in policy["historical_remediations"]
+            if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+        )
+        self.assertEqual("MERGED", retired["status"])
+        self.assertTrue(
+            rel000._retired_braces_accepted_known_advisory_is_exact(retired["accepted_known_advisory"])
+        )
+        # Its recorded graph (the 16.4.1 path on f944eecd) still validates on today's lockfile
+        # through the unchanged linear-path validator.
+        self.assertNotIn("lock_parents", retired["accepted_known_advisory"])
+        self.assertEqual(
+            retired["accepted_known_advisory"]["expected_lockfile_sha256"],
+            rel000.validate_known_advisory_lock_graph(
+                self.lock(), retired["accepted_known_advisory"], "branch"
+            ),
+        )
+        # The replays reactivate braces right after SEC-2026-08; both acceptances then load.
+        replay = rel000.load_remediation_policy(policy_before_braces_retirement(self.root))
+        self.assertEqual(
+            [
+                rel000.WEB_TRANSITIVE_REMEDIATION_ID,
+                rel000.BRACES_KNOWN_ADVISORY_ID,
+                rel000.MINIMATCH_KNOWN_ADVISORY_ID,
+            ],
+            [item["id"] for item in replay["active_remediations"]],
+        )
+
+        def braces(value):
+            return next(
+                item
+                for item in value["historical_remediations"]
+                if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+            )
+
+        for name, mutate in {
+            "other version": lambda value: braces(value)["accepted_known_advisory"].update(
+                installed_versions=["3.0.2"]
+            ),
+            "other path": lambda value: braces(value)["accepted_known_advisory"]["lock_path"].pop(1),
+            "no hash": lambda value: braces(value)["accepted_known_advisory"].pop(
+                "expected_lockfile_sha256"
+            ),
+            "other exit": lambda value: braces(value)["accepted_known_advisory"].update(
+                exit_condition="never"
+            ),
+            "removed": lambda value: braces(value).pop("accepted_known_advisory"),
+        }.items():
+            with self.subTest(retired_braces=name):
+                path = self.policy_with(mutate)
+                self.assert_reason(
+                    "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+                )
+
+    def test_lock_graph_is_exact_on_the_current_lockfile(self):
+        accepted = self.accepted_advisory()
+        self.assertEqual(
+            accepted["expected_lockfile_sha256"],
+            rel000.validate_known_advisory_lock_graph(self.lock(), accepted, "branch"),
+        )
+        # The production graph is the web image smoke's own module, not a second reading.
+        graph = rel000.web_image_dependencies()
+        self.assertEqual(
+            (REPOSITORY_ROOT / "tools/ci/web_image_dependencies.py").resolve(),
+            Path(graph.__file__).resolve(),
+        )
+        import yaml
+
+        lockfile = yaml.safe_load(self.lock().decode("utf-8"))
+        production = graph.production_graph(lockfile)
+        self.assertEqual(112, len(production))
+        self.assertEqual([], [key for key in production if graph.package_of(key)[0] == "minimatch"])
+        # The image smoke itself would reject either version in a production image.
+        manifest = json.loads((REPOSITORY_ROOT / "apps/web/package.json").read_text(encoding="utf-8"))
+        smoke = graph.check(["minimatch@3.1.5", "minimatch@10.2.5"], manifest, lockfile)
+        self.assertIn("minimatch@3.1.5: outside the production graph", smoke.problems)
+        self.assertIn("minimatch@10.2.5: outside the production graph", smoke.problems)
+        # Every path starts at a development dependency, and the lockfile walk reproduces the
+        # audit's 96 paths exactly.
+        roots, paths = rel000.known_advisory_dev_paths(lockfile, "minimatch", 96)
+        self.assertEqual(
+            {("devDependencies", "eslint"), ("devDependencies", "eslint-config-next")}, roots
+        )
+        self.assertEqual(
+            sorted([*self.MINIMATCH_3_1_5_AUDIT_PATHS, *self.MINIMATCH_10_2_5_AUDIT_PATHS]),
+            sorted(paths),
+        )
+        self.assertEqual(85, len(self.MINIMATCH_3_1_5_AUDIT_PATHS))
+        self.assertEqual(11, len(self.MINIMATCH_10_2_5_AUDIT_PATHS))
+
+    def test_real_audit_shape_is_what_the_sanitizer_produces(self):
+        (self.root / "raw.json").write_text(json.dumps(self.real_raw_audit()), encoding="utf-8")
+        rel000.sanitize_audit(self.root / "raw.json", self.root / "sanitized.json", True, 1)
+        self.assertEqual(
+            self.REAL_DEVELOPMENT_BASE_AUDIT,
+            json.loads((self.root / "sanitized.json").read_text(encoding="utf-8")),
+        )
+
+    def assert_lock_rejected(self, text: bytes, message: str) -> None:
+        """Rejected by the validator itself and through the resolver, on the branch or base."""
+
+        accepted = self.accepted_advisory()
+        failure = self.assert_reason(
+            "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+            lambda: rel000.validate_known_advisory_lock_graph(text, accepted, "branch"),
+        )
+        self.assertIn(message, failure.message)
+        for name, kwargs in {"branch": {"branch_lock": text}, "base": {"base_lock": text}}.items():
+            with self.subTest(lock=name):
+                root, base = self.repo(**kwargs)
+                failure = self.assert_reason(
+                    "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+                    lambda: self.accepted(root, base, self.normal_tracking()),
+                )
+                self.assertIn(message, failure.message)
+                shutil.rmtree(root)
+
+    def test_another_minimatch_version_fails_closed(self):
+        cases = {
+            # A third version in the packages section.
+            "third package version": self.mutated_lock(
+                "\n  minimatch@3.1.5:\n    resolution:",
+                "\n  minimatch@9.0.5:\n    resolution: {integrity: sha512-x}\n\n"
+                "  minimatch@3.1.5:\n    resolution:",
+            ),
+            # The typescript-estree edge resolving to another 10.x.
+            "other linked version": self.mutated_lock(
+                "      minimatch: 10.2.5\n", "      minimatch: 10.2.6\n"
+            ),
+        }
+        for name, text in cases.items():
+            with self.subTest(case=name):
+                self.assert_lock_rejected(text, "resolves to a different version set")
+        # Reported by the audit, another version breaks the exact audit identity.
+        for versions in (["10.2.5", "3.1.5", "9.0.5"], ["3.1.5"], ["10.2.6", "3.1.5"]):
+            with self.subTest(audit_versions=versions):
+                self.assert_reason(
+                    "KNOWN_ADVISORY_SCOPE_INVALID",
+                    lambda: self.normal(
+                        branch_audit=self.real_audit(
+                            lambda item: item.update(installed_versions=versions)
+                        )
+                    ),
+                )
+
+    def test_extra_or_missing_parent_fails_closed(self):
+        resolver_node = "  eslint-import-resolver-node@0.3.10(supports-color@7.2.0):\n    dependencies:\n"
+        cases = {
+            "extra parent": self.mutated_lock(
+                resolver_node, resolver_node + "      minimatch: 3.1.5\n"
+            ),
+            "extra parent of the other version": self.mutated_lock(
+                resolver_node, resolver_node + "      minimatch: 10.2.5\n"
+            ),
+            "missing parent": self.mutated_lock(
+                "      js-yaml: 4.3.2\n      minimatch: 3.1.5\n      strip-json-comments: 3.1.1\n",
+                "      js-yaml: 4.3.2\n      strip-json-comments: 3.1.1\n",
+            ),
+        }
+        for name, text in cases.items():
+            with self.subTest(case=name):
+                self.assert_lock_rejected(text, "parents changed")
+        # Without its only parent, 10.2.5 is no longer linked at all.
+        self.assert_lock_rejected(
+            self.mutated_lock("      minimatch: 10.2.5\n", ""),
+            "resolves to a different version set",
+        )
+
+    def test_production_path_fails_closed(self):
+        signalr = "  '@microsoft/signalr@10.0.0':\n    dependencies:\n"
+        # The parents of minimatch stay exact, but a production package now links one of them.
+        production = self.mutated_lock(
+            signalr, signalr + "      '@eslint/eslintrc': 3.3.6(supports-color@7.2.0)\n"
+        )
+        self.assert_lock_rejected(production, "is in the production graph")
+        # The image smoke would ship it: the production graph reaches minimatch 3.1.5.
+        import yaml
+
+        graph = rel000.web_image_dependencies()
+        reached = graph.production_graph(yaml.safe_load(production.decode("utf-8")))
+        self.assertIn("minimatch@3.1.5", reached)
+        # minimatch itself as a direct dependency of the importer.
+        direct = self.mutated_lock(
+            "    devDependencies:\n      '@types/node':\n",
+            "    devDependencies:\n      minimatch:\n        specifier: 3.1.5\n"
+            "        version: 3.1.5\n      '@types/node':\n",
+        )
+        self.assert_lock_rejected(direct, "became a direct dependency")
+        # A snapshot outside the importer graph linking one of its parents.
+        orphan = self.mutated_lock(
+            "  '@eslint/js@9.39.5': {}\n",
+            "  '@eslint/js@9.39.5': {}\n\n  orphan@1.0.0:\n    dependencies:\n"
+            "      '@eslint/eslintrc': 3.3.6(supports-color@7.2.0)\n",
+        )
+        self.assert_lock_rejected(orphan, "outside the importer graph")
+
+    def test_changed_path_count_fails_closed(self):
+        eslint_config_next = (
+            "  eslint-config-next@16.4.1(@typescript-eslint/parser@8.64.0(eslint@9.39.5("
+            "supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3))(eslint@9.39.5("
+            "supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3):\n    dependencies:\n"
+        )
+        # A development-only edge adds one path; parents, versions and roots stay exact.
+        more = self.mutated_lock(
+            eslint_config_next,
+            eslint_config_next + "      '@eslint/eslintrc': 3.3.6(supports-color@7.2.0)\n",
+        )
+        import yaml
+
+        _, paths = rel000.known_advisory_dev_paths(yaml.safe_load(more.decode("utf-8")), "minimatch", 1000)
+        self.assertEqual(97, len(paths))
+        self.assert_lock_rejected(more, "dependency path count changed")
+        # The audit reporting another count breaks the exact audit identity.
+        for count in (95, 97):
+            for label, inputs in (
+                ("base", lambda count=count: {"base_audit": self.count_audit(count), "branch_audit": self.count_audit(count)}),
+                ("branch", lambda count=count: {"branch_audit": self.count_audit(count)}),
+            ):
+                with self.subTest(count=count, audit=label):
+                    self.assert_reason(
+                        "KNOWN_ADVISORY_SCOPE_INVALID", lambda: self.normal(**inputs())
+                    )
+
+    def count_audit(self, count: int) -> dict[str, Any]:
+        return self.real_audit(lambda item: item.update(dependency_path_count=count))
+
+    def test_changed_lockfile_hash_fails_closed(self):
+        changed = self.lock() + b"\n"
+        accepted = self.accepted_advisory()
+        # The graph is still exact; only the bytes differ.
+        rel000.validate_known_advisory_dev_graph(changed, accepted)
+        for name, kwargs in {"branch": {"branch_lock": changed}, "base": {"base_lock": changed}}.items():
+            with self.subTest(lock=name):
+                root, base = self.repo(**kwargs)
+                failure = self.assert_reason(
+                    "KNOWN_ADVISORY_LOCK_GRAPH_CHANGED",
+                    lambda: self.accepted(root, base, self.normal_tracking()),
+                )
+                self.assertIn(name, str(failure))
+                shutil.rmtree(root)
+
+    def test_tracking_issue_must_stay_open_exact_and_consulted(self):
+        root, base = self.repo()
+        self.assert_reason(
+            "KNOWN_ADVISORY_ISSUE_STATE_INVALID",
+            lambda: self.accepted(root, base, self.normal_tracking([self.known_issue(state="CLOSED")])),
+        )
+        for name, issues in {
+            "retitled": [self.known_issue(title="SEC-2026-16: something else")],
+            "tracks another GHSA": [self.known_issue(tracked_advisory_ids=["GHSA-AAAA-BBBB-CCCC"])],
+            "tracks another GHSA too": [
+                self.known_issue(tracked_advisory_ids=[self.ADVISORY.upper(), "GHSA-AAAA-BBBB-CCCC"])
+            ],
+            "tracks nothing": [self.known_issue(tracked_advisory_ids=[])],
+            "other number": [self.known_issue(number=180)],
+            "duplicated": [self.known_issue(), self.known_issue()],
+            "not consulted": [],
+        }.items():
+            with self.subTest(issues=name):
+                self.assert_reason(
+                    "KNOWN_ADVISORY_TRACKING_INVALID",
+                    lambda: self.accepted(root, base, self.normal_tracking(issues)),
+                )
+        tracking = self.normal_tracking()
+        tracking.pop("known_advisory_issues")
+        self.assert_reason(
+            "KNOWN_ADVISORY_TRACKING_INVALID", lambda: self.accepted(root, base, tracking)
+        )
+
+    def test_advisory_with_changed_audit_fields_fails_closed(self):
+        self.assertEqual(
+            (
+                "package",
+                "severity",
+                "installed_versions",
+                "affected_range",
+                "patched_range",
+                "direct_or_transitive",
+                "dependency_path_count",
+            ),
+            rel000.KNOWN_ADVISORY_AUDIT_FIELDS,
+        )
+        cases = {
+            "package": lambda item: item.update(package="brace-expansion"),
+            "severity": lambda item: item.update(severity="low"),
+            "installed_versions": lambda item: item.update(installed_versions=["10.2.5"]),
+            "affected_range": lambda item: item.update(affected_range="<10.2.7"),
+            "patched_range": lambda item: item.update(patched_range=">=10.2.7"),
+            "direct_or_transitive": lambda item: item.update(direct_or_transitive="direct"),
+            "dependency_path_count": lambda item: item.update(dependency_path_count=69),
+        }
+        self.assertEqual(set(rel000.KNOWN_ADVISORY_AUDIT_FIELDS), set(cases))
+        for field, mutate in cases.items():
+            audit = self.real_audit(mutate)
+            if field == "severity":
+                audit["totals"].update(moderate=0, low=1)
+            for label, inputs in (
+                ("base", {"base_audit": audit, "branch_audit": audit}),
+                ("branch", {"branch_audit": audit}),
+            ):
+                with self.subTest(field=field, audit=label):
+                    failure = self.assert_reason(
+                        "KNOWN_ADVISORY_SCOPE_INVALID", lambda: self.normal(**inputs)
+                    )
+                    self.assertEqual([field], failure.details["fields"])
+        # A higher severity breaks the identity too, before any severity comparison.
+        higher = self.real_audit(lambda item: item.update(severity="high"))
+        higher["totals"].update(moderate=0, high=1)
+        self.assert_reason(
+            "KNOWN_ADVISORY_SCOPE_INVALID", lambda: self.normal(higher, higher)
+        )
+
+    def test_another_package_advisory_fails_closed(self):
+        other = {
+            **copy.deepcopy(self.REAL_DEVELOPMENT_BASE_AUDIT["advisories"][0]),
+            "advisory_id": "GHSA-aaaa-bbbb-cccc",
+            "package": "brace-expansion",
+            "installed_versions": ["1.1.21"],
+            "dependency_path_count": 1,
+        }
+        same_package = {**copy.deepcopy(other), "package": "minimatch", "installed_versions": ["3.1.5"]}
+        for name, advisory in {"another package": other, "another minimatch advisory": same_package}.items():
+            with self.subTest(advisory=name, audit="both"):
+                self.assert_reason(
+                    "UNTRACKED_DEPENDENCY_ADVISORY",
+                    lambda: self.normal(
+                        self.with_advisory(self.real_audit(), advisory),
+                        self.with_advisory(self.real_audit(), advisory),
+                    ),
+                )
+            with self.subTest(advisory=name, audit="branch"):
+                self.assert_reason(
+                    "NEW_DEPENDENCY_ADVISORY",
+                    lambda: self.normal(branch_audit=self.with_advisory(self.real_audit(), advisory)),
+                )
+        # The accepted advisory moved to another package is never accepted.
+        moved = self.real_audit(lambda item: item.update(package="brace-expansion"))
+        self.assert_reason("KNOWN_ADVISORY_SCOPE_INVALID", lambda: self.normal(moved, moved))
+
+    def test_todays_base_audit_passes_normal_release_evidence(self):
+        """Once merged, a PR that leaves the web dependencies alone passes normal mode."""
+
+        policy = self.policy()
+        root, base = self.repo()
+        # The branch of an unrelated PR: the acceptance files are the base, a README changes.
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "accepted"], cwd=root, check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        (root / "README.md").write_text("unrelated\n", encoding="utf-8")
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE, rel000.resolve_rel000_mode(policy, "feature/ntf-008")
+        )
+        diff = rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE, None, [])
+        self.assertEqual("CLEAN", diff["dependency_diff_against_base"])
+        tracking = self.normal_tracking()
+        accepted = self.accepted(root, base, tracking, policy=policy)
+        self.assertEqual([rel000.MINIMATCH_KNOWN_ADVISORY_ID], [item["remediation_id"] for item in accepted])
+        result = rel000.validate_issue_and_audit(
+            self.issue5(),
+            tracking,
+            self.real_audit(),
+            self.real_audit(),
+            diff,
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            None,
+            accepted,
+        )
+        self.assertEqual("PASSED", result["dependency_security_status"])
+        self.assertEqual("BLOCKED_BY_OWNER_DECISION", result["release_candidate_status"])
+        self.assertEqual([self.ADVISORY], result["remaining_advisory_ids"])
+        self.assertEqual("Issue #324", result["dependency_advisories"][0]["tracking_issue"])
+        self.assertEqual(
+            [
+                {
+                    "advisory_id": self.ADVISORY,
+                    "package": "minimatch",
+                    "severity": "moderate",
+                    "dependency_scope": "dev",
+                    "tracking_issue": "Issue #324",
+                    "remediation_id": rel000.MINIMATCH_KNOWN_ADVISORY_ID,
+                    "lockfile_sha256": "f944eecd2b6dd09f39fbe06677be038e6e38bdbcaca901da330353f02f0b5aa4",
+                }
+            ],
+            result["accepted_known_advisories"],
+        )
+        self.assertEqual(
+            ["Issue #5", "Issue #38", "Issue #40", "Issue #324"],
+            [item["id"] for item in result["known_security_issues"]],
+        )
+        known = result["known_security_issues"][-1]
+        self.assertEqual(("OPEN", "ACCEPTED_KNOWN_ADVISORY"), (known["state"], known["remediation_status"]))
+        rel000.assert_redacted(result["accepted_known_advisories"])
+        # Without the acceptance the same audit is what PR #323 hit.
+        failure = self.assert_reason(
+            "UNTRACKED_DEPENDENCY_ADVISORY", lambda: self.normal(accepted=[])
+        )
+        self.assertEqual([self.ADVISORY.lower()], failure.details["advisories"])
+        # Unused when the advisory is absent: an empty audit stays clean and consults nothing.
+        self.assertEqual(
+            [], self.accepted(root, base, self.normal_tracking([]), self.empty_audit(), self.empty_audit())
+        )
+        self.assertEqual(
+            "PASSED",
+            self.normal(self.empty_audit(), self.empty_audit(), accepted=[])["dependency_security_status"],
+        )
+
+    def test_tracking_only_dependency_diff_is_accepted(self):
+        root, base = self.repo()
+        result = rel000.validate_dependency_diff(
+            root, base, rel000.SECURITY_REMEDIATION, self.authorization()
+        )
+        self.assertEqual("AUTHORIZED_SECURITY_REMEDIATION", result["dependency_diff_against_base"])
+        self.assertEqual([], result["changed_dependency_files"])
+        self.assertFalse(result["dependency_lockfile_changed"])
+        self.assertEqual(rel000.MINIMATCH_KNOWN_ADVISORY_ID, result["remediation_id"])
+        self.assertEqual(
+            "f944eecd2b6dd09f39fbe06677be038e6e38bdbcaca901da330353f02f0b5aa4",
+            result["lockfile_sha256"],
+        )
+
+    def test_dependency_or_out_of_scope_change_is_rejected(self):
+        for name, lock in {
+            "lockfile bytes": self.lock() + b"\n",
+            "lockfile graph": self.lock().replace(b"minimatch: 10.2.5", b"minimatch: 10.2.6"),
+        }.items():
+            with self.subTest(lockfile=name):
+                root, base = self.repo(branch_lock=lock)
+                self.assert_reason(
+                    "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
+                    lambda: rel000.validate_dependency_diff(
+                        root, base, rel000.SECURITY_REMEDIATION, self.authorization()
+                    ),
+                )
+                shutil.rmtree(root)
+        root, base = self.repo()
+        for relative in ("apps/web/package.json", "apps/web/pnpm-workspace.yaml"):
+            with self.subTest(dependency_file=relative):
+                (root / relative).write_text("{}\n", encoding="utf-8")
+                self.assert_reason(
+                    "UNAUTHORIZED_DEPENDENCY_FILE_CHANGED",
+                    lambda: rel000.validate_dependency_diff(
+                        root, base, rel000.SECURITY_REMEDIATION, self.authorization()
+                    ),
+                )
+                (root / relative).unlink()
+        (root / "docs").mkdir(exist_ok=True)
+        (root / "docs/other.md").write_text("x\n", encoding="utf-8")
+        self.assert_reason(
+            "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+            lambda: rel000.validate_dependency_diff(
+                root, base, rel000.SECURITY_REMEDIATION, self.authorization()
+            ),
+        )
+
+    def test_remediation_mode_is_ready_for_merge_with_the_open_issue(self):
+        root, base = self.repo()
+        tracking = self.remediation_tracking()
+        accepted = self.accepted(root, base, tracking)
+        diff = rel000.validate_dependency_diff(
+            root, base, rel000.SECURITY_REMEDIATION, self.authorization()
+        )
+        result = rel000.validate_issue_and_audit(
+            self.issue5(),
+            tracking,
+            self.real_audit(),
+            self.real_audit(),
+            diff,
+            rel000.SECURITY_REMEDIATION,
+            self.authorization(),
+            accepted,
+        )
+        self.assertEqual("REMEDIATED_PENDING_MERGE", result["dependency_security_status"])
+        self.assertEqual("ACCEPTED_KNOWN_ADVISORY", result["additional_security_remediation_status"])
+        self.assertEqual(
+            ["Issue #5", "Issue #324"], [item["id"] for item in result["known_security_issues"]]
+        )
+        self.assertEqual(
+            {"executed": False, "status": "NOT_REQUIRED"},
+            rel000.validate_sharp_runtime_smoke(None, rel000.NORMAL_RELEASE_EVIDENCE, None),
+        )
+        self.assert_reason(
+            "SHARP_RUNTIME_SMOKE_NOT_EXECUTED",
+            lambda: rel000.validate_sharp_runtime_smoke(
+                None, rel000.SECURITY_REMEDIATION, self.authorization()
+            ),
+        )
+        self.assert_reason(
+            "ADDITIONAL_SECURITY_ISSUE_STATE_INVALID",
+            lambda: rel000.validate_issue_and_audit(
+                self.issue5(),
+                self.remediation_tracking(state="CLOSED"),
+                self.real_audit(),
+                self.real_audit(),
+                diff,
+                rel000.SECURITY_REMEDIATION,
+                self.authorization(),
+                accepted,
+            ),
+        )
+        self.assert_reason(
+            "KNOWN_ADVISORY_ISSUE_STATE_INVALID",
+            lambda: self.accepted(root, base, self.remediation_tracking(state="CLOSED")),
+        )
+        # The base audit must be exactly the accepted advisory.
+        self.assert_reason(
+            "BASE_AUDIT_UNEXPECTED",
+            lambda: rel000.validate_issue_and_audit(
+                self.issue5(),
+                tracking,
+                self.with_advisory(
+                    self.real_audit(),
+                    {
+                        **copy.deepcopy(self.REAL_DEVELOPMENT_BASE_AUDIT["advisories"][0]),
+                        "advisory_id": "GHSA-aaaa-bbbb-cccc",
+                        "severity": "low",
+                    },
+                ),
+                self.real_audit(),
+                diff,
+                rel000.SECURITY_REMEDIATION,
+                self.authorization(),
+                accepted,
+            ),
+        )
+        # Without the accepted advisory the open finding keeps the remediation blocked.
+        blocked = rel000.validate_issue_and_audit(
+            self.issue5(),
+            tracking,
+            self.real_audit(),
+            self.real_audit(),
+            diff,
+            rel000.SECURITY_REMEDIATION,
+            self.authorization(),
+            [],
+        )
+        self.assertEqual("BLOCKED", blocked["dependency_security_status"])
+
+    def test_exit_condition_records_the_owner_exit(self):
+        exit_condition = self.accepted_advisory()["exit_condition"]
+        self.assertEqual(rel000.MINIMATCH_KNOWN_ADVISORY_EXIT_CONDITION, exit_condition)
+        for fragment in (
+            "patched minimatch 3.x or 10.x",
+            "accept minimatch>=11.0.1",
+            "SEC-2026-15 (zod) route",
+            "withdraws or narrows GHSA-g3hv-75wg-m249",
+            "SEC-2026-10 (braces)",
+            "verify a zero audit",
+            "retire this accepted known advisory",
+            "close Issue #324",
+        ):
+            self.assertIn(fragment, exit_condition)
+
+    def test_fixture_and_both_workflows_bind_issue_branch_and_remediation(self):
+        fixture = json.loads(
+            (REPOSITORY_ROOT / "tests/fixtures/rel-000/security-tracking.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(38, fixture["issue_number"])
+        self.assertEqual({rel000.MINIMATCH_KNOWN_ADVISORY_ID: 324}, fixture["remediation_issues"])
+        self.assertEqual({rel000.MINIMATCH_KNOWN_ADVISORY_ID: 324}, fixture["known_advisory_issues"])
+        lines = []
+        for name in ("ci.yml", "pr-validation.yml"):
+            workflow = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            line = [item for item in workflow.splitlines() if "REL000_REMEDIATION_ID:" in item]
+            with self.subTest(workflow=name):
+                self.assertEqual(1, len(line))
+                self.assertIn(
+                    "github.head_ref == 'fix/security-2026-16-minimatch-tracked' "
+                    "&& 'SEC-2026-16-MINIMATCH-GLOBPARTS-TRACKED'",
+                    line[0],
+                )
+                self.assertIn('data.get("known_advisory_issues", {})', workflow)
+                self.assertIn("--known-advisory-input", workflow)
+            lines.append(line[0])
+        self.assertEqual(lines[0], lines[1])
+
+    def test_sanitize_issue_attaches_the_known_advisory_issue(self):
+        raw = {
+            "number": 324,
+            "state": "open",
+            "title": rel000.MINIMATCH_KNOWN_ADVISORY_ISSUE_TITLE,
+            "html_url": "https://github.com/example/issues/324",
+            "updated_at": "2026-10-31T00:00:00Z",
+            "body": f"Tracks `{self.ADVISORY}` (CVE-2026-118764) in minimatch 3.1.5 and 10.2.5.",
+        }
+        tracking = dict(raw, number=38, title="tracking", body="none")
+        (self.root / "known.json").write_text(json.dumps(raw), encoding="utf-8")
+        (self.root / "tracking.json").write_text(json.dumps(tracking), encoding="utf-8")
+        rel000.sanitize_issue(
+            self.root / "tracking.json", self.root / "out.json", None, [self.root / "known.json"]
+        )
+        sanitized = json.loads((self.root / "out.json").read_text(encoding="utf-8"))
+        self.assertEqual([self.known_issue(url=raw["html_url"], updated_at=raw["updated_at"])], sanitized["known_advisory_issues"])
 
 
 class NextSharpSourcemapRemediationPolicyTests(unittest.TestCase):

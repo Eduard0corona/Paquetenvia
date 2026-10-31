@@ -1856,6 +1856,91 @@
         "pnpm_3_3_17_result": "ONE_HIGH_ADVISORY",
         "pnpm_3_3_18_result": "AUDIT_ZERO"
       }
+    },
+    {
+      "id": "SEC-2026-16-MINIMATCH-GLOBPARTS-TRACKED",
+      "mode": "SECURITY_REMEDIATION",
+      "authorized_base_sha": "ece1c3e7ccb035fe74ce5b044711da24be4813b3",
+      "authorized_source_branch": "fix/security-2026-16-minimatch-tracked",
+      "tracked_issue": 324,
+      "tracked_issue_title": "SEC-2026-16: track minimatch globparts advisory until a compatible patched release ships",
+      "issue_advisories": {
+        "324": [
+          "GHSA-g3hv-75wg-m249"
+        ]
+      },
+      "expected_base_advisories": [
+        "GHSA-g3hv-75wg-m249"
+      ],
+      "expected_base_packages": {
+        "GHSA-g3hv-75wg-m249": "minimatch"
+      },
+      "expected_base_totals": {
+        "total": 1,
+        "critical": 0,
+        "high": 0,
+        "moderate": 1,
+        "low": 0
+      },
+      "expected_branch_totals": {
+        "total": 1,
+        "critical": 0,
+        "high": 0,
+        "moderate": 1,
+        "low": 0
+      },
+      "allowed_direct_packages": [],
+      "allowed_dependency_files": [
+        "apps/web/pnpm-lock.yaml"
+      ],
+      "required_dependency_files": [],
+      "allowed_non_dependency_files": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/pr-validation.yml",
+        "docs/development/rel-000-internal-release.md",
+        "docs/normative/v0.6/CHANGELOG.md",
+        "docs/normative/v0.6/CHECKSUMS_SHA256.txt",
+        "docs/normative/v0.6/MANIFEST.json",
+        "docs/normative/v0.6/decision-log.md",
+        "tests/Paqueteria.ArchitectureTests/SyntheticEnvironmentArchitectureTests.cs",
+        "tests/fixtures/rel-000/security-tracking.json",
+        "tools/rel-000/rel000.py",
+        "tools/rel-000/security-remediation-policy.json",
+        "tools/rel-000/test_rel000.py"
+      ],
+      "accepted_known_advisory": {
+        "advisory_id": "GHSA-g3hv-75wg-m249",
+        "package": "minimatch",
+        "severity": "moderate",
+        "installed_versions": ["10.2.5", "3.1.5"],
+        "affected_range": "<11.0.1",
+        "patched_range": ">=11.0.1",
+        "direct_or_transitive": "transitive",
+        "dependency_path_count": 96,
+        "dependency_scope": "dev",
+        "lock_parents": {
+          "10.2.5": [
+            "@typescript-eslint/typescript-estree@8.64.0"
+          ],
+          "3.1.5": [
+            "@eslint/config-array@0.21.2",
+            "@eslint/eslintrc@3.3.6",
+            "eslint-plugin-import@2.32.0",
+            "eslint-plugin-jsx-a11y@6.10.2",
+            "eslint-plugin-react@7.37.5",
+            "eslint@9.39.5"
+          ]
+        },
+        "lockfile": "apps/web/pnpm-lock.yaml",
+        "expected_lockfile_sha256": "f944eecd2b6dd09f39fbe06677be038e6e38bdbcaca901da330353f02f0b5aa4",
+        "tracked_issue": 324,
+        "tracked_issue_title": "SEC-2026-16: track minimatch globparts advisory until a compatible patched release ships",
+        "exit_condition": "When a patched minimatch 3.x or 10.x is published on npm, or the dependents (eslint, @eslint/config-array, @eslint/eslintrc, eslint-plugin-import, eslint-plugin-jsx-a11y, eslint-plugin-react and @typescript-eslint/typescript-estree) accept minimatch>=11.0.1: remediate it through the SEC-2026-15 (zod) route. When GitHub withdraws or narrows GHSA-g3hv-75wg-m249: retire this acceptance as SEC-2026-10 (braces) was retired. Then verify a zero audit, retire this accepted known advisory and close Issue #324."
+      },
+      "target_sharp_version": "0.35.5",
+      "require_sharp_runtime_smoke": true,
+      "prohibited_prereleases": true,
+      "manual_lockfile_edits_allowed": false
     }
   ]
 }
