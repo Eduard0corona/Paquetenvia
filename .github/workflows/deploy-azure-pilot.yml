@@ -46,6 +46,10 @@ env:
   PILOT_REGION: mexicocentral
   PILOT_HOST: paquetenvia.com
   BLOB_TAG_READER_ROLE: Paquetenvia Pilot Blob Tag Reader
+  # NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (W5, W6): the owner's two custom roles of the recipient notices, looked up
+  # by these exact names and checked action by action (env001_pilot_guards.py custom-role-check, guia-owner-avisos.md).
+  RECIPIENT_NOTICE_UNWRAP_ROLE: Paquetenvia Pilot Recipient Notice Unwrap
+  EMAIL_SENDER_ROLE: Paquetenvia Pilot Email Sender
 
 jobs:
   provenance:
@@ -179,6 +183,9 @@ jobs:
       # OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20: the PostgreSQL server the pilot uses. Empty = the first server (the
       # platform.bicep default); after a real restore the owner sets the restored server (README §6.4).
       PILOT_POSTGRES_SERVER_NAME: ${{ vars.PILOT_POSTGRES_SERVER_NAME }}
+      # NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (W2, W11 item 4): the Communication Services resource the owner created
+      # by hand. Its name lives only in this variable, never in the repository, and is never printed.
+      PILOT_ACS_NAME: ${{ vars.PILOT_ACS_NAME }}
     steps:
       - name: Validate inputs and environment variables
         shell: bash
@@ -191,6 +198,7 @@ jobs:
           [[ "${PILOT_BUDGET_START_DATE}" =~ ^20[0-9]{2}-(0[1-9]|1[0-2])-01$ ]] || { echo "::error::PILOT_BUDGET_START_DATE must be YYYY-MM-01"; exit 1; }
           [[ -z "${PILOT_BUDGET_EMAILS}" || "${PILOT_BUDGET_EMAILS}" =~ ^[A-Za-z0-9._%+@,-]+$ ]] || { echo "::error::PILOT_BUDGET_EMAILS must be a comma-separated list"; exit 1; }
           [[ -z "${PILOT_TRACKING_SUPPORT_URL}" || "${PILOT_TRACKING_SUPPORT_URL}" =~ ^https://[A-Za-z0-9./_-]+$ ]] || { echo "::error::PILOT_TRACKING_SUPPORT_URL must be an https URL"; exit 1; }
+          [[ "${PILOT_ACS_NAME}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]] || { echo "::error::PILOT_ACS_NAME variable is missing or is not a Communication Services resource name (guia-owner-avisos.md, paso 3)"; exit 1; }
 
       - name: Check out tested_git_sha
         uses: actions/checkout@v5
@@ -276,15 +284,55 @@ jobs:
             --server-json "${RUNNER_TEMP}/postgres-server.json" --platform-arm "${RUNNER_TEMP}/arm/platform.json" \
             --subscription-id "${AZURE_SUBSCRIPTION_ID}" --resource-group "${PILOT_RESOURCE_GROUP}" --region "${PILOT_REGION}"
 
-      - name: Stage 1 - identities, VNet, Key Vault (deny by default) and keys (security.bicep)
-        id: security
+      # NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (W2, W11 item 4): the Communication Services resource named by
+      # PILOT_ACS_NAME must already exist in the pilot resource group (the owner created it, NTF-EMAIL-ACS-PILOT-2026-10-11);
+      # a mistyped name stops here, before anything is deployed. The name and the id are never printed: the lookup's output
+      # and its az error (which would name the resource and the subscription) both go to /dev/null, and a failure prints a
+      # fixed message.
+      - name: Check the Communication Services resource (PILOT_ACS_NAME)
         shell: bash
         run: |
           set -euo pipefail
+          if ! az resource show --resource-group "${PILOT_RESOURCE_GROUP}" --name "${PILOT_ACS_NAME}" \
+              --resource-type Microsoft.Communication/communicationServices --query id -o tsv --only-show-errors > /dev/null 2>&1; then
+            echo "::error::The Communication Services resource named by PILOT_ACS_NAME cannot be read in ${PILOT_RESOURCE_GROUP} (guia-owner-avisos.md, paso 3)."
+            exit 1
+          fi
+          echo "The Communication Services resource named by PILOT_ACS_NAME exists."
+
+      # NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (W5 "Un rol propio y uno de Azure (Recommended)", W6 "Rol propio mínimo
+      # (Recommended)"): the Worker's unwrap-only role on recipient-notice-kek (stage 1) and its e-mail sender role on the
+      # Communication Services resource (stage 4) are the owner's custom roles. Each is looked up by its exact name and
+      # must hold exactly the reviewed actions and only the pilot resource group as assignable scope.
+      - name: Look up and check the recipient-notice custom roles (guia-owner-avisos.md, paso 2)
+        id: roles
+        shell: bash
+        run: |
+          set -euo pipefail
+          scope="/subscriptions/${AZURE_SUBSCRIPTION_ID}/resourceGroups/${PILOT_RESOURCE_GROUP}"
+          # check_role OUTPUT ROLE NAME: the definition named NAME must be exactly the reviewed ROLE; OUTPUT gets its id.
+          check_role() {
+            local output="$1" role="$2" name="$3" file="${RUNNER_TEMP}/role-$2.json" id
+            az role definition list --custom-role-only true --name "${name}" --scope "${scope}" --output json --only-show-errors > "${file}"
+            python3 ./tools/azr-001/env001_pilot_guards.py custom-role-check --role "${role}" --definitions-json "${file}" --scope "${scope}"
+            id="$(jq -r '.[0].id' "${file}")"
+            echo "${output}=${id}" >> "${GITHUB_OUTPUT}"
+          }
+          check_role unwrap_role recipient-notice-unwrap "${RECIPIENT_NOTICE_UNWRAP_ROLE}"
+          check_role sender_role email-sender "${EMAIL_SENDER_ROLE}"
+
+      - name: Stage 1 - identities, VNet, Key Vault (deny by default) and keys (security.bicep)
+        id: security
+        shell: bash
+        env:
+          UNWRAP_ROLE: ${{ steps.roles.outputs.unwrap_role }}
+        run: |
+          set -euo pipefail
           az deployment group create --resource-group "${PILOT_RESOURCE_GROUP}" --name env001-security \
-            --template-file "${RUNNER_TEMP}/arm/security.json" --only-show-errors --output none
+            --template-file "${RUNNER_TEMP}/arm/security.json" \
+            --parameters "recipientNoticeUnwrapRoleDefinitionId=${UNWRAP_ROLE}" --only-show-errors --output none
           outputs="$(az deployment group show --resource-group "${PILOT_RESOURCE_GROUP}" --name env001-security --query properties.outputs -o json)"
-          for key in vaultName piiKeyUri dataProtectionKeyUri; do
+          for key in vaultName piiKeyUri dataProtectionKeyUri recipientNoticeKeyUri; do
             echo "${key}=$(jq -r ".${key}.value" <<<"${outputs}")" >> "${GITHUB_OUTPUT}"
           done
 
@@ -296,7 +344,8 @@ jobs:
           VAULT: ${{ steps.security.outputs.vaultName }}
         run: bash deploy/azure/pilot/kv-firewall.sh open "${VAULT}"
 
-      - name: Ensure generated secrets (admin password, EmailLookup key); never printed
+      - name: Ensure generated secrets (admin password, EmailLookup key, recipient-notice secrets); never printed
+        id: generated
         shell: bash
         env:
           VAULT: ${{ steps.security.outputs.vaultName }}
@@ -315,6 +364,40 @@ jobs:
             openssl rand -base64 32 | tr -d '\n' > "${RUNNER_TEMP}/s"
             put_secret paquetenvia-email-lookup-key-1 "${RUNNER_TEMP}/s"
             echo "Generated paquetenvia-email-lookup-key-1."
+          fi
+          # NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (W7 "El workflow (Recommended)"): the seven recipient-notice secrets
+          # nobody types are generated once, when missing, and never printed; the owner writes only the three Meta values
+          # (checked in window 2). The contact lookup key is 32 random bytes in base64, like the EmailLookup key.
+          if ! has_secret paquetenvia-contact-lookup-key-1; then
+            openssl rand -base64 32 | tr -d '\n' > "${RUNNER_TEMP}/s"
+            put_secret paquetenvia-contact-lookup-key-1 "${RUNNER_TEMP}/s"
+            echo "Generated paquetenvia-contact-lookup-key-1."
+          fi
+          # The verify token, the Event Grid secret and the three previous slots: 32 random bytes in hex (64 characters,
+          # no whitespace). A previous slot holds a value nobody has until a rotation copies the old value into it (W11 item 2).
+          for name in whatsapp-webhook-verify-token whatsapp-webhook-verify-token-previous whatsapp-app-secret-previous \
+                      acs-email-events-secret acs-email-events-secret-previous; do
+            if ! has_secret "${name}"; then
+              openssl rand -hex 32 | tr -d '\n' > "${RUNNER_TEMP}/s"
+              put_secret "${name}" "${RUNNER_TEMP}/s"
+              echo "Generated ${name}."
+            fi
+          done
+          # The Azure resource id of the Communication Services resource named by PILOT_ACS_NAME (the API accepts only its
+          # e-mail events), stored once as Azure reports it. It holds the subscription id, so it is never printed: it passes
+          # through a shell variable and the file put_secret shreds, the lookup's az error (which would name the resource and
+          # the subscription) goes to /dev/null, and a failure prints a fixed message.
+          if ! has_secret acs-communication-resource-id; then
+            if ! acs_id="$(az resource show --resource-group "${PILOT_RESOURCE_GROUP}" --name "${PILOT_ACS_NAME}" \
+                --resource-type Microsoft.Communication/communicationServices --query id -o tsv --only-show-errors 2> /dev/null)" \
+                || [[ -z "${acs_id//[$'\r\n']/}" ]]; then
+              echo "::error::The id of the Communication Services resource named by PILOT_ACS_NAME could not be read (guia-owner-avisos.md, paso 3)."
+              exit 1
+            fi
+            printf '%s' "${acs_id//[$'\r\n']/}" > "${RUNNER_TEMP}/s"
+            unset acs_id
+            put_secret acs-communication-resource-id "${RUNNER_TEMP}/s"
+            echo "Stored acs-communication-resource-id (from PILOT_ACS_NAME)."
           fi
 
       - name: Prepare platform parameters (reads the administrator password; never printed)
@@ -454,6 +537,14 @@ jobs:
             echo "::error::Key Vault ${VAULT} lacks paquetenvia-telemetry-pseudonym-key-1. Store the organization pseudonym key (README 'Secrets the owner writes') and re-run."
             exit 1
           fi
+          # NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (W7, W11 item 8): the three Meta values only the owner can write. The
+          # API and the Worker read them at start, and a mapped secret that does not exist stops the host, so stop here.
+          for name in whatsapp-cloud-api-token whatsapp-phone-number-id whatsapp-app-secret; do
+            if ! has_secret "${name}"; then
+              echo "::error::Key Vault ${VAULT} lacks ${name}. Store the Meta value (guia-owner-avisos.md, paso 4) and re-run."
+              exit 1
+            fi
+          done
 
       - name: Close Key Vault firewall for this runner (window 2)
         if: always()
@@ -602,6 +693,8 @@ jobs:
           WEB_IMAGE: ${{ steps.images.outputs.web }}
           PII_KEY_URI: ${{ steps.security.outputs.piiKeyUri }}
           DP_KEY_URI: ${{ steps.security.outputs.dataProtectionKeyUri }}
+          NOTICE_KEY_URI: ${{ steps.security.outputs.recipientNoticeKeyUri }}
+          SENDER_ROLE: ${{ steps.roles.outputs.sender_role }}
           BLOB_URI: ${{ steps.platform.outputs.blobServiceUri }}
           PROXY_NETWORK: ${{ steps.platform.outputs.containerAppsSubnetPrefix }}
         run: |
@@ -616,6 +709,7 @@ jobs:
             --parameters "apiImage=${API_IMAGE}" "workerImage=${WORKER_IMAGE}" "webImage=${WEB_IMAGE}" \
               "publicHost=${PILOT_HOST}" "customDomainPhase=${CUSTOM_DOMAIN_PHASE}" \
               "piiKeyUri=${PII_KEY_URI}" "dataProtectionKeyUri=${DP_KEY_URI}" "blobServiceUri=${BLOB_URI}" \
+              "recipientNoticeKeyUri=${NOTICE_KEY_URI}" "acsName=${PILOT_ACS_NAME}" "acsEmailSenderRoleDefinitionId=${SENDER_ROLE}" \
               "trustedProxyNetwork=${PROXY_NETWORK}" "businessSettings=@deploy/azure/pilot/apps.settings.json" \
               "@deploy/azure/pilot/web.parameters.json" \
             --only-show-errors --output none
@@ -720,6 +814,78 @@ jobs:
           [[ "${body}" == *invalid_request* ]] || { echo "::error::/auth/backchannel-logout did not reach the API"; exit 1; }
           echo "Same-origin routing smoke test passed on ${base}"
 
+      # NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O8) and NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (W11 item 5): the
+      # Event Grid subscription of the e-mail delivery reports waits behind emailEventsPhase, whose value is the committed
+      # default of events.bicep (never a dispatch input). It is read from the compiled template after the revision check
+      # and the smoke test, because Event Grid validates the subscription against the new API revision. With 'none' this
+      # run creates nothing. 'subscribe' (the gate-closing change only) needs the apex bound, reads the current Event Grid
+      # secret in window 3 and applies it, so every later run also re-applies a rotated secret.
+      - name: Read emailEventsPhase from events.bicep
+        id: events_phase
+        shell: bash
+        run: |
+          set -euo pipefail
+          phase="$(jq -r '.parameters.emailEventsPhase.defaultValue' "${RUNNER_TEMP}/arm/events.json")"
+          case "${phase}" in
+            none)
+              echo "emailEventsPhase is none: no Event Grid system topic or subscription (only the gate-closing change sets subscribe)." ;;
+            subscribe)
+              [[ "${CUSTOM_DOMAIN_PHASE}" == "bind" ]] || { echo "::error::emailEventsPhase subscribe needs custom_domain_phase=bind: Event Grid validates https://${PILOT_HOST}/api/v1/messaging/email/events"; exit 1; }
+              echo "emailEventsPhase is subscribe: stage 6 creates or updates the Event Grid subscription." ;;
+            *)
+              echo "::error::events.bicep emailEventsPhase must default to none or subscribe"; exit 1 ;;
+          esac
+          echo "phase=${phase}" >> "${GITHUB_OUTPUT}"
+
+      - name: Open Key Vault firewall for this runner (window 3)
+        if: steps.events_phase.outputs.phase == 'subscribe'
+        shell: bash
+        env:
+          VAULT: ${{ steps.security.outputs.vaultName }}
+        run: bash deploy/azure/pilot/kv-firewall.sh open "${VAULT}"
+
+      - name: Prepare events parameters (reads the Event Grid secret; never printed)
+        if: steps.events_phase.outputs.phase == 'subscribe'
+        shell: bash
+        env:
+          VAULT: ${{ steps.security.outputs.vaultName }}
+        run: |
+          set -euo pipefail
+          umask 077
+          # Stage 6 consumes and shreds the file; if this step fails, shred it here so it never outlives a failed run.
+          trap 'rc=$?; if [[ ${rc} -ne 0 ]]; then shred -u "${RUNNER_TEMP}/events.parameters.json" 2>/dev/null || true; fi; exit ${rc}' EXIT
+          secret="$(az keyvault secret show --vault-name "${VAULT}" --name acs-email-events-secret --query value -o tsv)"
+          echo "::add-mask::${secret}"
+          SECRET="${secret}" python3 - > "${RUNNER_TEMP}/events.parameters.json" <<'PY'
+          import json, os
+          print(json.dumps({"$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentParameters.json#",
+                            "contentVersion": "1.0.0.0",
+                            "parameters": {"emailEventsSecret": {"value": os.environ["SECRET"]},
+                                           "acsName": {"value": os.environ["PILOT_ACS_NAME"]}}}))
+          PY
+          unset secret
+
+      - name: Close Key Vault firewall for this runner (window 3)
+        if: always() && steps.events_phase.outputs.phase == 'subscribe'
+        shell: bash
+        env:
+          VAULT: ${{ steps.security.outputs.vaultName }}
+        run: bash deploy/azure/pilot/kv-firewall.sh close "${VAULT:-}"
+
+      - name: Stage 6 - Event Grid subscription of the e-mail delivery reports (events.bicep)
+        if: steps.events_phase.outputs.phase == 'subscribe'
+        shell: bash
+        run: |
+          set -euo pipefail
+          trap 'shred -u "${RUNNER_TEMP}/events.parameters.json" 2>/dev/null || true' EXIT
+          az deployment group create --resource-group "${PILOT_RESOURCE_GROUP}" --name env001-events \
+            --template-file "${RUNNER_TEMP}/arm/events.json" --parameters "@${RUNNER_TEMP}/events.parameters.json" \
+            --only-show-errors --output none
+          state="$(az eventgrid system-topic event-subscription show --resource-group "${PILOT_RESOURCE_GROUP}" \
+            --system-topic-name egst-pv-pilot-acs --name egsub-pv-pilot-email-events --query provisioningState -o tsv)"
+          [[ "${state}" == "Succeeded" ]] || { echo "::error::the Event Grid subscription is ${state}, not Succeeded"; exit 1; }
+          echo "Event Grid subscription egsub-pv-pilot-email-events: Succeeded"
+
       - name: Summary and DNS records for the owner
         if: always()
         shell: bash
@@ -739,6 +905,7 @@ jobs:
           WORKER_SOURCE: ${{ steps.images.outputs.worker_source }}
           DBOPS_SOURCE: ${{ steps.images.outputs.dbops_source }}
           WEB_SOURCE: ${{ steps.images.outputs.web_source }}
+          EMAIL_EVENTS_PHASE: ${{ steps.events_phase.outputs.phase }}
         run: |
           {
             echo "## ENV-001 pilot deployment"
@@ -763,4 +930,11 @@ jobs:
             echo "|---|---|---|"
             echo "| A | @ | ${STATIC_IP:-unknown} |"
             echo "| TXT | asuid | ${VERIFICATION_ID:-unknown} |"
+            echo ""
+            # NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (W11 item 6; O8): the two webhook URLs. Meta's callback is
+            # registered by the owner only after the gate-closing change (guia-owner-avisos.md, paso 11).
+            echo "### Recipient notice webhooks"
+            echo "- emailEventsPhase: \`${EMAIL_EVENTS_PHASE:-not read}\` (subscribe only with the gate-closing change)"
+            echo "- Event Grid e-mail events: https://${PILOT_HOST}/api/v1/messaging/email/events"
+            echo "- Meta callback (register after the gates close): https://${PILOT_HOST}/api/v1/messaging/whatsapp/webhook"
           } >> "${GITHUB_STEP_SUMMARY}"

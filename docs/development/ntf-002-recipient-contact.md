@@ -9,7 +9,9 @@ plan (Recommended)": "se agrega como campo opcional en la nueva orden"; E4-P2 "L
 `recipient_notices.contact`, AI-07 `create_order.recipient_notices.email`.
 
 **Apagado e inerte.** Nada se envía. La configuración del piloto no cambia: `Locations__NoticeKeyProtector` no existe
-en `deploy/azure/pilot` y vale `Disabled`, así que ninguna fila recibe copias de avisos hasta AI-08 NTF-008. Ningún dato
+en `deploy/azure/pilot` y vale `Disabled`, así que ninguna fila recibe copias de avisos. AI-08 NTF-008 conecta la llave
+(rol y `KeyId`) y el selector sigue `Disabled` hasta el cambio que cierre las compuertas
+(NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31, W4 "Al cerrar las compuertas (Recommended)"). Ningún dato
 real entra antes de GATE-007 (PILOT-REAL-PEOPLE).
 
 ## Qué cambia
@@ -114,7 +116,8 @@ pnpm --dir apps/web exec vitest run src/operations
 
 ## Riesgos residuales
 
-- Las órdenes cotizadas antes de que NTF-008 configure la llave de avisos no tienen copias: nunca recibirán avisos
+- Las órdenes cotizadas antes de que el cambio que cierre las compuertas encienda las copias para avisos (W4) no las
+  tienen: nunca recibirán avisos
   (consecuencia ya aceptada en el ADR para las órdenes anteriores al encendido).
 - La política de correo es estructural (no verifica que el buzón exista); un correo mal escrito pero válido termina, en
   NTF-005, como un fallo permanente del proveedor.

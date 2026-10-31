@@ -41,4 +41,10 @@ regexes = [
   # credential. It is only in the history of fix/ops-002-restore-follows-server (commit a77d2f8; the test now uses
   # "ab" * 32), and the task rules forbid amending or rebasing that commit.
   '''PASSWORD = "0123456789abcdef"''',
+  # NTF-008 Azure built-in role definition id of Key Vault Reader (21090545-7ca7-4776-b22c-e363652d74d2), published by
+  # Microsoft (built-in-roles/security), no credential value. The exact matches below are only in the history of
+  # feat/ntf-008-pilot-notice-wiring (commit 5e2a61e: security.bicep and env001_pilot_guards.py; the role key is now
+  # kvReader and the guard reads the id from ALLOWED_ROLE_IDS), and the task rules forbid amending or rebasing that commit.
+  '''keyVaultReader: \x2721090545-7ca7-4776-b22c-e363652d74d2\x27''',
+  '''KEY_VAULT_READER_ROLE = "21090545-7ca7-4776-b22c-e363652d74d2"''',
 ]

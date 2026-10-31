@@ -724,6 +724,240 @@ class GateDecisionTests(unittest.TestCase):
         self.assertIn("STOP_FOR_OWNER_DECISION", bad.stdout)
 
 
+# ------------------------------------------------------------ NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (pure tests)
+SYNTHETIC_SCOPE = "/subscriptions/00000000-0000-4000-8000-000000000000/resourceGroups/rg-pv-pilot"
+SYNTHETIC_ACS_ID = SYNTHETIC_SCOPE + "/providers/Microsoft.Communication/communicationServices/acs-pv-synthetic"
+OWNER_GUIDE = REPO_ROOT / "docs" / "operations" / "env-001-pilot" / "guia-owner-avisos.md"
+
+
+def az_role_definition(key: str, **changes) -> dict:
+    """The `az role definition list` shape of a reviewed custom role, with optional changes."""
+    role = guards.CUSTOM_ROLES[key]
+    definition = {
+        "id": SYNTHETIC_SCOPE.split("/resourceGroups/")[0] + "/providers/Microsoft.Authorization/roleDefinitions/"
+              + ("11111111-1111-4111-8111-111111111111" if key == "recipient-notice-unwrap" else "22222222-2222-4222-8222-222222222222"),
+        "roleName": role.name,
+        "roleType": "CustomRole",
+        "description": "synthetic",
+        "assignableScopes": [SYNTHETIC_SCOPE],
+        "permissions": [{"actions": list(role.actions), "notActions": [], "dataActions": list(role.data_actions),
+                         "notDataActions": []}],
+    }
+    definition.update(changes)
+    return definition
+
+
+class RecipientNoticeSettingsTests(unittest.TestCase):
+    """AI-24 recipient_notices.switches.pilot and W11 item 7: the notice switches, the messaging settings and the public
+    tracking base URL are platform-managed, and the contact lookup keys are sensitive."""
+
+    def test_switches_messaging_and_public_tracking_cannot_be_set_from_the_settings_file(self):
+        for name, value in {
+            "Notifications__RecipientNotices__Enabled": "true",
+            "Notifications__RecipientNotices__Gate004DecisionId": "GATE-004-SYNTHETIC",
+            "notifications__recipientnotices__enabled": "true",
+            "Messaging__WhatsApp__Provider": "MetaCloudApi",
+            "Messaging__Email__Provider": "AzureCommunicationServices",
+            "Messaging__WhatsApp__Webhook__Enabled": "true",
+            "Messaging__Email__Events__Enabled": "true",
+            "PublicTracking__PublicBaseUrl": "https://elsewhere.example.test",
+            "PublicTracking__CurrentLinkKeyVersion": "2",
+        }.items():
+            with self.subTest(name=name):
+                failures = guards.validate_settings([{"name": name, "value": value}], allow_sentinel=False)
+                self.assertIn(f"setting {name} is platform-managed by apps.bicep and cannot be overridden", failures)
+        entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
+        self.assertFalse([e["name"] for e in entries if e["name"].casefold().startswith(
+            ("notifications__recipientnotices__", "messaging__", "publictracking__"))])
+        # The NTF-001 outbox processor settings stay owner business settings.
+        self.assertEqual([], guards.validate_settings([{"name": "Notifications__BatchSize", "value": "10"}] + SYNTHETIC_ELIGIBILITY,
+                                                      allow_sentinel=False))
+
+    def test_contact_lookup_keys_are_sensitive(self):
+        self.assertTrue(guards.SENSITIVE_SETTINGS.match("ContactLookup__Keys__1"))
+        self.assertFalse(guards.SENSITIVE_SETTINGS.match("ContactLookup__CurrentKeyVersion"))
+        self.assertFalse(guards.SENSITIVE_SETTINGS.match(guards.RECIPIENT_NOTICE_KEY_SETTING))
+
+    def test_every_recipient_notice_secret_is_mapped_and_either_generated_or_written_by_the_owner(self):
+        generated, owner = set(guards.RECIPIENT_NOTICE_GENERATED_SECRETS), set(guards.RECIPIENT_NOTICE_OWNER_SECRETS)
+        self.assertEqual(7, len(generated))
+        self.assertEqual(3, len(owner))
+        self.assertFalse(generated & owner)
+        api = set(guards.REQUIRED_SECRET_MAPPINGS[guards.API_APP].values())
+        worker = set(guards.REQUIRED_SECRET_MAPPINGS[guards.WORKER_APP].values())
+        self.assertEqual(generated | owner, (api | worker) & (generated | owner))
+        self.assertNotIn(guards.WHATSAPP_TOKEN_SECRET, api)
+        self.assertFalse(guards.WEBHOOK_SECRETS & worker)
+        self.assertEqual({guards.TRACKING_LINK_SECRET, guards.CONTACT_LOOKUP_SECRET, guards.WHATSAPP_PHONE_NUMBER_ID_SECRET},
+                         set(guards.SHARED_NON_CREDENTIAL_SECRETS))
+        self.assertEqual(guards.SHARED_NON_CREDENTIAL_SECRETS | {guards.TELEMETRY_PSEUDONYM_SECRET}, api & worker)
+
+
+class RecipientNoticeGateResolutionTests(unittest.TestCase):
+    """AI-24 recipient_notices.switches.gate_decisions: only `Gate resolution` rows of GATE-004 and GATE-007 turn the
+    recipient notices on (P28); a scoping row admits the pilot deploy, never the notices."""
+
+    LOG = (
+        "| Date | ID | Type | Decision | Impacted files | Approved by |\n"
+        "|---|---|---|---|---|---|\n"
+        "| 2026-11-01 | GATE-004-SYNTHETIC-RESOLUTION | Gate resolution | synthetic | none | test |\n"
+        "| 2026-11-01 | GATE-007-SYNTHETIC-RESOLUTION | Gate resolution | synthetic | none | test |\n"
+        "| 2026-11-01 | GATE-007-SYNTHETIC-SCOPING | Gate scoping | synthetic | none | test |\n"
+        "| 2026-11-01 | GATE-004-SYNTHETIC-TWICE | Gate resolution | synthetic | none | test |\n"
+        "| 2026-11-01 | GATE-004-SYNTHETIC-TWICE | Gate resolution | synthetic | none | test |\n"
+    )
+
+    def test_resolution_rows_are_accepted(self):
+        self.assertEqual([], guards.validate_gate_resolution(self.LOG, "004", "GATE-004-SYNTHETIC-RESOLUTION"))
+        self.assertEqual([], guards.validate_gate_resolution(self.LOG, "007", "GATE-007-SYNTHETIC-RESOLUTION"))
+
+    def test_anything_else_is_refused(self):
+        cases = {
+            ("007", "GATE-007-SYNTHETIC-SCOPING"): "not 'Gate resolution'",
+            ("004", "GATE-007-SYNTHETIC-RESOLUTION"): "missing or malformed",
+            ("004", "GATE-004-UNKNOWN"): "not recorded",
+            ("004", "GATE-004-SYNTHETIC-TWICE"): "appears 2 times",
+            ("004", ""): "missing or malformed",
+            ("004", "gate-004-synthetic-resolution"): "missing or malformed",
+            ("012", "GATE-012-PILOT-SCOPE"): "unsupported gate",
+        }
+        for (gate, decision_id), fragment in cases.items():
+            with self.subTest(decision_id=decision_id):
+                failures = guards.validate_gate_resolution(self.LOG, gate, decision_id)
+                self.assertEqual(1, len(failures), failures)
+                self.assertIn(fragment, failures[0])
+
+    def test_the_real_decision_log_resolves_neither_gate_yet(self):
+        rows = guards.decision_log_rows((REPO_ROOT / guards.DECISION_LOG).read_text(encoding="utf-8"))
+        self.assertFalse([row[1] for row in rows if row[1].startswith(("GATE-004-", "GATE-007-")) and row[2] == "Gate resolution"])
+
+
+class CustomRoleCheckTests(unittest.TestCase):
+    """W5 and W6: the workflow refuses a recipient-notice custom role that is missing, duplicated, named differently,
+    assignable elsewhere, or that holds any action beyond the reviewed ones (never listKeys or regenerateKey)."""
+
+    def check(self, key, definitions):
+        return guards.custom_role_failures(key, definitions, SYNTHETIC_SCOPE)
+
+    def test_the_reviewed_roles_pass(self):
+        for key in guards.RECIPIENT_NOTICE_CUSTOM_ROLES:
+            with self.subTest(key=key):
+                self.assertEqual([], self.check(key, [az_role_definition(key)]))
+
+    def test_the_reviewed_actions_are_the_decided_ones(self):
+        unwrap, sender = (guards.CUSTOM_ROLES[k] for k in guards.RECIPIENT_NOTICE_CUSTOM_ROLES)
+        self.assertEqual(((), ("Microsoft.KeyVault/vaults/keys/read", "Microsoft.KeyVault/vaults/keys/unwrap/action")),
+                         (unwrap.actions, unwrap.data_actions))
+        self.assertEqual((("Microsoft.Communication/CommunicationServices/Read", "Microsoft.Communication/CommunicationServices/Write",
+                           "Microsoft.Communication/EmailServices/write"), ()), (sender.actions, sender.data_actions))
+        for role in (unwrap, sender):
+            for action in role.actions + role.data_actions:
+                self.assertFalse(any(f in action.casefold() for f in guards.FORBIDDEN_CUSTOM_ROLE_ACTIONS), action)
+
+    def test_drift_is_refused(self):
+        unwrap = guards.CUSTOM_ROLES["recipient-notice-unwrap"]
+        sender = guards.CUSTOM_ROLES["email-sender"]
+        cases = {
+            "missing": ("email-sender", [], "must exist exactly once"),
+            "twice": ("email-sender", [az_role_definition("email-sender")] * 2, "must exist exactly once"),
+            "renamed": ("email-sender", [az_role_definition("email-sender", roleName="Paquetenvia Pilot Email")], "not named exactly"),
+            "list keys": ("email-sender", [az_role_definition("email-sender", permissions=[{
+                "actions": [*sender.actions, "Microsoft.Communication/CommunicationServices/ListKeys/action"],
+                "notActions": [], "dataActions": [], "notDataActions": []}])], "never grant listKeys"),
+            "regenerate key": ("email-sender", [az_role_definition("email-sender", permissions=[{
+                "actions": [*sender.actions, "Microsoft.Communication/CommunicationServices/RegenerateKey/action"],
+                "notActions": [], "dataActions": [], "notDataActions": []}])], "never grant listKeys"),
+            "wildcard": ("email-sender", [az_role_definition("email-sender", permissions=[{
+                "actions": ["Microsoft.Communication/*"], "notActions": [], "dataActions": [], "notDataActions": []}])],
+                "actions must be exactly"),
+            "wrap": ("recipient-notice-unwrap", [az_role_definition("recipient-notice-unwrap", permissions=[{
+                "actions": [], "notActions": [], "dataActions": [*unwrap.data_actions, "Microsoft.KeyVault/vaults/keys/wrap/action"],
+                "notDataActions": []}])], "dataActions must be exactly"),
+            "no unwrap": ("recipient-notice-unwrap", [az_role_definition("recipient-notice-unwrap", permissions=[{
+                "actions": [], "notActions": [], "dataActions": ["Microsoft.KeyVault/vaults/keys/read"], "notDataActions": []}])],
+                "dataActions must be exactly"),
+            "two blocks": ("recipient-notice-unwrap", [az_role_definition("recipient-notice-unwrap", permissions=[
+                {"actions": [], "dataActions": list(unwrap.data_actions)}, {"actions": [], "dataActions": []}])],
+                "exactly one permission block"),
+            "condition": ("recipient-notice-unwrap", [az_role_definition("recipient-notice-unwrap", permissions=[{
+                "actions": [], "notActions": [], "dataActions": list(unwrap.data_actions), "notDataActions": [],
+                "condition": "true"}])], "no condition"),
+            "subscription scope": ("recipient-notice-unwrap", [az_role_definition(
+                "recipient-notice-unwrap", assignableScopes=[SYNTHETIC_SCOPE.split("/resourceGroups/")[0]])], "only in the pilot resource group"),
+            "built-in": ("recipient-notice-unwrap", [az_role_definition("recipient-notice-unwrap", roleType="BuiltInRole")], "custom role"),
+        }
+        for name, (key, definitions, fragment) in cases.items():
+            with self.subTest(name=name):
+                failures = self.check(key, definitions)
+                self.assertTrue(any(fragment in failure for failure in failures), failures)
+                self.assertFalse(any(SYNTHETIC_SCOPE in failure for failure in failures), failures)
+
+    def test_cli_exit_codes_never_print_an_id(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "role.json"
+            for definitions, code in (([az_role_definition("email-sender")], 0), ([], 1)):
+                path.write_text(json.dumps(definitions), encoding="utf-8")
+                result = subprocess.run([sys.executable, guards.__file__, "custom-role-check", "--role", "email-sender",
+                                         "--definitions-json", str(path), "--scope", SYNTHETIC_SCOPE],
+                                        capture_output=True, text=True)
+                self.assertEqual(code, result.returncode, result.stdout)
+                self.assertNotIn("00000000-0000-4000-8000", result.stdout + result.stderr)
+            refused = subprocess.run([sys.executable, guards.__file__, "custom-role-check", "--role", "blob-tag-reader",
+                                      "--definitions-json", str(path), "--scope", SYNTHETIC_SCOPE], capture_output=True, text=True)
+            self.assertEqual(2, refused.returncode)
+
+
+class RecipientNoticeOwnerGuideTests(unittest.TestCase):
+    """W5, W6 and W11 item 11: the owner guide creates each custom role with exactly the actions the workflow checks, re-creates
+    the deployer's condition with the new role ids, holds names only (no value), and is linked from the runbook."""
+
+    @classmethod
+    def setUpClass(cls):
+        cls.text = OWNER_GUIDE.read_text(encoding="utf-8")
+
+    def test_each_custom_role_is_created_with_exactly_the_reviewed_actions(self):
+        blocks = re.findall(r"<<EOF\n(\{\n.*?\n\})\nEOF", self.text, re.S)
+        created = {}
+        for block in blocks:
+            definition = json.loads(block.replace("${RG_ID}", SYNTHETIC_SCOPE))
+            created[definition["Name"]] = definition
+        for key in guards.RECIPIENT_NOTICE_CUSTOM_ROLES:
+            role = guards.CUSTOM_ROLES[key]
+            with self.subTest(role=role.name):
+                definition = created[role.name]
+                self.assertEqual([SYNTHETIC_SCOPE], definition["AssignableScopes"])
+                self.assertEqual(([], []), (definition["NotActions"], definition["NotDataActions"]))
+                as_listed = az_role_definition(key, permissions=[{
+                    "actions": definition["Actions"], "notActions": definition["NotActions"],
+                    "dataActions": definition["DataActions"], "notDataActions": definition["NotDataActions"]}],
+                    assignableScopes=definition["AssignableScopes"])
+                self.assertEqual([], guards.custom_role_failures(key, [as_listed], SYNTHETIC_SCOPE))
+                self.assertIn(f'--name "{role.name}"', self.text)
+
+    def test_the_deployer_condition_admits_the_new_role_ids(self):
+        allowed = re.search(r'^ALLOWED="([^"]+)"$', self.text, re.M)
+        self.assertIsNotNone(allowed)
+        ids = [part.strip() for part in allowed.group(1).split(",")]
+        built_in = [i for i in ids if not i.startswith("${")]
+        self.assertEqual(sorted(guards.ALLOWED_ROLE_IDS), sorted(built_in))
+        self.assertEqual(["${SENDER_ID}", "${TAG_READER_ID}", "${UNWRAP_ID}"], sorted(i for i in ids if i.startswith("${")))
+        self.assertIn('--role "Role Based Access Control Administrator"', self.text)
+
+    def test_the_guide_holds_names_and_never_values(self):
+        emails = set(re.findall(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+", self.text))
+        self.assertEqual({"avisos@paquetenvia.com"}, emails)
+        guids = set(re.findall(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}", self.text))
+        self.assertLessEqual(guids, set(guards.ALLOWED_ROLE_IDS))
+        self.assertNotRegex(self.text, r"/subscriptions/[0-9a-f-]{36}")
+        for url in (guards.EMAIL_EVENTS_ENDPOINT, "https://paquetenvia.com/api/v1/messaging/whatsapp/webhook"):
+            self.assertIn(url, self.text)
+
+    def test_the_guide_is_linked_from_the_runbook_and_guide_a(self):
+        for document in ("README.md", "guia-owner-seccion-a.md", "bootstrap.md"):
+            with self.subTest(document=document):
+                self.assertIn("guia-owner-avisos.md", (OWNER_GUIDE.parent / document).read_text(encoding="utf-8"))
+
+
 class NonRootImageTests(unittest.TestCase):
     """P24 (AZR-001-AC-064): the final stage of each of the four pilot images runs as a non-root USER."""
 
@@ -956,6 +1190,16 @@ elif args[:3] == ["keyvault", "secret", "show"]:
 elif args[:3] == ["keyvault", "secret", "set"]:
     with open(opt("--file"), encoding="utf-8") as source, open(os.path.join(secrets, opt("--name")), "w", encoding="utf-8") as target:
         target.write(source.read())
+elif args[:2] == ["resource", "show"]:
+    path = os.path.join(state, "acs-id")
+    if opt("--resource-type") != "Microsoft.Communication/communicationServices" or not os.path.exists(path):
+        # Like az: the error names the resource and the resource group.
+        print(f"ERROR: (ResourceNotFound) The Resource '{opt('--resource-type')}/{opt('--name')}' under resource group "
+              f"'{opt('--resource-group')}' was not found.", file=sys.stderr); sys.exit(3)
+    print(open(path, encoding="utf-8").read())
+elif args[:3] == ["role", "definition", "list"]:
+    path = os.path.join(state, "roles", opt("--name") + ".json")
+    print(open(path, encoding="utf-8").read() if os.path.exists(path) else "[]")
 elif args[:2] == ["containerapp", "list"]:
     name = re.search(r"name=='([^']+)'", opt("--query")).group(1)
     if os.path.exists(os.path.join(state, "apps", name)):
@@ -1035,7 +1279,7 @@ class WorkflowConnectionSecretsTests(WorkflowStepHarness):
         self.assertEqual("${{ steps.platform.outputs.postgresHost }}", self.step["env"]["PGHOST_FQDN"])
         self.put_secret("pg-admin-password", "Pv1-" + "a" * 54)
         for name in ("authcenter-paquetenvia-client-secret", "google-maps-api-key", "public-tracking-link-key",
-                     "paquetenvia-telemetry-pseudonym-key-1"):
+                     "paquetenvia-telemetry-pseudonym-key-1", *guards.RECIPIENT_NOTICE_OWNER_SECRETS):
             self.put_secret(name, f"owner-value-of-{name}-0123456789")
 
     def run_connections(self, host: str, rotate: str = "false") -> subprocess.CompletedProcess:
@@ -1142,6 +1386,18 @@ class WorkflowConnectionSecretsTests(WorkflowStepHarness):
         self.assertNotIn("runtime_logins_changed", self.outputs())
         self.assert_no_secret_printed(result)
 
+    def test_each_missing_meta_value_stops_the_run_naming_it(self):
+        # W7 and W11 item 8 (NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31): a mapped secret that does not exist stops the host.
+        for name in guards.RECIPIENT_NOTICE_OWNER_SECRETS:
+            with self.subTest(name=name):
+                value = self.secret(name)
+                (self.state / "secrets" / name).unlink()
+                result = self.run_connections(self.OLD_HOST)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(f"lacks {name}. Store the Meta value (guia-owner-avisos.md, paso 4) and re-run.", result.stdout)
+                self.put_secret(name, value)
+        self.assertEqual(0, self.run_connections(self.OLD_HOST).returncode)
+
 
 class WorkflowAppRestartTests(WorkflowStepHarness):
     """Once stage 3 has applied the logins, the API and Worker run on the current credentials: a revision the real
@@ -1194,6 +1450,179 @@ class WorkflowAppRestartTests(WorkflowStepHarness):
         index = names.index(self.step["name"])
         self.assertTrue(names[index - 1].startswith("Stage 3 - "), names[index - 1])
         self.assertTrue(names[index + 1].startswith("Stage 4 - "), names[index + 1])
+
+
+class WorkflowRecipientNoticeSecretsTests(WorkflowStepHarness):
+    """NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (W7 "El workflow (Recommended)"): window 1 generates the seven
+    recipient-notice secrets nobody types once, when missing, and never prints them; it never writes a Meta value."""
+
+    def setUp(self):
+        super().setUp()
+        self.step = workflow_step(lambda s: s.get("id") == "generated")
+        (self.state / "acs-id").write_text(SYNTHETIC_ACS_ID + "\n", encoding="utf-8")
+
+    def run_generated(self) -> subprocess.CompletedProcess:
+        return self.run_step(self.step, VAULT="kv-pvp-test", PILOT_ACS_NAME="acs-pv-synthetic")
+
+    def generated(self) -> dict[str, str]:
+        return {name: self.secret(name) for name in guards.RECIPIENT_NOTICE_GENERATED_SECRETS}
+
+    def test_the_first_run_generates_the_seven_secrets_and_never_prints_them(self):
+        result = self.run_generated()
+        self.assertEqual(0, result.returncode, result.stderr)
+        values = self.generated()
+        self.assertEqual(32, len(base64.b64decode(values[guards.CONTACT_LOOKUP_SECRET], validate=True)))
+        for name in set(guards.RECIPIENT_NOTICE_GENERATED_SECRETS) - {guards.CONTACT_LOOKUP_SECRET, guards.ACS_RESOURCE_ID_SECRET}:
+            with self.subTest(name=name):
+                self.assertRegex(values[name], r"^[0-9a-f]{64}$")
+                self.assertIn(f"Generated {name}.", result.stdout)
+        self.assertEqual(SYNTHETIC_ACS_ID, values[guards.ACS_RESOURCE_ID_SECRET])
+        self.assertEqual(len(values), len(set(values.values())))
+        for name in guards.RECIPIENT_NOTICE_OWNER_SECRETS:
+            self.assertFalse((self.state / "secrets" / name).exists(), name)
+        for value in values.values():
+            self.assertNotIn(value, result.stdout + result.stderr)
+
+    def test_a_second_run_keeps_every_value(self):
+        self.assertEqual(0, self.run_generated().returncode)
+        before = self.generated()
+        (self.state / "acs-id").write_text(SYNTHETIC_ACS_ID.replace("acs-pv-synthetic", "acs-pv-other") + "\n", encoding="utf-8")
+        result = self.run_generated()
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(before, self.generated())
+        self.assertNotIn("Generated", result.stdout)
+
+    def test_an_unreadable_resource_id_stops_before_storing_it(self):
+        (self.state / "acs-id").unlink()
+        result = self.run_generated()
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse((self.state / "secrets" / guards.ACS_RESOURCE_ID_SECRET).exists())
+        self.assertFalse((self.root / "runner" / "s").exists())
+        # A3: the az error names the resource; the step prints only its fixed message.
+        self.assertIn("::error::The id of the Communication Services resource named by PILOT_ACS_NAME could not be read",
+                      result.stdout)
+        self.assertNotIn("acs-pv-synthetic", result.stdout + result.stderr)
+        self.assertNotIn("ResourceNotFound", result.stdout + result.stderr)
+
+    def test_an_empty_resource_id_stops_before_storing_it(self):
+        (self.state / "acs-id").write_text("\n", encoding="utf-8")
+        result = self.run_generated()
+        self.assertNotEqual(0, result.returncode)
+        self.assertFalse((self.state / "secrets" / guards.ACS_RESOURCE_ID_SECRET).exists())
+        self.assertIn("could not be read", result.stdout)
+
+
+class WorkflowAcsResourceCheckTests(WorkflowStepHarness):
+    """W2 and W11 item 4: after the login the workflow checks that PILOT_ACS_NAME names an existing Communication Services
+    resource; neither the name nor the id is printed, not even the az error of a failed lookup (A3)."""
+
+    def setUp(self):
+        super().setUp()
+        self.step = workflow_step(lambda s: s.get("name") == "Check the Communication Services resource (PILOT_ACS_NAME)")
+
+    def run_check(self) -> subprocess.CompletedProcess:
+        return self.run_step(self.step, PILOT_ACS_NAME="acs-pv-synthetic", PILOT_RESOURCE_GROUP="rg-pv-pilot")
+
+    def test_an_existing_resource_passes_without_printing_its_id(self):
+        (self.state / "acs-id").write_text(SYNTHETIC_ACS_ID + "\n", encoding="utf-8")
+        result = self.run_check()
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn("The Communication Services resource named by PILOT_ACS_NAME exists.", result.stdout)
+        self.assertNotIn(SYNTHETIC_ACS_ID, result.stdout + result.stderr)
+        self.assertNotIn("acs-pv-synthetic", result.stdout + result.stderr)
+
+    def test_a_missing_resource_stops_with_a_fixed_message(self):
+        result = self.run_check()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("::error::The Communication Services resource named by PILOT_ACS_NAME cannot be read in rg-pv-pilot",
+                      result.stdout)
+        self.assertNotIn("acs-pv-synthetic", result.stdout + result.stderr)
+        self.assertNotIn("ResourceNotFound", result.stdout + result.stderr)
+
+
+class WorkflowCustomRoleLookupTests(WorkflowStepHarness):
+    """W5 and W6: before stage 1 the workflow finds each recipient-notice custom role by its exact name and stops unless it
+    holds exactly the reviewed actions; the role definition ids go to stage 1 and stage 4 as step outputs."""
+
+    def setUp(self):
+        super().setUp()
+        self.step = workflow_step(lambda s: s.get("id") == "roles")
+        (self.state / "roles").mkdir()
+        self.env = guards.load_yaml(REPO_ROOT / guards.PILOT_WORKFLOW)["env"]
+
+    def write(self, key: str, definitions: list) -> None:
+        name = guards.CUSTOM_ROLES[key].name
+        (self.state / "roles" / f"{name}.json").write_text(json.dumps(definitions), encoding="utf-8")
+
+    def run_roles(self) -> subprocess.CompletedProcess:
+        return self.run_step(self.step, AZURE_SUBSCRIPTION_ID="00000000-0000-4000-8000-000000000000",
+                             RECIPIENT_NOTICE_UNWRAP_ROLE=self.env["RECIPIENT_NOTICE_UNWRAP_ROLE"],
+                             EMAIL_SENDER_ROLE=self.env["EMAIL_SENDER_ROLE"])
+
+    def test_the_reviewed_roles_are_found_and_their_ids_handed_on(self):
+        for key in guards.RECIPIENT_NOTICE_CUSTOM_ROLES:
+            self.write(key, [az_role_definition(key)])
+        result = self.run_roles()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        outputs = self.outputs()
+        self.assertEqual(az_role_definition("recipient-notice-unwrap")["id"], outputs["unwrap_role"])
+        self.assertEqual(az_role_definition("email-sender")["id"], outputs["sender_role"])
+
+    def test_a_missing_or_broader_role_stops_the_run(self):
+        self.write("recipient-notice-unwrap", [az_role_definition("recipient-notice-unwrap")])
+        result = self.run_roles()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("'Paquetenvia Pilot Email Sender' must exist exactly once", result.stdout)
+        self.assertNotIn("sender_role", self.outputs())
+        sender = guards.CUSTOM_ROLES["email-sender"]
+        self.write("email-sender", [az_role_definition("email-sender", permissions=[{
+            "actions": [*sender.actions, "Microsoft.Communication/CommunicationServices/ListKeys/action"],
+            "notActions": [], "dataActions": [], "notDataActions": []}])])
+        result = self.run_roles()
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("never grant listKeys", result.stdout)
+
+
+class WorkflowEmailEventsPhaseTests(WorkflowStepHarness):
+    """O8 and W11 item 5: the phase is the committed default of events.bicep, read from the compiled template; 'none'
+    creates nothing, and 'subscribe' needs the apex bound."""
+
+    def setUp(self):
+        super().setUp()
+        self.step = workflow_step(lambda s: s.get("id") == "events_phase")
+        (self.root / "runner" / "arm").mkdir()
+
+    def run_phase(self, phase: str, domain: str) -> subprocess.CompletedProcess:
+        template = {"parameters": {"emailEventsPhase": {"type": "string", "defaultValue": phase,
+                                                        "allowedValues": guards.EMAIL_EVENTS_PHASES}}}
+        (self.root / "runner" / "arm" / "events.json").write_text(json.dumps(template), encoding="utf-8")
+        return self.run_step(self.step, CUSTOM_DOMAIN_PHASE=domain, PILOT_HOST="paquetenvia.com")
+
+    def test_the_repository_commits_none(self):
+        source = (REPO_ROOT / guards.PILOT_DIR / "events.bicep").read_text(encoding="utf-8")
+        self.assertEqual(["none"], re.findall(r"^param emailEventsPhase string = '([a-z]+)'$", source, re.M))
+
+    def test_none_creates_nothing(self):
+        for domain in ("none", "bind"):
+            result = self.run_phase("none", domain)
+            self.assertEqual(0, result.returncode, result.stderr)
+            self.assertEqual("none", self.outputs()["phase"])
+            self.assertIn("no Event Grid system topic or subscription", result.stdout)
+        self.assertFalse((self.state / "calls").exists())
+
+    def test_subscribe_needs_the_apex_bound(self):
+        result = self.run_phase("subscribe", "none")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("needs custom_domain_phase=bind", result.stdout)
+        self.assertNotIn("phase", self.outputs())
+        result = self.run_phase("subscribe", "bind")
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("subscribe", self.outputs()["phase"])
+
+    def test_any_other_value_stops(self):
+        result = self.run_phase("true", "bind")
+        self.assertNotEqual(0, result.returncode)
+        self.assertNotIn("phase", self.outputs())
 
 
 # A stand-in for the Azure CLI as the revision check calls it. $AZ_STATE/revisions.json holds, per app, the
@@ -2890,6 +3319,247 @@ class TemplateGuardTests(unittest.TestCase):
                                          "--server-json", str(server), "--platform-arm", str(platform), "--subscription-id", "s",
                                          "--resource-group", "rg"], capture_output=True, text=True)
             self.assertEqual(1, unreadable.returncode)
+
+    # ------------------------------------------------- NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (P16, P23, P28 to P30)
+    GATE_LOG = RecipientNoticeGateResolutionTests.LOG
+
+    def notice_assignment(self, t, fragment: str):
+        """The role assignment on recipient-notice-kek whose JSON holds fragment."""
+        return next(r for r in t["security"]["resources"] if r.get("type") == "Microsoft.Authorization/roleAssignments"
+                    and "'recipient-notice-kek'" in str(r.get("scope")) and fragment in json.dumps(r))
+
+    def with_gate_ids(self, t, gate004="GATE-004-SYNTHETIC-RESOLUTION", gate007="GATE-007-SYNTHETIC-RESOLUTION"):
+        self.edit(t, "apps", "createObject('name', 'Notifications__WorkerId', 'value', 'pilot-worker')",
+                  "createObject('name', 'Notifications__WorkerId', 'value', 'pilot-worker'), "
+                  f"createObject('name', 'Notifications__RecipientNotices__Gate004DecisionId', 'value', '{gate004}'), "
+                  f"createObject('name', 'Notifications__RecipientNotices__Gate007DecisionId', 'value', '{gate007}')")
+
+    def test_the_repository_wires_recipient_notices_with_every_switch_off(self):
+        ctx = self.context()
+        results = self.results(ctx)
+        for number in (16, 23, 28, 29, 30):
+            self.assertTrue(results[number].passed, (number, results[number].detail))
+        self.assertIn("every switch off", results[28].detail)
+        api, worker = ctx.workload(guards.API_APP), ctx.workload(guards.WORKER_APP)
+        self.assertEqual({k: v for k, v in guards.REQUIRED_SECRET_MAPPINGS[guards.API_APP].items()}, guards.secret_mappings(api))
+        self.assertEqual({k: v for k, v in guards.REQUIRED_SECRET_MAPPINGS[guards.WORKER_APP].items()}, guards.secret_mappings(worker))
+        for workload in (api, worker):
+            self.assertEqual("1", workload.value("ContactLookup__CurrentKeyVersion"))
+            self.assertFalse([k for k in workload.env if k.startswith(("Notifications__RecipientNotices__", "Messaging__"))])
+            self.assertNotIn(guards.NOTICE_KEY_PROTECTOR, workload.env)
+        self.assertEqual("1", worker.value("PublicTracking__CurrentLinkKeyVersion"))
+        self.assertEqual("none", self.compiled["events"]["parameters"]["emailEventsPhase"]["defaultValue"])
+        key = self.resource(self.compiled, "security", "Microsoft.KeyVault/vaults/keys", "recipient-notice-kek")["properties"]
+        self.assertEqual(("RSA", 3072, ["wrapKey", "unwrapKey"]), (key["kty"], key["keySize"], key["keyOps"]))
+
+    def test_p28_any_switch_provider_notice_copy_or_subscription_needs_both_resolution_rows(self):
+        fragment = "without the GATE-004 and GATE-007 resolution rows"
+        on = {
+            "notices": ("Notifications__RecipientNotices__Enabled", "true"),
+            "notices any case": ("notifications__recipientnotices__enabled", "True"),
+            "whatsapp provider": ("Messaging__WhatsApp__Provider", "MetaCloudApi"),
+            "email provider": ("Messaging__Email__Provider", "AzureCommunicationServices"),
+            "whatsapp webhook": ("Messaging__WhatsApp__Webhook__Enabled", "true"),
+            "email events": ("Messaging__Email__Events__Enabled", "true"),
+            "notice copies": ("Locations__NoticeKeyProtector", "AzureKeyVault"),
+        }
+        for label, (name, value) in on.items():
+            def switch(t, name=name, value=value):
+                t["apps"]["variables"]["productionEnv"].append({"name": name, "value": value})
+            with self.subTest(label=label):
+                self.assert_fails(28, self.context(switch), fragment)
+                ctx = self.context(lambda t, switch=switch: (switch(t), self.with_gate_ids(t)))
+                ctx.decision_log = self.GATE_LOG
+                self.assertTrue(self.results(ctx)[28].passed, self.results(ctx)[28].detail)
+                scoped = self.context(lambda t, switch=switch: (switch(t), self.with_gate_ids(t, gate007="GATE-007-SYNTHETIC-SCOPING")))
+                scoped.decision_log = self.GATE_LOG
+                self.assert_fails(28, scoped, "not 'Gate resolution'")
+
+        def subscribe(t):
+            t["events"]["parameters"]["emailEventsPhase"]["defaultValue"] = "subscribe"
+        self.assert_fails(28, self.context(subscribe), "events.bicep emailEventsPhase=subscribe")
+        self.assert_fails(30, self.context(subscribe), "needs the API's Messaging__Email__Events__Enabled=true")
+
+        def explicit_off(t):
+            t["apps"]["variables"]["productionEnv"].extend([
+                {"name": "Notifications__RecipientNotices__Enabled", "value": "false"},
+                {"name": "Messaging__WhatsApp__Provider", "value": "Disabled"},
+                {"name": "Locations__NoticeKeyProtector", "value": "Disabled"}])
+        self.assertTrue(self.results(self.context(explicit_off))[28].passed)
+
+        def unknown_gate_ids(t):
+            self.with_gate_ids(t, gate004="GATE-004-NOT-RECORDED")
+        self.assert_fails(28, self.context(unknown_gate_ids), "GATE-004-NOT-RECORDED is not recorded")
+
+        def gate_ids_in_the_api(t):
+            t["apps"]["variables"]["productionEnv"].append({"name": "Notifications__RecipientNotices__Gate004DecisionId",
+                                                            "value": "GATE-004-SYNTHETIC-RESOLUTION"})
+        self.assert_fails(28, self.context(gate_ids_in_the_api), "only the Worker reads the gate decision ids")
+
+    def test_p16_both_hosts_name_the_recipient_notice_key_never_the_pii_key(self):
+        for host in ("ca-pv-pilot-api", "ca-pv-pilot-worker"):
+            def pii_key(t, host=host):
+                raw = json.dumps(self.resource(t, "apps", "Microsoft.App/containerApps", host))
+                old = "createObject('name', 'PiiProtection__RecipientNoticeKey__KeyId', 'value', parameters('recipientNoticeKeyUri'))"
+                assert raw.count(old) == 1, host
+                resources = t["apps"]["resources"]
+                index = resources.index(self.resource(t, "apps", "Microsoft.App/containerApps", host))
+                resources[index] = json.loads(raw.replace(old, old.replace("recipientNoticeKeyUri", "piiKeyUri")))
+            with self.subTest(host=host):
+                self.assert_fails(16, self.context(pii_key), f"{host} must set PiiProtection__RecipientNoticeKey__KeyId")
+
+    def test_p23_no_whatsapp_token_in_the_api_and_no_webhook_secret_in_the_worker(self):
+        def api_token(t):
+            self.edit(t, "apps", "'KeyVaultSecrets__Mappings__8__SecretName', 'value', 'whatsapp-app-secret')",
+                      "'KeyVaultSecrets__Mappings__8__SecretName', 'value', 'whatsapp-cloud-api-token')")
+        self.assert_fails(23, self.context(api_token), "the WhatsApp token never reaches the API")
+
+        def worker_webhook(t):
+            self.edit(t, "apps", "'KeyVaultSecrets__Mappings__6__SecretName', 'value', 'whatsapp-phone-number-id')",
+                      "'KeyVaultSecrets__Mappings__6__SecretName', 'value', 'whatsapp-webhook-verify-token')")
+        self.assert_fails(23, self.context(worker_webhook), "worker maps webhook secrets ['whatsapp-webhook-verify-token']")
+        self.assert_fails(6, self.context(worker_webhook), "differ from the least-privilege set")
+
+        def contact_key_in_environment(t):
+            t["apps"]["variables"]["productionEnv"].append({"name": "ContactLookup__Keys__1", "value": "inline"})
+        self.assert_fails(6, self.context(contact_key_in_environment), "sensitive setting ContactLookup__Keys__1")
+
+    def test_p29_each_key_role_belongs_to_one_host_and_one_key(self):
+        def api_unwraps(t):
+            self.notice_assignment(t, "kvReader")["properties"]["roleDefinitionId"] = (
+                "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('roles').keyVaultCryptoServiceEncryptionUser)]")
+        self.assert_fails(29, self.context(api_unwraps), "recipient-notice-kek must be held exactly by")
+
+        def worker_reader(t):
+            self.notice_assignment(t, "recipientNoticeUnwrapRoleDefinitionId")["properties"]["roleDefinitionId"] = (
+                "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('roles').kvReader)]")
+        self.assert_fails(29, self.context(worker_reader), "recipient-notice-kek must be held exactly by")
+
+        def unwrap_on_the_pii_key(t):
+            assignment = self.notice_assignment(t, "recipientNoticeUnwrapRoleDefinitionId")
+            assignment["scope"] = assignment["scope"].replace("'recipient-notice-kek'", "'pii-kek'")
+        failures = [r.detail for r in guards.run_guards(self.context(unwrap_on_the_pii_key)) if r.number == 29][0]
+        self.assertIn("outside recipient-notice-kek", failures)
+        self.assertIn("the Worker holds a role on pii-kek", failures)
+
+        def reader_on_the_vault(t):
+            extra = copy.deepcopy(self.notice_assignment(t, "kvReader"))
+            extra["scope"] = extra["scope"].replace("'recipient-notice-kek'", "'dataprotection-kek'")
+            t["security"]["resources"].append(extra)
+        self.assert_fails(29, self.context(reader_on_the_vault), "assigns Key Vault Reader outside recipient-notice-kek")
+
+        def unwrap_role_in_apps(t):
+            assignment = copy.deepcopy(self.notice_assignment(t, "recipientNoticeUnwrapRoleDefinitionId"))
+            t["apps"]["resources"].append(assignment)
+        self.assert_fails(14, self.context(unwrap_role_in_apps), "allowed only in security.bicep")
+
+        def unknown_parameter_role(t):
+            self.notice_assignment(t, "recipientNoticeUnwrapRoleDefinitionId")["properties"]["roleDefinitionId"] = "[parameters('anyRole')]"
+        self.assert_fails(14, self.context(unknown_parameter_role), "unknown parameter")
+
+    def test_p29_only_the_worker_sends_email_and_only_on_that_resource(self):
+        def sender():
+            return lambda t: next(r for r in t["apps"]["resources"] if r.get("type") == "Microsoft.Authorization/roleAssignments"
+                                  and "acsEmailSenderRoleDefinitionId" in json.dumps(r))
+
+        def api_sends(t):
+            assignment = sender()(t)
+            assignment["properties"]["principalId"] = assignment["properties"]["principalId"].replace("id-pv-pilot-worker", "id-pv-pilot-api")
+        self.assert_fails(29, self.context(api_sends), "must be held only by id-pv-pilot-worker")
+
+        def contributor(t):
+            sender()(t)["properties"]["roleDefinitionId"] = (
+                "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', 'b24988ac-6180-42a0-ab88-20f7382dd24c')]")
+        self.assert_fails(14, self.context(contributor), "outside the pilot allowlist")
+        self.assert_fails(29, self.context(contributor), "must be held only by id-pv-pilot-worker")
+
+        def second_sender(t):
+            t["apps"]["resources"].append(copy.deepcopy(sender()(t)))
+        self.assert_fails(29, self.context(second_sender), "must be held only by id-pv-pilot-worker")
+
+    def test_p29_workflow_names_checks_and_generates_fail_closed(self):
+        text = (REPO_ROOT / guards.PILOT_WORKFLOW).read_text(encoding="utf-8")
+        mutations = {
+            "role renamed": (text.replace("EMAIL_SENDER_ROLE: Paquetenvia Pilot Email Sender", "EMAIL_SENDER_ROLE: Paquetenvia Email"),
+                             "workflow env EMAIL_SENDER_ROLE must be exactly"),
+            "role not checked": (text.replace("python3 ./tools/azr-001/env001_pilot_guards.py custom-role-check", "true"),
+                                 "the roles step must look up and check each custom role"),
+            "acs not validated": (text.replace('[[ "${PILOT_ACS_NAME}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]', "true"),
+                                  "must validate PILOT_ACS_NAME before azure/login"),
+            "acs not checked": (text.replace("echo \"The Communication Services resource named by PILOT_ACS_NAME exists.\"", "true")
+                                .replace("if ! az resource show --resource-group \"${PILOT_RESOURCE_GROUP}\" --name \"${PILOT_ACS_NAME}\" \\\n"
+                                         "              --resource-type Microsoft.Communication/communicationServices --query id -o tsv --only-show-errors > /dev/null 2>&1; then",
+                                         "if false; then"),
+                                "must check that PILOT_ACS_NAME names an existing"),
+            "secret not generated": (text.replace("whatsapp-app-secret-previous \\\n", "\\\n"), "window 1 (step id generated) must generate"),
+            "meta value generated": (text.replace("for name in whatsapp-webhook-verify-token ", "for name in whatsapp-cloud-api-token whatsapp-webhook-verify-token "),
+                                     "must never generate the owner's Meta values"),
+            "meta value not required": (text.replace("for name in whatsapp-cloud-api-token whatsapp-phone-number-id whatsapp-app-secret; do",
+                                                     "for name in whatsapp-cloud-api-token whatsapp-phone-number-id; do"),
+                                        "window 2 (step id connections) must stop"),
+            "sender role not passed": (text.replace('"acsEmailSenderRoleDefinitionId=${SENDER_ROLE}" ', ""), "stage 4 must pass"),
+            "acs name read twice": (text + "\n# ${{ vars.PILOT_ACS_NAME }}\n",
+                                    "must read PILOT_ACS_NAME once"),
+        }
+        for label, (mutated, fragment) in mutations.items():
+            with self.subTest(label=label):
+                self.assertNotEqual(text, mutated)
+                self.assert_fails(29, self.context(workflow_text=mutated), fragment)
+
+    def test_p30_the_email_events_subscription_is_pinned(self):
+        def subscription(t):
+            return self.resource(t, "events", "Microsoft.EventGrid/systemTopics/eventSubscriptions")["properties"]
+
+        def topic(t):
+            return self.resource(t, "events", "Microsoft.EventGrid/systemTopics")
+
+        mutations = {
+            "endpoint": (lambda t: subscription(t)["destination"]["properties"].update(endpointUrl="https://paquetenvia.com/api/v1/other"),
+                         "must deliver to the webhook"),
+            "batching": (lambda t: subscription(t)["destination"]["properties"].update(maxEventsPerBatch=10), "one event per batch"),
+            "header": (lambda t: subscription(t)["destination"]["properties"]["deliveryAttributeMappings"][0].update(name="X-Other"),
+                       "static secret header"),
+            "not secret": (lambda t: subscription(t)["destination"]["properties"]["deliveryAttributeMappings"][0]["properties"]
+                           .update(isSecret=False), "static secret header"),
+            "events": (lambda t: subscription(t)["filter"]["includedEventTypes"].append(
+                "Microsoft.Communication.EmailEngagementTrackingReportReceived"), "filter exactly"),
+            "schema": (lambda t: subscription(t).update(eventDeliverySchema="CloudEventSchemaV1_0"), "Event Grid event schema"),
+            "always created": (lambda t: self.resource(t, "events", "Microsoft.EventGrid/systemTopics/eventSubscriptions").pop("condition"),
+                               "must exist only when"),
+            "topic always created": (lambda t: topic(t).pop("condition"), "exist only when"),
+            "topic type": (lambda t: topic(t)["properties"].update(topicType="Microsoft.Storage.StorageAccounts"), "of type"),
+            "phase values": (lambda t: t["events"]["parameters"]["emailEventsPhase"].update(allowedValues=["none", "subscribe", "always"]),
+                             "allowed values"),
+            "plain secret": (lambda t: t["events"]["parameters"]["emailEventsSecret"].update(type="string"), "@secure() parameter"),
+        }
+        for label, (mutate, fragment) in mutations.items():
+            with self.subTest(label=label):
+                self.assert_fails(30, self.context(mutate), fragment)
+
+        def topic_elsewhere(t):
+            t["apps"]["resources"].append(copy.deepcopy(topic(t)))
+        self.assert_fails(1, self.context(topic_elsewhere), "allowed only in events.bicep")
+
+        text = (REPO_ROOT / guards.PILOT_WORKFLOW).read_text(encoding="utf-8")
+        mutations = {
+            "phase passed": (text.replace('--parameters "@${RUNNER_TEMP}/events.parameters.json"',
+                                          '--parameters "@${RUNNER_TEMP}/events.parameters.json" "emailEventsPhase=subscribe"'),
+                             "must never pass emailEventsPhase"),
+            "no bind": (text.replace('[[ "${CUSTOM_DOMAIN_PHASE}" == "bind" ]] || ', ""), "require custom_domain_phase=bind"),
+            "firewall left open": (text.replace("if: always() && steps.events_phase.outputs.phase == 'subscribe'",
+                                                "if: steps.events_phase.outputs.phase == 'subscribe'"), "always close it"),
+            "always deployed": (text.replace("        if: steps.events_phase.outputs.phase == 'subscribe'\n        shell: bash\n        run: |\n"
+                                             "          set -euo pipefail\n          trap 'shred -u \"${RUNNER_TEMP}/events.parameters.json\"",
+                                             "        shell: bash\n        run: |\n          set -euo pipefail\n"
+                                             "          trap 'shred -u \"${RUNNER_TEMP}/events.parameters.json\""),
+                                "stage 6 must deploy events.json only for subscribe"),
+            "no meta callback": (text.replace("https://${PILOT_HOST}/api/v1/messaging/whatsapp/webhook", "the Meta callback"),
+                                 "the Meta callback https://"),
+        }
+        for label, (mutated, fragment) in mutations.items():
+            with self.subTest(label=label):
+                self.assertNotEqual(text, mutated)
+                self.assert_fails(30, self.context(workflow_text=mutated), fragment)
 
 
 if __name__ == "__main__":

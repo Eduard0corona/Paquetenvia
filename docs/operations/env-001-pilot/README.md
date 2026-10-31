@@ -14,7 +14,7 @@ files (`deploy/azure/*.bicep`, `deploy-core.ps1`, `deploy-azure-dev.yml`) or gua
 | OBS-002 alert e-mail (owner) | `deploy/azure/pilot/observability.parameters.json` |
 | Accepted terms and privacy versions for the web (owner, UI-001) | `deploy/azure/pilot/web.parameters.json` |
 | Deployment workflow | `.github/workflows/deploy-azure-pilot.yml` (`workflow_dispatch`, GitHub Environment `azure-pilot`) |
-| Static guards | `tools/azr-001/env001_pilot_guards.py` (28 guards) and `test_env001_pilot_guards.py` |
+| Static guards | `tools/azr-001/env001_pilot_guards.py` (31 guards) and `test_env001_pilot_guards.py` |
 | Restore drill and real restore | `deploy/azure/pilot/restore-drill.sh` (§6.4) |
 | One-time bootstrap (owner) | [`bootstrap.md`](bootstrap.md) |
 
@@ -39,6 +39,7 @@ lists what could only be checked statically.
 | ADP-001-PII-KEYVAULT-ENVELOPE | Key Vault RSA-3072 `pii-kek` (wrap/unwrap only). The API alone has *Key Vault Crypto Service Encryption User* on it. |
 | SCL-001 / ENV-001 Data Protection KEK | Key Vault RSA-3072 `dataprotection-kek`. API and Worker have *Crypto Service Encryption User*, and the workloads get `DataProtection__KeyEncryption__*`. |
 | GATE-013 | API and Worker run with `minReplicas = maxReplicas = 1`, SignalR `InProcess`, no Redis and no Azure SignalR Service (guard P08) |
+| NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (AI-08 NTF-008) | Recipient notices wired with every switch off: Key Vault RSA-3072 `recipient-notice-kek` (the API holds *Key Vault Reader* on it and wraps in process; the Worker holds the owner's custom unwrap-only role), the Worker's custom e-mail sender role on the Communication Services resource named by `PILOT_ACS_NAME`, the contact lookup key and the webhook secrets mapped from Key Vault, and the Event Grid subscription prepared behind `emailEventsPhase=none` (`events.bicep`). Nothing is sent, every webhook answers 404 and no notice copy is written until the gate-closing change (guards P28 to P30; owner steps in [`guia-owner-avisos.md`](guia-owner-avisos.md)) |
 
 The ENV-001 acceptance criterion "no pilot deployment without GATE-007 and GATE-012 resolved or
 explicitly scoped by the project owner" is enforced by the workflow. The environment variables
@@ -219,16 +220,17 @@ Guard P06 checks three things:
 
 | Workload (identity) | Secret → configuration key |
 |---|---|
-| API (`id-pv-pilot-api`) | `pg-api-runtime-connection` → `ConnectionStrings:Paqueteria`; `authcenter-paquetenvia-client-secret` → `AuthCenter:ClientSecret`; `paquetenvia-email-lookup-key-1` → `EmailLookup:Keys:1`; `google-maps-api-key` → `Locations:GoogleMaps:ApiKey`; `public-tracking-link-key` → `PublicTracking:LinkKeys:1`; `pg-realtime-runtime-connection` → `ConnectionStrings:PaqueteriaRealtime` (the in-process realtime dispatchers; never the Worker's connection); `paquetenvia-telemetry-pseudonym-key-1` → `TelemetryPseudonym:Keys:1` (OBS-003) |
-| Worker (`id-pv-pilot-worker`) | `pg-worker-runtime-connection` → `ConnectionStrings:PaqueteriaWorker` and `ConnectionStrings:Paqueteria` (one secret, read once, mapped to both keys); `paquetenvia-telemetry-pseudonym-key-1` → `TelemetryPseudonym:Keys:1` (OBS-003) |
+| API (`id-pv-pilot-api`) | `pg-api-runtime-connection` → `ConnectionStrings:Paqueteria`; `authcenter-paquetenvia-client-secret` → `AuthCenter:ClientSecret`; `paquetenvia-email-lookup-key-1` → `EmailLookup:Keys:1`; `google-maps-api-key` → `Locations:GoogleMaps:ApiKey`; `public-tracking-link-key` → `PublicTracking:LinkKeys:1`; `pg-realtime-runtime-connection` → `ConnectionStrings:PaqueteriaRealtime` (the in-process realtime dispatchers; never the Worker's connection); `paquetenvia-telemetry-pseudonym-key-1` → `TelemetryPseudonym:Keys:1` (OBS-003); NTF-008: `paquetenvia-contact-lookup-key-1` → `ContactLookup:Keys:1`; `whatsapp-app-secret` and `whatsapp-app-secret-previous` → `Messaging:WhatsApp:Webhook:AppSecret` and `PreviousAppSecret`; `whatsapp-webhook-verify-token` and `whatsapp-webhook-verify-token-previous` → `Messaging:WhatsApp:Webhook:VerifyToken` and `PreviousVerifyToken`; `acs-email-events-secret` and `acs-email-events-secret-previous` → `Messaging:Email:Events:Secret` and `PreviousSecret`; `whatsapp-phone-number-id` → `Messaging:WhatsApp:Webhook:PhoneNumberId`; `acs-communication-resource-id` → `Messaging:Email:Events:SourceResourceId` (never the WhatsApp token) |
+| Worker (`id-pv-pilot-worker`) | `pg-worker-runtime-connection` → `ConnectionStrings:PaqueteriaWorker` and `ConnectionStrings:Paqueteria` (one secret, read once, mapped to both keys); `paquetenvia-telemetry-pseudonym-key-1` → `TelemetryPseudonym:Keys:1` (OBS-003); NTF-008: `public-tracking-link-key` → `PublicTracking:LinkKeys:1`; `paquetenvia-contact-lookup-key-1` → `ContactLookup:Keys:1`; `whatsapp-cloud-api-token` → `Messaging:WhatsApp:MetaCloudApi:AccessToken`; `whatsapp-phone-number-id` → `Messaging:WhatsApp:MetaCloudApi:PhoneNumberId` (never a webhook secret) |
 | Migrate and verify jobs (`id-pv-pilot-migrate`) | `pg-migrate-connection` → `PAQUETERIA_MIGRATION_CONNECTION` |
 | Logins job (`id-pv-pilot-logins`) | `pg-migrate-connection` → `PAQUETERIA_MIGRATION_CONNECTION`; `pg-api-login-verifier` → `PAQUETERIA_API_LOGIN_VERIFIER`; `pg-worker-login-verifier` → `PAQUETERIA_WORKER_LOGIN_VERIFIER`; `pg-realtime-login-verifier` → `PAQUETERIA_REALTIME_LOGIN_VERIFIER` |
 
 The GitHub runner is outside the VNet. `deploy/azure/pilot/kv-firewall.sh` opens a temporary `/32`
 rule for the runner's public IP only around its secret reads and writes, and an `always()` step closes
-it. There are two windows:
-- generated secrets and the platform parameters;
-- the database connection secrets.
+it. There are three windows:
+- generated secrets (the seven recipient-notice secrets nobody types included) and the platform parameters;
+- the database connection secrets, and the check that every owner secret exists (the three Meta values included);
+- only with `emailEventsPhase=subscribe` (the gate-closing change), the Event Grid delivery secret for stage 6.
 
 Every redeploy of `security.bicep` also resets `ipRules` to empty. A secret rotation takes effect when
 the app restarts or starts a new revision; the workflow restarts the API and Worker after a rotation, and after a
@@ -246,27 +248,28 @@ new PostgreSQL server (OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20), and starts ei
 | `public-tracking-link-key` | **owner** (32 random bytes, base64; TRK-002-AUTO-LINK) | API (`PublicTracking__LinkKeys__1`) |
 | `paquetenvia-telemetry-pseudonym-key-1` | **owner** (32 random bytes, base64; OBS-003-TENANT-PSEUDONYM-2026-10-12) | API and Worker (`TelemetryPseudonym__Keys__1`) |
 | `pg-restore-drill-connection` | `restore-drill.sh` | verify job, during a drill only |
+| `paquetenvia-contact-lookup-key-1` | workflow (generated once: 32 random bytes, base64; NTF-008, W7) | API and Worker (`ContactLookup__Keys__1`) |
+| `whatsapp-webhook-verify-token`, `whatsapp-webhook-verify-token-previous`, `whatsapp-app-secret-previous`, `acs-email-events-secret`, `acs-email-events-secret-previous` | workflow (generated once: 32 random bytes, 64 hex characters; NTF-008, W7) | API (the Meta and Event Grid webhooks) |
+| `acs-communication-resource-id` | workflow (stored once from `PILOT_ACS_NAME`; NTF-008, W7) | API (`Messaging__Email__Events__SourceResourceId`) |
+| `whatsapp-cloud-api-token` | **owner** (Meta system-user token, no expiry, `whatsapp_business_messaging` only; NTF-008) | Worker only |
+| `whatsapp-phone-number-id` | **owner** (Meta) | API and Worker |
+| `whatsapp-app-secret` | **owner** (Meta app secret) | API only |
 
-**Reserved names (not created, for later work):**
+**Recipient notices (NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31, AI-08 NTF-008).** The owner steps are in
+[`guia-owner-avisos.md`](guia-owner-avisos.md): the first pilot deploy, the two custom roles and the deployer's
+condition, `PILOT_ACS_NAME`, the three Meta values, Meta business verification, the ACS sender
+`avisos@paquetenvia.com` and its DNS, the what-if, the WhatsApp templates and the steps after the gate-closing change.
+The workflow writes the seven secrets nobody types once and stops in window 2 while a Meta value is missing. Each
+`-previous` slot holds a random value nobody has until a rotation copies the old value into it.
 
-| Secret | For |
-|---|---|
-| `whatsapp-cloud-api-token` | GATE-004-CHANNELS (Meta Cloud API access token) → Worker `Messaging:WhatsApp:MetaCloudApi:AccessToken` |
-| `whatsapp-phone-number-id` | GATE-004-CHANNELS (WhatsApp Business phone number id) → Worker `Messaging:WhatsApp:MetaCloudApi:PhoneNumberId` |
-| `whatsapp-app-secret` | GATE-004-CHANNELS (webhook signature verification; no webhook exists yet, so nothing reads it) |
-
-Azure Communication Services email uses the Worker's managed identity, so it needs no secret.
-It is **not** in the Bicep yet. The resources themselves are free (about 0.00025 USD per email).
-ACS retires on 2028-09-30 and Microsoft starts limiting onboarding on 2026-10-23, so the owner creates
-the Communication Services and Email Communication Services resources by hand before that date
-(NTF-EMAIL-ACS-PILOT-2026-10-11, `guia-owner-seccion-a.md` §8); a later change references them from
-the templates and wires the Worker. Production needs another email provider (AI-10 `release_gates`).
-Binding `paquetenvia.com` as a sender needs its own DNS records (domain TXT, SPF, DKIM x2) and
-Meta/ACS sender setup. The adapters exist (`docs/development/gate-004-messaging-adapters.md`) but
-are **not wired into the pilot templates**: every `Messaging` channel stays `Disabled` until the owner
-supplies the secrets, the approved templates and the sender domain, and a separate change adds the
-Worker mappings, the per-secret RBAC and the guard allowlist together (a mapped secret that does not
-exist stops the Worker at start).
+Azure Communication Services email uses the Worker's managed identity, so it needs no secret. The owner created the
+Communication Services and Email Communication Services resources by hand (NTF-EMAIL-ACS-PILOT-2026-10-11,
+`guia-owner-seccion-a.md` §8); `apps.bicep` references the Communication Services resource through `PILOT_ACS_NAME`
+only to give the Worker its custom e-mail sender role on it, and `events.bicep` prepares its Event Grid subscription.
+The resources themselves are free (about 0.00025 USD per email). ACS retires on 2028-09-30; production needs another
+email provider (AI-10 `release_gates`). Every `Messaging` channel and webhook stays `Disabled` (P28): the gate-closing
+change turns them on with the approved Meta template names, the e-mail texts and the GATE-004 and GATE-007 resolution
+rows.
 
 App settings wired by `apps.bicep`:
 
@@ -289,6 +292,9 @@ App settings wired by `apps.bicep`:
     `AzureKeyVault`, `PiiProtection__AzureKeyVault__KeyId`, `ProofStorage__Provider=AzureBlob`,
     `ProofStorage__ThreatScanner=DefenderForStorage`, `ProofStorage__AzureBlob__ServiceUri`,
     `DataProtection__Provider=PostgreSql` plus the `DataProtection__KeyEncryption__*` settings.
+  - NTF-008: `ContactLookup__CurrentKeyVersion=1` and `PiiProtection__RecipientNoticeKey__KeyId` (the versionless URI of
+    `recipient-notice-kek`). `Locations__NoticeKeyProtector` is not set, so it stays `Disabled` and no notice copy is
+    written until the gate-closing change (W4); no `Messaging__*` or `Notifications__RecipientNotices__*` setting.
   - `Locations__GeocodingProvider=Manual`. The `GoogleMaps` adapter exists and its key is mapped, but
     GATE-003 stays open until the owner records the Google spending cap, daily quotas and billing alerts
     and writes the Geocoding-only key (section 6.6); switching the value to
@@ -296,7 +302,9 @@ App settings wired by `apps.bicep`:
 - **Worker:** `ConnectionStrings__Paqueteria` and `ConnectionStrings__PaqueteriaWorker`, the same
   ADP-001 proof-storage and Data Protection settings, `Dispatch__AssignmentLifecycle`,
   `Notifications`, `Orders__ClaimWindowFinalization__Enabled=true`, and `Urls=http://+:8080` for the
-  probes.
+  probes. NTF-008: `PublicTracking__PublicBaseUrl` (the public origin) and `PublicTracking__CurrentLinkKeyVersion=1`,
+  `ContactLookup__CurrentKeyVersion=1` and `PiiProtection__RecipientNoticeKey__KeyId`; never the PII key. Recipient
+  notices stay off (`Notifications__RecipientNotices__Enabled` unset) and both providers `Disabled`.
 - **Web:** `NODE_ENV=production`, `PAQUETERIA_CSP_CONNECT_SOURCES=<blob endpoint>` (so drivers can
   PUT proofs directly), and `PAQUETERIA_TERMS_VERSION` / `PAQUETERIA_PRIVACY_VERSION` from
   `web.parameters.json` (see "Accepted terms and privacy versions" below). The image is built with
@@ -501,7 +509,10 @@ Two further caveats:
 
 1. The owner runs [`bootstrap.md`](bootstrap.md) once. It creates the resource group in
    `mexicocentral`, the OIDC app registration and federated credential, the roles and the custom role,
-   and the `azure-pilot` GitHub Environment with its variables.
+   and the `azure-pilot` GitHub Environment with its variables. Since NTF-008 the run also needs, before it touches
+   Azure, the `PILOT_ACS_NAME` variable and, before stage 1, the two recipient-notice custom roles
+   (`Paquetenvia Pilot Recipient Notice Unwrap`, `Paquetenvia Pilot Email Sender`) with the deployer's condition widened
+   to 10 roles ([`guia-owner-avisos.md`](guia-owner-avisos.md) pasos 2 and 3).
 2. The owner records the GATE-007 and GATE-012 decisions (or explicit scopes) in `decision-log.md`,
    then sets `PILOT_GATE_007_DECISION` / `PILOT_GATE_012_DECISION` to those row ids.
    `PILOT_GATE_012_DECISION=GATE-012-PILOT-SCOPE` is already approved (owner, 2026-09-28).
@@ -541,13 +552,16 @@ Two further caveats:
    - The run summary lists the four digests it deploys (API, Worker, Web, DB ops), whether each was built by this run
      or reused, and the revision that serves each app.
 6. The first run creates the vault, then stops with *"lacks authcenter-paquetenvia-client-secret"*. The
-   workflow requires four owner secrets and reports the first one missing. Write all four straight into
+   workflow requires seven owner secrets and reports the first one missing. Write all seven straight into
    the vault (§6.6) and run again:
    - `authcenter-paquetenvia-client-secret`;
    - `google-maps-api-key`;
    - `public-tracking-link-key`;
    - `paquetenvia-telemetry-pseudonym-key-1` (OBS-003; also needed by a vault populated before OBS-003: the
-     next run stops with *"lacks paquetenvia-telemetry-pseudonym-key-1"* until it exists).
+     next run stops with *"lacks paquetenvia-telemetry-pseudonym-key-1"* until it exists);
+   - since NTF-008, the three Meta values `whatsapp-cloud-api-token`, `whatsapp-phone-number-id` and
+     `whatsapp-app-secret` ([`guia-owner-avisos.md`](guia-owner-avisos.md) paso 4). The same run generates the seven
+     recipient-notice secrets nobody types (§4).
 7. The run summary shows the DNS records. At the DNS host of `paquetenvia.com`, create:
    - `A` `@` → the environment static IP;
    - `TXT` `asuid` → the custom-domain verification id.
@@ -702,6 +716,14 @@ Consequences:
   never deployed, or an image someone unlocked and deleted) is built again, on the bases of the day. In single
   revision mode the new revisions replace the current ones only once they are ready; if they never are, the revision
   check fails the run and the current revisions keep serving. A base image patch needs a new commit (§6.2).
+- **Across NTF-008** (NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31, owner X2 "Documentarlo (Recommended)"): going
+  back to a commit from before NTF-008 is not a dispatch with that SHA. The workflow runs the guards from `main`
+  against the tested commit; they expect `events.bicep` (P00) and check P28 to P30, and stages 1 and 4 pass parameters
+  the older templates do not declare (`recipientNoticeUnwrapRoleDefinitionId`, `recipientNoticeKeyUri`, `acsName`,
+  `acsEmailSenderRoleDefinitionId`), so such a run stops before it touches Azure (it fails closed; nothing breaks).
+  To go back across NTF-008, revert the NTF-008 PR, promote the revert to `main`, wait for the Foundation CI push run
+  on `main` (13/13 green) and deploy that commit (§6.1 steps 4 and 5). The key, the role assignments and the secrets
+  NTF-008 created stay in Azure, unread, until the owner removes them.
 - **Database:** migrations are forward-only in the pilot. An application rollback is only safe while
   the older code still works with the newer schema; every lane is additive, see each lane's rollback
   notes. For data loss or a bad migration, use a point-in-time restore (§6.4). The template tooling
@@ -918,6 +940,10 @@ shred -u /tmp/tp
 bash deploy/azure/pilot/kv-firewall.sh close <kv>
 ```
 
+Since NTF-008 the owner also writes the three Meta values of the recipient notices, `whatsapp-cloud-api-token`,
+`whatsapp-phone-number-id` and `whatsapp-app-secret`, the same way: [`guia-owner-avisos.md`](guia-owner-avisos.md)
+paso 4.5 (in Spanish) has the commands.
+
 `public-tracking-link-key` derives every public tracking link (HMAC-SHA256; only the SHA-256 of each
 link is stored). Write it once and keep it: replacing the value under the same version makes the API
 refuse to show existing links (it fails closed). To rotate, store the new key under a new secret name,
@@ -1117,8 +1143,8 @@ Details, format and error codes: `docs/development/mdm-001-master-data-loader.md
 
 ## 8. Static guards (`tools/azr-001/env001_pilot_guards.py`)
 
-The 28 guards (P00–P27) run on the compiled ARM output, the workflow, the pilot Dockerfiles and the restore drill
-script:
+The 31 guards (P00–P30) run on the compiled ARM output, the workflow, the pilot Dockerfiles, the restore drill
+script and the decision log:
 
 - **Resources:** only authorized resource types and exactly six workloads. Redis, Azure SignalR,
   Front Door and PostgreSQL firewall rules are rejected.
@@ -1141,8 +1167,9 @@ script:
     allowlist, in a VNet-injected Consumption environment.
   - Storage flags and Defender scanning are set. Blob versioning is off, and blob and container soft delete are on
     for exactly 30 days with no permanent delete (P12, ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20).
-  - Key Vault denies public traffic (only the Container Apps subnet, no bypass, no standing IP rule) and has RBAC, purge protection and wrap-only RSA keys of at least 3072 bits.
-- **RBAC:** role assignments stay within the allowlist.
+  - Key Vault denies public traffic (only the Container Apps subnet, no bypass, no standing IP rule) and has RBAC, purge protection and wrap-only RSA keys of at least 3072 bits: `pii-kek`, `dataprotection-kek` and, since NTF-008, `recipient-notice-kek` (P13).
+- **RBAC:** role assignments stay within the allowlist (P14): the built-in roles of `ALLOWED_ROLE_IDS` (*Key Vault
+  Reader* since NTF-008) and the three owner custom roles, each only in its own template.
 - **Cost:** the 100 USD budget exists and the log cap is set.
 - **ADP-001 and web:**
   - The ADP-001 configuration contract is wired.
@@ -1191,7 +1218,9 @@ script:
   dispatcher on, the API maps `ConnectionStrings:PaqueteriaRealtime` from `pg-realtime-runtime-connection`; it never
   maps `ConnectionStrings:PaqueteriaWorker` or a Worker secret (the shared OBS-003 pseudonym key is not a Worker
   credential and is exempt); no other workload maps the realtime secret; and the workflow generates exactly the
-  `api`, `worker` and `realtime` runtime logins.
+  `api`, `worker` and `realtime` runtime logins. NTF-008 (W11 item 7): the API may also share the three secrets that
+  are no credential of a service (`public-tracking-link-key`, `paquetenvia-contact-lookup-key-1`,
+  `whatsapp-phone-number-id`), never maps `whatsapp-cloud-api-token`, and the Worker never maps a webhook secret.
 - **Non-root images (P24, AZR-001-AC-064):** AZR-001 v0.8 says "Non-root cuando soporte runtime. Root requiere
   waiver", and no waiver exists. The workflow builds exactly the four images `deploy/azure/Dockerfile.api`,
   `deploy/azure/Dockerfile.worker`, `deploy/azure/pilot/Dockerfile.db-ops` and `deploy/azure/pilot/Dockerfile.web`,
@@ -1245,6 +1274,31 @@ script:
   locked on the digest stops it; a failing registry read stops it before any build; a failed build stops it; a
   checkout other than `tested_git_sha` stops it before the registry.
 
+- **Recipient notices stay off (P28, NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31):** no workload may set
+  `Notifications__RecipientNotices__Enabled`, `Messaging__WhatsApp__Webhook__Enabled` or `Messaging__Email__Events__Enabled`
+  to anything but `false`, a messaging provider to anything but `Disabled`, or `Locations__NoticeKeyProtector` to
+  anything but `Disabled`, and `events.bicep` must commit `emailEventsPhase=none`, unless the Worker's
+  `Notifications__RecipientNotices__Gate004DecisionId` and `Gate007DecisionId` name decision-log rows of Type exactly
+  `Gate resolution` (a scoping row admits the deploy, never the notices). `Notifications__RecipientNotices__`,
+  `Messaging__` and `PublicTracking__` are platform-managed, and `ContactLookup__Keys__*` is sensitive (P06, P17).
+- **Recipient-notice roles and secrets (P29):** `recipient-notice-kek` is held exactly by the API (*Key Vault Reader*)
+  and the Worker (the custom role `Paquetenvia Pilot Recipient Notice Unwrap`), each scoped to that key; the Worker
+  holds nothing on `pii-kek`; the Communication Services resource (`parameters('acsName')`) is held only by the Worker
+  with the custom role `Paquetenvia Pilot Email Sender`. The workflow pins both role names, checks each role action by
+  action before stage 1 (`custom-role-check`: exactly `keys/read` and `keys/unwrap/action`, or exactly the three ACS
+  actions; never `listKeys`, `regenerateKey` or a wildcard; assignable only in the resource group), reads
+  `PILOT_ACS_NAME` once, validates it before `azure/login` and checks after login that it names an existing resource,
+  passes the role ids, `acsName` and `recipientNoticeKeyUri` to stages 1 and 4, generates the seven secrets nobody
+  types in window 1 and stops in window 2 while a Meta value is missing.
+- **Event Grid e-mail events (P30, O8):** `events.bicep` declares the global system topic of the Communication Services
+  resource and one subscription, both only when `emailEventsPhase` is `subscribe`: webhook
+  `https://paquetenvia.com/api/v1/messaging/email/events`, one event per batch, only
+  `Microsoft.Communication.EmailDeliveryReportReceived`, the Event Grid schema and the static secret header
+  `X-Paquetenvia-Event-Secret` from a `@secure()` parameter. The workflow never passes the phase: it reads the
+  committed default from the compiled template after the smoke test, needs `custom_domain_phase=bind` for `subscribe`,
+  reads the secret only then (window 3) and deploys stage 6; the summary prints both webhook URLs. `subscribe` also
+  needs the API's `Messaging__Email__Events__Enabled=true`.
+
 The unit tests compile the real templates whenever the pinned Bicep CLI is present (the azr-static CI
 job installs it). They mutate the ARM output to prove that each guard fails closed.
 
@@ -1256,7 +1310,7 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
 **Verified without Azure:**
 
 - `bicep build` and `bicep lint` pass with the pinned v0.47.16, with no warnings.
-- 28/28 pilot guards (P00–P27) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
+- 31/31 pilot guards (P00–P30) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
   tooling tests. The gitleaks scan was not re-run for OBS-002.
 - The SCL-007 PostgreSQL connection and resource alerts build and lint with no diagnostic, and P21 pins them.
 - The OBS-002 alert and workbook queries parse and type-check offline (Kusto language service).
@@ -1343,6 +1397,22 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
   - the exact text a refused push prints, and that the pilot registry is in *RBAC Registry Permissions* mode (in the
     ABAC mode *Contributor* has no data plane access, and the existing push would already fail);
   - the output of `az acr repository list` and `show-tags` on a registry with no repository yet.
+- NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (AI-08 NTF-008), checked against Microsoft Learn and the Meta developer
+  documentation (`guia-owner-avisos.md` cites each page), never against Azure or Meta:
+  - that *Key Vault Reader* on the key lets the API read the public part of `recipient-notice-kek` (`keys/read`) and
+    the custom unwrap role lets the Worker unwrap with it;
+  - that the three ACS actions of `Paquetenvia Pilot Email Sender` suffice for the Email REST API with a managed
+    identity (Microsoft Learn gives them for SMTP with an Entra application), and that
+    `Microsoft.Communication/CommunicationServices/Write` in them also lets the Worker change the resource's
+    configuration, more than "only send" (a residual risk; never `ListKeys` or `RegenerateKey`);
+  - ARM acceptance of the role assignment on the `existing` Communication Services resource and of the Event Grid
+    system topic and subscription (`2025-02-15`, location `global`, static secret delivery attribute), and the
+    `az deployment group what-if` the owner runs (W8);
+  - the system topic's `topicType` `Microsoft.Communication.CommunicationServices`, which no Microsoft Learn page read
+    shows written that way; it is used only with `emailEventsPhase=subscribe`, in the gate-closing change, where stage 6
+    runs after the API and the Worker are healthy;
+  - the Event Grid validation handshake against the live API (NTF-006 answers it without the secret header and
+    accepts only the topic stored in `acs-communication-resource-id`); the gate-closing change creates the subscription.
 - OBS-003:
   - ARM acceptance of the workspace-based component;
   - that the exporter reaches the Mexico Central ingestion endpoint from inside the VNet, and the real volume

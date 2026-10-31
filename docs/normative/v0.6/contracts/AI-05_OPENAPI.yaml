@@ -9001,9 +9001,11 @@ x-pilot-contract-deltas:
       DestinationAddressInput on createQuote, RecipientEmailPolicy, the e-mail in the quote input hash only when present,
       the Locations lane step 20261020000100_AddRecipientNoticeContact with its AI-06 DDL and baseline assertions, the
       wrap-only recipient-notice sealer (Locations:NoticeKeyProtector, Disabled by default and in the pilot, so no notice
-      copy is written until AI-08 NTF-008 wires the key) and the wizard field; part NTF-004 shipped by
-      feat/ntf-004-recipient-notice-producer together with its code and tests - CreateOrderRequest.recipient_notices on
-      createOrder and the CsvImportCommitRequest fields recipient_whatsapp_consent_attested and
+      copy is written until the gate-closing change turns it on; AI-08 NTF-008 wires the key and keeps it Disabled,
+      NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 W4 "Al cerrar las compuertas (Recommended)") and the wizard field;
+      part NTF-004 shipped by feat/ntf-004-recipient-notice-producer together with its code and tests -
+      CreateOrderRequest.recipient_notices on createOrder and the CsvImportCommitRequest fields
+      recipient_whatsapp_consent_attested and
       recipient_whatsapp_consent_version on commitOrderCsv, the Orders lane step 20261023000200_AddRecipientNoticeConsents
       (orders.recipient_notice_consents, append-only under FORCE RLS) with its AI-06 and AI-18 declarations and baseline
       assertions, the ORD-002 producer of orders.recipient-notice-requested (RecipientNoticeRequestPolicy) and the two

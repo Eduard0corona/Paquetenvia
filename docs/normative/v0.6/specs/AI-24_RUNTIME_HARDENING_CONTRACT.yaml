@@ -344,6 +344,7 @@ recipient_notices:
   - NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23
   - NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25
   - NTF-RECIPIENT-NOTICE-PANEL-2026-10-30
+  - NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31
   - GATE-004-CHANNELS
   - NTF-EMAIL-ACS-PILOT-2026-10-11
   - NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02
@@ -362,9 +363,13 @@ recipient_notices:
     lane step with the automatic-reply store and the Worker's automatic-reply sender;
     NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25, O2 to O11) and AI-08 NTF-007 (the dispatcher's list and "Detener avisos",
     the Locations phone opener under the PII key and the order detail panel; NTF-RECIPIENT-NOTICE-PANEL-2026-10-30, T1
-    to T6), with every switch off and every provider Disabled; nothing is configured or enabled. AI-08 NTF-008 delivers
-    the rest with its own code and tests; only a later change that records the GATE-004 and GATE-007 resolution rows
-    turns it on. GATE-004 and GATE-007 stay open
+    to T6) and AI-08 NTF-008 (the pilot wiring - recipient-notice-kek and its two roles, the contact lookup key and the
+    webhook secrets mapped from Key Vault, the Worker's ACS role and the Event Grid subscription behind emailEventsPhase
+    none (pilot_wiring); NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31, V1 and W1 to W11 - merged only after the owner
+    confirmed that the first pilot deploy succeeded and that every Azure, Meta and DNS resource exists), with every
+    switch off, every provider Disabled and Locations:NoticeKeyProtector Disabled, so no notice copy is written yet;
+    nothing is enabled. Only a later change, the gate-closing change, that records the GATE-004 and GATE-007 resolution
+    rows turns it on. GATE-004 and GATE-007 stay open
   adr: docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md
   audience: the delivery recipient of the order only, reached at the contact of its destination location; never the
     sender or its business (E4-P13, out of this work until BUS-001), a driver or a dispatcher
@@ -504,7 +509,14 @@ recipient_notices:
       carries an e-mail or a notice copy
     notice_key: Key Vault RSA key recipient-notice-kek, distinct from the PII key and the Data Protection key; ADP-001
       envelope format v1 bound to owner organization, location row and purpose; notice_key_version is akv:{key
-      name}/{version}; rotation keeps earlier versions readable
+      name}/{version}; rotation keeps earlier versions readable. In the pilot (NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31)
+      deploy/azure/pilot/security.bicep creates it, RSA 3072 with wrapKey and unwrapKey only like pii-kek (W11 choice
+      3); the API holds the built-in Key Vault Reader on it, which reads its public part, and wraps in process; the
+      Worker holds the owner's custom role Paquetenvia Pilot Recipient Notice Unwrap, data actions
+      Microsoft.KeyVault/vaults/keys/read and Microsoft.KeyVault/vaults/keys/unwrap/action only (W5 "Un rol propio y uno
+      de Azure (Recommended)"); both roles are scoped to the key alone. NTF-008 wires the key (the roles and
+      PiiProtection:RecipientNoticeKey:KeyId in both hosts) and Locations:NoticeKeyProtector stays Disabled until the
+      gate-closing change, so no notice copy is written before it (W4 "Al cerrar las compuertas (Recommended)")
     roles: the API may only wrap with the notice key and never unwraps it; the Worker may only unwrap with it and read
       its versions, and never reaches the PII key, so addresses, names and incident text stay closed to it (the ADP-001
       rule "The Worker needs no access to the PII key" still holds)
@@ -776,7 +788,11 @@ recipient_notices:
     webhooks: Messaging:WhatsApp:Webhook:Enabled and Messaging:Email:Events:Enabled, false by default (uniform 404);
       unsubscribeRecipientNotices has no switch (O4)
     pilot: Notifications__RecipientNotices__ and Messaging__ become platform-managed in tools/azr-001/env001_pilot_guards.py
-      (as Voice__, NTF-008); only the gate-closing change sets them
+      (as Voice__, NTF-008), and PublicTracking__ too (NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 W11 choice 7); only
+      the gate-closing change sets them. Guard P28 refuses any recipient-notice switch, real provider,
+      Locations__NoticeKeyProtector=AzureKeyVault or emailEventsPhase=subscribe unless the Worker's
+      Notifications__RecipientNotices__Gate004DecisionId and Gate007DecisionId name decision-log rows of Type Gate
+      resolution
   pilot_wiring: NTF-008 - the Worker reads public-tracking-link-key, paquetenvia-contact-lookup-key-1 and the WhatsApp
     token and phone number id and may only unwrap with recipient-notice-kek; the API reads
     paquetenvia-contact-lookup-key-1, the Meta app secret and the webhook verify token (each with its previous slot),
@@ -786,7 +802,29 @@ recipient_notices:
     "Registrar al cerrar las compuertas (Recommended)") - Event Grid and Meta register a webhook only while it answers,
     and both stay off (uniform 404) until the gate-closing change, so NTF-008 prepares the Event Grid subscription
     behind a phase parameter (like the custom domain), not created until that change, and the runbook registers the
-    Meta callback as a step after the gates close
+    Meta callback as a step after the gates close. NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (V1 and W1 to W11) fixes
+    them. Secret names (W11 choice 1) - the Worker maps public-tracking-link-key, paquetenvia-contact-lookup-key-1,
+    whatsapp-cloud-api-token and whatsapp-phone-number-id; the API maps paquetenvia-contact-lookup-key-1,
+    whatsapp-app-secret and whatsapp-app-secret-previous, whatsapp-webhook-verify-token and
+    whatsapp-webhook-verify-token-previous, acs-email-events-secret and acs-email-events-secret-previous,
+    whatsapp-phone-number-id and acs-communication-resource-id; each previous slot holds a random value nobody has until
+    a rotation copies the old value into it (W11 choice 2). Writers (W7 "El workflow (Recommended)") - the pilot
+    workflow generates once, when missing and never printed, the seven secrets nobody types (the contact lookup key, the
+    verify token, the Event Grid secret, the three previous slots and the resource id read from PILOT_ACS_NAME) and stops
+    while one of the three Meta values the owner writes is missing (W11 choice 8). Roles - recipient-notice-kek as in
+    contact.notice_key (W5); the Worker's ACS role is the owner's custom role Paquetenvia Pilot Email Sender with exactly
+    Microsoft.Communication/CommunicationServices/Read, Microsoft.Communication/CommunicationServices/Write and
+    Microsoft.Communication/EmailServices/write (never listKeys or regenerateKey; W6 "Rol propio mínimo (Recommended)"),
+    scoped to the Communication Services resource, whose name lives only in the azure-pilot variable PILOT_ACS_NAME (W2,
+    W11 choice 4); the workflow looks each custom role up by exact name and checks it action by action. Event Grid - the
+    subscription lives in deploy/azure/pilot/events.bicep behind emailEventsPhase none or subscribe, committed as none
+    (W11 choice 5), created after the revision check and the smoke test, delivering to
+    https://paquetenvia.com/api/v1/messaging/email/events with no IP list; the Meta callback is
+    https://paquetenvia.com/api/v1/messaging/whatsapp/webhook (W11 choice 6). The owner steps are in
+    docs/operations/env-001-pilot/guia-owner-avisos.md (W11 choice 11). NTF-008 merges only after the owner confirms that
+    the first pilot deploy succeeded and that every Azure, Meta and DNS resource exists (V1, W1, W3), after the owner's
+    what-if (W8); the gate-closing change is a separate later change, deployed after 21:00 America/Mazatlan with the Meta
+    callback registered before 08:00 (W11 choice 10)
   logging: owner organization pseudonym, lane, channel, notice, outcome and code only (OBS-002 allowlist); never a
     phone, an e-mail, a name, a link, a token, a template parameter or a provider message
   rollback: Enabled false or a provider Disabled, no migration; rows already created then end FAILED with

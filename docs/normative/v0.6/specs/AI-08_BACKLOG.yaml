@@ -1995,7 +1995,7 @@ items:
   - normative - the AI-05 part, the AI-07 texts, the AI-24 dispatcher view and the decision-log row of round T
   approval_gate: GATE-004
 - id: NTF-008
-  decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner; E4-P2, E4-P7 and E4-P12)
+  decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner; E4-P2, E4-P7 and E4-P12) and NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (project owner; V1 and W1 to W11)
   epic: Operations
   release: MVP-1
   title: Conexión de avisos en el piloto
@@ -2008,14 +2008,16 @@ items:
   - ENV-001
   expected_outputs:
   - apps.bicep Key Vault mappings for the Worker (public-tracking-link-key, paquetenvia-contact-lookup-key-1, the WhatsApp token and phone number id) and the API (paquetenvia-contact-lookup-key-1, the Meta app secret and the webhook verify token with their previous slots, the Event Grid delivery secret with its previous slot, the WhatsApp phone_number_id and the Azure resource id of the Communication Services resource; NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 O11 choice 11)
-  - an unwrap-only role for the Worker and a wrap-only role for the API on recipient-notice-kek, the least-privilege ACS role of the Worker and the webhook URLs, with the pilot guard allowlists; the Event Grid subscription prepared behind a phase parameter (like the custom domain) and created only by the gate-closing change, because Event Grid validates it against a webhook that stays off until then (O8 "Registrar al cerrar las compuertas (Recommended)")
+  - an unwrap-only role for the Worker and, for the API, which wraps in process with the public part, a read-only role on recipient-notice-kek (W5 "Un rol propio y uno de Azure (Recommended)" - "Creas un rol "solo abrir" para el Worker (como el de etiquetas de blob); la API usa el rol de lectura de Azure. Actualizas la condición del deployer." - the owner's custom role Paquetenvia Pilot Recipient Notice Unwrap and the built-in Key Vault Reader, both scoped to the key), the least-privilege ACS role of the Worker (W6, the custom role Paquetenvia Pilot Email Sender) and the webhook URLs, with the pilot guard allowlists; the Event Grid subscription prepared behind a phase parameter (like the custom domain) and created only by the gate-closing change, because Event Grid validates it against a webhook that stays off until then (O8 "Registrar al cerrar las compuertas (Recommended)")
   - Notifications__RecipientNotices__ and Messaging__ platform-managed in tools/azr-001/env001_pilot_guards.py
   - the owner guide for Meta (display name = the legal name of the company, E4-P7), ACS (avisos@paquetenvia.com, display name Seguimiento de envío, E4-P12) and DNS, with the registration of the Meta callback as a step after the gate-closing change (O8)
   acceptance_criteria:
   - 'DECIDED NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P7 "La razón social (Recommended)", E4-P12 "avisos@paquetenvia.com (Recommended)")'
-  - only after the owner created the secrets, the key and the resources (a mapped secret that does not exist stops the Worker)
-  - every switch stays off; a later gate-closing change that records the GATE-004 and GATE-007 resolution rows turns notices on with the approved Meta template names
+  - 'DECIDED NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (V1 "Preparar el PR y esperar (Recommended)", W1 "No todavía", W2 "Sí, los dos", W3 "Esperar a todo (Recommended)", W4 "Al cerrar las compuertas (Recommended)", W5 "Un rol propio y uno de Azure (Recommended)", W6 "Rol propio mínimo (Recommended)", W7 "El workflow (Recommended)", W8 "Tú en Cloud Shell antes de fusionar (Recommended)", W9 "Cuarentena (Recommended)", W10 "Después del abogado (Recommended)", W11 "Aprobarlas todas (Recommended)") - the PR stays a draft until the first pilot deploy succeeded and every Azure, Meta and DNS resource exists, with the owner guide docs/operations/env-001-pilot/guia-owner-avisos.md; Locations:NoticeKeyProtector stays Disabled until the gate-closing change; the API holds Key Vault Reader and the Worker the custom unwrap-only role on recipient-notice-kek, which security.bicep creates; the Worker sends e-mail with the custom role whose actions Microsoft Learn gives, never listKeys or regenerateKey, on the resource named by PILOT_ACS_NAME; the workflow generates the seven secrets nobody types and the owner writes only the three Meta values; the owner runs the what-if in Cloud Shell; DMARC quarantine; the WhatsApp templates go to Meta after the GATE-007 lawyer; and the thirteen technical choices of W11 (AI-24 recipient_notices.pilot_wiring)'
+  - only after the first pilot deploy succeeded and the owner created the resources, the custom roles, PILOT_ACS_NAME and the three Meta secrets (a mapped secret that does not exist stops the Worker); the key is created by security.bicep (W11 choice 3) and the other seven secrets by the workflow (W7 "El workflow (Recommended)" - "Los genera una sola vez si faltan, sin mostrarlos, como la llave de correos de inicio de sesión. Tú solo escribes los 3 valores de Meta.")
+  - every switch stays off and Locations:NoticeKeyProtector stays Disabled (W4 "Al cerrar las compuertas (Recommended)" - "Hasta entonces no se guardan copias sin uso y cotizar no depende de la llave de avisos. Las órdenes cotizadas antes no reciben avisos."); a later gate-closing change that records the GATE-004 and GATE-007 resolution rows turns notices on with the approved Meta template names
   required_tests:
   - env001_pilot_guards.py tests
-  - Bicep build and what-if
+  - Bicep build and what-if - the build and lint in CI; the what-if run by the owner in Cloud Shell before the merge, with only the change counts pasted in the PR (W8 "Tú en Cloud Shell antes de fusionar (Recommended)")
+  - the pilot API and Worker start with exactly their pilot settings (W11 choice 12)
   approval_gate: GATE-004 and GATE-007

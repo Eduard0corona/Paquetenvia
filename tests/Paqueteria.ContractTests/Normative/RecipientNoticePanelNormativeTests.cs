@@ -115,7 +115,10 @@ public sealed class RecipientNoticePanelNormativeTests
             RecipientNoticePanelContract.DecisionId,
             notices.Sequence("decisions").Children.Cast<YamlScalarNode>().Select(node => node.Value));
         Assert.Contains("and AI-08 NTF-007 (the dispatcher's list and \"Detener avisos\"", notices.Scalar("status"), StringComparison.Ordinal);
-        Assert.Contains("AI-08 NTF-008 delivers the rest", notices.Scalar("status"), StringComparison.Ordinal);
+        // NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31: NTF-008 is recorded next to NTF-007 and only the gate-closing change
+        // turns the notices on (RecipientNoticePilotWiringNormativeTests pins the rest).
+        Assert.Contains("and AI-08 NTF-008 (the pilot wiring", notices.Scalar("status"), StringComparison.Ordinal);
+        Assert.Contains("Only a later change, the gate-closing change", notices.Scalar("status"), StringComparison.Ordinal);
         var view = notices.Mapping("dispatcher_view");
         Assert.Contains("no scheduled time (T2)", view.Scalar("list"), StringComparison.Ordinal);
         Assert.StartsWith("T6 choice 5", view.Scalar("stop_steps"), StringComparison.Ordinal);
@@ -141,7 +144,9 @@ public sealed class RecipientNoticePanelNormativeTests
 
         Assert.Contains(RecipientNoticePanelContract.DecisionId, File.ReadAllText(RepositoryPaths.Normative("CHANGELOG.md")), StringComparison.Ordinal);
         var adr = File.ReadAllText(Path.Combine(RepositoryPaths.Root, "docs", "adr", "ADR-NTF-002-RECIPIENT-NOTICES.md"));
-        Assert.Contains("(AI-08 NTF-002 a NTF-007)", adr, StringComparison.Ordinal);
+        // NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 extends the ADR status to NTF-008.
+        Assert.Contains("(AI-08\n  NTF-002 a NTF-008;", adr, StringComparison.Ordinal);
+        Assert.Contains("NTF-RECIPIENT-NOTICE-PANEL-2026-10-30", adr, StringComparison.Ordinal);
         var legal = File.ReadAllText(Path.Combine(RepositoryPaths.Root, "docs", "legal", "terminos-y-condiciones-borrador.md"));
         Assert.DoesNotContain("todavía no está en el decision log", legal, StringComparison.Ordinal);
         Assert.DoesNotContain("está solo en las respuestas literales del owner", legal, StringComparison.Ordinal);

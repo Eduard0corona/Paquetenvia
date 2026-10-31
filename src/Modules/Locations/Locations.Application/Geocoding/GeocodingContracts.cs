@@ -94,8 +94,8 @@ public interface ILocationNoticeContactSealer
     /// <summary>
     /// Seals the notice copies of a quote destination under the recipient-notice key, a key the API can only wrap
     /// with (it never opens a notice copy). Returns <see langword="null"/> when no recipient-notice key is configured
-    /// (<c>Locations:NoticeKeyProtector=Disabled</c>, the default and the pilot value until AI-08 NTF-008): the row then
-    /// carries no notice copy and the quote is unaffected. A configured sealer that cannot seal throws
+    /// (<c>Locations:NoticeKeyProtector=Disabled</c>, the default and the pilot value until the gate-closing change):
+    /// the row then carries no notice copy and the quote is unaffected. A configured sealer that cannot seal throws
     /// <see cref="LocationPiiProtectionUnavailableException"/> and never returns plaintext.
     /// </summary>
     Task<SealedLocationNoticeContact?> SealAsync(LocationNoticeContactValues values, CancellationToken cancellationToken);

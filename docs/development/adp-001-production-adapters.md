@@ -110,7 +110,9 @@ key version from Key Vault, never from configuration or the client.
 
 NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P2) adds a second RSA key, `recipient-notice-kek`, distinct from the PII key, that
 seals copies of the destination phone and e-mail for the Worker's recipient notices
-(`docs/development/ntf-002-recipient-contact.md`). It is off by default and in the pilot until AI-08 NTF-008.
+(`docs/development/ntf-002-recipient-contact.md`). It is off by default and in the pilot: AI-08 NTF-008 wires the key
+(the roles below and `PiiProtection__RecipientNoticeKey__KeyId`) and `Locations__NoticeKeyProtector` stays `Disabled`
+until the gate-closing change (NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31, W4).
 
 | Variable | Value | Required |
 | --- | --- | --- |
@@ -121,7 +123,10 @@ seals copies of the destination phone and e-mail for the Worker's recipient noti
 The API reads the key (`GET /keys/{name}`) and wraps each data key in process with its public part (RSA-OAEP-256), so
 it needs only the `Microsoft.KeyVault/vaults/keys/read` data action on that key and never `wrapKey`, `unwrapKey` or
 `decrypt`; it has no code that could open a notice copy. The Worker gets unwrap on this key only (never the PII key)
-with NTF-005 and NTF-008, which fixes the roles and secret names. Ready check: `recipient_notice_key`.
+with NTF-005 and NTF-008. In the pilot (NTF-008, W5) the API holds the built-in *Key Vault Reader* on the key and the
+Worker the owner's custom role `Paquetenvia Pilot Recipient Notice Unwrap` (data actions `keys/read` and
+`keys/unwrap/action` only), both scoped to `recipient-notice-kek`, which `security.bicep` creates. Ready check:
+`recipient_notice_key`.
 
 Key requirements: RSA key (3072 bits recommended; `RSA-HSM` optional), permitted operations
 `wrapKey` and `unwrapKey`, algorithm `RSA-OAEP-256`. Rotation creates a **new version of the same
