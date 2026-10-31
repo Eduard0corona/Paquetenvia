@@ -1,5 +1,35 @@
 # Changelog
 
+## Avisos al destinatario: conexión en el piloto (NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31, AI-08 NTF-008) — 2026-10-31
+
+- Respuestas literales del project owner (ronda V, pregunta V1, y ronda W, preguntas W1 a W11, preguntadas y respondidas
+  el 2026-10-30), registradas en `decision-log.md` con sus contextos, los textos de las opciones, la vista previa y las
+  opciones no elegidas: V1 "Preparar el PR y esperar (Recommended)", W1 "No todavía", W2 "Sí, los dos", W3 "Esperar a
+  todo (Recommended)", W4 "Al cerrar las compuertas (Recommended)", W5 "Un rol propio y uno de Azure (Recommended)", W6
+  "Rol propio mínimo (Recommended)", W7 "El workflow (Recommended)", W8 "Tú en Cloud Shell antes de fusionar
+  (Recommended)", W9 "Cuarentena (Recommended)", W10 "Después del abogado (Recommended)" y W11 "Aprobarlas todas
+  (Recommended)". Es el PR-7 de la secuencia de `docs/development/ntf-recipient-notices.md`; aplica además
+  `NTF-RECIPIENT-NOTICES-2026-10-20` (E4-P2, E4-P7 y E4-P12) y `NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25` (O8 y O11
+  elección 11). El PR queda en borrador hasta que el owner confirme el primer despliegue del piloto y todos los recursos
+  de Azure, Meta y DNS (V1, W3).
+- AI-08 NTF-008 gana su criterio `DECIDED`; sus textos dicen ahora que la API tiene *Key Vault Reader* sobre la llave de
+  avisos (cierra en su propio proceso con la parte pública) y el Worker un rol propio que solo abre (W5), que la
+  plantilla crea la llave y el workflow los siete secretos que nadie escribe (W7), que `Locations:NoticeKeyProtector`
+  sigue `Disabled` (W4) y cómo se hace el what-if (W8).
+- AI-24 `recipient_notices` registra NTF-008 en `status`, la llave y sus dos roles en `contact.notice_key`, las guardas en
+  `switches.pilot` y, en `pilot_wiring`, los nombres de los secretos, quién los escribe, el rol de ACS
+  `Paquetenvia Pilot Email Sender` (las tres acciones que da Microsoft Learn, nunca `listKeys` ni `regenerateKey`),
+  `PILOT_ACS_NAME`, `emailEventsPhase` (`none` en el repositorio) y las dos URL de webhook.
+- AI-05: la frase de la parte NTF-002 ya no dice que las copias empiezan con NTF-008: empiezan con el cambio que cierre
+  las compuertas (W4). La entrada de NTF-002 de este archivo se corrige igual.
+- `deploy/azure/pilot`: `security.bicep` crea `recipient-notice-kek` y sus dos asignaciones; `apps.bicep` mapea los
+  secretos y da al Worker el rol de correo sobre el recurso de ACS; `events.bicep` (nuevo) prepara la suscripción de Event
+  Grid. El workflow valida `PILOT_ACS_NAME`, revisa los dos roles propios acción por acción, genera los siete secretos,
+  exige los tres de Meta y solo con `subscribe` despliega la etapa 6. `env001_pilot_guards.py` gana P28 a P30. Guía del
+  owner en español: `docs/operations/env-001-pilot/guia-owner-avisos.md`.
+- Sin migración, sin dependencias nuevas, sin código de producción nuevo. Todos los interruptores siguen apagados;
+  GATE-004 y GATE-007 siguen abiertas. Nota: `docs/development/ntf-008-pilot-wiring.md`.
+
 ## Avisos al destinatario: panel y "Detener avisos" (NTF-RECIPIENT-NOTICE-PANEL-2026-10-30, AI-08 NTF-007) — 2026-10-30
 
 - Respuestas literales del project owner (ronda T, preguntas T1 a T6, 2026-10-30), registradas en `decision-log.md` con
@@ -307,7 +337,9 @@
   envuelve, con la parte pública de esa llave: no tiene forma de abrir una copia, y el Worker no gana acceso a la llave
   PII. `Locations:NoticeKeyProtector` es `Disabled` por omisión y en el piloto (`Mock` solo en Development, Testing y
   DEV_SYNTHETIC; `AzureKeyVault` solo junto a la llave PII de Key Vault, con `PiiProtection:RecipientNoticeKey:KeyId`
-  distinto de la llave PII); AI-08 NTF-008 la conecta en el piloto. El origen nunca lleva correo ni copia.
+  distinto de la llave PII); AI-08 NTF-008 conecta la llave en el piloto y el selector sigue `Disabled` hasta el cambio
+  que cierre las compuertas (corregido por `NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31`, W4). El origen nunca lleva
+  correo ni copia.
 - El correo y las copias nunca se devuelven, registran en logs, auditan ni van a `request_snapshot_redacted`, a un
   outbox ni a un evento; los tipos que los llevan imprimen `[redacted]`.
 - AI-07: el campo "Correo del destinatario (opcional)" del paso "Dónde" de "Nueva orden" está construido. AI-24:

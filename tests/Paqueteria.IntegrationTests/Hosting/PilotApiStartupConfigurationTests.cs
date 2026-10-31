@@ -1,16 +1,15 @@
-using System.Security.Cryptography;
-using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
-using System.Text.RegularExpressions;
 using Dispatch.Infrastructure;
 using Drivers.Infrastructure;
+using Locations.Infrastructure;
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Options;
+using Notifications.Infrastructure.RecipientNotices.Webhooks;
 using Orders.Infrastructure.Orders;
-using Paqueteria.Infrastructure.Database.Baseline;
+using Paqueteria.Application.Security;
 using Realtime.Application.Configuration;
 using Routing.Infrastructure;
 
@@ -29,10 +28,8 @@ namespace Paqueteria.IntegrationTests.Hosting;
 /// <c>ConnectionStrings:PaqueteriaWorker</c> and would have refused to start; dropping the realtime mapping keeps that
 /// failure class visible.
 /// </remarks>
-public sealed partial class PilotApiStartupConfigurationTests
+public sealed class PilotApiStartupConfigurationTests
 {
-    private const string ClosedPort = "Host=127.0.0.1;Port=1;Database=paqueteria;Password=unused;Timeout=3;Pooling=false";
-
     /// <summary>
     /// The start validation failures the pilot API produces without its driver eligibility maps: <c>Drivers:Provider</c>
     /// and <c>Routing:Provider</c> are <c>PostgreSql</c> in the pilot, so both validate the per-vehicle-type required
@@ -83,6 +80,61 @@ public sealed partial class PilotApiStartupConfigurationTests
         Assert.Equal("pg-api-runtime-connection", settings.Mappings["ConnectionStrings:Paqueteria"]);
         Assert.DoesNotContain("ConnectionStrings:PaqueteriaWorker", settings.Mappings.Keys);
         Assert.DoesNotContain(settings.Mappings.Values, secret => secret.StartsWith("pg-worker-", StringComparison.Ordinal));
+    }
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (AI-08 NTF-008; AI-24 <c>recipient_notices.pilot_wiring</c>): the API maps
+    /// the contact lookup key and the webhook values (each secret with its previous slot), never the WhatsApp token; it
+    /// names the recipient-notice key and sets no recipient-notice switch, no messaging setting and no
+    /// <c>Locations:NoticeKeyProtector</c>, so no notice copy is written until the gate-closing change (W4).
+    /// </summary>
+    [Fact]
+    public void Pilot_api_maps_the_recipient_notice_secrets_with_every_switch_off()
+    {
+        var settings = PilotApiSettings.Load();
+        var expected = new Dictionary<string, string>(StringComparer.Ordinal)
+        {
+            ["ContactLookup:Keys:1"] = "paquetenvia-contact-lookup-key-1",
+            ["Messaging:WhatsApp:Webhook:AppSecret"] = "whatsapp-app-secret",
+            ["Messaging:WhatsApp:Webhook:PreviousAppSecret"] = "whatsapp-app-secret-previous",
+            ["Messaging:WhatsApp:Webhook:VerifyToken"] = "whatsapp-webhook-verify-token",
+            ["Messaging:WhatsApp:Webhook:PreviousVerifyToken"] = "whatsapp-webhook-verify-token-previous",
+            ["Messaging:Email:Events:Secret"] = "acs-email-events-secret",
+            ["Messaging:Email:Events:PreviousSecret"] = "acs-email-events-secret-previous",
+            ["Messaging:WhatsApp:Webhook:PhoneNumberId"] = "whatsapp-phone-number-id",
+            ["Messaging:Email:Events:SourceResourceId"] = "acs-communication-resource-id",
+        };
+        foreach (var (key, secret) in expected)
+        {
+            Assert.Equal(secret, settings.Mappings[key]);
+        }
+
+        Assert.DoesNotContain("whatsapp-cloud-api-token", settings.Mappings.Values);
+        Assert.DoesNotContain("Messaging:WhatsApp:MetaCloudApi:AccessToken", settings.Mappings.Keys);
+        Assert.Equal("1", settings.Configuration["ContactLookup:CurrentKeyVersion"]);
+        Assert.Equal(
+            "https://kv-pvp-synthetic.vault.azure.net/keys/recipient-notice-kek",
+            settings.Configuration["PiiProtection:RecipientNoticeKey:KeyId"]);
+        Assert.NotEqual(
+            settings.Configuration["PiiProtection:AzureKeyVault:KeyId"],
+            settings.Configuration["PiiProtection:RecipientNoticeKey:KeyId"]);
+        Assert.DoesNotContain(settings.Configuration.Keys, key =>
+            key.StartsWith("Messaging:", StringComparison.OrdinalIgnoreCase) ||
+            key.StartsWith("Notifications:RecipientNotices:", StringComparison.OrdinalIgnoreCase) ||
+            key.Equals("Locations:NoticeKeyProtector", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public async Task The_pilot_api_starts_with_the_contact_lookup_key_no_notice_copy_and_every_webhook_off()
+    {
+        await using var api = new PilotApiFactory(PilotApiSettings.Load().Resolved());
+
+        Assert.Equal(
+            LocationNoticeKeyProtectorKind.Disabled,
+            api.Services.GetRequiredService<IOptions<LocationsOptions>>().Value.NoticeKeyProtector);
+        Assert.False(api.Services.GetRequiredService<IOptions<WhatsAppWebhookOptions>>().Value.Enabled);
+        Assert.False(api.Services.GetRequiredService<IOptions<EmailEventsOptions>>().Value.Enabled);
+        Assert.True(api.Services.GetRequiredService<IRecipientContactLookup>().IsAvailable);
     }
 
     [Fact]
@@ -212,7 +264,7 @@ public sealed partial class PilotApiStartupConfigurationTests
         return failures.Distinct(StringComparer.Ordinal).ToArray();
     }
 
-    private static string Connection(string login) => ClosedPort + ";Username=" + login;
+    private static string Connection(string login) => PilotAppsTemplate.Connection(login);
 
     /// <summary>
     /// A bound eligibility options object as <c>Drivers:Eligibility:...=value</c> entries, the way configuration spells
@@ -254,68 +306,13 @@ public sealed partial class PilotApiStartupConfigurationTests
     }
 
     /// <summary>The API settings the pilot deploys, read from the reviewed templates.</summary>
-    private sealed partial record PilotApiSettings(
+    private sealed record PilotApiSettings(
         Dictionary<string, string?> Configuration,
         Dictionary<string, string> Mappings)
     {
         public static PilotApiSettings Load()
         {
-            var root = RepositoryRootLocator.Find(AppContext.BaseDirectory);
-            var bicep = File.ReadAllText(Path.Combine(root, "deploy", "azure", "pilot", "apps.bicep"));
-            var parameters = ParameterDefaults().Matches(bicep)
-                .ToDictionary(match => match.Groups[1].Value, match => match.Groups[2].Value, StringComparer.Ordinal);
-            var expressions = new Dictionary<string, string>(StringComparer.Ordinal)
-            {
-                ["publicOrigin"] = "https://" + parameters["publicHost"],
-                ["authCenterAuthority"] = parameters["authCenterAuthority"],
-                ["authCenterIssuer"] = parameters["authCenterIssuer"],
-                ["authCenterClientId"] = parameters["authCenterClientId"],
-                ["trustedProxyNetwork"] = parameters["trustedProxyNetwork"],
-                // Deployment outputs: synthetic, well-formed values of the same shape.
-                ["blobServiceUri"] = "https://pvpilotsynthetic.blob.core.windows.net",
-                ["piiKeyUri"] = "https://kv-pvp-synthetic.vault.azure.net/keys/paquetenvia-pii",
-                ["dataProtectionKeyUri"] = "https://kv-pvp-synthetic.vault.azure.net/keys/paquetenvia-data-protection",
-                ["apiIdentity.properties.clientId"] = "00000000-0000-4000-8000-0000000000a1",
-                ["vault.properties.vaultUri"] = "https://kv-pvp-synthetic.vault.azure.net/",
-                // OBS-003: the connection string of the pilot Application Insights (the export stays off in the pilot).
-                ["appInsights.properties.ConnectionString"] =
-                    "InstrumentationKey=00000000-0000-4000-8000-0000000000c1;IngestionEndpoint=https://mexicocentral-0.in.applicationinsights.azure.com/",
-            };
-
-            var apiEnv = ApiEnvironment().Match(bicep);
-            Assert.True(apiEnv.Success, "apps.bicep no longer declares apiEnv as concat(<variables>, [ ... ], businessSettings).");
-            var environment = new List<(string Name, string Value)>();
-            foreach (var variable in apiEnv.Groups[1].Value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
-            {
-                var block = new Regex(@"^var " + Regex.Escape(variable) + @" = \[\n(.*?)\n\]", RegexOptions.Multiline | RegexOptions.Singleline)
-                    .Match(bicep);
-                Assert.True(block.Success, $"apps.bicep variable {variable} not found.");
-                environment.AddRange(Entries(block.Groups[1].Value, expressions));
-            }
-
-            environment.AddRange(Entries(apiEnv.Groups[2].Value, expressions));
-            using (var businessSettings = JsonDocument.Parse(
-                       File.ReadAllText(Path.Combine(root, "deploy", "azure", "pilot", "apps.settings.json"))))
-            {
-                environment.AddRange(businessSettings.RootElement.EnumerateArray()
-                    .Select(entry => (entry.GetProperty("name").GetString()!, entry.GetProperty("value").GetString()!)));
-            }
-
-            var configuration = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
-            foreach (var (name, value) in environment)
-            {
-                Assert.False(configuration.ContainsKey(name.Replace("__", ":", StringComparison.Ordinal)), $"{name} is set twice.");
-                configuration[name.Replace("__", ":", StringComparison.Ordinal)] = value;
-            }
-
-            var mappings = new Dictionary<string, string>(StringComparer.Ordinal);
-            for (var index = 0; configuration.ContainsKey($"KeyVaultSecrets:Mappings:{index}:SecretName"); index++)
-            {
-                mappings[configuration[$"KeyVaultSecrets:Mappings:{index}:ConfigurationKey"]!] =
-                    configuration[$"KeyVaultSecrets:Mappings:{index}:SecretName"]!;
-            }
-
-            Assert.NotEmpty(mappings);
+            var (configuration, mappings) = PilotAppsTemplate.Load("apiEnv");
             return new PilotApiSettings(configuration, mappings);
         }
 
@@ -323,62 +320,27 @@ public sealed partial class PilotApiStartupConfigurationTests
         /// The settings with the Key Vault source off and every mapped configuration key holding a synthetic value of
         /// the shape the owner or the workflow stores (README section 4).
         /// </summary>
-        public Dictionary<string, string?> Resolved()
-        {
-            var resolved = Configuration
-                .Where(pair => !pair.Key.StartsWith("KeyVaultSecrets:", StringComparison.OrdinalIgnoreCase))
-                .ToDictionary(pair => pair.Key, pair => pair.Value, StringComparer.OrdinalIgnoreCase);
-            foreach (var key in Mappings.Keys)
+        public Dictionary<string, string?> Resolved() =>
+            PilotAppsTemplate.Resolve(Configuration, Mappings, key => PilotAppsTemplate.SharedSecret(key) ?? key switch
             {
-                resolved[key] = key switch
-                {
-                    "ConnectionStrings:Paqueteria" => Connection("pv_pilot_api"),
-                    "ConnectionStrings:PaqueteriaRealtime" => Connection("pv_pilot_realtime"),
-                    "AuthCenter:ClientSecret" => Derived("authcenter client", hex: true),
-                    "EmailLookup:Keys:1" => Derived("email lookup key", hex: false),
-                    "Locations:GoogleMaps:ApiKey" => Derived("geocoding key", hex: true),
-                    "PublicTracking:LinkKeys:1" => Derived("tracking link key", hex: false),
-                    "TelemetryPseudonym:Keys:1" => Derived("telemetry pseudonym key", hex: false),
-                    _ => throw new Xunit.Sdk.XunitException(
-                        $"The pilot API maps {key} from Key Vault; give it a synthetic value here."),
-                };
-            }
-
-            return resolved;
-        }
-
-        private static string Derived(string purpose, bool hex)
-        {
-            var bytes = SHA256.HashData(Encoding.UTF8.GetBytes("paquetenvia rtm pilot startup " + purpose));
-            return hex ? Convert.ToHexStringLower(bytes) : Convert.ToBase64String(bytes);
-        }
-
-        private static IEnumerable<(string Name, string Value)> Entries(string block, IReadOnlyDictionary<string, string> expressions)
-        {
-            foreach (Match entry in EnvironmentEntry().Matches(block))
-            {
-                var raw = entry.Groups[2].Value.Trim();
-                if (raw.StartsWith('\'') && raw.EndsWith('\''))
-                {
-                    yield return (entry.Groups[1].Value, raw[1..^1]);
-                    continue;
-                }
-
-                Assert.True(
-                    expressions.TryGetValue(raw, out var value),
-                    $"apps.bicep sets {entry.Groups[1].Value} from {raw}; give it a synthetic value here.");
-                yield return (entry.Groups[1].Value, value!);
-            }
-        }
-
-        [GeneratedRegex(@"^param (\w+) string = '([^']*)'", RegexOptions.Multiline)]
-        private static partial Regex ParameterDefaults();
-
-        [GeneratedRegex(@"^var apiEnv = concat\(([\w\s,]+), \[\n(.*?)\n\], businessSettings\)", RegexOptions.Multiline | RegexOptions.Singleline)]
-        private static partial Regex ApiEnvironment();
-
-        [GeneratedRegex(@"name: '([^']+)'\s*\n\s*value: ([^\n]+)")]
-        private static partial Regex EnvironmentEntry();
+                "ConnectionStrings:Paqueteria" => Connection("pv_pilot_api"),
+                "ConnectionStrings:PaqueteriaRealtime" => Connection("pv_pilot_realtime"),
+                "AuthCenter:ClientSecret" => PilotAppsTemplate.Derived("authcenter client", hex: true),
+                "EmailLookup:Keys:1" => PilotAppsTemplate.Derived("email lookup key", hex: false),
+                "Locations:GoogleMaps:ApiKey" => PilotAppsTemplate.Derived("geocoding key", hex: true),
+                // NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31: the webhook values. The Meta app secret is written by the
+                // owner; the verify token, the Event Grid secret and the previous slots are 64 hex characters from the
+                // workflow; the phone number id and the resource id have the shapes Meta and Azure give.
+                "Messaging:WhatsApp:Webhook:AppSecret" => PilotAppsTemplate.Derived("meta app secret", hex: true),
+                "Messaging:WhatsApp:Webhook:PreviousAppSecret" => PilotAppsTemplate.Derived("meta app secret previous", hex: true),
+                "Messaging:WhatsApp:Webhook:VerifyToken" => PilotAppsTemplate.Derived("meta verify token", hex: true),
+                "Messaging:WhatsApp:Webhook:PreviousVerifyToken" => PilotAppsTemplate.Derived("meta verify token previous", hex: true),
+                "Messaging:Email:Events:Secret" => PilotAppsTemplate.Derived("event grid secret", hex: true),
+                "Messaging:Email:Events:PreviousSecret" => PilotAppsTemplate.Derived("event grid secret previous", hex: true),
+                "Messaging:WhatsApp:Webhook:PhoneNumberId" => PilotAppsTemplate.SyntheticPhoneNumberId,
+                "Messaging:Email:Events:SourceResourceId" => PilotAppsTemplate.SyntheticAcsResourceId,
+                _ => null,
+            });
     }
 
     /// <summary>The API host in the pilot's environment (Production), composed and started with the given settings.</summary>

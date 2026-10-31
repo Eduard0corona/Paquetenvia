@@ -73,7 +73,7 @@ inalcanzable no es este caso: se reintenta.
    versión exacta de la copia; `PiiProtection:RecipientNoticeKey:KeyId`), y solo se construye con avisos encendidos y un
    proveedor real. Con proveedores sintéticos se usan `+520000000002` y `destinatario@example.invalid` sin descifrar.
 6. `ContactLookup:Keys` y `CurrentKeyVersion` en el Worker; la baja se busca con el hash de cada versión configurada.
-   NTF-008 la conecta a `paquetenvia-contact-lookup-key-1`.
+   NTF-008 la conecta a `paquetenvia-contact-lookup-key-1` (generada una vez por el workflow, W7).
 7. Enlace de baja: Base64URL de versión de llave (2 bytes), organización (16), aviso (16) y HMAC-SHA256 con prefijo
    `paquetenvia-unsubscribe-v1` (88 caracteres). Página `{PublicTracking:PublicBaseUrl}/avisos/baja/<token>` (`{{3}}` del
    correo) y un clic `{PublicBaseUrl}/api/v1/recipient-notices/unsubscribe/<token>` en `List-Unsubscribe` con

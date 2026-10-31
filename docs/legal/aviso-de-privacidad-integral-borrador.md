@@ -100,7 +100,8 @@ nunca nombre ni dirección) y los puntos legales de `docs/development/ntf-recipi
 > - Correo del destinatario (NTF-RECIPIENT-NOTICES-2026-10-20, AI-08 NTF-002): `DestinationAddressInput.email` de
 >   `createQuote`, opcional y solo en el destino. Se guarda cifrado en `locations.locations.email_ciphertext` con la
 >   llave de datos personales (E4-P17: "Dos copias, como el teléfono"). Cuando se configure la llave de avisos
->   `recipient-notice-kek` (AI-08 NTF-008; hoy `Locations__NoticeKeyProtector` vale `Disabled`), se guardarán además
+>   `recipient-notice-kek` (AI-08 NTF-008 la conecta; `Locations__NoticeKeyProtector` sigue en `Disabled` hasta el cambio
+>   que cierre GATE-004 y GATE-007, decisión W4), se guardarán además
 >   copias del teléfono y del correo con esa llave (`notice_phone_ciphertext`, `notice_email_ciphertext`), las únicas
 >   que el proceso de avisos podrá abrir. Ninguna se devuelve, registra, audita ni publica; borrar la ubicación borra
 >   todas las copias (`docs/development/ntf-002-recipient-contact.md`).

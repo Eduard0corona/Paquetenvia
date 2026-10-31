@@ -2,7 +2,8 @@
 
 - Estado: aceptado (NTF-RECIPIENT-NOTICES-2026-10-20; detallado por NTF-RECIPIENT-NOTICE-CAPS-2026-10-23,
   NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23, NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 y
-  NTF-RECIPIENT-NOTICE-PANEL-2026-10-30); implementado por partes (AI-08 NTF-002 a NTF-007) y **apagado**. GATE-004 y
+  NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 y NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31); implementado por partes (AI-08
+  NTF-002 a NTF-008; NTF-008 se fusiona solo cuando existen los recursos del owner) y **apagado**. GATE-004 y
   GATE-007 siguen abiertas.
 - Fecha: 2026-10-20
 - Alcance: contratos v0.6 (AI-03, AI-04, AI-05 `x-pilot-contract-deltas`, AI-06 y AI-18 como contrato declarado,

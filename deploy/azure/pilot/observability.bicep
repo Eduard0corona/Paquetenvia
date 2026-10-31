@@ -1,4 +1,4 @@
-// ENV-001 pilot (PILOT-REAL-PEOPLE), stage 5 of 5: OBS-002 alerts, action group and workbook, and the SCL-007
+// ENV-001 pilot (PILOT-REAL-PEOPLE), stage 5 of 6: OBS-002 alerts, action group and workbook, and the SCL-007
 // PostgreSQL connection and resource alerts.
 // The OBS-002 alerts and the workbook read the Container Apps console and system logs that platform.bicep already
 // sends to Log Analytics. The queries use only the OBS-002 structured events (fixed lane, job and outcome

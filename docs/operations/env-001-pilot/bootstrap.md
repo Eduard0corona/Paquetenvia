@@ -94,6 +94,11 @@ TAG_READER_ID="$(az role definition list --custom-role-only true \
 echo "$TAG_READER_ID"
 ```
 
+NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (AI-08 NTF-008) adds two more custom roles in the same resource group,
+`Paquetenvia Pilot Recipient Notice Unwrap` (W5) and `Paquetenvia Pilot Email Sender` (W6). Their JSON and the commands
+are in [`guia-owner-avisos.md`](guia-owner-avisos.md) §2: the workflow looks each one up by exact name and checks it
+action by action before deploying.
+
 ## 5. Minimum roles for the deployer (resource group scope only)
 
 - **Contributor on the resource group** covers every resource in the templates:
@@ -104,7 +109,10 @@ echo "$TAG_READER_ID"
   - the OBS-003 Application Insights component (`Microsoft.Insights/components`).
 - **Role Based Access Control Administrator** lets the templates assign roles to the workload
   identities. An ABAC condition restricts it to the seven roles the templates use, so the deployer can
-  never grant Owner, Contributor, User Access Administrator or Storage Blob Data Owner.
+  never grant Owner, Contributor, User Access Administrator or Storage Blob Data Owner. Since AI-08 NTF-008 the
+  templates use ten roles (*Key Vault Reader* and the two recipient-notice custom roles are added): the owner deletes
+  and re-creates this assignment with the longer list ([`guia-owner-avisos.md`](guia-owner-avisos.md) §2.4) before
+  the first deployment with NTF-008.
 
 ```bash
 az role assignment create --assignee-object-id "$SP_OBJECT_ID" --assignee-principal-type ServicePrincipal \
@@ -163,6 +171,7 @@ In the GitHub UI: *Settings → Environments → New environment* `azure-pilot`.
 | `PILOT_GATE_007_DECISION` | ID of the decision-log row `GATE-007-...` whose Type is `Gate resolution` or `Gate scoping` (privacy). Not set until the owner records it; `GATE-007-PRIVACY-DRAFT` is rejected. |
 | `PILOT_GATE_012_DECISION` | `GATE-012-PILOT-SCOPE` (Type `Gate scoping`, cloud and data residency) |
 | `PILOT_POSTGRES_SERVER_NAME` | leave it unset (empty = the first PostgreSQL server). Set it only after a real restore, to the restored server that `restore-drill.sh --real` prints (README §6.4, OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20) |
+| `PILOT_ACS_NAME` | the name of the Communication Services resource in `rg-pv-pilot` (NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31, [`guia-owner-avisos.md`](guia-owner-avisos.md) §3). Required once NTF-008 is on `main`; never written in the repository |
 
 Or with the GitHub CLI (`gh auth login` first):
 
@@ -194,4 +203,6 @@ Then follow the README §6.1 from step 2.
 az role assignment delete --assignee "$SP_OBJECT_ID" --scope "$RG_ID"
 az ad app delete --id "$APP_ID"
 az role definition delete --name "Paquetenvia Pilot Blob Tag Reader" --scope "$RG_ID"
+az role definition delete --name "Paquetenvia Pilot Recipient Notice Unwrap" --scope "$RG_ID"
+az role definition delete --name "Paquetenvia Pilot Email Sender" --scope "$RG_ID"
 ```

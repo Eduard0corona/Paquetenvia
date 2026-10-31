@@ -1,4 +1,4 @@
-// ENV-001 pilot (PILOT-REAL-PEOPLE), stage 4 of 5: Web, API and Worker Container Apps and the
+// ENV-001 pilot (PILOT-REAL-PEOPLE), stage 4 of 6: Web, API and Worker Container Apps and the
 // PILOT-SAME-ORIGIN-ROUTING rule-based route on the apex domain.
 targetScope = 'resourceGroup'
 
@@ -43,6 +43,23 @@ param webPrivacyVersion string
 @description('Versionless Key Vault key URIs from security.bicep.')
 param piiKeyUri string
 param dataProtectionKeyUri string
+// NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P2): the recipient-notice key, which the API wraps with and the Worker unwraps
+// with (security.bicep grants each half). Locations__NoticeKeyProtector stays Disabled (the default) until the
+// gate-closing change, so no notice copy is written yet (NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31, W4).
+param recipientNoticeKeyUri string
+
+// NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (W2, W11 item 4): the Communication Services resource the owner created
+// by hand (NTF-EMAIL-ACS-PILOT-2026-10-11). Its name comes from the azure-pilot variable PILOT_ACS_NAME, never from the
+// repository; the workflow checks that it exists before deploying.
+@description('Name of the existing Communication Services resource in the pilot resource group (PILOT_ACS_NAME).')
+@minLength(1)
+@maxLength(63)
+param acsName string
+
+// W6 "Rol propio mínimo (Recommended)": the owner's custom role "Paquetenvia Pilot Email Sender" (the three actions
+// Microsoft Learn gives for sending e-mail, never listKeys or regenerateKey), looked up by exact name by the workflow.
+@description('Resource id of the custom role that only sends e-mail through the Communication Services resource (guia-owner-avisos.md, paso 2).')
+param acsEmailSenderRoleDefinitionId string
 
 @description('Blob service endpoint from platform.bicep (https://<account>.blob.core.windows.net).')
 param blobServiceUri string
@@ -71,10 +88,27 @@ var apiSecretNames = [
   'public-tracking-link-key'
   // OBS-003-TENANT-PSEUDONYM-2026-10-12: the owner-written key of the organization pseudonym in logs and traces.
   'paquetenvia-telemetry-pseudonym-key-1'
+  // NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (W7, W11 item 1; RECEIPTS O11 choice 11): the contact lookup key and the
+  // webhook values. Every switch that would use them stays off until the gate-closing change.
+  'paquetenvia-contact-lookup-key-1'
+  'whatsapp-app-secret'
+  'whatsapp-app-secret-previous'
+  'whatsapp-webhook-verify-token'
+  'whatsapp-webhook-verify-token-previous'
+  'acs-email-events-secret'
+  'acs-email-events-secret-previous'
+  'whatsapp-phone-number-id'
+  'acs-communication-resource-id'
 ]
 var workerSecretNames = [
   'pg-worker-runtime-connection'
   'paquetenvia-telemetry-pseudonym-key-1'
+  // NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31: the tracking link key, the contact lookup key and the WhatsApp token and
+  // phone number id. The Worker never reads a webhook secret, and the API never reads the WhatsApp token.
+  'public-tracking-link-key'
+  'paquetenvia-contact-lookup-key-1'
+  'whatsapp-cloud-api-token'
+  'whatsapp-phone-number-id'
 ]
 
 resource containerEnvironment 'Microsoft.App/managedEnvironments@2025-07-01' existing = {
@@ -104,6 +138,10 @@ resource workerIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-1
 
 resource webIdentity 'Microsoft.ManagedIdentity/userAssignedIdentities@2024-11-30' existing = {
   name: 'id-pv-pilot-web'
+}
+
+resource communicationServices 'Microsoft.Communication/communicationServices@2023-04-01' existing = {
+  name: acsName
 }
 
 resource apiSecrets 'Microsoft.KeyVault/vaults/secrets@2024-11-01' existing = [for name in apiSecretNames: {
@@ -136,6 +174,19 @@ resource workerSecretReaders 'Microsoft.Authorization/roleAssignments@2022-04-01
     principalType: 'ServicePrincipal'
   }
 }]
+
+// AI-24 recipient_notices.pilot_wiring ("the ACS role of the Worker"): the Worker sends e-mail with its managed identity
+// (no ACS key or connection string anywhere), through the owner's least-privilege custom role, scoped to that resource
+// only. Messaging__Email__Provider stays Disabled until the gate-closing change, so nothing is sent yet.
+resource workerEmailSender 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
+  name: guid(communicationServices.id, workerIdentity.id, 'acs-email-sender')
+  scope: communicationServices
+  properties: {
+    roleDefinitionId: acsEmailSenderRoleDefinitionId
+    principalId: workerIdentity.properties.principalId
+    principalType: 'ServicePrincipal'
+  }
+}
 
 var productionEnv = [
   {
@@ -258,6 +309,82 @@ var apiKeyVaultEnv = [
     name: 'KeyVaultSecrets__Mappings__6__ConfigurationKey'
     value: 'TelemetryPseudonym:Keys:1'
   }
+  // NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (W7, W11 items 1 and 2): the contact lookup key (opt-out hashes and the
+  // e-mail unsubscribe token, AI-24 opt_out.hash) and the webhook values (AI-24 webhooks; RECEIPTS O11 choices 9 and 11).
+  // Each previous slot holds a random value nobody has until a rotation copies the old value into it. The workflow
+  // generates every one of them once except the Meta app secret and phone number id, which the owner writes.
+  {
+    name: 'KeyVaultSecrets__Mappings__7__SecretName'
+    value: 'paquetenvia-contact-lookup-key-1'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__7__ConfigurationKey'
+    value: 'ContactLookup:Keys:1'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__8__SecretName'
+    value: 'whatsapp-app-secret'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__8__ConfigurationKey'
+    value: 'Messaging:WhatsApp:Webhook:AppSecret'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__9__SecretName'
+    value: 'whatsapp-app-secret-previous'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__9__ConfigurationKey'
+    value: 'Messaging:WhatsApp:Webhook:PreviousAppSecret'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__10__SecretName'
+    value: 'whatsapp-webhook-verify-token'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__10__ConfigurationKey'
+    value: 'Messaging:WhatsApp:Webhook:VerifyToken'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__11__SecretName'
+    value: 'whatsapp-webhook-verify-token-previous'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__11__ConfigurationKey'
+    value: 'Messaging:WhatsApp:Webhook:PreviousVerifyToken'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__12__SecretName'
+    value: 'acs-email-events-secret'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__12__ConfigurationKey'
+    value: 'Messaging:Email:Events:Secret'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__13__SecretName'
+    value: 'acs-email-events-secret-previous'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__13__ConfigurationKey'
+    value: 'Messaging:Email:Events:PreviousSecret'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__14__SecretName'
+    value: 'whatsapp-phone-number-id'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__14__ConfigurationKey'
+    value: 'Messaging:WhatsApp:Webhook:PhoneNumberId'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__15__SecretName'
+    value: 'acs-communication-resource-id'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__15__ConfigurationKey'
+    value: 'Messaging:Email:Events:SourceResourceId'
+  }
 ]
 
 var workerKeyVaultEnv = [
@@ -289,6 +416,42 @@ var workerKeyVaultEnv = [
   {
     name: 'KeyVaultSecrets__Mappings__2__ConfigurationKey'
     value: 'TelemetryPseudonym:Keys:1'
+  }
+  // NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31: the tracking link key the Worker derives recipient links with (AI-24
+  // tracking_link.derive), the contact lookup key of the opt-out check, and the WhatsApp token and phone number id the
+  // Meta adapter sends with (the owner writes both). Messaging__WhatsApp__Provider stays Disabled until the gate-closing
+  // change, so the token is read and never used yet.
+  {
+    name: 'KeyVaultSecrets__Mappings__3__SecretName'
+    value: 'public-tracking-link-key'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__3__ConfigurationKey'
+    value: 'PublicTracking:LinkKeys:1'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__4__SecretName'
+    value: 'paquetenvia-contact-lookup-key-1'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__4__ConfigurationKey'
+    value: 'ContactLookup:Keys:1'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__5__SecretName'
+    value: 'whatsapp-cloud-api-token'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__5__ConfigurationKey'
+    value: 'Messaging:WhatsApp:MetaCloudApi:AccessToken'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__6__SecretName'
+    value: 'whatsapp-phone-number-id'
+  }
+  {
+    name: 'KeyVaultSecrets__Mappings__6__ConfigurationKey'
+    value: 'Messaging:WhatsApp:MetaCloudApi:PhoneNumberId'
   }
 ]
 
@@ -375,6 +538,18 @@ var apiEnv = concat(productionEnv, proofStorageEnv, dataProtectionEnv, apiKeyVau
   {
     name: 'PiiProtection__AzureKeyVault__KeyId'
     value: piiKeyUri
+  }
+  // NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (W4 "Al cerrar las compuertas (Recommended)"): the notice key is wired
+  // (role and KeyId), and Locations__NoticeKeyProtector is not set, so it stays Disabled: the API writes no notice copy
+  // and quoting does not depend on this key until the gate-closing change turns it on.
+  {
+    name: 'PiiProtection__RecipientNoticeKey__KeyId'
+    value: recipientNoticeKeyUri
+  }
+  // AI-24 opt_out.key_versions: the contact lookup key version (paquetenvia-contact-lookup-key-1, mapped above).
+  {
+    name: 'ContactLookup__CurrentKeyVersion'
+    value: '1'
   }
   {
     name: 'Pricing__Provider'
@@ -484,6 +659,27 @@ var workerEnv = concat(productionEnv, proofStorageEnv, dataProtectionEnv, worker
   {
     name: 'Notifications__WorkerId'
     value: 'pilot-worker'
+  }
+  // NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (AI-24 tracking_link.derive and opt_out.key_versions): the Worker builds
+  // {PublicBaseUrl}/track/<token> in memory with link key version 1 and hashes contacts under contact lookup key
+  // version 1. It unwraps notice copies with the notice key only (never the PII key). Notifications__RecipientNotices__
+  // and Messaging__ are not set here: every recipient-notice switch stays off and every provider Disabled until the
+  // gate-closing change records the GATE-004 and GATE-007 resolution rows (env001_pilot_guards.py P28).
+  {
+    name: 'PublicTracking__PublicBaseUrl'
+    value: publicOrigin
+  }
+  {
+    name: 'PublicTracking__CurrentLinkKeyVersion'
+    value: '1'
+  }
+  {
+    name: 'ContactLookup__CurrentKeyVersion'
+    value: '1'
+  }
+  {
+    name: 'PiiProtection__RecipientNoticeKey__KeyId'
+    value: recipientNoticeKeyUri
   }
   {
     name: 'Orders__ClaimWindowFinalization__Enabled'

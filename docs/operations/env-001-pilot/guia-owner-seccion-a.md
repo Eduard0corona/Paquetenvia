@@ -233,6 +233,9 @@ echo "$TAG_READER_ID"   # debe imprimir un GUID; si sale vacío, espera 1-2 minu
 El nombre debe ser exactamente `Paquetenvia Pilot Blob Tag Reader`: el workflow lo busca así
 (`env.BLOB_TAG_READER_ROLE`).
 
+Los avisos al destinatario (AI-08 NTF-008) agregan dos roles propios más, `Paquetenvia Pilot Recipient Notice Unwrap`
+y `Paquetenvia Pilot Email Sender`: están en [`guia-owner-avisos.md`](guia-owner-avisos.md) §2.
+
 ### 2.4 Roles del deployer (solo a nivel del grupo de recursos)
 
 - **Contributor** sobre `rg-pv-pilot`.
@@ -255,6 +258,10 @@ az role assignment create --assignee-object-id "$SP_OBJECT_ID" --assignee-princi
 
 No asignes nada a nivel de suscripción. *Key Vault Secrets Officer* sobre la bóveda se lo dan las
 propias plantillas (`security.bicep`, vía `deployer()`); el deployer nunca recibe un rol cripto.
+
+Con NTF-008 la condición admite 10 roles (se agregan *Key Vault Reader* y los dos roles propios de los avisos). Antes
+del primer despliegue con NTF-008 borras esta asignación y la vuelves a crear con la lista ampliada:
+[`guia-owner-avisos.md`](guia-owner-avisos.md) §2.4.
 
 ### 2.5 Verificación del bootstrap (bootstrap.md §7)
 
@@ -302,6 +309,7 @@ En la misma pantalla del environment → *Environment variables → Add variable
 | `PILOT_TRACKING_SUPPORT_URL` | No | URL `https://` de soporte en el tracking público. **Déjala vacía mientras siga abierto GATE-001** (por defecto no hay enlace y la compilación rechaza un enlace con la marca) | `^https://[A-Za-z0-9./_-]+$` |
 | `PILOT_GATE_012_DECISION` | Sí | `GATE-012-PILOT-SCOPE` | fila válida en `decision-log.md` |
 | `PILOT_GATE_007_DECISION` | Sí | `<ID_FILA_GATE-007>` (ver 0.1; hoy no existe) | fila válida en `decision-log.md`; `GATE-007-PRIVACY-DRAFT` se rechaza |
+| `PILOT_ACS_NAME` | Sí, desde NTF-008 | El nombre del recurso Communication Services de `rg-pv-pilot` ([`guia-owner-avisos.md`](guia-owner-avisos.md) §3). Nunca va en el repositorio | `^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$` y el recurso debe existir |
 | `PILOT_POSTGRES_SERVER_NAME` | No | **No la crees ahora.** Vacía (o sin crear) significa el primer servidor de la base. Solo se llena después de una restauración real, con el nombre que imprime el comando (paso 7.7) | vacía, o el nombre del primer servidor seguido de partes `-` en minúsculas y números (máximo 63 caracteres), y el servidor debe existir |
 
 Nota: `PILOT_TRACKING_SUPPORT_URL` se compila dentro de la imagen web como
@@ -972,7 +980,10 @@ az resource list --resource-group "$RG" --resource-type Microsoft.Communication/
 az resource list --resource-group "$RG" --resource-type Microsoft.Communication/emailServices -o table
 ```
 
-Después mándame los dos nombres (no son secretos) para el cambio que conecte el `Worker`.
+El cambio que conecta el `Worker` es AI-08 NTF-008: el nombre del recurso Communication Services va en la variable
+`PILOT_ACS_NAME` del environment (nunca en el repositorio ni en el chat), y el dominio, el remitente
+`avisos@paquetenvia.com`, el DNS, los roles y los valores de Meta siguen la guía
+[`guia-owner-avisos.md`](guia-owner-avisos.md).
 
 > Antes de producción el correo pasa a otro proveedor (AI-10 `release_gates.PRODUCTION`). Cuál, lo decides después.
 

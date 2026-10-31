@@ -17,7 +17,9 @@ con AI-08 NTF-006 (PR-5), los webhooks de Meta y Event Grid, los acuses, las baj
 de baja del correo ([`ntf-006-receipts-optouts-autoreply.md`](ntf-006-receipts-optouts-autoreply.md),
 `NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25`); con AI-08 NTF-007 (PR-6), el panel "Avisos al destinatario" del detalle de la
 orden y "Detener avisos" ([`ntf-007-recipient-notice-panel.md`](ntf-007-recipient-notice-panel.md),
-`NTF-RECIPIENT-NOTICE-PANEL-2026-10-30`). Nada se envía ni está encendido.** GATE-004 y GATE-007 siguen abiertas; solo
+`NTF-RECIPIENT-NOTICE-PANEL-2026-10-30`); con AI-08 NTF-008 (PR-7, en borrador hasta que el owner cree los recursos), la
+conexión del piloto con todo apagado ([`ntf-008-pilot-wiring.md`](ntf-008-pilot-wiring.md),
+`NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31`). Nada se envía ni está encendido.** GATE-004 y GATE-007 siguen abiertas; solo
 el cambio que registre sus filas de resolución enciende los avisos.
 
 ## Arquitectura
@@ -123,7 +125,7 @@ SEC-2026-13 (back-sync #286): hasta entonces fallan al restaurar con NU1903.
 | PR-3 | NTF-004 | `RecipientNoticeRequestPolicy`, INSERT en ORD-002, permiso de WhatsApp en `createOrder` y CSV, tabla de permisos, casillas | carril Orders `20261023000200_AddRecipientNoticeConsents` (append-only; el `Down` se niega con filas) | sí, después de PR-4 |
 | PR-5 | NTF-006 | Webhooks de Meta y Event Grid, acuses, bajas, respuesta automática, baja por correo y su página, rol `paqueteria_notification_receipt_executor` con su DDL en AI-18 | carril Notifications `20261029000100_AddRecipientNoticeReceipts` (funciones del ejecutor y almacén de respuestas automáticas; el `Down` se niega con solicitudes) | sí (cargas firmadas falsas) |
 | PR-6 | NTF-007 | `listOrderRecipientNotices`, `stopOrderRecipientNotices`, panel y tiempo real; abridor del teléfono con la llave de datos personales en Locations (`NTF-RECIPIENT-NOTICE-PANEL-2026-10-30`, T1 a T6) | ninguna | sí |
-| PR-7 | NTF-008 | `apps.bicep` (secretos y roles del Worker y la API sobre la llave de avisos, rol de ACS, Event Grid, URLs), guardas del piloto, guía del owner | ninguna | solo después de que el owner cree secretos y recursos |
+| PR-7 | NTF-008 | `security.bicep` (llave `recipient-notice-kek` y sus dos roles), `apps.bicep` (secretos de la API y el Worker, rol de ACS), `events.bicep` (Event Grid detrás de `emailEventsPhase=none`), workflow, guardas P28 a P30, guía del owner `guia-owner-avisos.md` (`NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31`) | ninguna | solo después del primer despliegue del piloto y de que el owner cree secretos y recursos (V1, W3) |
 | PR-8 | puerta | Filas de resolución de GATE-004 y GATE-007, interruptores, ids de decisión, nombres de plantillas aprobadas por Meta, textos de correo, `docs/legal` final | ninguna | no: necesita las dos puertas |
 
 Orden: PR-0 → (PR-1 ∥ PR-2) → PR-4 → PR-3 → PR-5 → PR-6 → PR-7 → PR-8. PR-3 y PR-4 pueden ir en una misma promoción.
@@ -131,16 +133,18 @@ Orden: PR-0 → (PR-1 ∥ PR-2) → PR-4 → PR-3 → PR-5 → PR-6 → PR-7 →
 ## Acciones del owner
 
 1. **Antes del 2026-10-23**: crear los recursos Communication Services y Email Communication Services en la
-   suscripción del piloto (`NTF-EMAIL-ACS-PILOT-2026-10-11`; desde esa fecha Microsoft limita las altas nuevas). Luego
-   verificar `paquetenvia.com` (registros SPF, DKIM y DMARC) y crear el remitente `avisos@paquetenvia.com` con el
-   nombre visible "Seguimiento de envío" y sin buzón de respuestas (E4-P12).
-2. **Meta**: portafolio de negocio y verificación del negocio, cuenta de WhatsApp Business, un número que no se use en
-   la app de WhatsApp, el nombre visible = la razón social (E4-P7), un token de usuario del sistema y el app secret.
-   Revisar los cuatro textos de AI-24 `recipient_notices.templates` en este PR y después mandarlos a revisión de Meta
-   (categoría utilidad, `es_MX`).
-3. **Key Vault**: la llave RSA `recipient-notice-kek`, el secreto `paquetenvia-contact-lookup-key-1`, el token y el id
-   del número de WhatsApp, el app secret y el token de verificación del webhook (los nombres exactos los fija PR-7).
-   La llave del enlace `public-tracking-link-key` ya existe; PR-7 se la da también al Worker.
+   suscripción del piloto (`NTF-EMAIL-ACS-PILOT-2026-10-11`; el owner respondió en W2 que ya existen). El dominio, el
+   DNS (DMARC en cuarentena, W9), el aumento de límites y el remitente `avisos@paquetenvia.com` con el nombre visible
+   "Seguimiento de envío" (E4-P12) siguen la guía [`guia-owner-avisos.md`](../operations/env-001-pilot/guia-owner-avisos.md)
+   §6 y §7.
+2. **Meta**: la guía §4, §5 y §9: portafolio, verificación del negocio, número, nombre visible = la razón social
+   (E4-P7), token de usuario del sistema sin vencimiento y solo con permiso de envío (W11 punto 9), app secret, y las
+   cuatro plantillas a revisión de Meta después de la respuesta del abogado de GATE-007 (W10).
+3. **Key Vault**: PR-7 fija los nombres (W11 punto 1). La plantilla crea la llave `recipient-notice-kek` (W11 punto 3);
+   el workflow genera una vez los siete secretos que nadie escribe (W7); el owner escribe solo `whatsapp-cloud-api-token`,
+   `whatsapp-phone-number-id` y `whatsapp-app-secret` después del primer despliegue (W1), crea los dos roles propios y
+   vuelve a crear la condición del deployer (W5, W6), y define `PILOT_ACS_NAME` (W2). La llave del enlace
+   `public-tracking-link-key` ya existe; PR-7 se la da también al Worker.
 4. **Abogado (GATE-007)**: revisar los puntos de abajo y registrar la resolución de GATE-007.
 
 ## Puntos legales para GATE-007 (`docs/legal/`)

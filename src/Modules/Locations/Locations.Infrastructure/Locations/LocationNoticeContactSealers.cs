@@ -6,9 +6,10 @@ using Paqueteria.Infrastructure.Security.Pii;
 namespace Locations.Infrastructure.Locations;
 
 /// <summary>
-/// <c>Locations:NoticeKeyProtector=Disabled</c> (the default, and the pilot value until AI-08 NTF-008 wires the key):
-/// no recipient-notice key exists, so no destination gets a notice copy and the quote is unaffected. Recipient
-/// notices stay off (AI-24 <c>recipient_notices.switches</c>); an order without notice copies never gets one.
+/// <c>Locations:NoticeKeyProtector=Disabled</c> (the default, and the pilot value until the gate-closing change; AI-08
+/// NTF-008 wires the key but keeps this selector Disabled, NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 W4):
+/// nothing is sealed with the recipient-notice key, so no destination gets a notice copy and the quote is unaffected.
+/// Recipient notices stay off (AI-24 <c>recipient_notices.switches</c>); an order without notice copies never gets one.
 /// </summary>
 public sealed class DisabledLocationNoticeContactSealer : ILocationNoticeContactSealer
 {

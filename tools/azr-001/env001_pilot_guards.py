@@ -8,7 +8,7 @@ guards; they check the pilot's own owner decisions against the compiled ARM outp
 (`bicep build`) and the workflow. They never contact Azure.
 
 Commands:
-  check            evaluate every pilot guard (P00..P27)
+  check            evaluate every pilot guard (P00..P30)
   settings-check   validate deploy/azure/pilot/apps.settings.json (fails while an owner value is missing)
   observability-check  validate deploy/azure/pilot/observability.parameters.json (OBS-002 alert e-mail)
   web-check        validate deploy/azure/pilot/web.parameters.json (UI-001 accepted terms/privacy versions)
@@ -17,6 +17,7 @@ Commands:
   postgres-server-name     validate PILOT_POSTGRES_SERVER_NAME (OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20)
   connection-host          read a connection string on stdin, print only its PostgreSQL host
   postgres-adoption-check  refuse a named PostgreSQL server that platform.bicep cannot update in place
+  custom-role-check        require an owner custom role of the recipient notices to hold exactly its reviewed actions
 """
 
 from __future__ import annotations
@@ -63,6 +64,36 @@ TELEMETRY_PSEUDONYM_KEY_VERSION = "1"
 TELEMETRY_PSEUDONYM_SECRET = f"paquetenvia-telemetry-pseudonym-key-{TELEMETRY_PSEUDONYM_KEY_VERSION}"
 TELEMETRY_PSEUDONYM_CONFIGURATION_KEY = f"TelemetryPseudonym:Keys:{TELEMETRY_PSEUDONYM_KEY_VERSION}"
 
+# NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (AI-08 NTF-008; W7 and W11 item 1; RECEIPTS O11 choice 11): the Key Vault
+# secrets of the recipient notices. The two fixed names come from AI-24 (tracking_token.derivation.key, opt_out.hash);
+# the others from W11 item 1.
+TRACKING_LINK_SECRET = "public-tracking-link-key"
+CONTACT_LOOKUP_SECRET = "paquetenvia-contact-lookup-key-1"
+WHATSAPP_TOKEN_SECRET = "whatsapp-cloud-api-token"
+WHATSAPP_PHONE_NUMBER_ID_SECRET = "whatsapp-phone-number-id"
+WHATSAPP_APP_SECRET = "whatsapp-app-secret"
+WHATSAPP_APP_SECRET_PREVIOUS = "whatsapp-app-secret-previous"
+WHATSAPP_VERIFY_TOKEN_SECRET = "whatsapp-webhook-verify-token"
+WHATSAPP_VERIFY_TOKEN_PREVIOUS = "whatsapp-webhook-verify-token-previous"
+EMAIL_EVENTS_SECRET = "acs-email-events-secret"
+EMAIL_EVENTS_SECRET_PREVIOUS = "acs-email-events-secret-previous"
+ACS_RESOURCE_ID_SECRET = "acs-communication-resource-id"
+# The webhook secrets the API alone reads; the Worker never maps one (P23).
+WEBHOOK_SECRETS = frozenset({
+    WHATSAPP_APP_SECRET, WHATSAPP_APP_SECRET_PREVIOUS, WHATSAPP_VERIFY_TOKEN_SECRET, WHATSAPP_VERIFY_TOKEN_PREVIOUS,
+    EMAIL_EVENTS_SECRET, EMAIL_EVENTS_SECRET_PREVIOUS,
+})
+# The three shared secrets that are no credential of a service and that both hosts read (W11 item 7; P23); the organization
+# pseudonym key (OBS-003) is the fourth secret both read.
+SHARED_NON_CREDENTIAL_SECRETS = frozenset({TRACKING_LINK_SECRET, CONTACT_LOOKUP_SECRET, WHATSAPP_PHONE_NUMBER_ID_SECRET})
+# W7 "El workflow (Recommended)": the seven secrets nobody types, generated once by the workflow when missing (window 1),
+# and the three Meta values only the owner writes, whose absence stops the run (window 2, W11 item 8).
+RECIPIENT_NOTICE_GENERATED_SECRETS = (
+    CONTACT_LOOKUP_SECRET, WHATSAPP_VERIFY_TOKEN_SECRET, WHATSAPP_VERIFY_TOKEN_PREVIOUS, WHATSAPP_APP_SECRET_PREVIOUS,
+    EMAIL_EVENTS_SECRET, EMAIL_EVENTS_SECRET_PREVIOUS, ACS_RESOURCE_ID_SECRET,
+)
+RECIPIENT_NOTICE_OWNER_SECRETS = (WHATSAPP_TOKEN_SECRET, WHATSAPP_PHONE_NUMBER_ID_SECRET, WHATSAPP_APP_SECRET)
+
 # Key Vault secrets each workload may reference (least privilege, §17-style classes).
 # PILOT-KEYVAULT-PRIVATE-APP-READ: each workload reads exactly these Key Vault secrets itself (ADP-001
 # `KeyVaultSecrets__Mappings__<n>__SecretName` -> `__ConfigurationKey`), never through Container Apps.
@@ -75,16 +106,32 @@ REQUIRED_SECRET_MAPPINGS = {
         # GATE-003-PROVIDER-GOOGLE: owner-written Google Maps Platform key for the Locations adapter.
         "Locations:GoogleMaps:ApiKey": "google-maps-api-key",
         # TRK-002-AUTO-LINK: owner-written HMAC key public tracking links are derived with.
-        "PublicTracking:LinkKeys:1": "public-tracking-link-key",
+        "PublicTracking:LinkKeys:1": TRACKING_LINK_SECRET,
         # RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12: the in-process realtime dispatchers' own least-privilege login.
         "ConnectionStrings:PaqueteriaRealtime": "pg-realtime-runtime-connection",
         # OBS-003-TENANT-PSEUDONYM-2026-10-12: owner-written HMAC key of the organization pseudonym (logs and traces).
         TELEMETRY_PSEUDONYM_CONFIGURATION_KEY: TELEMETRY_PSEUDONYM_SECRET,
+        # NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31: the contact lookup key and the webhook values (AI-24 pilot_wiring).
+        "ContactLookup:Keys:1": CONTACT_LOOKUP_SECRET,
+        "Messaging:WhatsApp:Webhook:AppSecret": WHATSAPP_APP_SECRET,
+        "Messaging:WhatsApp:Webhook:PreviousAppSecret": WHATSAPP_APP_SECRET_PREVIOUS,
+        "Messaging:WhatsApp:Webhook:VerifyToken": WHATSAPP_VERIFY_TOKEN_SECRET,
+        "Messaging:WhatsApp:Webhook:PreviousVerifyToken": WHATSAPP_VERIFY_TOKEN_PREVIOUS,
+        "Messaging:Email:Events:Secret": EMAIL_EVENTS_SECRET,
+        "Messaging:Email:Events:PreviousSecret": EMAIL_EVENTS_SECRET_PREVIOUS,
+        "Messaging:WhatsApp:Webhook:PhoneNumberId": WHATSAPP_PHONE_NUMBER_ID_SECRET,
+        "Messaging:Email:Events:SourceResourceId": ACS_RESOURCE_ID_SECRET,
     },
     WORKER_APP: {
         "ConnectionStrings:PaqueteriaWorker": "pg-worker-runtime-connection",
         "ConnectionStrings:Paqueteria": "pg-worker-runtime-connection",
         TELEMETRY_PSEUDONYM_CONFIGURATION_KEY: TELEMETRY_PSEUDONYM_SECRET,
+        # NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31: the tracking link key, the contact lookup key and the WhatsApp token
+        # and phone number id (AI-24 pilot_wiring); never a webhook secret.
+        "PublicTracking:LinkKeys:1": TRACKING_LINK_SECRET,
+        "ContactLookup:Keys:1": CONTACT_LOOKUP_SECRET,
+        "Messaging:WhatsApp:MetaCloudApi:AccessToken": WHATSAPP_TOKEN_SECRET,
+        "Messaging:WhatsApp:MetaCloudApi:PhoneNumberId": WHATSAPP_PHONE_NUMBER_ID_SECRET,
     },
     WEB_APP: {},
     MIGRATE_JOB: {"PAQUETERIA_MIGRATION_CONNECTION": "pg-migrate-connection"},
@@ -108,7 +155,7 @@ SECRET_RBAC_VARIABLE = {
 }
 MAPPING_KEY = re.compile(r"^KeyVaultSecrets__Mappings__(\d+)__(SecretName|ConfigurationKey)$")
 SENSITIVE_SETTINGS = re.compile(
-    r"^(ConnectionStrings__.*|.*Secret|EmailLookup__Keys__.*|PublicTracking__LinkKeys__.*|TelemetryPseudonym__Keys__.*|PAQUETERIA_MIGRATION_CONNECTION|.*_VERIFIER|.*Password.*|.*ApiKey.*|.*Token)$")
+    r"^(ConnectionStrings__.*|.*Secret|EmailLookup__Keys__.*|PublicTracking__LinkKeys__.*|TelemetryPseudonym__Keys__.*|ContactLookup__Keys__.*|PAQUETERIA_MIGRATION_CONNECTION|.*_VERIFIER|.*Password.*|.*ApiKey.*|.*Token)$")
 
 AUTHORIZED_RESOURCE_TYPES = frozenset(
     {
@@ -144,11 +191,17 @@ AUTHORIZED_RESOURCE_TYPES = frozenset(
         # (observability.bicep only, RESOURCE_TYPE_TEMPLATES): the two PostgreSQL connection alerts and the four
         # PostgreSQL resource alerts, pinned by P21; every other metric alert is refused.
         "Microsoft.Insights/metricAlerts",
+        # NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (events.bicep only, RESOURCE_TYPE_TEMPLATES): the system topic of the
+        # Communication Services resource and its e-mail delivery report subscription, behind emailEventsPhase (P30).
+        "Microsoft.EventGrid/systemTopics",
+        "Microsoft.EventGrid/systemTopics/eventSubscriptions",
     }
 )
 # Authorized types that only one template may declare.
 RESOURCE_TYPE_TEMPLATES = {
     "Microsoft.Insights/metricAlerts": "observability",
+    "Microsoft.EventGrid/systemTopics": "events",
+    "Microsoft.EventGrid/systemTopics/eventSubscriptions": "events",
 }
 PROHIBITED_TYPE_PREFIXES = (
     "Microsoft.Cache/",  # GATE-013: no Redis
@@ -166,7 +219,52 @@ ALLOWED_ROLE_IDS = {
     "4633458b-17de-408a-b874-0445c86b69e6": "Key Vault Secrets User",
     "b86a8fe4-44ce-4948-aee5-eccb2c155cd7": "Key Vault Secrets Officer",
     "e147488a-f6f5-4113-8e2d-b22465e65bf6": "Key Vault Crypto Service Encryption User",
+    # NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (W5): only the API's role on recipient-notice-kek (P29). Its data actions
+    # are Microsoft.KeyVault/vaults/*/read and secrets/readMetadata/action: keys/read returns the public part of an RSA
+    # key and never a secret value (learn.microsoft.com built-in-roles/security, read 2026-10-31).
+    "21090545-7ca7-4776-b22c-e363652d74d2": "Key Vault Reader",
 }
+KEY_VAULT_READER_ROLE = "21090545-7ca7-4776-b22c-e363652d74d2"
+
+
+@dataclass(frozen=True)
+class CustomRole:
+    """An owner custom role the templates assign through a role-definition-id parameter, looked up by exact name."""
+
+    name: str
+    workflow_variable: str | None
+    parameter: str
+    template: str
+    actions: tuple[str, ...] = ()
+    data_actions: tuple[str, ...] = ()
+
+
+# Custom roles the pilot may assign (P14). The two recipient-notice roles (NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31)
+# are checked action by action before each deployment (custom-role-check); the owner creates them from the JSON of
+# docs/operations/env-001-pilot/guia-owner-avisos.md, which test_env001_pilot_guards.py keeps equal to these lists.
+CUSTOM_ROLES = {
+    "blob-tag-reader": CustomRole(
+        name="Paquetenvia Pilot Blob Tag Reader", workflow_variable="BLOB_TAG_READER_ROLE",
+        parameter="blobTagReaderRoleDefinitionId", template="platform",
+        data_actions=("Microsoft.Storage/storageAccounts/blobServices/containers/blobs/tags/read",)),
+    # W5 "Un rol propio y uno de Azure (Recommended)": the Worker opens notice copies and reads the key's versions; it can
+    # neither wrap, sign nor reach any other key.
+    "recipient-notice-unwrap": CustomRole(
+        name="Paquetenvia Pilot Recipient Notice Unwrap", workflow_variable="RECIPIENT_NOTICE_UNWRAP_ROLE",
+        parameter="recipientNoticeUnwrapRoleDefinitionId", template="security",
+        data_actions=("Microsoft.KeyVault/vaults/keys/read", "Microsoft.KeyVault/vaults/keys/unwrap/action")),
+    # W6 "Rol propio mínimo (Recommended)": exactly the three actions Microsoft Learn gives for a custom role that sends
+    # e-mail through a Communication Services resource ("Set up SMTP authentication for sending emails", custom role tab,
+    # page updated 2026-09-23, read 2026-10-31); no listKeys, no regenerateKey, no data action.
+    "email-sender": CustomRole(
+        name="Paquetenvia Pilot Email Sender", workflow_variable="EMAIL_SENDER_ROLE",
+        parameter="acsEmailSenderRoleDefinitionId", template="apps",
+        actions=("Microsoft.Communication/CommunicationServices/Read", "Microsoft.Communication/CommunicationServices/Write",
+                 "Microsoft.Communication/EmailServices/write")),
+}
+RECIPIENT_NOTICE_CUSTOM_ROLES = ("recipient-notice-unwrap", "email-sender")
+# Action fragments no recipient-notice custom role may ever hold (W6: they would hand out the ACS access keys).
+FORBIDDEN_CUSTOM_ROLE_ACTIONS = ("listkeys", "regeneratekey", "*")
 
 # Values that must never reach a pilot workload.
 FORBIDDEN_ENV_VALUES = frozenset({"mock", "synthetic", "devsynthetic", "dev_synthetic", "development", "testing", "s3compatible", "memory"})
@@ -199,6 +297,12 @@ PLATFORM_MANAGED_PREFIXES = (
     "Incidents__",
     "OutboxRetention__",
     "OperationalCleanup__",
+    # NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (AI-24 recipient_notices.switches.pilot; W11 item 7): the notice switches,
+    # the messaging providers and their webhooks, and the public tracking base URL the Worker builds recipient links with,
+    # are reviewed apps.bicep values; only the gate-closing change sets the switches (P28).
+    "Notifications__RecipientNotices__",
+    "Messaging__",
+    "PublicTracking__",
     # VOICE-001-PROVIDER-TWILIO-2026-10-11: the masked call bridge stays Disabled in the pilot until the owner
     # delivers the Twilio account, number and Key Vault secrets and GATE-007 is resolved; enabling it is an
     # apps.bicep change under review, never a free-form setting.
@@ -287,6 +391,8 @@ class Context:
     templates: dict[str, dict[str, Any]] = field(default_factory=dict)
     workflow: dict[str, Any] = field(default_factory=dict)
     workflow_text: str = ""
+    # The decision log at the checked revision (P28 reads its GATE-004 and GATE-007 rows).
+    decision_log: str = ""
 
     def resources(self, resource_type: str | None = None) -> list[tuple[str, dict[str, Any]]]:
         found = []
@@ -374,6 +480,8 @@ def load_context(repo_root: Path, arm_dir: Path) -> Context:
         raise GuardError(f"missing {PILOT_WORKFLOW}")
     ctx.workflow_text = workflow.read_text(encoding="utf-8")
     ctx.workflow = load_yaml(workflow)
+    log = repo_root / DECISION_LOG
+    ctx.decision_log = log.read_text(encoding="utf-8") if log.is_file() else ""
     return ctx
 
 
@@ -383,7 +491,7 @@ def _result(number: int, title: str, failures: list[str], ok: str) -> GuardResul
 
 # ---------------------------------------------------------------------------------------------- guards
 def guard_00_templates(ctx: Context) -> GuardResult:
-    expected = {"security", "platform", "jobs", "apps", "observability"}
+    expected = {"security", "platform", "jobs", "apps", "observability", "events"}
     failures = [] if set(ctx.templates) == expected else [f"pilot templates must be exactly {sorted(expected)}, found {sorted(ctx.templates)}"]
     return _result(0, "pilot templates compiled", failures, f"{len(ctx.templates)} templates")
 
@@ -752,7 +860,7 @@ def guard_13_key_vault(ctx: Context) -> GuardResult:
         if properties.get("enableRbacAuthorization") is not True or properties.get("enablePurgeProtection") is not True:
             failures.append("Key Vault must use RBAC and purge protection")
     keys = {str(r.get("name")): r for _, r in ctx.resources("Microsoft.KeyVault/vaults/keys")}
-    for required in ("pii-kek", "dataprotection-kek"):
+    for required in ("pii-kek", "dataprotection-kek", RECIPIENT_NOTICE_KEY):
         if not any(required in name for name in keys):
             failures.append(f"missing Key Vault key {required}")
     for name, key in keys.items():
@@ -785,12 +893,24 @@ def guard_14_rbac(ctx: Context) -> GuardResult:
     for template, assignment in ctx.resources("Microsoft.Authorization/roleAssignments"):
         count += 1
         definition = str((assignment.get("properties", {}) or {}).get("roleDefinitionId", ""))
-        if "parameters('blobTagReaderRoleDefinitionId')" in definition:
+        custom = _custom_role_of(definition)
+        if custom is not None:
+            if CUSTOM_ROLES[custom].template != template:
+                failures.append(f"{template} assigns the custom role {CUSTOM_ROLES[custom].name}, allowed only in "
+                                f"{CUSTOM_ROLES[custom].template}.bicep")
+            continue
+        if "parameters(" in definition:
+            failures.append(f"{template} assigns a role from an unknown parameter: {definition}")
             continue
         role_id = _resolve_role_id(definition, ctx.templates[template].get("variables", {}) or {})
         if role_id not in ALLOWED_ROLE_IDS:
             failures.append(f"{template} assigns a role outside the pilot allowlist: {definition}")
     return _result(14, "least-privilege RBAC only", failures, f"{count} role assignment(s) within the allowlist")
+
+
+def _custom_role_of(definition: str) -> str | None:
+    """The CUSTOM_ROLES key whose role-definition-id parameter is exactly this roleDefinitionId, or None."""
+    return next((key for key, role in CUSTOM_ROLES.items() if definition == f"[parameters('{role.parameter}')]"), None)
 
 
 def _resolve_role_id(definition: str, variables: dict[str, Any]) -> str | None:
@@ -860,7 +980,16 @@ def guard_16_adp_contract(ctx: Context) -> GuardResult:
                 failures.append(f"{name} must set {key}={value}")
     if "PiiProtection__AzureKeyVault__KeyId" in ctx.workload(WORKER_APP).env:
         failures.append("worker needs no PII key (ADP-001 RBAC table)")
-    return _result(16, "ADP-001 configuration contract wired", failures, "PII, proof storage and Data Protection KEK settings present")
+    # NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (AI-24 recipient_notices.contact): both hosts name the recipient-notice
+    # key, from the security.bicep output, and never the PII key in its place.
+    for name in (API_APP, WORKER_APP):
+        workload = ctx.workload(name)
+        source = env_source(ctx, workload, RECIPIENT_NOTICE_KEY_SETTING)
+        if source != f"parameters('{RECIPIENT_NOTICE_KEY_PARAMETER}')":
+            failures.append(f"{name} must set {RECIPIENT_NOTICE_KEY_SETTING} from parameters('{RECIPIENT_NOTICE_KEY_PARAMETER}') "
+                            f"(the recipient-notice key, not the PII key), found {source}")
+    return _result(16, "ADP-001 configuration contract wired", failures,
+                   "PII, recipient-notice, proof storage and Data Protection KEK settings present")
 
 
 def guard_19_cleanups_enabled(ctx: Context) -> GuardResult:
@@ -1441,11 +1570,20 @@ def guard_23_realtime_dispatcher_credential(ctx: Context) -> GuardResult:
     if "ConnectionStrings:PaqueteriaWorker" in mappings:
         failures.append("api maps ConnectionStrings:PaqueteriaWorker; the Worker credential must never reach the API")
     # OBS-003-TENANT-PSEUDONYM-2026-10-12: both hosts read the organization pseudonym key (not a credential; both must
-    # derive the same pseudonyms). Every other Worker secret stays out of the API.
-    worker_secrets = set(REQUIRED_SECRET_MAPPINGS[WORKER_APP].values()) - {TELEMETRY_PSEUDONYM_SECRET}
+    # derive the same pseudonyms). NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (W11 item 7): they also share the three
+    # secrets that are no credential of a service (the tracking link key, the contact lookup key and the WhatsApp phone
+    # number id). Every other Worker secret stays out of the API: the WhatsApp token above all.
+    worker_secrets = set(REQUIRED_SECRET_MAPPINGS[WORKER_APP].values()) - {TELEMETRY_PSEUDONYM_SECRET} - SHARED_NON_CREDENTIAL_SECRETS
     shared = sorted(worker_secrets & set(mappings.values()))
     if shared:
         failures.append(f"api maps Worker secrets {shared}")
+    if WHATSAPP_TOKEN_SECRET in mappings.values():
+        failures.append(f"api maps {WHATSAPP_TOKEN_SECRET}; the WhatsApp token never reaches the API")
+    worker_mappings = secret_mappings(ctx.workload(WORKER_APP))
+    if isinstance(worker_mappings, dict):
+        webhook = sorted(WEBHOOK_SECRETS & set(worker_mappings.values()))
+        if webhook:
+            failures.append(f"worker maps webhook secrets {webhook}; only the API's webhooks read them")
     for workload in ctx.workloads:
         other = secret_mappings(workload)
         if workload.name != API_APP and isinstance(other, dict) and REALTIME_SECRET in other.values():
@@ -1455,8 +1593,9 @@ def guard_23_realtime_dispatcher_credential(ctx: Context) -> GuardResult:
         failures.append(f"the workflow must generate exactly the api, worker and realtime runtime logins, found {loops}")
     if '"pg-${role}-runtime-connection"' not in ctx.workflow_text or '"pg-${role}-login-verifier"' not in ctx.workflow_text:
         failures.append("the workflow no longer writes pg-<role>-runtime-connection and pg-<role>-login-verifier")
-    return _result(23, "API realtime dispatcher credential (RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12)", failures,
-                   "own Key Vault connection, no Worker credential, login generated by the workflow")
+    return _result(23, "API realtime dispatcher credential (RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12); recipient-notice secrets split",
+                   failures, "own Key Vault connection, no Worker credential, login generated by the workflow; no WhatsApp "
+                   "token in the API and no webhook secret in the Worker")
 
 
 # ---------------------------------------------------------------------------------------------- AC-064
@@ -1825,6 +1964,405 @@ def guard_27_image_reuse(ctx: Context) -> GuardResult:
                    "an existing paquetenvia-<name>:<tested sha> is reused, never rebuilt, and every tag is locked")
 
 
+# ------------------------------------------------------- NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (P28, P29, P30)
+# AI-08 NTF-008 wires the recipient notices into the pilot with every switch off (owner rounds V and W). The key, the
+# settings, the custom roles and the Event Grid subscription below are the whole wiring; the gate-closing change that
+# records the GATE-004 and GATE-007 resolution rows is the only one that may turn anything on.
+RECIPIENT_NOTICE_KEY = "recipient-notice-kek"
+RECIPIENT_NOTICE_KEY_SETTING = "PiiProtection__RecipientNoticeKey__KeyId"
+RECIPIENT_NOTICE_KEY_PARAMETER = "recipientNoticeKeyUri"
+# Switches that are off unless literally "false" is not what they say (an expression counts as on), and whose host.
+RECIPIENT_NOTICE_SWITCHES = {
+    "Notifications__RecipientNotices__Enabled": WORKER_APP,
+    "Messaging__WhatsApp__Webhook__Enabled": API_APP,
+    "Messaging__Email__Events__Enabled": API_APP,
+}
+RECIPIENT_NOTICE_PROVIDERS = ("Messaging__WhatsApp__Provider", "Messaging__Email__Provider")
+# NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31 (W4 "Al cerrar las compuertas (Recommended)"): no notice copy is written
+# until the gate-closing change; the setting stays unset (its default is Disabled).
+NOTICE_KEY_PROTECTOR = "Locations__NoticeKeyProtector"
+RECIPIENT_NOTICE_GATE_SETTINGS = {
+    "004": "Notifications__RecipientNotices__Gate004DecisionId",
+    "007": "Notifications__RecipientNotices__Gate007DecisionId",
+}
+GATE_RESOLUTION_TYPE = "Gate resolution"
+# The format the Worker checks at start (RecipientNoticesOptions Gate004Pattern and Gate007Pattern).
+NOTICE_GATE_DECISION_ID = {gate: re.compile(rf"^GATE-{gate}-[A-Z0-9][A-Z0-9-]{{2,76}}\Z") for gate in RECIPIENT_NOTICE_GATE_SETTINGS}
+EMAIL_EVENTS_TEMPLATE = "events"
+EMAIL_EVENTS_PHASE_PARAMETER = "emailEventsPhase"
+EMAIL_EVENTS_PHASES = ["none", "subscribe"]
+EMAIL_EVENTS_CONDITION = f"[equals(parameters('{EMAIL_EVENTS_PHASE_PARAMETER}'), 'subscribe')]"
+# W11 item 6: the two webhook URLs (AI-05 servers /api/v1), with no IP list (the signature and the secret header
+# authenticate every call).
+PILOT_HOST = "paquetenvia.com"
+EMAIL_EVENTS_ENDPOINT = f"https://{PILOT_HOST}/api/v1/messaging/email/events"
+META_CALLBACK_SUMMARY = "https://${PILOT_HOST}/api/v1/messaging/whatsapp/webhook"
+EMAIL_EVENTS_SUMMARY = "https://${PILOT_HOST}/api/v1/messaging/email/events"
+EMAIL_EVENTS_HEADER = "X-Paquetenvia-Event-Secret"
+EMAIL_EVENTS_TYPE = "Microsoft.Communication.EmailDeliveryReportReceived"
+ACS_TYPE = "Microsoft.Communication/communicationServices"
+ACS_TOPIC_TYPE = "Microsoft.Communication.CommunicationServices"
+ACS_NAME_VARIABLE = "PILOT_ACS_NAME"
+ACS_NAME_PARAMETER = "acsName"
+# The Communication Services resource name rule (1 to 63 letters, digits and hyphens, never a hyphen at either end).
+ACS_NAME_CHECK = '[[ "${PILOT_ACS_NAME}" =~ ^[A-Za-z0-9]([A-Za-z0-9-]{0,61}[A-Za-z0-9])?$ ]]'
+IDENTITY_REFERENCE = re.compile(r"userAssignedIdentities', (?:'([a-z0-9-]+)'|variables\('identityNames'\)\[(\d+)\])")
+API_IDENTITY = "id-pv-pilot-api"
+WORKER_IDENTITY = "id-pv-pilot-worker"
+
+
+def env_source(ctx: Context, workload: Workload, name: str) -> str | None:
+    """How a workload's env entry is built: its literal value, or the ARM expression without brackets (for example
+    `parameters('x')`) when Bicep compiled the entry into one; None when the entry is missing."""
+    entry = workload.env.get(name)
+    if entry is None:
+        return None
+    kind, value = entry
+    if value != "<expression>":
+        return value[1:-1] if value.startswith("[") and value.endswith("]") and not value.startswith("[[") else value
+    prefix = f"createObject('name', '{name}', '{kind}', "
+    for text in (json.dumps(workload.resource), json.dumps(ctx.templates[workload.template].get("variables", {}))):
+        start = text.find(prefix)
+        if start < 0:
+            continue
+        index, depth, quoted = start + len(prefix), 1, False
+        while index < len(text):
+            char = text[index]
+            if quoted:
+                if char == "'" and text[index + 1:index + 2] == "'":
+                    index += 1
+                elif char == "'":
+                    quoted = False
+            elif char == "'":
+                quoted = True
+            elif char == "(":
+                depth += 1
+            elif char == ")":
+                depth -= 1
+                if depth == 0:
+                    return text[start + len(prefix):index].strip()
+            index += 1
+    return "<expression>"
+
+
+def validate_gate_resolution(text: str, gate: str, decision_id: str) -> list[str]:
+    """AI-24 recipient_notices.switches.gate_decisions: the id names exactly one decision-log row of Type
+    `Gate resolution` for GATE-004 or GATE-007, in the format the Worker checks. A `Gate scoping` row admits the pilot
+    deploy (gate-decision), never the recipient notices."""
+    pattern = NOTICE_GATE_DECISION_ID.get(gate)
+    if pattern is None:
+        return [f"unsupported gate GATE-{gate}"]
+    if not decision_id or not pattern.match(decision_id):
+        return [f"the GATE-{gate} decision id is missing or malformed (GATE-{gate}-...)"]
+    matches = [r for r in decision_log_rows(text) if len(r) >= len(DECISION_LOG_HEADER) and r[1] == decision_id]
+    if not matches:
+        return [f"decision {decision_id} is not recorded in the decision-log table"]
+    if len(matches) > 1:
+        return [f"decision {decision_id} appears {len(matches)} times in the decision-log table"]
+    if matches[0][2] != GATE_RESOLUTION_TYPE:
+        return [f"decision {decision_id} has Type '{matches[0][2]}', not '{GATE_RESOLUTION_TYPE}'"]
+    return []
+
+
+def _email_events_phase(ctx: Context) -> Any:
+    parameter = (ctx.templates.get(EMAIL_EVENTS_TEMPLATE, {}).get("parameters", {}) or {}).get(EMAIL_EVENTS_PHASE_PARAMETER)
+    return parameter.get("defaultValue") if isinstance(parameter, dict) else None
+
+
+def guard_28_recipient_notice_switches(ctx: Context) -> GuardResult:
+    """AI-08 NTF-008 "every switch stays off": no recipient-notice switch, no real provider, no
+    Locations__NoticeKeyProtector=AzureKeyVault (W4) and no emailEventsPhase=subscribe unless the Worker's
+    Notifications__RecipientNotices__Gate004DecisionId and Gate007DecisionId name decision-log rows of Type
+    `Gate resolution` (W11 item 7). Gate ids that are set must name such rows whatever else is set."""
+    failures: list[str] = []
+    turned_on: list[str] = []
+    switches = {key.casefold(): key for key in RECIPIENT_NOTICE_SWITCHES}
+    providers = {key.casefold(): key for key in RECIPIENT_NOTICE_PROVIDERS}
+    gate_settings = {key.casefold(): gate for gate, key in RECIPIENT_NOTICE_GATE_SETTINGS.items()}
+    gate_ids: dict[str, str | None] = {gate: None for gate in RECIPIENT_NOTICE_GATE_SETTINGS}
+    for workload in ctx.workloads:
+        for key, (_, value) in workload.env.items():
+            folded, setting = key.casefold(), value.strip().casefold()
+            if folded in switches and setting != "false":
+                turned_on.append(f"{workload.name} {key}={value}")
+            elif folded in providers and setting != "disabled":
+                turned_on.append(f"{workload.name} {key}={value}")
+            elif folded == NOTICE_KEY_PROTECTOR.casefold() and setting != "disabled":
+                turned_on.append(f"{workload.name} {key}={value}")
+            elif folded in gate_settings:
+                if workload.name != WORKER_APP:
+                    failures.append(f"{workload.name} sets {key}; only the Worker reads the gate decision ids")
+                else:
+                    gate_ids[gate_settings[folded]] = value
+    phase = _email_events_phase(ctx)
+    if phase != "none":
+        turned_on.append(f"events.bicep {EMAIL_EVENTS_PHASE_PARAMETER}={phase}")
+    resolutions = {gate: validate_gate_resolution(ctx.decision_log, gate, (decision or "").strip())
+                   for gate, decision in gate_ids.items()}
+    for gate, decision in gate_ids.items():
+        if decision is not None and resolutions[gate]:
+            failures.append(f"{RECIPIENT_NOTICE_GATE_SETTINGS[gate]}: {'; '.join(resolutions[gate])}")
+    if turned_on and any(resolutions.values()):
+        failures.append(f"recipient notices are turned on ({', '.join(turned_on)}) without the GATE-004 and GATE-007 "
+                        f"resolution rows in {RECIPIENT_NOTICE_GATE_SETTINGS['004']} and {RECIPIENT_NOTICE_GATE_SETTINGS['007']}; "
+                        "only the gate-closing change turns them on (AI-08 NTF-008)")
+    detail = ("every switch off, every provider Disabled, no notice copy, emailEventsPhase none" if not turned_on
+              else f"turned on with both Gate resolution rows: {', '.join(turned_on)}")
+    return _result(28, "recipient notices stay off without the GATE-004 and GATE-007 resolution rows", failures, detail)
+
+
+def _identity_of(ctx: Context, template: str, assignment: dict[str, Any]) -> str | None:
+    text = json.dumps((assignment.get("properties", {}) or {}).get("principalId", ""))
+    match = IDENTITY_REFERENCE.search(text)
+    if not match:
+        return None
+    if match.group(1):
+        return match.group(1)
+    names = (ctx.templates[template].get("variables", {}) or {}).get("identityNames")
+    index = int(match.group(2))
+    return names[index] if isinstance(names, list) and index < len(names) else None
+
+
+def _role_of(ctx: Context, template: str, assignment: dict[str, Any]) -> str | None:
+    definition = str((assignment.get("properties", {}) or {}).get("roleDefinitionId", ""))
+    return _custom_role_of(definition) or _resolve_role_id(definition, ctx.templates[template].get("variables", {}) or {})
+
+
+def _workflow_steps(ctx: Context) -> list[dict[str, Any]]:
+    deploy = (ctx.workflow.get("jobs", {}) or {}).get("deploy", {}) or {}
+    return [s for s in deploy.get("steps", []) or [] if isinstance(s, dict)]
+
+
+def guard_29_recipient_notice_wiring(ctx: Context) -> GuardResult:
+    """AI-08 NTF-008 roles and secrets (W5, W6, W7, W11 items 1 to 4 and 8): recipient-notice-kek with Key Vault Reader
+    for the API and the owner's unwrap-only role for the Worker, scoped to that key alone; the owner's e-mail sender role
+    for the Worker alone, scoped to the Communication Services resource named by PILOT_ACS_NAME; both custom roles looked
+    up by exact name and checked action by action before stage 1; PILOT_ACS_NAME read once, validated before Azure and
+    checked to exist after login; the seven secrets nobody types generated once in window 1 and the three Meta values
+    required in window 2."""
+    failures: list[str] = []
+    assignments = [(template, resource) for template, resource in ctx.resources("Microsoft.Authorization/roleAssignments")]
+    notice_key = [(t, a) for t, a in assignments if f"'{RECIPIENT_NOTICE_KEY}'" in str(a.get("scope", ""))]
+    found = sorted((t, _identity_of(ctx, t, a) or "?", _role_of(ctx, t, a) or "?") for t, a in notice_key)
+    expected = sorted([("security", API_IDENTITY, KEY_VAULT_READER_ROLE), ("security", WORKER_IDENTITY, "recipient-notice-unwrap")])
+    if found != expected:
+        failures.append(f"{RECIPIENT_NOTICE_KEY} must be held exactly by {API_IDENTITY} (Key Vault Reader, wrap in process) and "
+                        f"{WORKER_IDENTITY} (the custom role {CUSTOM_ROLES['recipient-notice-unwrap'].name}), found {found}")
+    acs = [(t, a) for t, a in assignments if ACS_TYPE.casefold() in str(a.get("scope", "")).casefold()]
+    found_acs = sorted((t, _identity_of(ctx, t, a) or "?", _role_of(ctx, t, a) or "?") for t, a in acs)
+    if found_acs != [("apps", WORKER_IDENTITY, "email-sender")] or \
+            any(f"parameters('{ACS_NAME_PARAMETER}')" not in str(a.get("scope", "")) for _, a in acs):
+        failures.append(f"the Communication Services resource (parameters('{ACS_NAME_PARAMETER}')) must be held only by "
+                        f"{WORKER_IDENTITY} with the custom role {CUSTOM_ROLES['email-sender'].name}, found {found_acs}")
+    for template, assignment in assignments:
+        role = _role_of(ctx, template, assignment)
+        scope = str(assignment.get("scope", ""))
+        if role == KEY_VAULT_READER_ROLE and f"'{RECIPIENT_NOTICE_KEY}'" not in scope:
+            failures.append(f"{template} assigns Key Vault Reader outside {RECIPIENT_NOTICE_KEY}")
+        if role == "recipient-notice-unwrap" and f"'{RECIPIENT_NOTICE_KEY}'" not in scope:
+            failures.append(f"{template} assigns {CUSTOM_ROLES['recipient-notice-unwrap'].name} outside {RECIPIENT_NOTICE_KEY}")
+        if role == "email-sender" and ACS_TYPE.casefold() not in scope.casefold():
+            failures.append(f"{template} assigns {CUSTOM_ROLES['email-sender'].name} outside the Communication Services resource")
+        if "'pii-kek'" in scope and _identity_of(ctx, template, assignment) == WORKER_IDENTITY:
+            failures.append("the Worker holds a role on pii-kek; it opens notice copies with the recipient-notice key only")
+    security_parameters = ctx.templates.get("security", {}).get("parameters", {}) or {}
+    apps_parameters = ctx.templates.get("apps", {}).get("parameters", {}) or {}
+    for template, parameters, name in (("security", security_parameters, CUSTOM_ROLES["recipient-notice-unwrap"].parameter),
+                                       ("apps", apps_parameters, CUSTOM_ROLES["email-sender"].parameter),
+                                       ("apps", apps_parameters, ACS_NAME_PARAMETER),
+                                       ("apps", apps_parameters, RECIPIENT_NOTICE_KEY_PARAMETER)):
+        definition = parameters.get(name)
+        if not isinstance(definition, dict) or definition.get("type") != "string" or "defaultValue" in definition:
+            failures.append(f"{template}.bicep must take {name} as a string parameter without a default")
+    output = ((ctx.templates.get("security", {}).get("outputs", {}) or {}).get(RECIPIENT_NOTICE_KEY_PARAMETER, {}) or {}).get("value")
+    if not isinstance(output, str) or RECIPIENT_NOTICE_KEY not in output:
+        failures.append(f"security.bicep must output {RECIPIENT_NOTICE_KEY_PARAMETER}, the versionless URI of {RECIPIENT_NOTICE_KEY}")
+
+    # The workflow: names, lookups and parameters.
+    env = ctx.workflow.get("env", {}) or {}
+    for key in RECIPIENT_NOTICE_CUSTOM_ROLES:
+        role = CUSTOM_ROLES[key]
+        if env.get(role.workflow_variable) != role.name:
+            failures.append(f"workflow env {role.workflow_variable} must be exactly '{role.name}'")
+    steps = _workflow_steps(ctx)
+    run = lambda step: str(step.get("run", ""))  # noqa: E731
+    step_env = lambda step: step.get("env", {}) or {}  # noqa: E731
+    login = _step_index(steps, lambda s: "azure/login" in str(s.get("uses", "")))
+    roles = _step_index(steps, lambda s: s.get("id") == "roles")
+    security = _step_index(steps, lambda s: s.get("id") == "security")
+    apps = _step_index(steps, lambda s: '"${RUNNER_TEMP}/arm/apps.json"' in run(s))
+    if len(roles) != 1 or not login or len(security) != 1 or not login[0] < roles[0] < security[0]:
+        failures.append("one step (id roles) must look up the recipient-notice custom roles after azure/login and before stage 1")
+    else:
+        text = run(steps[roles[0]])
+        for needle in ('custom-role-check --role "${role}" --definitions-json "${file}" --scope "${scope}"',
+                       'check_role unwrap_role recipient-notice-unwrap "${RECIPIENT_NOTICE_UNWRAP_ROLE}"',
+                       'check_role sender_role email-sender "${EMAIL_SENDER_ROLE}"',
+                       'az role definition list --custom-role-only true --name "${name}" --scope "${scope}"'):
+            if needle not in text:
+                failures.append(f"the roles step must look up and check each custom role by exact name: {needle}")
+    if len(security) == 1 and (step_env(steps[security[0]]).get("UNWRAP_ROLE") != "${{ steps.roles.outputs.unwrap_role }}"
+                               or '"recipientNoticeUnwrapRoleDefinitionId=${UNWRAP_ROLE}"' not in run(steps[security[0]])
+                               or RECIPIENT_NOTICE_KEY_PARAMETER not in run(steps[security[0]])):
+        failures.append("stage 1 must pass recipientNoticeUnwrapRoleDefinitionId from the roles step and export recipientNoticeKeyUri")
+    if len(apps) != 1 or step_env(steps[apps[0]]).get("SENDER_ROLE") != "${{ steps.roles.outputs.sender_role }}" \
+            or step_env(steps[apps[0]]).get("NOTICE_KEY_URI") != "${{ steps.security.outputs.recipientNoticeKeyUri }}" \
+            or any(needle not in run(steps[apps[0]]) for needle in (
+                '"recipientNoticeKeyUri=${NOTICE_KEY_URI}"', '"acsName=${PILOT_ACS_NAME}"',
+                '"acsEmailSenderRoleDefinitionId=${SENDER_ROLE}"')):
+        failures.append("stage 4 must pass recipientNoticeKeyUri, acsName (PILOT_ACS_NAME) and acsEmailSenderRoleDefinitionId")
+    deploy_env = ((ctx.workflow.get("jobs", {}) or {}).get("deploy", {}) or {}).get("env", {}) or {}
+    if deploy_env.get(ACS_NAME_VARIABLE) != f"${{{{ vars.{ACS_NAME_VARIABLE} }}}}" or ctx.workflow_text.count(f"vars.{ACS_NAME_VARIABLE}") != 1:
+        failures.append(f"the deploy job must read {ACS_NAME_VARIABLE} once, into its env")
+    validate = _step_index(steps, lambda s: ACS_NAME_CHECK in run(s))
+    if len(validate) != 1 or not login or validate[0] > login[0]:
+        failures.append(f"the deploy job must validate {ACS_NAME_VARIABLE} before azure/login: {ACS_NAME_CHECK}")
+    exists = _step_index(steps, lambda s: "az resource show" in run(s) and f"--resource-type {ACS_TYPE}" in run(s)
+                         and '--name "${PILOT_ACS_NAME}"' in run(s) and s.get("id") != "generated")
+    if len(exists) != 1 or not login or not roles or not login[0] < exists[0] < roles[0]:
+        failures.append(f"one step after azure/login and before the roles step must check that {ACS_NAME_VARIABLE} names an existing {ACS_TYPE}")
+    generated = [s for s in steps if s.get("id") == "generated"]
+    text = run(generated[0]) if len(generated) == 1 else ""
+    loop = re.search(r"for name in ((?:[a-z0-9-]+\s*(?:\\\n)?\s*)+); do", text)
+    looped = set(loop.group(1).replace("\\", " ").split()) if loop else set()
+    singles = set(re.findall(r"if ! has_secret ([a-z0-9-]+); then", text))
+    if looped | (singles & set(RECIPIENT_NOTICE_GENERATED_SECRETS)) != set(RECIPIENT_NOTICE_GENERATED_SECRETS) \
+            or 'put_secret "${name}"' not in text or "kv-firewall" in text:
+        failures.append(f"window 1 (step id generated) must generate {list(RECIPIENT_NOTICE_GENERATED_SECRETS)} once when missing")
+    if any(secret in text for secret in RECIPIENT_NOTICE_OWNER_SECRETS if secret != WHATSAPP_APP_SECRET) or \
+            re.search(rf"\b{WHATSAPP_APP_SECRET}\b(?!-previous)", text):
+        failures.append(f"window 1 must never generate the owner's Meta values {list(RECIPIENT_NOTICE_OWNER_SECRETS)}")
+    connections = [s for s in steps if s.get("id") == "connections"]
+    owner_check = f"for name in {' '.join(RECIPIENT_NOTICE_OWNER_SECRETS)}; do"
+    if len(connections) != 1 or owner_check not in run(connections[0]) or 'if ! has_secret "${name}"; then' not in run(connections[0]):
+        failures.append(f"window 2 (step id connections) must stop while Key Vault lacks one of {list(RECIPIENT_NOTICE_OWNER_SECRETS)}")
+    mapped = set(REQUIRED_SECRET_MAPPINGS[API_APP].values()) | set(REQUIRED_SECRET_MAPPINGS[WORKER_APP].values())
+    unwritten = sorted((WEBHOOK_SECRETS | SHARED_NON_CREDENTIAL_SECRETS | {WHATSAPP_TOKEN_SECRET, ACS_RESOURCE_ID_SECRET})
+                       - {TRACKING_LINK_SECRET} - set(RECIPIENT_NOTICE_GENERATED_SECRETS) - set(RECIPIENT_NOTICE_OWNER_SECRETS))
+    if unwritten or not set(RECIPIENT_NOTICE_GENERATED_SECRETS) | set(RECIPIENT_NOTICE_OWNER_SECRETS) <= mapped:
+        failures.append(f"every recipient-notice secret must be mapped and either generated or written by the owner, found {unwritten}")
+    return _result(29, "recipient-notice key, ACS role, custom roles and secrets (NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31)",
+                   failures, "API reads and Worker unwraps recipient-notice-kek, Worker sends e-mail with the custom role, "
+                   "custom roles checked, seven secrets generated and three Meta values required")
+
+
+def guard_30_email_events_subscription(ctx: Context) -> GuardResult:
+    """O8 and W11 items 5 and 6: events.bicep declares the Communication Services system topic and its e-mail delivery
+    report subscription only behind emailEventsPhase (none or subscribe, committed in the template): Event Grid schema,
+    one event per batch, only EmailDeliveryReportReceived, the endpoint https://paquetenvia.com/api/v1/messaging/email/events
+    and the Key Vault secret as the static secret header. The workflow reads the phase from the compiled template (never
+    an input) after the smoke test, deploys only with subscribe (apex bound, secret read in window 3), and prints both
+    webhook URLs. subscribe also needs the API's Messaging__Email__Events__Enabled=true."""
+    failures: list[str] = []
+    template = ctx.templates.get(EMAIL_EVENTS_TEMPLATE, {})
+    parameters = template.get("parameters", {}) or {}
+    phase = parameters.get(EMAIL_EVENTS_PHASE_PARAMETER)
+    if not isinstance(phase, dict) or phase.get("type") != "string" or phase.get("allowedValues") != EMAIL_EVENTS_PHASES \
+            or phase.get("defaultValue") not in EMAIL_EVENTS_PHASES:
+        failures.append(f"events.bicep must take {EMAIL_EVENTS_PHASE_PARAMETER} with the allowed values {EMAIL_EVENTS_PHASES} "
+                        "and one of them as its committed default")
+    if (parameters.get("emailEventsSecret", {}) or {}).get("type") != "securestring":
+        failures.append("events.bicep must take emailEventsSecret as a @secure() parameter")
+    topics = ctx.resources("Microsoft.EventGrid/systemTopics")
+    subscriptions = ctx.resources("Microsoft.EventGrid/systemTopics/eventSubscriptions")
+    if len(topics) != 1 or len(subscriptions) != 1:
+        failures.append(f"events.bicep must declare one system topic and one subscription, found {len(topics)} and {len(subscriptions)}")
+    for _, topic in topics:
+        properties = topic.get("properties", {}) or {}
+        if topic.get("condition") != EMAIL_EVENTS_CONDITION or topic.get("location") != "global" \
+                or properties.get("topicType") != ACS_TOPIC_TYPE \
+                or f"parameters('{ACS_NAME_PARAMETER}')" not in str(properties.get("source", "")) \
+                or ACS_TYPE not in str(properties.get("source", "")):
+            failures.append(f"the system topic must be global, of type {ACS_TOPIC_TYPE}, on the Communication Services resource "
+                            f"(parameters('{ACS_NAME_PARAMETER}')), and exist only when {EMAIL_EVENTS_CONDITION}")
+    for _, subscription in subscriptions:
+        properties = subscription.get("properties", {}) or {}
+        destination = properties.get("destination", {}) or {}
+        webhook = destination.get("properties", {}) or {}
+        mapping = [{"name": EMAIL_EVENTS_HEADER, "type": "Static",
+                    "properties": {"value": "[parameters('emailEventsSecret')]", "isSecret": True}}]
+        if subscription.get("condition") != EMAIL_EVENTS_CONDITION:
+            failures.append(f"the subscription must exist only when {EMAIL_EVENTS_CONDITION}")
+        if destination.get("endpointType") != "WebHook" or webhook.get("endpointUrl") != EMAIL_EVENTS_ENDPOINT:
+            failures.append(f"the subscription must deliver to the webhook {EMAIL_EVENTS_ENDPOINT}")
+        if webhook.get("maxEventsPerBatch") != 1:
+            failures.append("the subscription must deliver one event per batch (AI-05 receiveAcsEmailEvents, batching off)")
+        if webhook.get("deliveryAttributeMappings") != mapping:
+            failures.append(f"the subscription must send exactly the static secret header {EMAIL_EVENTS_HEADER} from emailEventsSecret")
+        if properties.get("filter") != {"includedEventTypes": [EMAIL_EVENTS_TYPE]}:
+            failures.append(f"the subscription must filter exactly {EMAIL_EVENTS_TYPE}")
+        if properties.get("eventDeliverySchema") != "EventGridSchema":
+            failures.append("the subscription must use the Event Grid event schema")
+    if _email_events_phase(ctx) == "subscribe" and ctx.workload(API_APP).value("Messaging__Email__Events__Enabled") != "true":
+        failures.append("emailEventsPhase=subscribe needs the API's Messaging__Email__Events__Enabled=true: Event Grid validates "
+                        "the subscription against that webhook")
+
+    steps = _workflow_steps(ctx)
+    run = lambda step: str(step.get("run", ""))  # noqa: E731
+    phase_step = _step_index(steps, lambda s: s.get("id") == "events_phase")
+    smoke = _step_index(steps, lambda s: "Same-origin routing smoke test passed" in run(s))
+    deploy = _step_index(steps, lambda s: '"${RUNNER_TEMP}/arm/events.json"' in run(s) and "az deployment group create" in run(s))
+    if "emailEventsPhase=" in ctx.workflow_text or "--email-events-phase" in ctx.workflow_text \
+            or '"emailEventsPhase"' in ctx.workflow_text:
+        failures.append("the workflow must never pass emailEventsPhase; its value is the committed default of events.bicep")
+    if len(phase_step) != 1 or len(smoke) != 1 or phase_step[0] < smoke[0] or \
+            """jq -r '.parameters.emailEventsPhase.defaultValue' "${RUNNER_TEMP}/arm/events.json\"""" not in run(steps[phase_step[0]]) or \
+            '[[ "${CUSTOM_DOMAIN_PHASE}" == "bind" ]]' not in run(steps[phase_step[0]]):
+        failures.append("one step (id events_phase) after the smoke test must read emailEventsPhase from the compiled "
+                        "events.json and require custom_domain_phase=bind for subscribe")
+    subscribe = "steps.events_phase.outputs.phase == 'subscribe'"
+    windows = [s for s in steps if "kv-firewall.sh" in run(s) and subscribe in str(s.get("if", ""))]
+    if sorted(run(s).split()[2] for s in windows) != ["close", "open"] or \
+            not any(str(s.get("if", "")).startswith("always() && ") and "close" in run(s) for s in windows):
+        failures.append("window 3 must open the Key Vault firewall only for subscribe and always close it")
+    if len(deploy) != 1 or subscribe not in str(steps[deploy[0]].get("if", "")) or \
+            '--parameters "@${RUNNER_TEMP}/events.parameters.json"' not in run(steps[deploy[0]]) or \
+            (phase_step and deploy[0] < phase_step[0]):
+        failures.append("stage 6 must deploy events.json only for subscribe, after the phase step, with the shredded parameters file")
+    summary = [s for s in steps if "GITHUB_STEP_SUMMARY" in run(s)]
+    if len(summary) != 1 or META_CALLBACK_SUMMARY not in run(summary[0]) or EMAIL_EVENTS_SUMMARY not in run(summary[0]):
+        failures.append(f"the always-run summary must print {EMAIL_EVENTS_SUMMARY} and the Meta callback {META_CALLBACK_SUMMARY}")
+    if f"PILOT_HOST: {PILOT_HOST}" not in ctx.workflow_text:
+        failures.append(f"the workflow must pin PILOT_HOST: {PILOT_HOST}")
+    return _result(30, "Event Grid e-mail events behind emailEventsPhase (O8; NTF-RECIPIENT-NOTICE-PILOT-WIRING-2026-10-31)",
+                   failures, f"emailEventsPhase={_email_events_phase(ctx)}; subscription pinned to {EMAIL_EVENTS_ENDPOINT}")
+
+
+def custom_role_failures(role_key: str, definitions: Any, scope: str) -> list[str]:
+    """W5 and W6: the custom role found by exact name holds exactly the reviewed actions and data actions, no not-action,
+    no condition, and only the pilot resource group as assignable scope. A failure never quotes an id or a scope."""
+    role = CUSTOM_ROLES.get(role_key)
+    if role is None or role_key not in RECIPIENT_NOTICE_CUSTOM_ROLES:
+        return [f"unknown recipient-notice custom role {role_key}"]
+    if not isinstance(definitions, list) or len(definitions) != 1 or not isinstance(definitions[0], dict):
+        count = len(definitions) if isinstance(definitions, list) else "no list of"
+        return [f"custom role '{role.name}' must exist exactly once in the pilot resource group, found {count} "
+                "(guia-owner-avisos.md, paso 2)"]
+    definition = definitions[0]
+    failures = []
+    if definition.get("roleName") != role.name:
+        failures.append(f"the role found is not named exactly '{role.name}'")
+    if definition.get("roleType") not in (None, "CustomRole"):
+        failures.append(f"'{role.name}' must be a custom role")
+    permissions = definition.get("permissions")
+    if not isinstance(permissions, list) or len(permissions) != 1 or not isinstance(permissions[0], dict):
+        return failures + [f"'{role.name}' must have exactly one permission block"]
+    block = permissions[0]
+    for field_name, expected in (("actions", role.actions), ("notActions", ()), ("dataActions", role.data_actions),
+                                 ("notDataActions", ())):
+        found = block.get(field_name) or []
+        if not isinstance(found, list) or sorted(str(a).casefold() for a in found) != sorted(a.casefold() for a in expected):
+            failures.append(f"'{role.name}' {field_name} must be exactly {list(expected)}, found {found}")
+        if any(fragment in str(a).casefold() for a in (found if isinstance(found, list) else []) for fragment in FORBIDDEN_CUSTOM_ROLE_ACTIONS):
+            failures.append(f"'{role.name}' {field_name} must never grant listKeys, regenerateKey or a wildcard")
+    if block.get("condition"):
+        failures.append(f"'{role.name}' must have no condition")
+    scopes = definition.get("assignableScopes")
+    if not isinstance(scopes, list) or [str(s).rstrip("/").casefold() for s in scopes] != [scope.rstrip("/").casefold()]:
+        failures.append(f"'{role.name}' must be assignable only in the pilot resource group")
+    return failures
+
+
 def guard_20_guard_tool_dependencies(ctx: Context) -> GuardResult:
     """Every job that runs a guard tool (both import PyYAML at module scope) installs the pinned PyYAML
     with actions/setup-python first, in the same job."""
@@ -1882,6 +2420,9 @@ GUARDS: tuple[Callable[[Context], GuardResult], ...] = (
     guard_25_postgres_server_setting,
     guard_26_revision_check,
     guard_27_image_reuse,
+    guard_28_recipient_notice_switches,
+    guard_29_recipient_notice_wiring,
+    guard_30_email_events_subscription,
 )
 
 
@@ -2396,6 +2937,19 @@ def command_postgres_adoption_check(args: argparse.Namespace) -> int:
     return 1 if failures else 0
 
 
+def command_custom_role_check(args: argparse.Namespace) -> int:
+    """az role definition list output -> PASS only when the role holds exactly its reviewed permissions."""
+    try:
+        definitions = json.loads(Path(args.definitions_json).read_text(encoding="utf-8"))
+        failures = custom_role_failures(args.role, definitions, args.scope)
+    except (OSError, ValueError) as error:
+        failures = [f"cannot read the role definitions: {type(error).__name__}"]
+    for failure in failures:
+        print(f"STOP_FOR_OWNER_DECISION: {failure}")
+    print(f"ENV001_CUSTOM_ROLE_{args.role.upper().replace('-', '_')}=" + ("FAIL" if failures else "PASS"))
+    return 1 if failures else 0
+
+
 def command_scram_verifier(_: argparse.Namespace) -> int:
     password = sys.stdin.read().rstrip("\n")
     if len(password) < 32:
@@ -2444,6 +2998,11 @@ def build_parser() -> argparse.ArgumentParser:
     adoption.add_argument("--resource-group", required=True)
     adoption.add_argument("--region", default=PILOT_REGION)
     adoption.set_defaults(func=command_postgres_adoption_check)
+    role = sub.add_parser("custom-role-check", help="require a recipient-notice custom role to hold exactly its reviewed actions")
+    role.add_argument("--role", required=True, choices=RECIPIENT_NOTICE_CUSTOM_ROLES)
+    role.add_argument("--definitions-json", required=True, help="az role definition list output for the role's exact name")
+    role.add_argument("--scope", required=True, help="the pilot resource group id, the only assignable scope")
+    role.set_defaults(func=command_custom_role_check)
     return parser
 
 
