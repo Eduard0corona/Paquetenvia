@@ -34,13 +34,13 @@
     },
     {
       "path": "CHANGELOG.md",
-      "bytes": 273752,
-      "sha256": "f56414d5bb07e96d0468f19b0a0b78eb4b62ebe09a0cc010a945f2e21d8a3492"
+      "bytes": 276282,
+      "sha256": "6309ec8d24c003f2e8883c0925f917a10384a374f8e07ee3d7431bc7a6f9b374"
     },
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "dd8392b7e5152862475fe07762b2d0d67671afc1bac921ba46a12141a6487563"
+      "sha256": "892aa92f350a69379716f4f7f01715d0429ad53c406724acda304d8341ea6093"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
@@ -74,8 +74,8 @@
     },
     {
       "path": "decision-log.md",
-      "bytes": 643440,
-      "sha256": "666676df8ebd32ba6faa7312722320ae6d15c78c26b6cfea40c256a3000d2583"
+      "bytes": 651650,
+      "sha256": "facb6950ebc8d1dae0e74b3e08477232dc9f0c5a97c1f53c4d028b703a1133cb"
     },
     {
       "path": "docs/AI-14_TECH_REFERENCES.md",
