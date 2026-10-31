@@ -384,16 +384,17 @@ cambios". Hazlo al final, con los pasos 1 a 7 hechos. Cloud Shell trae `az` (con
 El what-if debe describir lo que desplegará la fusión, no la rama sola: la rama no trae los valores del primer
 despliegue que fusionaste en `development` (`web.parameters.json`, `observability.parameters.json`). Por eso usa la
 **referencia de fusión del PR de NTF-008** (`pull/<número>/merge`, la que GitHub arma con la rama encima del
-`development` de hoy) y comprueba antes que ya trae tus valores. Si una de las dos comprobaciones falla, `development`
-todavía no los tiene o el PR tiene un conflicto: detente y avísale al orquestador.
+`development` de hoy) y comprueba antes que ya trae tus valores. Si la comprobación imprime un nombre de archivo, ese
+archivo todavía tiene `OWNER_DECISION_REQUIRED`; si `git fetch` falla, el PR tiene un conflicto. En los dos casos,
+detente y avísale al orquestador.
 
 ```bash
 gh auth login
 gh repo clone Eduard0corona/Paquetenvia -- --depth 1 && cd Paquetenvia
 PR="$(gh pr list --repo Eduard0corona/Paquetenvia --head feat/ntf-008-pilot-notice-wiring --json number --jq '.[0].number')"
 git fetch --depth 1 origin "pull/${PR}/merge" && git checkout --detach FETCH_HEAD
-python3 tools/azr-001/env001_pilot_guards.py web-check --file deploy/azure/pilot/web.parameters.json
-python3 tools/azr-001/env001_pilot_guards.py observability-check --file deploy/azure/pilot/observability.parameters.json
+grep -l OWNER_DECISION_REQUIRED deploy/azure/pilot/web.parameters.json deploy/azure/pilot/observability.parameters.json \
+  || echo "La referencia de fusión trae los valores del primer despliegue: sigue."
 
 UNWRAP_ROLE="$(az role definition list --custom-role-only true --name "Paquetenvia Pilot Recipient Notice Unwrap" --scope "$RG_ID" --query "[0].id" -o tsv)"
 SENDER_ROLE="$(az role definition list --custom-role-only true --name "Paquetenvia Pilot Email Sender" --scope "$RG_ID" --query "[0].id" -o tsv)"
