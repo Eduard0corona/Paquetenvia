@@ -28,7 +28,7 @@ var roles = {
   kvOfficer: 'b86a8fe4-44ce-4948-aee5-eccb2c155cd7'
   keyVaultCryptoServiceEncryptionUser: 'e147488a-f6f5-4113-8e2d-b22465e65bf6'
   // Key Vault Reader: keys/read returns the public part of an RSA key, which is all the API needs to wrap in process.
-  keyVaultReader: '21090545-7ca7-4776-b22c-e363652d74d2'
+  kvReader: '21090545-7ca7-4776-b22c-e363652d74d2'
 }
 
 var addressSpace = '10.60.0.0/22'
@@ -244,10 +244,10 @@ resource workerDataProtectionKey 'Microsoft.Authorization/roleAssignments@2022-0
 // and never unwraps; the Worker only unwraps and reads its versions. Each role is scoped to the key alone, and the Worker
 // still holds nothing on pii-kek.
 resource apiRecipientNoticeKeyReader 'Microsoft.Authorization/roleAssignments@2022-04-01' = {
-  name: guid(recipientNoticeKey.id, identityNames[0], roles.keyVaultReader)
+  name: guid(recipientNoticeKey.id, identityNames[0], roles.kvReader)
   scope: recipientNoticeKey
   properties: {
-    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.keyVaultReader)
+    roleDefinitionId: subscriptionResourceId('Microsoft.Authorization/roleDefinitions', roles.kvReader)
     principalId: identities[0].properties.principalId
     principalType: 'ServicePrincipal'
   }

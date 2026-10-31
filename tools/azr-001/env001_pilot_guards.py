@@ -224,7 +224,8 @@ ALLOWED_ROLE_IDS = {
     # key and never a secret value (learn.microsoft.com built-in-roles/security, read 2026-10-31).
     "21090545-7ca7-4776-b22c-e363652d74d2": "Key Vault Reader",
 }
-KEY_VAULT_READER_ROLE = "21090545-7ca7-4776-b22c-e363652d74d2"
+# Looked up by name, so the role id is written once (above).
+KEY_VAULT_READER_ROLE = next(role_id for role_id, name in ALLOWED_ROLE_IDS.items() if name == "Key Vault Reader")
 
 
 @dataclass(frozen=True)

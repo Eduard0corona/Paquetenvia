@@ -3384,13 +3384,13 @@ class TemplateGuardTests(unittest.TestCase):
 
     def test_p29_each_key_role_belongs_to_one_host_and_one_key(self):
         def api_unwraps(t):
-            self.notice_assignment(t, "keyVaultReader")["properties"]["roleDefinitionId"] = (
+            self.notice_assignment(t, "kvReader")["properties"]["roleDefinitionId"] = (
                 "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('roles').keyVaultCryptoServiceEncryptionUser)]")
         self.assert_fails(29, self.context(api_unwraps), "recipient-notice-kek must be held exactly by")
 
         def worker_reader(t):
             self.notice_assignment(t, "recipientNoticeUnwrapRoleDefinitionId")["properties"]["roleDefinitionId"] = (
-                "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('roles').keyVaultReader)]")
+                "[subscriptionResourceId('Microsoft.Authorization/roleDefinitions', variables('roles').kvReader)]")
         self.assert_fails(29, self.context(worker_reader), "recipient-notice-kek must be held exactly by")
 
         def unwrap_on_the_pii_key(t):
@@ -3401,7 +3401,7 @@ class TemplateGuardTests(unittest.TestCase):
         self.assertIn("the Worker holds a role on pii-kek", failures)
 
         def reader_on_the_vault(t):
-            extra = copy.deepcopy(self.notice_assignment(t, "keyVaultReader"))
+            extra = copy.deepcopy(self.notice_assignment(t, "kvReader"))
             extra["scope"] = extra["scope"].replace("'recipient-notice-kek'", "'dataprotection-kek'")
             t["security"]["resources"].append(extra)
         self.assert_fails(29, self.context(reader_on_the_vault), "assigns Key Vault Reader outside recipient-notice-kek")
