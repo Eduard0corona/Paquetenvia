@@ -94,7 +94,9 @@
       "name": "WEB_TRACKING",
       "patterns": [
         "apps/web/src/tracking/**",
-        "apps/web/src/app/track/**"
+        "apps/web/src/app/track/**",
+        "apps/web/src/recipient-notices/**",
+        "apps/web/src/app/avisos/**"
       ],
       "jobs": [
         "web",
@@ -310,6 +312,21 @@
       ],
       "job_sets": [
         "BACKEND"
+      ]
+    },
+    {
+      "name": "IMAGE_BUILD_INPUT",
+      "patterns": [
+        "src/**",
+        "database/**",
+        "Paqueteria.sln",
+        "Directory.Build.props",
+        ".dockerignore",
+        "tools/Paqueteria.DatabaseMigrator/**",
+        "tools/Paqueteria.DevSeed/**"
+      ],
+      "jobs": [
+        "azr-static"
       ]
     },
     {

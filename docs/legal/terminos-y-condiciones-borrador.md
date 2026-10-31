@@ -365,23 +365,26 @@ foto: la app no envía la ubicación del teléfono.
 enviar. **[PENDIENTE: si una fotografía basta como prueba de entrega frente al Cliente, y si el repartidor puede dejar
 el paquete sin entregarlo en mano (por ejemplo, en la puerta o con un vecino). El sistema no distingue esos casos.]**
 
-9.3. Cada foto se guarda en almacenamiento privado, con la hora y una huella SHA-256, y pasa un análisis de malware
-antes de aceptarse. Una foto usada para reportar un intento fallido nunca cuenta como prueba de entrega.
+9.3. Antes de guardarla, el teléfono reduce cada foto (máximo 1600 px por lado) y le quita los metadatos; la evidencia
+es esa foto reducida. Cada foto se guarda en almacenamiento privado, con la hora y una huella SHA-256 de la foto
+reducida, y pasa un análisis de malware antes de aceptarse. Una foto usada para reportar un intento fallido nunca cuenta como prueba de entrega.
 
 9.4. Hoy ninguna pantalla deja ver ni descargar las fotografías: el personal solo puede consultar que existen, su
 tipo, su huella y su hora. **[PENDIENTE: cómo y en qué plazo se entrega al Cliente una copia de la foto en una
 reclamación. Hace falta un cambio técnico o un procedimiento manual.]**
 
-9.5. Las fotos pueden mostrar a la persona que recibe, el domicilio o placas de vehículos, y pueden llevar la ubicación
-GPS del teléfono en sus metadatos. Se tratan conforme al aviso de privacidad (sección 13). **[PENDIENTE: plazo de
-conservación; las reglas de retención proponen 12 meses después del fin del envío y hoy no se borran.]**
+9.5. Las fotos pueden mostrar a la persona que recibe, el domicilio o placas de vehículos. No llevan metadatos: el
+teléfono quita la ubicación GPS, el modelo del teléfono y la hora que la cámara guarda en la imagen. Se tratan conforme
+al aviso de privacidad (sección 13). **[PENDIENTE: plazo de conservación; las reglas de retención proponen 12 meses
+después del fin del envío y hoy no se borran.]**
 
 > **Nota para revisión.** Fotos: POD-001 (`docs/development/pod-001-secure-proof-upload.md`): JPEG o PNG de hasta
 > 10 MiB ("Foto de evidencia", `apps/web/src/driver/components/driver-proof-capture.tsx`). `recipient_name` se
 > rechaza (`FinalizeProofRequest`, aviso integral, sección 3.1). Evidencia de incidente excluida de la entrega (AI-04
 > `prohibited`). Lectura: `listOrderProofs` devuelve id, tipo, `sha256` y `captured_at`, nunca bytes ni URL
-> (API-INC-LIST-PROOFS-2026-09-29); `IProofDownloadService` existe pero ningún endpoint lo usa. EXIF: la app sube el
-> archivo sin recodificar (`apps/web/src/driver/proofs/proof-file.ts`). Retención:
+> (API-INC-LIST-PROOFS-2026-09-29); `IProofDownloadService` existe pero ningún endpoint lo usa. EXIF: la app reduce
+> la foto a un JPEG de máximo 1600 px por lado y calidad 80 % sin metadatos antes de calcular la huella
+> (`apps/web/src/driver/proofs/proof-photo-reduce.ts`, DRV-PROOF-PHOTO-REDUCE-2026-10-20). Retención:
 > [reglas de retención](reglas-de-retencion-borrador.md), sección 3.2.
 
 ---
@@ -391,14 +394,15 @@ conservación; las reglas de retención proponen 12 meses después del fin del e
 **Hoy el sistema no envía ningún aviso al destinatario.** Los conectores de WhatsApp y correo existen, pero están
 apagados y nada los usa. El personal puede ver y copiar el enlace de seguimiento de cada orden.
 
-El owner ya decidió cómo funcionarán cuando se construyan y se habiliten **[PENDIENTE: GATE-004 y GATE-007; ninguna de
-estas decisiones está construida ni registrada en el decision log]**. Este borrador las recoge para que el abogado
-revise las obligaciones del Cliente:
+El owner ya decidió cómo funcionarán cuando se construyan y se habiliten **[PENDIENTE: GATE-004 y GATE-007; de estas
+decisiones solo está construido el campo opcional del correo del destinatario (AI-08 NTF-002), y todas, incluido el
+texto del diálogo de "Detener avisos" (I4, registrada en NTF-RECIPIENT-NOTICE-PANEL-2026-10-30), ya están registradas en
+el decision log]**. Este borrador las recoge para que el abogado revise las obligaciones del Cliente:
 
 10.1. **Qué avisos.** Por WhatsApp: el enlace de seguimiento cuando la orden queda confirmada, "Va en camino" cuando el
 repartidor inicia el traslado, "No se pudo entregar" (sin el motivo; no se avisa si falla la recolección) y
-"Entregado". Por correo, los mismos avisos si se captura el correo del destinatario; hoy no se captura y se agregaría
-como campo opcional.
+"Entregado". Por correo, los mismos avisos si se captura el correo del destinatario, que es un campo opcional de la
+nueva orden (ya existe; hoy no se le envía nada).
 
 10.2. **Permiso del destinatario.** En la nueva orden habrá una casilla: "El destinatario aceptó recibir avisos de su
 envío por WhatsApp". Si no se marca, no se envía WhatsApp; sí se envía correo si hay. Queda registro de quién la marcó
@@ -408,19 +412,32 @@ y cuándo.
 recibir los avisos por WhatsApp. **[PENDIENTE: redacción de esta declaración, qué prueba debe conservar el Cliente y
 qué pasa si resulta falsa. Meta exige ese permiso y puede limitar o bloquear el número si se incumple.]**
 
-10.4. **Baja.** El destinatario puede dejar de recibir avisos respondiendo "BAJA" o tocando "No recibir avisos" en
-WhatsApp, con el enlace de cada correo, o pidiéndolo por teléfono para que el personal toque "Detener avisos" en la
-orden. La baja vale para todos los envíos que le manden, de cualquier empresa, porque el número de WhatsApp es uno
-solo.
+10.4. **Baja.** El destinatario puede dejar de recibir avisos de tres formas:
 
-10.5. **Contenido.** Los avisos no llevan marca ni el nombre del Cliente ni de nadie, tutean al destinatario y tienen un
-botón "Ver seguimiento". En WhatsApp aparece la razón social de la Plataforma como nombre; los correos salen de
+- **Por WhatsApp**, respondiendo "BAJA" o tocando "No recibir avisos". Recibe una sola vez la confirmación "Listo. Ya
+  no recibirás avisos en este número." Deja de recibir los avisos por WhatsApp.
+- **Por correo**, con el enlace de baja de cada correo. El enlace abre una página con un botón para darse de baja; al
+  tocarlo, la página confirma la baja en pantalla y no se le manda ningún mensaje. Deja de recibir los avisos por
+  correo.
+- **Por teléfono**, pidiéndolo para que el personal toque "Detener avisos" en la orden. Antes de detenerlos, el
+  personal ve: "El destinatario dejará de recibir avisos de todas las empresas. Durante el piloto no se puede
+  deshacer." Al destinatario no se le manda nada. Deja de recibir los avisos por WhatsApp y por correo.
+
+La baja vale para todos los envíos que le manden, de cualquier empresa, porque el número de WhatsApp es uno solo.
+Durante el piloto la baja es definitiva: no la deshace una casilla marcada en una orden nueva, ni el personal, ni un
+mensaje del destinatario. Si alguien la pidió por error, no hay forma de reactivarla. **[PENDIENTE: cómo podrá volver a
+recibir avisos quien se dio de baja. El owner lo revisa al terminar el piloto.]**
+
+10.5. **Contenido.** Los avisos no llevan marca ni el nombre del Cliente ni de nadie, y tutean al destinatario. Los de
+WhatsApp tienen el botón "Ver seguimiento". Los correos no tienen botones: llevan el enlace de seguimiento completo en
+una línea aparte. En WhatsApp aparece la razón social de la Plataforma como nombre; los correos salen de
 avisos@paquetenvia.com con el nombre "Seguimiento de envío" y sin buzón de respuestas. Solo se envían de 8:00 a 21:00,
 hora de Mazatlán; lo que ocurra fuera de ese horario sale a las 8:00, salvo que ya no aplique.
 
-10.6. **Dudas del destinatario.** Si el destinatario responde al WhatsApp, recibe una respuesta automática: "Este
-número solo envía avisos. Para dudas sobre tu envío contacta a quien te lo envió." **[PENDIENTE: obligación del
-Cliente de atender esas dudas, y medio de contacto con la Plataforma para casos que el Cliente no pueda resolver.]**
+10.6. **Dudas del destinatario.** Si el destinatario responde al WhatsApp con un mensaje que no sea una baja (sección
+10.4), recibe una respuesta automática: "Este número solo envía avisos. Para dudas sobre tu envío contacta a quien te
+lo envió." **[PENDIENTE: obligación del Cliente de atender esas dudas, y medio de contacto con la Plataforma para casos
+que el Cliente no pueda resolver.]**
 
 10.7. El Cliente no recibe avisos automáticos de sus propios envíos. **[PENDIENTE: cómo se entera el Cliente del
 estado. Hoy, por el enlace de seguimiento que le pase el personal.]**
@@ -433,8 +450,18 @@ estado. Hoy, por el enlace de seguimiento que le pase el personal.]**
 > ("Al quedar confirmada (Recommended)"), E4-P5 ("Sin motivo, con enlace (Recommended)"), E4-P6 ("De \"tú\", sin
 > nombres (Recommended)"), E4-P7 ("La razón social (Recommended)"), E4-P8 ("Las tres vías (Recommended)"), E4-P9
 > ("Respuesta automática (Recommended)"), E4-P10 ("8:00 a 21:00 (Recommended)"), E4-P11 ("Por los dos siempre
-> (Recommended)"), E4-P12 ("avisos@paquetenvia.com (Recommended)") y E4-P13 ("Fuera de este trabajo (Recommended)").
-> Canales: GATE-004-CHANNELS. Si la implementación cambia algo de esto, hay que revisar esta sección.
+> (Recommended)"), E4-P12 ("avisos@paquetenvia.com (Recommended)"), E4-P13 ("Fuera de este trabajo (Recommended)"),
+> E4-P14 ("Corregir los dos (Recommended)"), E4-P15 ("Sí, una línea (Recommended)"), E4-P16 ("No en el piloto
+> (Recommended)") e I4 ("Sí, decirlo (Recommended)"). E4 a E4-P16 están registradas en
+> NTF-RECIPIENT-NOTICES-2026-10-20 (decision log) y en `docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md`, puntos 5 y 7.
+> Textos de WhatsApp y cuerpos de correo: AI-24 `recipient_notices.templates`; el correo, que no tiene botones, dice
+> "en el enlace de abajo" donde WhatsApp dice "con el botón Ver seguimiento" (E4-P14). Confirmaciones y permanencia de
+> la baja: AI-24 `recipient_notices.opt_out` (`confirmation` y `permanence`) y AI-08 NTF-006. Página de baja del
+> correo: AI-07 `/avisos/baja/:token` (abrirla no cambia nada; un botón da la baja). "Detener avisos" detiene
+> los dos canales del contacto de la orden (`opt_out.dispatcher`). El texto de su diálogo es la decisión I4, registrada
+> con su pregunta en NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (T1 "Así, como I4 (Recommended)") y aplicada en AI-08
+> NTF-007; AI-07 (`/ops/orders/:id`, `recipient_notices.texts.dialog`) la fija. Canales:
+> GATE-004-CHANNELS. Si la implementación cambia algo de esto, hay que revisar esta sección.
 
 ---
 
@@ -677,8 +704,9 @@ estos términos:]**
 3. Cuál es la Norma Mexicana a que se refiere el artículo 76 BIS 1 de la Ley Federal de Protección al Consumidor.
 4. Las condiciones de Meta (WhatsApp Business) sobre el permiso del destinatario, citadas solo como las describió la
    pregunta del owner E4-P1; no se abrieron sus políticas.
-5. Las decisiones E4 a E4-P13 están en las respuestas literales del owner, pero todavía no en el decision log ni en el
-   código. Si su implementación cambia, la sección 10 cambia.
+5. Las decisiones E4 a E4-P16 están en el decision log (NTF-RECIPIENT-NOTICES-2026-10-20), pero todavía no en el
+   código; la I4 (el diálogo de "Detener avisos") quedó registrada en NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (T1). Si su
+   implementación cambia, la sección 10 cambia.
 6. Qué hará la Plataforma fuera del sistema: cobro del envío, entrega del efectivo al Cliente, atención de
    reclamaciones y copias de fotos. Nada de eso existe en el código.
 

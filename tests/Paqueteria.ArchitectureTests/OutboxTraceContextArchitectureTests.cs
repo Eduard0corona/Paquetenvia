@@ -24,7 +24,9 @@ public sealed partial class OutboxTraceContextArchitectureTests
         ["src/Modules/Dispatch/Dispatch.Infrastructure/ExternalOffers/PostgreSqlExternalOfferService.cs"] = 1,
         ["src/Modules/Dispatch/Dispatch.Infrastructure/Lifecycle/PostgreSqlAssignmentLifecycleReactor.cs"] = 1,
         ["src/Modules/Drivers/Drivers.Infrastructure/Locations/PostgreSqlDriverLocationIngestionService.cs"] = 1,
-        ["src/Modules/Orders/Orders.Infrastructure/Orders/PostgreSqlOrderTransitionService.cs"] = 3,
+        // orders.status-changed, orders.timeline-event-added, the D8 Dispatch reaction and (NTF-RECIPIENT-NOTICES-2026-10-20,
+        // AI-08 NTF-004) orders.recipient-notice-requested.
+        ["src/Modules/Orders/Orders.Infrastructure/Orders/PostgreSqlOrderTransitionService.cs"] = 4,
         ["src/Modules/Orders/Orders.Infrastructure/Orders/QuoteSnapshotToOrderCoordinator.cs"] = 1,
         ["src/Modules/Routing/Routing.Infrastructure/Routes/PostgreSqlRouteService.Persistence.cs"] = 1,
     };
@@ -37,10 +39,14 @@ public sealed partial class OutboxTraceContextArchitectureTests
     {
         ["security.append_operator_order_outbox"] =
             "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20261013000100_AddOutboxTraceContext.cs",
+        // NTF-RECIPIENT-NOTICES-2026-10-20: the recipient notice lane step installs the v2 emitter (derived from the OBS-003
+        // one) and the recipient notice expansion, both carrying the originating trace context.
         ["security.emit_notification_status_changed"] =
-            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261013000200_CarryOutboxTraceContext.cs",
+            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261020000100_AddRecipientNoticeLane.cs",
         ["security.expand_order_created_notifications"] =
             "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261013000200_CarryOutboxTraceContext.cs",
+        ["security.expand_recipient_notice_request"] =
+            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261020000100_AddRecipientNoticeLane.cs",
     };
 
     /// <summary>The claim readers (one reader loop per claim call) and the consumers (one activity per processing entry).</summary>
@@ -168,7 +174,10 @@ public sealed partial class OutboxTraceContextArchitectureTests
 
         // The current definer writes the caller's context; the Notifications writers copy the originating row's.
         Assert.StartsWith(AddOutboxTraceContext.OutboxFunctionSql, latest["security.append_operator_order_outbox"], StringComparison.Ordinal);
-        Assert.StartsWith(CarryOutboxTraceContext.EmitSql, latest["security.emit_notification_status_changed"], StringComparison.Ordinal);
+        Assert.StartsWith(AddRecipientNoticeLane.EmitSql, latest["security.emit_notification_status_changed"], StringComparison.Ordinal);
+        Assert.StartsWith(AddRecipientNoticeLane.ExpandSql, latest["security.expand_recipient_notice_request"], StringComparison.Ordinal);
+        Assert.Contains("p_occurred_at,p_occurred_at,v_trace_parent);", AddRecipientNoticeLane.EmitSql, StringComparison.Ordinal);
+        Assert.Contains("v_available_at,v_occurred_at,v_source.trace_parent);", AddRecipientNoticeLane.ExpandSql, StringComparison.Ordinal);
         Assert.StartsWith(CarryOutboxTraceContext.ExpandSql, latest["security.expand_order_created_notifications"], StringComparison.Ordinal);
         Assert.Contains("last_error,created_at,processed_at,trace_parent)", AddOutboxTraceContext.OutboxFunctionSql, StringComparison.Ordinal);
         Assert.Contains("p_occurred_at,p_occurred_at,v_trace_parent);", CarryOutboxTraceContext.EmitSql, StringComparison.Ordinal);
@@ -178,10 +187,22 @@ public sealed partial class OutboxTraceContextArchitectureTests
         Assert.Contains("NEW.created_at,NEW.trace_parent)", latest["platform.protect_outbox_content"], StringComparison.Ordinal);
         Assert.Contains("NEW.created_at,NEW.trace_parent)", latest["platform.protect_location_outbox_content"], StringComparison.Ordinal);
 
-        // The migrator applies both steps as the latest of their lanes.
+        // The migrator applies both steps. The Notifications one is followed only by the NTF-RECIPIENT-NOTICES-2026-10-20
+        // recipient notice lane step, the NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 count step and the
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 receipt step (whose receipt writer reuses the emitting writer rather
+        // than writing an outbox row of its own), and the Dispatch one only by the DP-INDEXES-ORDERS-DISPATCH-2026-10-20
+        // read-index step; each keeps its own source rule.
         var coordinator = File.ReadAllText(TestRepository.GetPath("tools/Paqueteria.DatabaseMigrator/ModuleMigrationCoordinator.cs"));
-        Assert.Contains("(\"Dispatch\", \"__ef_migrations_history_dispatch\", AddOutboxTraceContext.MigrationId,", coordinator, StringComparison.Ordinal);
-        Assert.Contains("(\"Notifications\", \"__ef_migrations_history_notifications\", CarryOutboxTraceContext.MigrationId,", coordinator, StringComparison.Ordinal);
+        Assert.Contains("(\"Dispatch\", \"__ef_migrations_history_dispatch\", AddAssignmentReadIndexes.MigrationId,", coordinator, StringComparison.Ordinal);
+        Assert.Contains(
+            "AddOutboxTraceContext.MigrationId,\n            \"src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20261013000100_AddOutboxTraceContext.cs\",\n            IsOutboxTraceContextDispatchSource);",
+            coordinator.ReplaceLineEndings("\n"),
+            StringComparison.Ordinal);
+        Assert.Contains("(\"Notifications\", \"__ef_migrations_history_notifications\", AddRecipientNoticeReceipts.MigrationId,", coordinator, StringComparison.Ordinal);
+        Assert.Contains(
+            "CarryOutboxTraceContext.MigrationId,\n            \"src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261013000200_CarryOutboxTraceContext.cs\",\n            IsNotificationsTraceContextSource);",
+            coordinator.ReplaceLineEndings("\n"),
+            StringComparison.Ordinal);
     }
 
     [Fact]

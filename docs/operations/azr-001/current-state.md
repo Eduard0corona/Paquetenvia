@@ -85,3 +85,50 @@ update_2026_09_27:
   azure_clean_path: NOT_YET_EXERCISED_ON_AZURE
   note: ENV-001 (PILOT-REAL-PEOPLE) is a separate environment documented in docs/operations/env-001-pilot/; nothing here authorizes it.
 ```
+
+## Update recorded on 2026-10-20 (AZR-001-AC-064 non-root images)
+
+AZR-001 v0.8 (§21 and AC-064 "Image hardening") says "Non-root cuando soporte runtime. Root requiere
+waiver". No waiver is recorded. The final stage of every DEV-SYNTHETIC Dockerfile in `deploy/azure/`
+now switches to a non-root user. PR #276 moved the API and Worker images. This update moves the Web
+and DB Ops images, following their ENV-001 pilot counterparts (`deploy/azure/pilot/Dockerfile.web`,
+`deploy/azure/pilot/Dockerfile.db-ops`). The image files stay root-owned and read-only for the
+process. Nothing in the DEV-SYNTHETIC deployment needs root: no port below 1024, no write under
+`/app`, no package install at start and no mounted volume.
+
+The AC-064 catalog in `azr-001-v0.8.md` is not changed. The Acceptance image has no Dockerfile yet,
+so AC-064 cannot be checked for it.
+
+```yaml
+update_2026_10_20:
+  ac_064_non_root_final_stage:
+    deploy/azure/Dockerfile.api: {user: "$APP_UID", resolves_to: "app (uid 1654)", since: "PR #276"}
+    deploy/azure/Dockerfile.worker: {user: "$APP_UID", resolves_to: "app (uid 1654)", since: "PR #276"}
+    deploy/azure/Dockerfile.web: {user: node, resolves_to: "node (uid 1000)"}
+    deploy/azure/Dockerfile.db-ops: {user: "$APP_UID", resolves_to: "app (uid 1654)"}
+    acceptance: NO_DOCKERFILE_YET
+  root_waivers: []
+  check: tools/azr-001/test_azr001_static_guards.py DevSyntheticNonRootImageTests (every deploy/azure/Dockerfile*)
+  azure_clean_path: NOT_YET_EXERCISED_ON_AZURE
+```
+
+## Update recorded on 2026-10-20 (db-ops image migrator sources)
+
+Before every command the DatabaseMigrator reads the baseline files and the source of every module lane from `/app`.
+Since SCL-001 (`d135e71`), three of those sources are under `src/BuildingBlocks/Paqueteria.Infrastructure`.
+`deploy/azure/Dockerfile.db-ops` copied only `src/Modules`, so the DEV-SYNTHETIC migration job
+(`migration-job.bicep`) would have exited 3 at start ("DataProtection adoption migration is missing"). The image now
+also copies the two directories that hold them. Built locally, it passes `verify` with every lane `VERIFIED` as
+uid 1654, and `assert` against a local PostGIS 18/3.6 database. The `--azure-ownership-bridge` path still has no
+Azure evidence.
+
+```yaml
+update_2026_10_20_db_ops_sources:
+  deploy/azure/Dockerfile.db-ops:
+    added_copies:
+      - src/BuildingBlocks/Paqueteria.Infrastructure/DataProtection/Migrations
+      - src/BuildingBlocks/Paqueteria.Infrastructure/Database/Evolution/Migrations
+    local_verify: {exit: 0, lanes_verified: 13, user: "app (uid 1654)"}
+  check: tests/Paqueteria.ArchitectureTests/DbOpsImageArchitectureTests.cs (every deploy/**/Dockerfile.db-ops*)
+  azure_clean_path: NOT_YET_EXERCISED_ON_AZURE
+```

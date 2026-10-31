@@ -136,7 +136,10 @@ Rollback operativo de routing:
 1. deshabilitar/detener el dispatcher Notifications;
 2. drenar o terminalizar todas las filas Notifications-owned;
 3. ejecutar `OperationalRollbackSql` bajo el rol autorizado sólo cuando no
-   existan filas activas;
+   existan filas activas (con el paso `20261020000100_AddRecipientNoticeLane`
+   de NTF-RECIPIENT-NOTICES-2026-10-20 aplicado, revertir antes ese paso del
+   carril: restaura el `apply_notification_outcome` de 8 argumentos que este
+   rollback revoca);
 4. desplegar o revertir al worker anterior;
 5. validar que se restauró EXECUTE de la claim/recovery global anterior y se
    revocaron las claims/recovery NTF al worker;

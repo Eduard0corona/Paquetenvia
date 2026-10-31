@@ -127,6 +127,48 @@ internal static partial class MessagingHttp
         return true;
     }
 
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-005): the per-channel extras of a request. A WhatsApp request may carry
+    /// a URL button suffix (Base64URL characters only, as the tracking token) and a quick reply payload (a fixed
+    /// upper-case code), never an unsubscribe URL; an e-mail request may carry an absolute https one-click unsubscribe
+    /// URL without spaces, angle brackets or a fragment, never a button.
+    /// </summary>
+    public static bool AreExtrasValid(MessagingRequest request) => request.Channel switch
+    {
+        MessagingChannel.WhatsApp =>
+            request.OneClickUnsubscribeUrl is null &&
+            (request.UrlButtonSuffix is null || UrlButtonSuffixPattern().IsMatch(request.UrlButtonSuffix)) &&
+            (request.QuickReplyPayload is null || QuickReplyPayloadPattern().IsMatch(request.QuickReplyPayload)),
+        MessagingChannel.Email =>
+            request.FreeFormText is null &&
+            request.UrlButtonSuffix is null &&
+            request.QuickReplyPayload is null &&
+            (request.OneClickUnsubscribeUrl is null || IsOneClickUnsubscribeUrl(request.OneClickUnsubscribeUrl)),
+        _ => false,
+    };
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: a free-form text request is WhatsApp only, without parameters or buttons,
+    /// one to 1024 characters of a single line.
+    /// </summary>
+    public static bool IsFreeFormTextValid(MessagingRequest request) =>
+        request.Channel == MessagingChannel.WhatsApp &&
+        request.FreeFormText is { Length: > 0 and <= 1024 } text &&
+        !string.IsNullOrWhiteSpace(text) &&
+        !text.Any(char.IsControl) &&
+        request.Parameters is { Count: 0 } &&
+        request.UrlButtonSuffix is null &&
+        request.QuickReplyPayload is null &&
+        request.OneClickUnsubscribeUrl is null;
+
+    private static bool IsOneClickUnsubscribeUrl(string value) =>
+        value.Length <= 2048 &&
+        !value.Any(character => char.IsControl(character) || char.IsWhiteSpace(character) || character is '<' or '>' or '"') &&
+        Uri.TryCreate(value, UriKind.Absolute, out var uri) &&
+        uri.Scheme == Uri.UriSchemeHttps &&
+        string.IsNullOrEmpty(uri.UserInfo) &&
+        string.IsNullOrEmpty(uri.Fragment);
+
     /// <summary>E.164 without separators: optional '+', 8 to 15 digits, no leading zero.</summary>
     public static bool TryNormalizePhone(string address, out string digits)
     {
@@ -148,4 +190,10 @@ internal static partial class MessagingHttp
 
     [GeneratedRegex(@"^[1-9]\d{7,14}$", RegexOptions.CultureInvariant)]
     private static partial Regex PhonePattern();
+
+    [GeneratedRegex("^[A-Za-z0-9_-]{1,512}$", RegexOptions.CultureInvariant)]
+    private static partial Regex UrlButtonSuffixPattern();
+
+    [GeneratedRegex("^[A-Z][A-Z0-9_]{0,127}$", RegexOptions.CultureInvariant)]
+    private static partial Regex QuickReplyPayloadPattern();
 }

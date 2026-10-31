@@ -18,8 +18,8 @@ namespace Dispatch.Infrastructure.Fleet;
 /// (set_config after BEGIN, SET LOCAL ROLE paqueteria_app, FORCE RLS), the capability of the assignment picker read
 /// first (DISPATCHER, PLATFORM_ADMIN with MFA), then one page of the active organization's OWN drivers that are not
 /// INACTIVE with their current stops and the capture time of their latest position. Nothing is written, no row is
-/// locked and no cross-module flow is added; the indexes assignments_driver_idx and driver_positions_tenant_time_idx
-/// already serve both lookups.
+/// locked and no cross-module flow is added; assignments_driver_open_idx (the driver's ACCEPTED or ACTIVE assignments
+/// only, DP-INDEXES-ORDERS-DISPATCH-2026-10-20) and driver_positions_tenant_time_idx serve both lookups.
 /// </summary>
 public sealed class PostgreSqlOrganizationDriversQuery(
     TenantTransactionContext<DispatchDbContext> transactionContext,

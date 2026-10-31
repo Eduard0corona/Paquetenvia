@@ -28,6 +28,7 @@ tags:
 - name: Platform
 - name: Operations
 - name: Voice
+- name: Messaging
 paths:
   /quotes:
     post:
@@ -53,6 +54,12 @@ paths:
         other refusal after location resolution, the Idempotency-Key stays
         bound to the request). The authorization (actor and reason) is part of
         the Idempotency-Key fingerprint.
+        NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002): the destination
+        (DestinationAddressInput) may carry the optional email of the delivery
+        recipient; an invalid one is 422 before any effect and never echoed, it
+        is part of the Idempotency-Key fingerprint only when present, and it is
+        never returned, logged, audited or placed in request_snapshot_redacted,
+        an outbox payload or an event.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - $ref: '#/components/parameters/IdempotencyKey'
@@ -1429,6 +1436,125 @@ paths:
           $ref: '#/components/responses/TrackingLinkConflict'
         '503':
           $ref: '#/components/responses/ServiceUnavailable'
+  /orders/{orderId}/recipient-notices:
+    get:
+      tags:
+      - Orders
+      operationId: listOrderRecipientNotices
+      description: >-
+        NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P8) and NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (AI-08 NTF-007;
+        x-pilot-contract-deltas NTF-RECIPIENT-NOTICES, part NTF-007; AI-24 recipient_notices.dispatcher_view; AI-07
+        /ops/orders/:id recipient_notices) - the recipient notices of one order, for the order detail panel "Avisos al
+        destinatario". One tenant transaction of the organization selected with X-Organization-Id reads them only when
+        that organization owns the order (T6 choice 2): one item per notice and channel, WHATSAPP or EMAIL (an IN_APP
+        notification is never listed), ordered by creation and WhatsApp before e-mail, at most 100 and without
+        pagination. whatsapp_consent_attested says whether the order recorded the WhatsApp consent box (current
+        version); email_on_file whether the destination keeps a recipient e-mail under the PII key, the one "Detener
+        avisos" opts out, even before its notice copy exists (T6 choice 3); nothing is decrypted. last_code is the last
+        code the notice recorded, from the closed set of RecipientNotice.last_code (T6 choice 4); a stored value outside
+        the closed sets fails closed as 503 and is never passed on. No scheduled time is answered (T2 "Sin hora, con
+        nota (Recommended)"): a PENDING notice leaves inside the 08:00 to 21:00 America/Mazatlan window of AI-24
+        recipient_notices.quiet_hours, which the panel states in a fixed line. Never the phone, the e-mail, the link or
+        a template parameter. DISPATCHER members and PLATFORM_ADMIN members with a satisfied MFA challenge only
+        (x-capability-matrix recipient_notice_operations; 403 MFA_REQUIRED when only the second factor is missing),
+        decided before any order is read; a malformed, missing or other-organization order, and an order the selected
+        organization only operates, is the uniform 404. No switch: while Notifications:RecipientNotices:Enabled is
+        false no notice is created and the list is empty. Not limited under SEC-004 (T6 choice 10). Cache-Control
+        no-store.
+      x-authorization-precedence: capability-before-persisted-state
+      x-capability-protected-state:
+      - order
+      - notification
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/OrderId'
+      responses:
+        '200':
+          description: The recipient notices of the order and the two booleans of the panel
+          headers:
+            Cache-Control:
+              description: NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (T6 choice 2); no cache keeps the panel.
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecipientNoticeList'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /orders/{orderId}/recipient-notices/stop:
+    post:
+      tags:
+      - Orders
+      operationId: stopOrderRecipientNotices
+      description: >-
+        NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P8 "Las tres vías (Recommended)", E4-P16) and
+        NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (AI-08 NTF-007; AI-24 recipient_notices.opt_out.dispatcher) - the button
+        "Detener avisos" of the order detail, for a recipient who asks by phone. It takes no body and no query; one
+        valid Idempotency-Key is required, and anything else is 409 INVALID_REQUEST before the capability or any state
+        is read. Then, in this order (T6 choice 5): the capability (DISPATCHER members and PLATFORM_ADMIN members with a
+        satisfied MFA challenge, x-capability-matrix recipient_notice_operations; 403 MFA_REQUIRED when only the second
+        factor is missing); one tenant transaction of the selected organization that returns the stored answer of the
+        same key, or reads the PII ciphertexts of the destination phone and e-mail of an order that organization owns
+        (else the uniform 404, as listOrderRecipientNotices), and commits; with no transaction open, both are opened in
+        memory with the API's PII key (purposes locations.phone and locations.email, as VOICE-001 and
+        unsubscribeRecipientNotices), never with the recipient-notice key, and hashed under every configured contact
+        lookup key version (AI-24 recipient_notices.opt_out.hash); then one transaction records the WHATSAPP opt-out of
+        the phone and the EMAIL opt-out of the e-mail through security.record_recipient_opt_out (source DISPATCHER;
+        global, every organization, E4-P8), the audit row RECIPIENT_NOTICES_STOPPED of the order with the
+        Idempotency-Key as its request_id and the channels only (T6 choice 7), and the stored answer. A phone or e-mail
+        that cannot be opened or used leaves its channel out; with none left the answer is 409
+        RECIPIENT_CONTACT_UNAVAILABLE and nothing is recorded or audited; without the PII key or the contact lookup key
+        it is 503 (T6 choice 8). The 200 names the channels whose opt-out is on record - WHATSAPP when the order has a
+        usable phone, EMAIL when it has a usable e-mail - also when it already was, so no opt-out made through another
+        organization shows (T6 choice 6), and recorded_at is the server time of this action. A replay of the same key
+        by the same person for the same order returns the stored answer and writes nothing; the key used for another
+        order or by another person is 409 IDEMPOTENCY_CONFLICT; another press (a new key) is audited again and changes
+        nothing for the recipient (T3 "Mensaje y botón siempre (Recommended)"). It is offered to the owner organization
+        even when the order has no notice and no consent box, because the opt-out is global (T6 choice 13). It cancels
+        nothing itself: every PENDING notice of that contact ends CANCELLED with RECIPIENT_OPTED_OUT when its send comes
+        (AI-24 recipient_notices.opt_out.check). It sends nothing to the recipient (opt_out.confirmation.other_paths)
+        and, during the pilot, cannot be undone (E4-P16). No switch, and not limited under SEC-004 (T6 choice 10).
+        Cache-Control no-store.
+      x-authorization-precedence: shape-validation-then-capability-before-persisted-state
+      x-shape-validation: invalid-request-without-productive-transaction
+      x-capability-protected-state:
+      - order
+      - location_contact
+      parameters:
+      - $ref: '#/components/parameters/OrganizationContext'
+      - $ref: '#/components/parameters/OrderId'
+      - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The channels whose opt-out is on record and the time of this action
+          headers:
+            Cache-Control:
+              description: NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (T6 choice 5); no cache keeps the answer.
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RecipientNoticeStopResult'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '409':
+          $ref: '#/components/responses/RecipientNoticeStopConflict'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /organizations/{organizationId}/audit:
     get:
       tags:
@@ -1934,6 +2060,212 @@ paths:
           $ref: '#/components/responses/VoiceWebhookRejected'
         '404':
           $ref: '#/components/responses/UniformNotFound'
+  /messaging/whatsapp/webhook:
+    get:
+      tags:
+      - Messaging
+      operationId: verifyMetaWhatsAppWebhook
+      security: []
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006; AI-24 recipient_notices.webhooks.whatsapp) - the
+        verification Meta sends when the callback URL is saved. Anonymous: no session, cookie or CSRF. 200 with
+        hub.challenge as text/plain only for hub.mode subscribe, one hub.challenge of 1 to 256 characters of A-Z a-z
+        0-9 . _ - and a hub.verify_token equal, in constant time, to the current or the previous configured token
+        (two slots for rotation, O11 choice 9); otherwise the uniform 403. The whole query, hub.verify_token included,
+        is removed from the request target before anything logs it (O11 choice 7). 404 while
+        Messaging:WhatsApp:Webhook:Enabled is false, before anything else and never 429 (O4); 429 under SEC-004, 10
+        per 60 seconds per client network (O3). Cache-Control no-store.
+      parameters:
+      - name: hub.mode
+        in: query
+        required: true
+        schema:
+          type: string
+          maxLength: 64
+      - name: hub.verify_token
+        in: query
+        required: true
+        schema:
+          type: string
+          maxLength: 256
+      - name: hub.challenge
+        in: query
+        required: true
+        schema:
+          type: string
+          pattern: ^[A-Za-z0-9_.-]{1,256}$
+      responses:
+        '200':
+          description: The hub.challenge, unchanged
+          content:
+            text/plain:
+              schema:
+                type: string
+        '403':
+          $ref: '#/components/responses/MessagingWebhookRejected'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+    post:
+      tags:
+      - Messaging
+      operationId: receiveMetaWhatsAppWebhook
+      security: []
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006; AI-24 recipient_notices.webhooks.whatsapp, receipts,
+        opt_out and auto_reply) - Meta's webhook of the platform's one WhatsApp number. Anonymous: no session, cookie or
+        CSRF. 404 while Messaging:WhatsApp:Webhook:Enabled is false, before anything else and never 429 (O4). A body
+        over 256 KiB is 413 without being read further (O11 choice 2). X-Hub-Signature-256 must be exactly one valid
+        signature of the raw body under the current or the previous Meta app secret (O11 choice 9), compared in
+        constant time before the body is parsed; otherwise the uniform 403. A validly signed body that is not a JSON
+        object is 400. Only object whatsapp_business_account and changes of field messages whose
+        metadata.phone_number_id is the configured number are read (O11 choice 5); every other object, change and field
+        is ignored with 200. Statuses delivered and failed become delivery receipts (sent and read are ignored); an
+        inbound text that is exactly BAJA, ALTO, STOP or CANCELAR (trimmed, case and accents ignored), or the quick
+        reply No recibir avisos (recognized by its payload or its text, O11 choice 4), records the WHATSAPP opt-out of
+        the sender hash and, when it records it, requests the one confirmation; any other inbound message requests the
+        one automatic reply (at most one per contact in 24 hours; none for a message older than 23 hours). A validly
+        signed duplicate (Meta's retries) changes nothing. 200 once recorded; 503 when the store or a key is
+        unavailable, so Meta retries; 429 under SEC-004, 300 per 60 seconds per client network (O3). No inbound text,
+        profile name, phone, recipient_id or provider reference is ever logged, stored in clear or audited.
+        Cache-Control no-store.
+      parameters:
+      - $ref: '#/components/parameters/MetaWebhookSignature'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/MetaWhatsAppWebhookPayload'
+      responses:
+        '200':
+          description: Acknowledged
+        '400':
+          $ref: '#/components/responses/MessagingWebhookMalformed'
+        '403':
+          $ref: '#/components/responses/MessagingWebhookRejected'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /messaging/email/events:
+    post:
+      tags:
+      - Messaging
+      operationId: receiveAcsEmailEvents
+      security: []
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006; O2 "Secreto en un encabezado (Recommended)"; AI-24
+        recipient_notices.webhooks.email and receipts.email) - the Event Grid subscription of the Communication
+        Services resource, Event Grid event schema, batching off. Anonymous: no session, cookie or CSRF. 404 while
+        Messaging:Email:Events:Enabled is false, before anything else and never 429 (O4). A request whose
+        aeg-event-type is SubscriptionValidation is the subscription validation handshake: its
+        Microsoft.EventGrid.SubscriptionValidationEvent code (A-Z a-z 0-9 and -, at most 128) is answered as
+        validationResponse, and nothing is recorded. Every other request is a delivery and must carry the Key Vault
+        secret header X-Paquetenvia-Event-Secret, compared in constant time against the current and the previous
+        secret (two slots for rotation) before the body is read: missing is 401, wrong is the uniform 403. A body over
+        64 KiB is 413 (O11 choice 2); a body that is not a JSON array of events is 400.
+        Microsoft.Communication.EmailDeliveryReportReceived events of the configured resource (topic) become receipts
+        (O6: Delivered is DELIVERED; Bounced and Suppressed are FAILED MESSAGING_RECIPIENT_UNDELIVERABLE; FilteredSpam
+        and Quarantined are FAILED MESSAGING_POLICY_BLOCKED; Failed is FAILED MESSAGING_PROVIDER_REJECTED; Expanded is
+        ignored); other event types and resources are ignored. A duplicate changes nothing. 200 once recorded; 503 when
+        the store is unavailable, so Event Grid retries; 429 under SEC-004, 120 per 60 seconds per client network
+        (O3). The recipient address, the sender and the status message are never read, logged or stored.
+        Cache-Control no-store.
+      parameters:
+      - $ref: '#/components/parameters/EventGridEventType'
+      - $ref: '#/components/parameters/EventGridDeliverySecret'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: array
+              items:
+                $ref: '#/components/schemas/EventGridEvent'
+      responses:
+        '200':
+          description: Acknowledged; the handshake answer carries validationResponse
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/EventGridValidationResponse'
+        '400':
+          $ref: '#/components/responses/MessagingWebhookMalformed'
+        '401':
+          $ref: '#/components/responses/MessagingWebhookUnauthenticated'
+        '403':
+          $ref: '#/components/responses/MessagingWebhookRejected'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  /recipient-notices/unsubscribe/{unsubscribeToken}:
+    post:
+      tags:
+      - Messaging
+      operationId: unsubscribeRecipientNotices
+      security: []
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006; AI-24 recipient_notices.webhooks.unsubscribe and
+        opt_out.email_link) - the RFC 8058 one-click unsubscribe of a recipient e-mail (List-Unsubscribe-Post) and the
+        button of the public page /avisos/baja/:token (AI-07). Anonymous: no session, cookie or CSRF; no switch (O4).
+        The body is empty, application/x-www-form-urlencoded or multipart/form-data with exactly the field
+        List-Unsubscribe=One-Click, or the JSON object {} of the page; anything else is 400 and a body over 1 KiB is
+        413 (O11 choices 2 and 7), both before the token is read. The token (88 Base64URL characters) binds the owner
+        organization and the notification under HMAC-SHA256 (contact lookup key, prefix paquetenvia-unsubscribe-v1)
+        and is checked in constant time; it is removed from the request target before anything logs it and is never
+        stored (O11 choice 7). A valid token reads the destination e-mail copy of that ORDER_DESTINATION e-mail
+        notice under FORCE RLS in a transaction of its organization and opens it with the API's PII key (O11 choice
+        1); the EMAIL opt-out of its hash is recorded (source EMAIL_LINK, no audit row, O10) and the answer is 204,
+        also when it was already recorded. An invalid or malformed token, an unknown notification or one whose e-mail
+        copy no longer exists is the uniform 404; 503 when the store or a key is unavailable; both without traceId,
+        like publicTracking. Never a redirect, and no GET (a link scanner never opts out). 429 under SEC-004, 20 per
+        60 seconds per client network, with the uniform public body (O3). Cache-Control no-store and Referrer-Policy
+        no-referrer.
+      parameters:
+      - name: unsubscribeToken
+        in: path
+        required: true
+        schema:
+          type: string
+          minLength: 1
+          maxLength: 256
+      requestBody:
+        required: false
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              $ref: '#/components/schemas/OneClickUnsubscribeForm'
+          multipart/form-data:
+            schema:
+              $ref: '#/components/schemas/OneClickUnsubscribeForm'
+          application/json:
+            schema:
+              type: object
+              maxProperties: 0
+      responses:
+        '204':
+          description: The e-mail opt-out is recorded
+        '400':
+          $ref: '#/components/responses/MessagingWebhookMalformed'
+        '404':
+          $ref: '#/components/responses/UniformNotFound'
+        '413':
+          $ref: '#/components/responses/PayloadTooLarge'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
   /quotes/{quoteId}:
     get:
       tags:
@@ -3566,6 +3898,40 @@ components:
         type: string
         minLength: 1
         maxLength: 256
+    MetaWebhookSignature:
+      name: X-Hub-Signature-256
+      in: header
+      required: true
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 - sha256= followed by the hexadecimal HMAC-SHA256 of the raw request
+        body under the Meta app secret (Key Vault; a current and a previous slot for rotation, O11 choice 9), compared
+        in constant time before the body is parsed.
+      schema:
+        type: string
+        pattern: ^sha256=[0-9A-Fa-f]{64}$
+    EventGridEventType:
+      name: aeg-event-type
+      in: header
+      required: false
+      description: >-
+        Event Grid's own header: SubscriptionValidation marks the subscription validation handshake; any other value,
+        or none, is a delivery.
+      schema:
+        type: string
+        maxLength: 64
+    EventGridDeliverySecret:
+      name: X-Paquetenvia-Event-Secret
+      in: header
+      required: false
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O2 "Secreto en un encabezado (Recommended)") - the Key Vault secret
+        the Event Grid subscription sends as a static delivery header; required on every delivery (every request but
+        the validation handshake) and compared in constant time against the current and the previous secret before
+        the body is read.
+      schema:
+        type: string
+        minLength: 1
+        maxLength: 256
     OrganizationContext:
       name: X-Organization-Id
       in: header
@@ -3754,6 +4120,17 @@ components:
         application/problem+json:
           schema:
             $ref: '#/components/schemas/RecipientCallConflictProblem'
+    RecipientNoticeStopConflict:
+      description: >-
+        NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 - stopOrderRecipientNotices conflict identified by a stable code.
+        INVALID_REQUEST (a missing, repeated or malformed Idempotency-Key, a query or a body) is decided before any
+        state is read; IDEMPOTENCY_CONFLICT (the key was used for another order or by another person);
+        RECIPIENT_CONTACT_UNAVAILABLE (neither the phone nor the e-mail of the destination can be used; nothing was
+        recorded or audited). Never carries a phone, an e-mail or a hash.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/RecipientNoticeStopConflictProblem'
     VoiceWebhookMalformed:
       description: VOICE-001 webhook that is not a well-formed application/x-www-form-urlencoded Twilio request.
       content:
@@ -3764,6 +4141,41 @@ components:
       description: >-
         VOICE-001 webhook without exactly one valid X-Twilio-Signature for the configured public URL, or for another
         Twilio account. Uniform; nothing is read, logged or stored.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    MessagingWebhookMalformed:
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 - a body that is not the contracted shape: a validly signed Meta body
+        that is not a JSON object, an Event Grid body that is not a JSON array of events (or a handshake without a
+        usable validation code), or an unsubscribe body other than empty, List-Unsubscribe=One-Click or {}. Nothing is
+        recorded or echoed.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    MessagingWebhookUnauthenticated:
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O2) - an Event Grid delivery without the X-Paquetenvia-Event-Secret
+        header. The body is not read.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    MessagingWebhookRejected:
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 - a Meta verification whose mode, challenge or verify token is not
+        accepted, a Meta POST without exactly one valid X-Hub-Signature-256, or an Event Grid delivery with a wrong
+        secret. Uniform; nothing is parsed, logged or stored.
+      content:
+        application/problem+json:
+          schema:
+            $ref: '#/components/schemas/Problem'
+    PayloadTooLarge:
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O11 choice 2) - the body exceeds the operation's bound (Meta webhook
+        256 KiB, Event Grid events 64 KiB, unsubscribe 1 KiB); it is not read further or parsed.
       content:
         application/problem+json:
           schema:
@@ -3869,6 +4281,28 @@ components:
         references:
           type: string
           maxLength: 500
+    DestinationAddressInput:
+      description: >-
+        NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002; x-pilot-contract-deltas NTF-RECIPIENT-NOTICES, part NTF-002) -
+        the destination of a quote: AddressInput plus the optional email of the delivery recipient. The origin keeps
+        AddressInput, so an origin never carries an e-mail.
+      allOf:
+      - $ref: '#/components/schemas/AddressInput'
+      - type: object
+        properties:
+          email:
+            type: string
+            maxLength: 254
+            pattern: '^[\t-\r ]*[!-?A-~]+@[!-?A-~]+\.[!-?A-~]+[\t-\r ]*$'
+            description: >-
+              Optional. ASCII whitespace is trimmed from both ends; what remains is printable ASCII without spaces,
+              with exactly one @ after a non-empty local part and a domain holding a dot with at least one character
+              before and after it; the domain is lower-cased and the local part kept as typed. Any other value (null
+              is read as absent) is 422 ValidationError before any effect, and the value is never echoed. Present, it
+              enters the quote input hash and the Idempotency-Key fingerprint; absent, both stay byte-identical to a
+              request without the field. It is stored only sealed - under the PII key and, when the recipient-notice
+              key is configured, as a notice copy (AI-24 recipient_notices.contact) - and never returned by any
+              operation, logged, audited or placed in request_snapshot_redacted, an outbox payload or an event.
     CreateQuoteRequest:
       type: object
       required:
@@ -3883,7 +4317,7 @@ components:
         origin:
           $ref: '#/components/schemas/AddressInput'
         destination:
-          $ref: '#/components/schemas/AddressInput'
+          $ref: '#/components/schemas/DestinationAddressInput'
         service_type:
           type: string
           enum:
@@ -4176,6 +4610,32 @@ components:
             member, is rejected with 409 before any order is created. It is stored on the order, returned as
             Order.service_window and is part of the Idempotency-Key request hash, so replaying a key with another
             window is a conflict.
+        recipient_notices:
+          type:
+          - object
+          - 'null'
+          additionalProperties: false
+          required:
+          - whatsapp_consent_attested
+          properties:
+            whatsapp_consent_attested:
+              type: boolean
+            whatsapp_consent_version:
+              type: string
+              const: NTF-RECIPIENT-WHATSAPP-CONSENT-V1
+          description: >-
+            NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-004; x-pilot-contract-deltas NTF-RECIPIENT-NOTICES, part NTF-004;
+            AI-24 recipient_notices.consent) - the optional WhatsApp consent box of "Nueva orden" ("El destinatario
+            aceptó recibir avisos de su envío por WhatsApp", unticked by default). Absent or null, or
+            whatsapp_consent_attested false without whatsapp_consent_version, records nothing and the order gets no
+            WhatsApp notice (an e-mail notice still, when the destination has an e-mail). whatsapp_consent_attested true
+            requires whatsapp_consent_version NTF-RECIPIENT-WHATSAPP-CONSENT-V1, the only accepted version; any other
+            shape (another member, a version with false, true without the version or another version) is the uniform
+            409 INVALID_REQUEST before any order is created. Ticked, orders.recipient_notice_consents gets one row (the
+            order, WHATSAPP, the version, the creating actor and the server time) in the createOrder transaction, the
+            ORDER_CREATED audit entry records only the boolean whatsapp_consent_attested, and the version enters the
+            Idempotency-Key request hash; unticked, the hash stays byte-identical to a request without the field. It is
+            never returned, and no phone, e-mail or name is part of it.
     Order:
       type: object
       required:
@@ -5655,6 +6115,60 @@ components:
           pattern: ^[0-9]{1,5}$
       additionalProperties:
         type: string
+    MetaWhatsAppWebhookPayload:
+      type: object
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 - Meta's WhatsApp Business webhook body. Only object
+        (whatsapp_business_account), entry[].changes[] of field messages with value.metadata.phone_number_id, and in
+        value the statuses (id, status, timestamp, errors[0].code) and the messages (from, timestamp, type, text.body,
+        button.payload and button.text) are read; every other member is ignored.
+      properties:
+        object:
+          type: string
+        entry:
+          type: array
+          items:
+            type: object
+    EventGridEvent:
+      type: object
+      description: >-
+        NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 - one Event Grid event (Event Grid event schema). Only eventType,
+        topic and, in data, validationCode (Microsoft.EventGrid.SubscriptionValidationEvent) or messageId, status and
+        deliveryAttemptTimeStamp (Microsoft.Communication.EmailDeliveryReportReceived) are read.
+      properties:
+        id:
+          type: string
+        eventType:
+          type: string
+        topic:
+          type: string
+        subject:
+          type: string
+        eventTime:
+          type: string
+        dataVersion:
+          type: string
+        data:
+          type: object
+    EventGridValidationResponse:
+      type: object
+      additionalProperties: false
+      required:
+      - validationResponse
+      properties:
+        validationResponse:
+          type: string
+          pattern: ^[A-Za-z0-9-]{1,128}$
+    OneClickUnsubscribeForm:
+      type: object
+      description: RFC 8058 one-click unsubscribe body; exactly this field.
+      additionalProperties: false
+      required:
+      - List-Unsubscribe
+      properties:
+        List-Unsubscribe:
+          type: string
+          const: One-Click
     DriverLocationInvalidRequestProblem:
       type: object
       required:
@@ -5743,6 +6257,28 @@ components:
             in the file, that none contains prohibited goods. Exactly one field with the value true; absent, repeated
             or any other value is the uniform 409 CONFLICT before the batch is reserved or any order is created.
             Every created order records it as POST /orders does.
+        recipient_whatsapp_consent_attested:
+          type: string
+          enum:
+          - 'true'
+          - 'false'
+          description: >-
+            NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-004; x-pilot-contract-deltas NTF-RECIPIENT-NOTICES, part NTF-004;
+            AI-07 csv_order_import.recipient_notices) - the one optional WhatsApp consent box of the commit, for the
+            recipient of every row of the file. Absent or false (without recipient_whatsapp_consent_version) records
+            nothing and those orders get no WhatsApp notice. true requires recipient_whatsapp_consent_version, and every
+            created order then records its own consent row as POST /orders does (the creating actor and the server
+            time). A repeated field, any other value, true without the version or a version without true is the uniform
+            409 CONFLICT before the batch is reserved or any order is created. Ticked, it is part of the batch
+            fingerprint and of each row's ORD-001 request hash, so replaying the batch Idempotency-Key with the other
+            answer is IDEMPOTENCY_CONFLICT; unticked, both stay unchanged. previewOrderCsv is unchanged.
+        recipient_whatsapp_consent_version:
+          type: string
+          enum:
+          - NTF-RECIPIENT-WHATSAPP-CONSENT-V1
+          description: >-
+            NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-004) - required, once, with recipient_whatsapp_consent_attested
+            true and absent otherwise; NTF-RECIPIENT-WHATSAPP-CONSENT-V1 is the only accepted value.
     CsvImportRowError:
       type: object
       required:
@@ -7770,6 +8306,181 @@ components:
           type: string
           enum:
           - TRACKING_LINK_ORDER_FINISHED
+    RecipientNoticeList:
+      type: object
+      additionalProperties: false
+      description: >-
+        NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (AI-08 NTF-007, T6 choices 2 and 3) - the recipient notices of one order,
+        ordered by creation and WhatsApp before e-mail, at most 100, and the two booleans of the panel. Never the
+        phone, the e-mail, the link or a template parameter.
+      required:
+      - items
+      - whatsapp_consent_attested
+      - email_on_file
+      properties:
+        items:
+          type: array
+          maxItems: 100
+          items:
+            $ref: '#/components/schemas/RecipientNotice'
+        whatsapp_consent_attested:
+          type: boolean
+          description: The order recorded the WhatsApp consent box, version NTF-RECIPIENT-WHATSAPP-CONSENT-V1.
+        email_on_file:
+          type: boolean
+          description: >-
+            The destination keeps a recipient e-mail under the PII key (the one "Detener avisos" opts out), even
+            before its notice copy exists (T6 choice 3).
+    RecipientNotice:
+      type: object
+      additionalProperties: false
+      description: >-
+        NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 - one recipient notice on one channel. There is no scheduled time (T2
+        "Sin hora, con nota (Recommended)"); a PENDING notice leaves inside the 08:00 to 21:00 America/Mazatlan window.
+      required:
+      - notification_id
+      - notice
+      - channel
+      - status
+      - attempts
+      - last_code
+      - sent_at
+      - delivered_at
+      - updated_at
+      properties:
+        notification_id:
+          type: string
+          format: uuid
+        notice:
+          type: string
+          enum:
+          - TRACKING_LINK
+          - IN_TRANSIT
+          - DELIVERY_FAILED
+          - DELIVERED
+        channel:
+          type: string
+          enum:
+          - WHATSAPP
+          - EMAIL
+        status:
+          type: string
+          enum:
+          - PENDING
+          - SENT
+          - DELIVERED
+          - FAILED
+          - CANCELLED
+        attempts:
+          type: integer
+          format: int32
+          minimum: 0
+        last_code:
+          description: >-
+            T6 choice 4 - the last code the notice recorded, null before any: the closed MessagingResultCodes, the
+            lane's AMBIGUOUS_TIMEOUT, TRACKING_LINK_UNAVAILABLE and cancellation reasons, and MAX_ATTEMPTS_EXHAUSTED
+            (a send request that ran out of attempts). A stored code outside this set fails the read closed (503).
+          type:
+          - string
+          - 'null'
+          enum:
+          - MESSAGING_ACCEPTED
+          - MESSAGING_SYNTHETIC_ACCEPTED
+          - MESSAGING_SYNTHETIC_TRANSIENT
+          - MESSAGING_SYNTHETIC_PERMANENT
+          - MESSAGING_SYNTHETIC_AMBIGUOUS_TIMEOUT
+          - MESSAGING_CHANNEL_DISABLED
+          - MESSAGING_TEMPLATE_NOT_CONFIGURED
+          - MESSAGING_TEMPLATE_PARAMETERS_INVALID
+          - MESSAGING_RECIPIENT_INVALID
+          - MESSAGING_PROVIDER_TIMEOUT
+          - MESSAGING_PROVIDER_UNREACHABLE
+          - MESSAGING_PROVIDER_RATE_LIMITED
+          - MESSAGING_PROVIDER_UNAVAILABLE
+          - MESSAGING_PROVIDER_AUTH_FAILED
+          - MESSAGING_PROVIDER_REJECTED
+          - MESSAGING_PROVIDER_RESPONSE_INVALID
+          - MESSAGING_RECIPIENT_UNDELIVERABLE
+          - MESSAGING_REENGAGEMENT_REQUIRED
+          - MESSAGING_PROVIDER_TEMPLATE_REJECTED
+          - MESSAGING_POLICY_BLOCKED
+          - MESSAGING_PROVIDER_CIRCUIT_OPEN
+          - MESSAGING_PROVIDER_CONCURRENCY_LIMITED
+          - AMBIGUOUS_TIMEOUT
+          - TRACKING_LINK_UNAVAILABLE
+          - NOTICE_SUPERSEDED
+          - NOTICE_STALE
+          - NOTICE_LIMIT_REACHED
+          - RECIPIENT_OPTED_OUT
+          - MAX_ATTEMPTS_EXHAUSTED
+          - null
+        sent_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        delivered_at:
+          type:
+          - string
+          - 'null'
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+          description: The time of the notice's last change, shown in America/Mazatlan.
+    RecipientNoticeStopResult:
+      type: object
+      additionalProperties: false
+      description: >-
+        NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (T6 choice 6) - the channels whose opt-out is on record for the order's
+        destination, recorded by this press or already there (never told apart), and the server time of this action.
+      required:
+      - order_id
+      - channels
+      - recorded_at
+      properties:
+        order_id:
+          type: string
+          format: uuid
+        channels:
+          type: array
+          minItems: 1
+          maxItems: 2
+          uniqueItems: true
+          items:
+            type: string
+            enum:
+            - WHATSAPP
+            - EMAIL
+        recorded_at:
+          type: string
+          format: date-time
+    RecipientNoticeStopConflictProblem:
+      type: object
+      required:
+      - type
+      - title
+      - status
+      - code
+      properties:
+        type:
+          type: string
+          format: uri-reference
+        title:
+          type: string
+        status:
+          type: integer
+          const: 409
+        detail:
+          type: string
+        instance:
+          type: string
+        code:
+          type: string
+          enum:
+          - INVALID_REQUEST
+          - IDEMPOTENCY_CONFLICT
+          - RECIPIENT_CONTACT_UNAVAILABLE
     PublicTrackingProjection:
       type: object
       required:
@@ -8003,6 +8714,15 @@ x-capability-matrix:
     403 before anything is read
   dispatch_contact_operations:
     getMyDispatchContact: [DRIVER]
+  recipient_notice_operations_decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner, 2026-10-20, E4-P8 "Las tres vías
+    (Recommended)") with NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (project owner, 2026-10-30, round T) - the panel
+    "Avisos al destinatario" and "Detener avisos" follow the tracking_link_operations rule - DISPATCHER members without
+    MFA and PLATFORM_ADMIN members with a satisfied MFA challenge (403 MFA_REQUIRED when only the second factor is
+    missing), of the organization that owns the order only, decided before any order is read; every other role
+    receives the uniform 403, and an order the selected organization only operates is the uniform 404
+  recipient_notice_operations:
+    listOrderRecipientNotices: [DISPATCHER, PLATFORM_ADMIN]
+    stopOrderRecipientNotices: [DISPATCHER, PLATFORM_ADMIN]
 x-pilot-contract-deltas:
   purpose: Contract deltas recorded for the pilot. The HTTP surface above is unchanged until the implementing task publishes
     each delta together with code and tests. Every entry is an owner decision (DECIDED).
@@ -8271,3 +8991,144 @@ x-pilot-contract-deltas:
       user, its own budget) records its 429 in ADR-OBS-001. TooManyRequests now declares the Retry-After header that
       every 429 already sends. The numbers are configuration (RateLimits) and a later owner decision re-sets them; no
       path, operation, schema or other status code changes
+  - id: NTF-RECIPIENT-NOTICES
+    status: DECIDED
+    decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner, 2026-10-19 and 2026-10-20 - E4 and the answers E4-P1 to
+      E4-P13 recorded in decision-log.md; docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md; AI-24 recipient_notices)
+    literal: '"Avisos al destinatario: con tu decisión "Empezaremos con todo habilitado" toca construirlos (WhatsApp y correo, apagados hasta cerrar GATE-004). ¿Qué avisos manda el piloto?" - Los 4 del plan (Recommended)'
+    option: 'Enlace de seguimiento al crear la orden, "Va en camino", "No se pudo entregar" y "Entregado", por WhatsApp. Por correo solo si hay correo del destinatario: hoy no se captura, se agrega como campo opcional en la nueva orden.'
+    implementation: part NTF-002 shipped by feat/ntf-002-recipient-contact together with its code and tests -
+      DestinationAddressInput on createQuote, RecipientEmailPolicy, the e-mail in the quote input hash only when present,
+      the Locations lane step 20261020000100_AddRecipientNoticeContact with its AI-06 DDL and baseline assertions, the
+      wrap-only recipient-notice sealer (Locations:NoticeKeyProtector, Disabled by default and in the pilot, so no notice
+      copy is written until AI-08 NTF-008 wires the key) and the wizard field; part NTF-004 shipped by
+      feat/ntf-004-recipient-notice-producer together with its code and tests - CreateOrderRequest.recipient_notices on
+      createOrder and the CsvImportCommitRequest fields recipient_whatsapp_consent_attested and
+      recipient_whatsapp_consent_version on commitOrderCsv, the Orders lane step 20261023000200_AddRecipientNoticeConsents
+      (orders.recipient_notice_consents, append-only under FORCE RLS) with its AI-06 and AI-18 declarations and baseline
+      assertions, the ORD-002 producer of orders.recipient-notice-requested (RecipientNoticeRequestPolicy) and the two
+      consent boxes (NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23); part NTF-006 shipped by
+      feat/ntf-006-receipts-optouts-autoreply together with its code and tests - verifyMetaWhatsAppWebhook,
+      receiveMetaWhatsAppWebhook, receiveAcsEmailEvents and unsubscribeRecipientNotices with their SEC-004 policies,
+      the Notifications lane step 20261029000100_AddRecipientNoticeReceipts (the receipt executor's functions and the
+      automatic-reply store) with its AI-06 and AI-18 declarations and baseline assertions, the Worker's
+      automatic-reply sender and the public page /avisos/baja/:token (NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25, O2 to
+      O11); both webhook switches stay off (uniform 404); part NTF-007 shipped by
+      feat/ntf-007-recipient-notice-panel together with its code and tests - listOrderRecipientNotices,
+      stopOrderRecipientNotices and x-capability-matrix recipient_notice_operations, with the Locations phone opener
+      under the PII key and the order detail panel "Avisos al destinatario" (NTF-RECIPIENT-NOTICE-PANEL-2026-10-30, T1
+      to T6; no migration, no new grant); every part below is now published in this file together with its code and
+      tests by the AI-08 item it names; GATE-004 and GATE-007 stay open and every switch stays off
+    delta: recipient notices (TRACKING_LINK, IN_TRANSIT, DELIVERY_FAILED and DELIVERED) to the delivery recipient by
+      WhatsApp and by e-mail; the parts below add an optional recipient e-mail, the WhatsApp consent, the dispatcher
+      list and stop operations, the provider webhooks and the e-mail unsubscribe; every error keeps
+      application/problem+json, the uniform 404 and the AI05-DECLARE-EMITTED-ERRORS 503, and no answer, problem or log
+      ever carries a phone, an e-mail, a link, a token or a template parameter
+    parts:
+    - item: NTF-002
+      operation: createQuote
+      change: CreateQuoteRequest.destination becomes DestinationAddressInput, AddressInput plus the optional email
+        (string, ASCII only, at most 254 characters, exactly one @, a domain with at least one dot and no spaces;
+        trimmed, the domain lower-cased); origin keeps AddressInput, so an origin never carries an e-mail; any other
+        value is 422 ValidationError before any effect, without echoing it; the e-mail enters the quote input hash and
+        the Idempotency-Key fingerprint only when present, so existing hashes stay stable (LOW-PRICE-MANUAL-AUTH-2026-10-02
+        precedent); it is stored only sealed (AI-24 recipient_notices.contact) and never returned by any operation,
+        logged, audited or placed in request_snapshot_redacted, an outbox payload or an event
+    - item: NTF-004
+      operation: createOrder
+      change: CreateOrderRequest gains the optional recipient_notices object (additionalProperties false) with
+        whatsapp_consent_attested (boolean) and whatsapp_consent_version (const NTF-RECIPIENT-WHATSAPP-CONSENT-V1,
+        required when whatsapp_consent_attested is true and absent otherwise); absent or false records nothing; any other
+        shape is the uniform 409 INVALID_REQUEST before any order is created; it is part of the Idempotency-Key request
+        hash (only when true, NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 N3 choice 3); when true, orders.recipient_notice_consents
+        gets one row (order, WHATSAPP, version, the actor, the server time) in the createOrder transaction and the
+        ORDER_CREATED audit entry records the boolean only
+    - item: NTF-004
+      operation: commitOrderCsv
+      change: CsvImportCommitRequest gains the optional form fields recipient_whatsapp_consent_attested (true or false)
+        and recipient_whatsapp_consent_version (NTF-RECIPIENT-WHATSAPP-CONSENT-V1, required with true); the attestation
+        covers every row of the batch, is recorded for each created order as on createOrder and is part of the batch
+        fingerprint (only when true, NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 N3 choice 3); any other shape is the uniform
+        409 CONFLICT before the batch is reserved (N3 choice 5); previewOrderCsv is unchanged
+    - item: NTF-006
+      operation: verifyMetaWhatsAppWebhook
+      method_path: GET /messaging/whatsapp/webhook
+      change: tag Messaging, security none; query hub.mode, hub.verify_token and hub.challenge; 200 text/plain with
+        hub.challenge only for hub.mode subscribe and a verify token equal, in constant time, to the current or the
+        previous configured secret (two slots, NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 O11 choice 9); otherwise the
+        uniform 403; the query is removed from the request target before anything logs it (O11 choice 7); 404 while
+        Messaging:WhatsApp:Webhook:Enabled is false, never 429 then (O4); 429 under SEC-004, 10 per 60 seconds per
+        client network (O3)
+    - item: NTF-006
+      operation: receiveMetaWhatsAppWebhook
+      method_path: POST /messaging/whatsapp/webhook
+      change: tag Messaging, security none, application/json from Meta with the required X-Hub-Signature-256 header
+        (sha256= and the HMAC-SHA256 of the raw body under the current or the previous Meta app secret, O11 choice 9),
+        checked in constant time before parsing; a body over 256 KiB is 413 (O11 choice 2); only object
+        whatsapp_business_account and the configured phone_number_id are read (O11 choice 5); statuses become delivery
+        receipts (AI-24 recipient_notices.receipts); an inbound opt-out keyword or the quick reply No recibir avisos (by
+        its payload or its text, O11 choice 4) becomes a WHATSAPP opt-out of the sender hash
+        (recipient_notices.opt_out) and, when it records that opt-out, the one confirmation
+        (recipient_notices.opt_out.confirmation, E4-P15); any other inbound message gets the one automatic reply
+        (recipient_notices.auto_reply, E4-P9); 200 once recorded, fields it does not use ignored; the uniform 403 for a
+        missing or invalid signature; 400 for a validly signed body that is not a JSON object; 404 while disabled,
+        never 429 then (O4); 429 under SEC-004, 300 per 60 seconds per client network (O3); 503 when the store or a key
+        is unavailable, so Meta retries; no inbound text, profile name, phone or recipient_id is ever logged, stored in
+        clear or audited
+    - item: NTF-006
+      operation: receiveAcsEmailEvents
+      method_path: POST /messaging/email/events
+      change: tag Messaging, security none, Event Grid event schema (application/json); answers the subscription
+        validation handshake (aeg-event-type SubscriptionValidation) with its validationResponse; otherwise only
+        deliveries authenticated by the Key Vault secret header X-Paquetenvia-Event-Secret, compared in constant time
+        against two slots before the body is read (O2 "Secreto en un encabezado (Recommended)"), else 401 when it is
+        missing or the uniform 403 when it is wrong; a body over 64 KiB is 413 (O11 choice 2);
+        Microsoft.Communication.EmailDeliveryReportReceived events become receipts with the O6 status map and other
+        event types are ignored; 200 once recorded; 404 while Messaging:Email:Events:Enabled is false, never 429 then
+        (O4); 429 under SEC-004, 120 per 60 seconds per client network (O3); 503 when the store is unavailable, so
+        Event Grid retries
+    - item: NTF-006
+      operation: unsubscribeRecipientNotices
+      method_path: POST /recipient-notices/unsubscribe/{unsubscribeToken}
+      change: tag Messaging, security none, no session, cookie or CSRF, and no switch (O4); the body is empty, the RFC
+        8058 field List-Unsubscribe=One-Click as a form or multipart, or an empty JSON object from the public page,
+        else 400, and a body over 1 KiB is 413 (O11 choices 2 and 7); the token binds the owner organization and the
+        notification id under HMAC-SHA256 and is checked in constant time, and it is removed from the request target
+        before anything logs it; a valid token reads the e-mail copy of that notification with the API's PII key in a
+        transaction of its organization (O11 choice 1) and records the EMAIL opt-out of its hash (source EMAIL_LINK,
+        no audit row, O10) and answers 204, also when it was already recorded; an invalid or malformed token, or one
+        whose notification or e-mail copy no longer exists, is the uniform 404; 429 under SEC-004, 20 per 60 seconds
+        per client network with the uniform public body (O3); 503 when the store or a key is unavailable; never a
+        redirect and no GET; Cache-Control no-store
+    - item: NTF-007
+      operation: listOrderRecipientNotices
+      method_path: GET /orders/{orderId}/recipient-notices
+      change: tag Orders; OrganizationContext and OrderId; 200 RecipientNoticeList with items (notification_id, notice,
+        channel WHATSAPP or EMAIL, status PENDING, SENT, DELIVERED, FAILED or CANCELLED, attempts, last_code from the
+        explicit closed set of RecipientNotice.last_code - the closed MessagingResultCodes, the lane's AMBIGUOUS_TIMEOUT,
+        TRACKING_LINK_UNAVAILABLE and cancellation reasons, and MAX_ATTEMPTS_EXHAUSTED (NTF-RECIPIENT-NOTICE-PANEL-2026-10-30
+        T6 choice 4), sent_at, delivered_at, updated_at; ordered by creation, WhatsApp before e-mail, at most 100; no
+        scheduled time, T2 "Sin hora, con nota (Recommended)"), whatsapp_consent_attested and email_on_file (booleans,
+        the e-mail under the PII key, T6 choice 3); never the phone, the e-mail, the link or a template parameter;
+        Cache-Control no-store; 401, 403 (MFA_REQUIRED when only the second factor is missing), the uniform 404 (missing
+        order, another organization or an order the selected organization only operates) and 503 (also for a stored
+        value outside the closed sets)
+    - item: NTF-007
+      operation: stopOrderRecipientNotices
+      method_path: POST /orders/{orderId}/recipient-notices/stop
+      change: tag Orders; OrganizationContext, OrderId and the required Idempotency-Key, no body; records the WHATSAPP
+        opt-out of the destination phone and, when there is one, the EMAIL opt-out of the destination e-mail (source
+        DISPATCHER; global, E4-P8), decrypting them in memory only with the API's PII key outside any open transaction,
+        and audits RECIPIENT_NOTICES_STOPPED with the Idempotency-Key as request_id and the channels only, without any
+        value (NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 T6 choices 5 and 7); 200 RecipientNoticeStopResult with order_id,
+        the channels recorded - the channels whose contact is usable, named also when their opt-out was already on
+        record, so no opt-out made through another organization shows (T6 choice 6) - and recorded_at, the server time
+        of this action; a replay returns the stored answer; 409 INVALID_REQUEST, IDEMPOTENCY_CONFLICT or
+        RECIPIENT_CONTACT_UNAVAILABLE when no contact is usable, nothing recorded or audited (T6 choice 8);
+        Cache-Control no-store; 401, 403 (MFA_REQUIRED), the uniform 404 as listOrderRecipientNotices and 503 when the
+        PII key or the contact lookup key is unavailable
+    - item: NTF-007
+      operation: x-capability-matrix
+      change: a new section recipient_notice_operations with listOrderRecipientNotices and stopOrderRecipientNotices for
+        DISPATCHER members without MFA and PLATFORM_ADMIN members with a satisfied MFA challenge, owner organization
+        only (the tracking_link_operations rule), decided before any order is read

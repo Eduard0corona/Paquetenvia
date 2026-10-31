@@ -1,5 +1,6 @@
 using System.Data.Common;
 using System.Text.Json;
+using Locations.Application.Geocoding;
 using Locations.Application.Locations;
 using Locations.Infrastructure.Geocoding;
 using Locations.Infrastructure.Locations;
@@ -29,7 +30,7 @@ namespace Paqueteria.ContractTests.PostgreSql;
 
 [Collection(PostgreSqlContractCollection.Name)]
 [Trait("Category", "PostgreSqlContract")]
-public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fixture)
+public sealed partial class PricingPostgreSqlContractTests(PostgreSqlContractFixture fixture)
 {
     [PostgreSqlContractFact]
     public async Task Pricing_adoption_is_applied_migrator_owned_and_has_zero_pending_migrations()
@@ -1518,7 +1519,9 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
     private QuoteRuntimeScope CreateScope(
         NpgsqlDataSource dataSource,
         IQuoteLocationResolver? resolverOverride = null,
-        DbCommandInterceptor? pricingInterceptor = null)
+        DbCommandInterceptor? pricingInterceptor = null,
+        ILocationNoticeContactSealer? noticeSealer = null,
+        ILocationPiiProtector? piiProtector = null)
     {
         var locationState = new TenantDatabaseExecutionState();
         var locationOptions = new DbContextOptionsBuilder<LocationsDbContext>()
@@ -1529,7 +1532,8 @@ public sealed class PricingPostgreSqlContractTests(PostgreSqlContractFixture fix
         var locationService = new PostgreSqlLocationService(
             new TenantTransactionContext<LocationsDbContext>(locations, locationState),
             new ManualGeocodingProvider(),
-            new DeterministicMockLocationPiiProtector(),
+            piiProtector ?? new DeterministicMockLocationPiiProtector(),
+            noticeSealer ?? new DisabledLocationNoticeContactSealer(),
             new PostgreSqlAppendOnlyAuditWriter(locationState),
             new SystemClock());
         var countingResolver = new CountingQuoteLocationResolver(resolverOverride ?? locationService);

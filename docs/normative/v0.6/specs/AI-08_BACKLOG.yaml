@@ -2,7 +2,7 @@ meta:
   version: '0.6'
   generated: '2026-07-19'
   execution_order: topological by depends_on; P0 before P1
-  item_count: 70
+  item_count: 78
 definition_of_ready:
 - normative inputs identified
 - dependencies DONE
@@ -326,8 +326,10 @@ items:
   - documento vencido bloquea
   - capacidad y estado se verifican
   - razón de rechazo estructurada
+  - 'DECIDED DRV-ELIGIBILITY-SORTED-DIMENSIONS-2026-10-20 (project owner, "Que el sistema las ordene"): before comparing, DriverEligibilityPolicy sorts the three sides of each package and the three limits of the vehicle type from largest to smallest; a package fits when each sorted side is at most the limit in the same place, the order fits when every package fits, a side not measured is not checked (the measured sides take the largest limits) unless RequireDimensions, which fails a blank side with the code of its field in every package; a side that does not fit reports the code of its sorted place (largest LENGTH, middle WIDTH, smallest HEIGHT); Dispatch, Orders and Routing pass the sides of each package'
   required_tests:
   - eligibility table tests
+  - sorted dimensions table tests - every order of the sides and of the limits gives the same verdict and code, ties, partial sides, RequireDimensions true and false, multi-package orders, and an order typed sideways through the picker, assignDriver, capacity_available and addRouteStop on PostgreSQL
   approval_gate: null
 - id: DSP-002
   epic: Dispatch
@@ -499,9 +501,11 @@ items:
   - evento conserva client timestamp
   - reintento no duplica
   - conflicto requiere resolución visible
+  - 'DECIDED DRV-PROOF-PHOTO-REDUCE-2026-10-20 (project owner, "Reducir y quitar metadatos (Recommended)"): the phone reduces every proof photo before it is hashed and queued - a JPEG of at most 1600 px per side (never enlarged, aspect ratio kept), quality 0.8, with no metadata (no EXIF, GPS, XMP, ICC profile or comment); that reduced JPEG is the stored evidence, its SHA-256 is computed on those bytes and those exact bytes are queued, uploaded and kept; a photo the phone cannot reduce is refused with nothing kept, never replaced by the picked file; the 10 MiB, 25 MiB and 100-operation limits are unchanged (AI-07 driver_stop.proof_photo)'
   required_tests:
   - offline Playwright
   - duplicate upload
+  - 'proof photo reduction in a real browser - a synthetic EXIF GPS camera JPEG is previewed, stored, hashed, declared and uploaded as one upright image/jpeg of at most 1600 px per side with no metadata segment, and a photo the browser cannot decode keeps nothing'
   approval_gate: null
 - id: TRK-001
   epic: Tracking
@@ -704,6 +708,10 @@ items:
   - RouteChanged is emitted post-commit through outbox and clients recover through REST
   - route cost is calculated server-side from ACCEPTED/ACTIVE assignment cost_cents using bigint cents
   - already-valid 4500/5200-cent orders may be linked without changing Pricing snapshots, consolidated_route or financial_override
+  - 'DECIDED RTE-001-ROUTING-ASSIGNMENT-FLOW6-2026-10-20: route stop <-> assignment.route_id is AI-13 §4 flow 6
+    (route_stop_to_assignment_route_id, docs/adr/ADR-RTE-001-ROUTE-ASSIGNMENT-FLOW6.md); in the one Routes transaction
+    addRouteStop sets and removeRouteStop clears dispatch.assignments.route_id, its only write into another module; no
+    behaviour change'
   required_tests:
   - route constraints
   - Playwright reorder
@@ -716,6 +724,7 @@ items:
   - RouteChanged audience and transactional outbox
   - Playwright drag and keyboard reorder
   - valid 4500/5200-cent order route fixture
+  - cross-module write catalog (CrossSchemaWriteCatalogTests) fails on a new, removed or unflowed cross-module write
   approval_gate: null
 - id: INC-001
   epic: Incidents
@@ -796,10 +805,12 @@ items:
   - AUTH-001
   - ENV-001
   - UI-001
+  - NTF-005
   expected_outputs:
   - pilot readiness report
   acceptance_criteria:
   - 50-100 entregas reales planificadas
+  - NTF-RECIPIENT-NOTICES-2026-10-20 and PILOT-SCOPE-ALL-ENABLED - the recipient notices (NTF-005) are part of the pilot; they go live only once GATE-004 and GATE-007 are resolved
   - datos completos >=98%
   - restore vigente
   required_tests:
@@ -1028,10 +1039,13 @@ items:
   - consultas críticas cumplen presupuesto
   - migraciones son expand/contract
   - tablas candidatas tienen plan probado sin downtime destructivo
+  - 'DECIDED DP-INDEXES-ORDERS-DISPATCH-2026-10-20 (project owner, "Ahora, en un PR (Recommended)"): AI-06 and the Orders and Dispatch lanes carry four read indexes - order_events_actor_status_time_idx and assignments_order_driver_idx for the driver''s completed_today count, assignments_driver_open_idx for listMyStops, listOrganizationDrivers and the assignment picker, and orders_price_review_idx for the operations dashboard price-review filter; each lane step adopts the AI-06 index, refuses one of another shape, never uses CONCURRENTLY and rolls back by dropping exactly its own indexes; round I ("Reescribir la consulta (Recommended)", "Dejarlo para el piloto (Recommended)", "Dejarlo por ahora (Recommended)"): the order list without an owner_org_id, public_id or COD-pending filter reads in two parts per organization of app.current_org_ids - owned orders from orders_owner_created_idx and orders only operated (owner not admitted by security.app_allowed_org) from orders_operator_created_idx, each ordered and limited, then merged - with the same rows, order, page size and cursor as the previous statement, which the other filters keep; the queue counts and the COD-pending filter stay unchanged'
   required_tests:
   - query benchmark
   - migration compatibility test
   - restore with partitioned sample
+  - read index plans - the runtime statements, read from their sources and planned as paqueteria_app under FORCE RLS on synthetic history, use their DP-INDEXES-ORDERS-DISPATCH-2026-10-20 index instead of the driver's assignment history or every order; both lane steps roll back and forward as the migrator (PostgreSQL)
+  - order list by party - both list statements, read from the runtime source, return the same pages (every column, every filter combination, ties on created_at, contexts of one, several and no organizations) as paqueteria_app under FORCE RLS, the runtime list matches the previous statement for every filter it accepts, and each part walks its own index (PostgreSQL)
   approval_gate: GATE-014
 - id: SCL-004
   epic: Scalability
@@ -1257,16 +1271,25 @@ items:
   - organization provisioning service
   - audit event
   - integration tests
+  - one-time audited platform bootstrap command (TEN-003-PLATFORM-BOOTSTRAP-2026-10-19)
   acceptance_criteria:
   - bootstrap role never writes
   - identity_subject equals validated OIDC subject
   - new UUIDs are generated by application and authorized only in transaction-local context
   - organization and initial membership are atomic
   - failed provisioning leaves no partial user/organization/membership
+  - 'DECIDED TEN-003-PLATFORM-BOOTSTRAP-2026-10-19: the DatabaseMigrator platform-bootstrap command, run once by the
+    owner on the migration connection before the first sign-in, creates through the TEN-003 provisioner the ACTIVE
+    PLATFORM organization, the user of the owner''s AuthCenter subject (the AuthCenter user id, a lowercase UUID) and
+    its ACTIVE default PLATFORM_ADMIN membership with one append-only audit row, in one transaction that writes as
+    paqueteria_migrator under FORCE RLS with the new UUIDs pre-authorized only in that transaction; it refuses, writing
+    nothing, once any PLATFORM organization, PLATFORM_ADMIN membership or user of that subject exists, and its output
+    names no subject, name or id; the API keeps the deny authorizer and no role, grant or function is added'
   required_tests:
   - first login provisioning
   - organization provisioning rollback
   - RLS fail-closed without pre-authorized UUID
+  - platform bootstrap once on real PostgreSQL, refused on every later run with nothing written
 - id: OPS-004
   title: Retención y purga segura de outbox
   priority: P1
@@ -1440,10 +1463,14 @@ items:
   - the Data Protection key ring has an external key-encryption protector before distributed activation
   - restore drill evidence is current before pilot start
   - 'DECIDED PILOT-SAME-ORIGIN-ROUTING: the Azure ingress sends /api, /hubs, /auth and /signin-authcenter to the API'
+  - 'DECIDED OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20 (project owner, "Que el despliegue lo siga (Recommended)"): after a real restore the pilot follows the restored PostgreSQL server - the server is one setting, the azure-pilot variable PILOT_POSTGRES_SERVER_NAME (empty = the first server, the unchanged template default), validated before Azure; a named server must exist and be adoptable in place before stage 2; the migration connection, the runtime credentials and logins (regenerated when their host is not the server in service), the jobs, the SCL-007 alerts and restore-drill.sh follow it; the original server is never deleted by the deployment and keeps its backups until the owner deletes it (env-001 README section 6.4)'
+  - 'DECIDED ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21 (project owner, "Reusar la imagen (Recommended)"): the pilot deploy builds an image once per commit - when paquetenvia-<name>:<tested_git_sha> is already in the pilot registry it reuses that digest and builds and pushes nothing, so a rollback deploys the same bytes; otherwise it builds on the unpinned bases (a base patch reaches the pilot with the next commit) and pushes; each tag is then locked (az acr repository update --write-enabled false) and read back, so the registry refuses a push over it; a failing registry read or lock stops the run before any build; every later step uses the digest (env-001 README section 6.2)'
   required_tests:
   - migrator Clean and Applied paths on the pilot database
   - restore drill
   - readiness checks green with production adapters enabled
+  - pilot static guard and workflow step tests - PILOT_POSTGRES_SERVER_NAME format and default, the server named only through the setting, adoption refused for a missing or unadoptable server, kept runtime credentials regenerated on a host change without printing a secret, failing closed on every drift
+  - pilot images step tests - an existing paquetenvia-<name>:<tested_git_sha> reused with no build or push, a missing one built, pushed, locked and read back, a push over an existing locked tag refused, a failing registry read stopping the step before any build, and guard P27 keeping the reuse branch
   approval_gate: owner_technology_operations
 - id: ADP-001
   decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)
@@ -1527,10 +1554,36 @@ items:
   acceptance_criteria:
   - master data loads are idempotent, audited and tenant-scoped
   - real zones require GATE-010 resolution or explicit owner scoping; tariffs follow GATE-011-VAT-INCLUDED-2026-09-29
+  - 'DECIDED GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20 (project owner, G4 "Sí, propónmelos (Recommended)", H2 "Aprobar la tabla (Recommended)" and H3 "Aprobar la lista (Recommended)"): the pilot driver eligibility maps are the reviewed Drivers__Eligibility entries of deploy/azure/pilot/apps.settings.json, shared by every organization and not loaded as master data - per order, packages / total grams / heaviest package grams / length x width x height mm: MOTORCYCLE 5 / 20000 / 10000 / 400 x 400 x 350, CAR 10 / 100000 / 20000 / 900 x 800 x 600, VAN 20 / 400000 / 20000 / 2000 x 1200 x 1200, BICYCLE 3 / 10000 / 10000 / 450 x 400 x 300, WALKER 2 / 5000 / 5000 / 450 x 400 x 300, RequireDimensions false for all five; documents IDENTITY, DRIVER_LICENSE, VEHICLE_CARD and INSURANCE for MOTORCYCLE, CAR and VAN and IDENTITY for BICYCLE and WALKER, each with an expiry date (no NonExpiringDocumentTypes) and no BACKGROUND_CHECK; pickups count as VAN and cargo bikes as BICYCLE; GATE-010 stays open for zones, hours, prohibited items and SLA, and no real driver is assignable before DRV-DOC-001'
   required_tests:
   - idempotent reload
   - cross-tenant isolation
   approval_gate: GATE-010
+- id: DRV-DOC-001
+  decision: GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20 (project owner; H1 and H3)
+  epic: Driver
+  release: MVP-1
+  title: Registro de documentos de repartidor y validación por despacho
+  priority: P1
+  depends_on:
+  - DSP-001
+  - MDM-001
+  expected_outputs:
+  - a way to record the documents of each real driver in drivers.driver_documents - AI-05 registerMyDriverDocument and listMyDriverDocuments (/driver/me/documents), or an MDM-001 loader extension that carries the document metadata; the implementing task chooses with an ADR
+  - a dispatch operation that marks a document VALID or REJECTED, or the same outcome recorded through the MDM-001 loader; any AI-05, AI-06 or AI-18 change it needs is part of that ADR
+  acceptance_criteria:
+  - 'DECIDED GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20 (project owner, H1 "Tarea nueva, tras GATE-007 (Recommended)"): the H3 document list is the target policy; documents are registered and dispatch validates them'
+  - no real driver document is stored before GATE-007 is resolved or explicitly scoped by the project owner (driver documents are part of GATE-007)
+  - a document registered by a driver starts PENDING; only dispatch makes it VALID or REJECTED (a dispatcher of the driver organization authorized in the backend and by RLS, or a reviewed MDM-001 load), audited in the same transaction; a driver never validates a document
+  - every required document carries expires_at (NonExpiringDocumentTypes stays empty, H3); a permanent Sinaloa driver license is recorded with the review date the owner defines
+  - a document file never travels through the API as multipart; no document number, file, object key or hash appears in logs, outbox, events or audit payloads
+  - a driver reads only their own documents; another organization's document answers the uniform 404
+  required_tests:
+  - DSP-001 eligibility end to end - VALID and unexpired documents of the pilot list make the driver eligible; a missing, PENDING, REJECTED or expired one keeps its DSP-001 rejection
+  - PostgreSQL RLS and cross-tenant isolation of drivers.driver_documents
+  - authorization matrix of the registration and validation operations
+  - migration up and down on real PostgreSQL when the schema changes
+  approval_gate: GATE-007
 - id: TRK-002
   decision: AI08-PILOT-ITEMS (project owner, 2026-09-27)
   epic: Tracking
@@ -1550,6 +1603,7 @@ items:
   - sending links to customers requires GATE-004 and GATE-007
   - TRK-002-AUTO-LINK - every order gets its link when it is created; get-or-create returns the same link and never rotates
   - TRK-002-AUTO-LINK - a link lives with the order and 24 hours after its first final public status; finished orders get no new link
+  - NTF-RECIPIENT-NOTICES-2026-10-20 - the delivery of the link through an approved channel is the NTF-005 notice recipient.tracking-link (WhatsApp URL button and e-mail), sent when the order is confirmed; the Worker derives the link in memory from the stored generation and key version and checks it against the stored hash; issuance here is unchanged
   required_tests:
   - link issued once per generation, with the order, and returned unchanged by get-or-create
   - the revocation route does not exist and a link keeps resolving until its lifecycle bound
@@ -1738,6 +1792,7 @@ items:
   - a realtime notice a Worker lane writes (dispatch.assignment-changed from the Dispatch reaction, notifications.status-changed from a notification delivery) can wait for both idle lanes on a fully idle system, up to 1 s on the Worker lane and up to 1 s on the realtime business lane, about 2 s in the worst case before the other screens and the driver app update (before about 0.5 s); the owner accepts it and keeps both maximum idle waits at 1 s; under load there is no wait, the AI-15 event_delivery_p95_seconds warning still applies from the realtime row, and the order notices the API writes itself are not affected
   - an idle realtime lane claims at least once a second, so its OBS-002 OutboxLaneSummary is still written once a minute and a ready row waits at most 1 s more for its claim; the OBS-002 MaxClaimAgeMs (now - min(available_at), read when the claim returns) includes that wait
   - 'DECIDED SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14 (project owner, "Sí, 80 % y 95 % (Recommended)" and "Máximo en 5 min, cada minuto (Recommended)"): two Azure Monitor metric alerts on active_connections of the pilot PostgreSQL server (B1ms, 35 user connections) against AI-15 connection_pool_utilization 0.8/0.95 - a warning at 28 or more (severity 2) and a critical at 33 or more (severity 1); the Maximum of the one-minute samples over 5 minutes, evaluated every minute, stateful (one e-mail when it fires and one when it resolves); 2 time series, inside the 10 free per resource, otherwise about 0.10 USD per series per month against PILOT-BUDGET-ACCEPT-98-108; both notify the existing pilot action group, whose alert e-mail address the owner sets at deploy (alertEmailAddress, still OWNER_DECISION_REQUIRED)'
+  - 'DECIDED SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20 (project owner, "CPU, memoria y disco (Recommended)", "Un nivel, de aviso (Recommended)", "CPU 70, memoria 80, disco 70 (Recommended)", "Sí, agregarla (Recommended)" and "Menos de 72 (25 %) (Recommended)"): four more Azure Monitor metric alerts on the pilot PostgreSQL server, one level each (warning, severity 2), evaluated every minute, stateful, through the existing pilot action group - cpu_percent Average over 30 minutes >= 70 (AI-15 db_cpu_utilization warning 0.7, window 30m), memory_percent Maximum over 5 minutes >= 80, storage_percent Maximum over 5 minutes >= 70 (22.4 of the 32 GiB) and cpu_credits_remaining Minimum over 5 minutes <= 72 (25 % of the 288 B1ms credits); with the two connection alerts, 6 time series, inside the 10 free per resource, otherwise about 0.10 USD per series per month against PILOT-BUDGET-ACCEPT-98-108; the B1ms credit numbers and the 32 GiB base of the storage percentages are checked at the first deployment'
   required_tests:
   - architecture test - one data source per role, resolved by every module
   - pooled-connection tenant context regression on the shared pools (PostgreSQL)
@@ -1745,6 +1800,7 @@ items:
   - adaptive wait backoff, reset on work, heartbeat while idle and cancellation (fake clock)
   - a realtime notice committed after an idle period reaches a SignalR client within the AI-15 event_delivery_p95_seconds warning (PostgreSQL)
   - pilot static guard - exactly the two PostgreSQL connection alerts (target server, metric, aggregation, window, frequency, thresholds, severities, action group, no e-mail address), failing closed on every drift
+  - pilot static guard - exactly the four PostgreSQL resource alerts besides the two connection alerts, six metric alerts in all (target server, metric, aggregation, operator, threshold, window, frequency, severity, action group, enabled, stateful, no dimension, no e-mail address, server SKU and disk size), failing closed on every drift
   approval_gate: owner_technology_operations
 - id: OPS-005
   decision: PHASE4-PLATFORM-APPROVAL-2026-10-12 (project owner)
@@ -1772,3 +1828,194 @@ items:
   required_tests:
   - the end-to-end suite itself, green in CI
   approval_gate: owner_technology_operations
+- id: NTF-002
+  decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner; E4 and E4-P2)
+  epic: Notifications
+  release: MVP-1
+  title: Contacto del destinatario para avisos (correo opcional y llave de avisos)
+  priority: P1
+  depends_on:
+  - GEO-001
+  - PRC-001
+  - ADP-001
+  - UI-001
+  expected_outputs:
+  - createQuote DestinationAddressInput.email with RecipientEmailPolicy (AI-05 x-pilot-contract-deltas NTF-RECIPIENT-NOTICES, part NTF-002)
+  - the quote input hash and the Idempotency-Key fingerprint include the e-mail only when present
+  - Locations lane step adding email_ciphertext (PII key, purpose locations.email) and the notice copies notice_phone_ciphertext, notice_email_ciphertext and notice_key_version (recipient-notice key), with the AI-06 DDL and the baseline assertions in the same change (AI-06 declared contract)
+  - a notice-key protector the API can only wrap with (Key Vault RSA key recipient-notice-kek; AI-24 recipient_notices.contact)
+  - "the wizard field \"Correo del destinatario (opcional)\" (AI-07 create_order.recipient_notices.email)"
+  - docs/legal drafts list the optional recipient e-mail (GATE-007)
+  acceptance_criteria:
+  - 'DECIDED NTF-RECIPIENT-NOTICES-2026-10-20 (E4, "se agrega como campo opcional en la nueva orden"; E4-P2 "Llave propia para avisos (Recommended)")'
+  - only the destination accepts an e-mail; an invalid one is 422 before any effect and is never echoed
+  - the e-mail and every notice copy are never returned, logged, audited or placed in a snapshot, outbox payload or event
+  - existing quote hashes are unchanged when no e-mail is given
+  - the API never unwraps with the notice key; the Worker gains no access to the PII key
+  - the lane Down refuses while any new column holds a value
+  - no real recipient data before GATE-007 is resolved
+  required_tests:
+  - unit - RecipientEmailPolicy, hash stability vectors, redaction and ToString
+  - PostgreSQL - the columns, their checks, RLS and the guarded Down, Up and Down and Up again
+  - contract - the AI-05 422 cases and the DTO properties
+  - Vitest - the wizard field
+  approval_gate: GATE-004 and GATE-007
+- id: NTF-003
+  decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner; E4)
+  epic: Notifications
+  release: MVP-1
+  title: Lane de notificaciones para WhatsApp y correo
+  priority: P1
+  depends_on:
+  - NTF-001
+  - RTM-002
+  expected_outputs:
+  - Notifications lane step with the template channel and variable catalog, the new Notification columns and indexes, the status event statuses, the opt-out store and the recipient notice templates per organization (AI-06 declared contract)
+  - security.resolve_outbox_consumer branch orders.recipient-notice-requested -> NOTIFICATIONS
+  - security.expand_recipient_notice_request, read_notification_delivery v2, apply_notification_outcome v2, cancel_notification and is_recipient_opted_out (AI-18 declared contract)
+  - Realtime parser and payload NotificationStatusChanged v2 (AI-12 decided amendment), accepting v1 and v2
+  acceptance_criteria:
+  - 'DECIDED NTF-RECIPIENT-NOTICES-2026-10-20 (E4 "Los 4 del plan (Recommended)")'
+  - inert - no producer writes a request row yet and every switch stays off
+  - one Notification per order event, channel and template key; the WhatsApp ambiguous and stale-lease rules still hold
+  - a WHATSAPP or EMAIL status-changed row reaches OperationsHub instead of ending DEAD
+  - the Down refuses while external-channel rows or opt-outs exist and restores the published bodies
+  required_tests:
+  - PostgreSQL contract - catalog, grants, FORCE RLS, cross-tenant isolation, unique per order event, lease loss, the v2 code allowlist and the CANCELLED path
+  - NotificationsMigrationGuardPostgreSqlTests up, down and up again
+  - Realtime parser unit tests for v1 and v2
+  approval_gate: GATE-004
+- id: NTF-004
+  decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner; E4, E4-P1, E4-P3, E4-P4 and E4-P5)
+  epic: Notifications
+  release: MVP-1
+  title: Solicitud de avisos desde ORD-002 y permiso de WhatsApp
+  priority: P1
+  depends_on:
+  - ORD-002
+  - CSV-001
+  - NTF-005
+  expected_outputs:
+  - RecipientNoticeRequestPolicy and the extra outbox INSERT in the ORD-002 transaction (AI-24 recipient_notices.producer)
+  - CreateOrderRequest.recipient_notices and the CSV-001 commit consent fields (AI-05 x-pilot-contract-deltas NTF-RECIPIENT-NOTICES, part NTF-004)
+  - Orders lane step for orders.recipient_notice_consents, append-only (AI-06 and AI-18 declared contract)
+  - the consent checkbox on "Nueva orden" and on the CSV commit (AI-07 create_order and csv_order_import recipient_notices)
+  acceptance_criteria:
+  - 'DECIDED NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P1 "Casilla en la orden (Recommended)", E4-P3 "Al iniciar traslado (Recommended)", E4-P4 "Al quedar confirmada (Recommended)", E4-P5 "Sin motivo, con enlace (Recommended)")'
+  - exactly DRAFT -> CONFIRMED, PICKED_UP -> IN_TRANSIT, IN_TRANSIT -> FAILED_ATTEMPT, DELIVERING -> FAILED_ATTEMPT and DELIVERING -> DELIVERED write a request row, in the same transaction as the order event, with every value supplied, no RETURNING and no personal data; AT_PICKUP -> FAILED_ATTEMPT writes none
+  - an idempotent replay of a transition writes no second row; a later failure in the transaction rolls the row back
+  - the consent is optional, unticked by default and recorded once (who, when, version); without it no WhatsApp notice is created
+  - still the six AI-13 section 4 flows, with no new flow or coordinator; it merges only after NTF-005, whose consumer settles the rows while notices are off
+  - 'DECIDED NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 (N1 "Seis, y corregir los textos (Recommended)", N2 "Mismo texto y una nota (Recommended)", N3 "Aprobarlas todas (Recommended)") - the CSV-001 box reads exactly the AI-24 consent text, version NTF-RECIPIENT-WHATSAPP-CONSENT-V1, with the fixed note "Aplica a todas las filas de este archivo. Márcala solo si cada destinatario lo aceptó."; the version is a constant of the web; the box enters the createOrder request hash and the CSV batch fingerprint only when ticked; the ORDER_CREATED audit keeps the boolean only and each CSV order gets its own consent row; invalid CSV consent fields are the existing uniform 409; the Worker reads the consent under RLS'
+  required_tests:
+  - unit - the 29-transition matrix and the attempt-stage rule
+  - PostgreSQL - row in the same transaction, rollback, no RETURNING, idempotent replay, payload without PII, the consent table append-only and under RLS
+  - architecture - six coordinators (AI-13 section 4), no new flow and no new write into another module's schema
+  - Vitest - the consent checkbox
+  approval_gate: GATE-004
+- id: NTF-005
+  decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner; E4, E4-P2, E4-P6, E4-P10, E4-P11 and E4-P12)
+  epic: Notifications
+  release: MVP-1
+  title: Entrega de avisos al destinatario en el Worker
+  priority: P1
+  depends_on:
+  - NTF-002
+  - NTF-003
+  - TRK-002
+  expected_outputs:
+  - the Notifications processor routes WHATSAPP and EMAIL to IMessagingProvider; expansion with the switches, the channel set, quiet hours, the stale bound and the caps (AI-24 recipient_notices)
+  - Orders and Locations readers in the Worker; in-memory decryption with the notice key only (unwrap only); the tracking link key ring in the Worker with the hash check
+  - opt-out check, supersession at send time and the closed result codes
+  - IMessagingProvider URL-button suffix and quick reply for the Meta adapter; plain-text e-mail rendering with List-Unsubscribe; the gate decision ids checked at start; a synthetic contact resolver
+  - the WhatsApp templates and e-mail texts exactly as AI-24 recipient_notices.templates records them
+  acceptance_criteria:
+  - 'DECIDED NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P2 "Llave propia para avisos (Recommended)", E4-P6 "De "tú", sin nombres (Recommended)", E4-P10 "8:00 a 21:00 (Recommended)", E4-P11 "Por los dos siempre (Recommended)", E4-P12 "avisos@paquetenvia.com (Recommended)")'
+  - WhatsApp only with the recorded consent, e-mail only when the destination has one, both when both apply, each independent
+  - nothing leaves outside 08:00-21:00 America/Mazatlan; a deferred notice that no longer applies ends CANCELLED without a provider call
+  - no provider call with a database transaction open; no phone, e-mail, link or token in logs, rows, events or traces
+  - the link is derived in memory and checked against the stored hash; no live link is TRACKING_LINK_UNAVAILABLE
+  - real providers refused without the GATE-004 and GATE-007 decision ids and in Development, Testing and DEV_SYNTHETIC
+  - 'DECIDED NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 (L1 "Función de conteo (Recommended)", L2 "Toda la plataforma (Recommended)", L3 "Destinatario inválido (Recommended)", L5 "Aceptar el conteo estricto (Recommended)") - the caps are counted by the read-only security.read_recipient_notice_counts of a Notifications lane step, only under the live lease of the send request; the per-order cap counts the other notices of the same order and channel with attempts > 0 and the daily cap every other notice of the channel on the whole platform with attempts > 0 whose last attempt falls on that Mazatlan day, including notices that ended before any provider call; a contact that cannot be used ends FAILED with MESSAGING_RECIPIENT_INVALID'
+  required_tests:
+  - unit - routing, redaction, quiet hours, the validity table, link derivation against the stored hash and the Meta button JSON
+  - PostgreSQL contract and an end-to-end synthetic run - four notices, both channels, opted out, stale, disabled, superseded by an offline replay and an ambiguous WhatsApp failing once
+  - PostgreSQL contract - security.read_recipient_notice_counts (owner, definer, EXECUTE for paqueteria_worker only, only under a live send-request lease, two integers only, per order and channel, per channel and Mazatlan day across organizations, attempts > 0 only) and its lane step Up, Down and Up again
+  - architecture - no PII log dimensions, only these readers decrypt, HTTP client loggers removed
+  approval_gate: GATE-004 and GATE-007
+- id: NTF-006
+  decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner; E4-P8 and E4-P9) and NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (project owner; O2 to O11)
+  epic: Notifications
+  release: MVP-1
+  title: Acuses de entrega, bajas y respuesta automática
+  priority: P1
+  depends_on:
+  - NTF-005
+  expected_outputs:
+  - verifyMetaWhatsAppWebhook and receiveMetaWhatsAppWebhook (statuses, opt-out keywords, the quick reply, the opt-out confirmation and the automatic reply), receiveAcsEmailEvents and unsubscribeRecipientNotices (AI-05 x-pilot-contract-deltas NTF-RECIPIENT-NOTICES, part NTF-006)
+  - security.record_messaging_receipt, security.record_recipient_opt_out and the automatic-reply store and functions, owned by the new paqueteria_notification_receipt_executor (AI-18 declared contract, with its DDL and baseline assertions in this change)
+  - the contact lookup key in the API and the Worker; the public page /avisos/baja/:token (AI-07)
+  - the exact grant set of the new executor in docs/normative/v0.6/tools/validate_contracts.py and DatabaseBaselineAssertions
+  acceptance_criteria:
+  - 'DECIDED NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P8 "Las tres vías (Recommended)", E4-P9 "Respuesta automática (Recommended)", E4-P15 "Sí, una línea (Recommended)")'
+  - 'DECIDED NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O2 "Secreto en un encabezado (Recommended)", O3 "Los propuestos (Recommended)", O4 "404 siempre; baja sin interruptor (Recommended)", O5 "Ampliar AI-18 (Recommended)", O6 "Cuarentena = bloqueado; Expanded se ignora (Recommended)", O7 "Aprobar lo propuesto (Recommended)", O8 "Registrar al cerrar las compuertas (Recommended)", O9 "Aprobar estos textos (Recommended)", O10 "Sí, el registro de la baja basta (Recommended)", O11 "Aprobarlas todas (Recommended)") - Event Grid deliveries carry a Key Vault secret header compared in constant time, two slots, before the body is read; SEC-004 per client network per 60 seconds: verifyMetaWhatsAppWebhook 10, receiveMetaWhatsAppWebhook 300, receiveAcsEmailEvents 120, unsubscribeRecipientNotices 20 with the uniform public 429; a switched-off webhook is always the uniform 404, never 429, and the unsubscribe has no switch; a FAILED receipt records its code and the status-changed row comes from the existing writer; Quarantined is FAILED MESSAGING_POLICY_BLOCKED and Expanded is ignored; the automatic reply ignores quiet hours, is dropped with its number erased while notices or WhatsApp are off and has no daily cap; the webhooks are registered after the gates close; the /avisos/baja/:token texts of AI-07; a recipient opt-out writes no audit row; and the eleven technical choices of O11'
+  - every webhook checks its signature or authentication in constant time before parsing and is a uniform 404 while off
+  - receipts only move forward and ignore unknown references; repeated receipts change nothing
+  - an opt-out is global, kept as a keyed hash only, and honoured by the next send
+  - one automatic reply per contact in 24 hours, inside the customer service window, sent by the Worker; the inbound text and the number are never stored in clear or logged
+  - a WhatsApp opt-out by message gets the one confirmation "Listo. Ya no recibirás avisos en este número." only when it records the opt-out, through the automatic-reply path and outside its 24-hour limit; the e-mail page and "Detener avisos" send no message
+  - the ACS delivery authentication is a Key Vault secret header (O2), recorded in this change, and the SEC-004 budgets of the four anonymous operations are the owner's (O3)
+  required_tests:
+  - signature vectors (valid, invalid, a validly signed duplicate that changes nothing - the "replayed" vector, O11 choice 11 - and oversized) and the Event Grid handshake
+  - forward-only and idempotent receipts; opt-out honoured by the next send; automatic reply limits
+  - no recipient stored or logged; rate limits; 404 when off
+  approval_gate: GATE-004
+- id: NTF-007
+  decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner; E4-P8) and NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (project owner; T1 to T6)
+  epic: Operations UI
+  release: MVP-1
+  title: Panel de avisos al destinatario y "Detener avisos"
+  priority: P1
+  depends_on:
+  - NTF-005
+  - NTF-006
+  - UI-001
+  expected_outputs:
+  - listOrderRecipientNotices, stopOrderRecipientNotices and x-capability-matrix recipient_notice_operations (AI-05 x-pilot-contract-deltas NTF-RECIPIENT-NOTICES, part NTF-007)
+  - "the order detail panel \"Avisos al destinatario\" with \"Detener avisos\" and its live update (AI-07 /ops/orders/:id recipient_notices)"
+  acceptance_criteria:
+  - 'DECIDED NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P8 "Las tres vías (Recommended)")'
+  - 'DECIDED NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (T1 "Así, como I4 (Recommended)", T2 "Sin hora, con nota (Recommended)", T3 "Mensaje y botón siempre (Recommended)", T4 "Panel con una línea (Recommended)", T5 "Aprobar estos textos (Recommended)", T6 "Aprobarlas todas (Recommended)") - T1 records I4: the ConfirmDialog of "Detener avisos" has the title and text the owner approved and the buttons Cancelar and Detener avisos, focus on Cancelar; the list answers no scheduled time and the panel states the 08:00 to 21:00 Mazatlan window (T2); after a stop the confirmation lives in memory and the button stays (T3); while notices are off the panel shows the fixed line and the button (T4); the es-MX texts come from one helper with a test that pins every string (T5); and the thirteen technical choices of T6'
+  - DISPATCHER and PLATFORM_ADMIN with MFA of the owner organization only; a foreign or operated-only order is the uniform 404
+  - no recipient value in any answer, audit row or log; the stop is idempotent and audited RECIPIENT_NOTICES_STOPPED
+  required_tests:
+  - authorization matrix (dispatcher, admin with MFA, other roles, foreign organization)
+  - no recipient in the answer; idempotent stop
+  - Vitest - the panel, the confirmation and the live update
+  - normative - the AI-05 part, the AI-07 texts, the AI-24 dispatcher view and the decision-log row of round T
+  approval_gate: GATE-004
+- id: NTF-008
+  decision: NTF-RECIPIENT-NOTICES-2026-10-20 (project owner; E4-P2, E4-P7 and E4-P12)
+  epic: Operations
+  release: MVP-1
+  title: Conexión de avisos en el piloto
+  priority: P1
+  depends_on:
+  - NTF-004
+  - NTF-005
+  - NTF-006
+  - NTF-007
+  - ENV-001
+  expected_outputs:
+  - apps.bicep Key Vault mappings for the Worker (public-tracking-link-key, paquetenvia-contact-lookup-key-1, the WhatsApp token and phone number id) and the API (paquetenvia-contact-lookup-key-1, the Meta app secret and the webhook verify token with their previous slots, the Event Grid delivery secret with its previous slot, the WhatsApp phone_number_id and the Azure resource id of the Communication Services resource; NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 O11 choice 11)
+  - an unwrap-only role for the Worker and a wrap-only role for the API on recipient-notice-kek, the least-privilege ACS role of the Worker and the webhook URLs, with the pilot guard allowlists; the Event Grid subscription prepared behind a phase parameter (like the custom domain) and created only by the gate-closing change, because Event Grid validates it against a webhook that stays off until then (O8 "Registrar al cerrar las compuertas (Recommended)")
+  - Notifications__RecipientNotices__ and Messaging__ platform-managed in tools/azr-001/env001_pilot_guards.py
+  - the owner guide for Meta (display name = the legal name of the company, E4-P7), ACS (avisos@paquetenvia.com, display name Seguimiento de envío, E4-P12) and DNS, with the registration of the Meta callback as a step after the gate-closing change (O8)
+  acceptance_criteria:
+  - 'DECIDED NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P7 "La razón social (Recommended)", E4-P12 "avisos@paquetenvia.com (Recommended)")'
+  - only after the owner created the secrets, the key and the resources (a mapped secret that does not exist stops the Worker)
+  - every switch stays off; a later gate-closing change that records the GATE-004 and GATE-007 resolution rows turns notices on with the approved Meta template names
+  required_tests:
+  - env001_pilot_guards.py tests
+  - Bicep build and what-if
+  approval_gate: GATE-004 and GATE-007

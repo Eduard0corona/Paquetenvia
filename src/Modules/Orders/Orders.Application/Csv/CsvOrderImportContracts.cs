@@ -149,6 +149,12 @@ public sealed record CsvOrderImportPrevalidation(
 /// ORD-PROHIBITED-GOODS-PHONE-MX-2026-10-02: the dispatcher's confirmation, given once on commit for every shipment
 /// in the file, that none contains prohibited goods. Each row hands it to ORD-001, which rejects a row without it.
 /// </param>
+/// <param name="WhatsAppConsentVersion">
+/// NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P1; AI-08 NTF-004): the one WhatsApp consent box of the commit, for the
+/// recipient of every row of the file. <see langword="null"/> when not ticked; ticked it is
+/// <see cref="Orders.RecipientNoticeConsentPolicy.Version"/>, part of the batch fingerprint, and each created order records
+/// its own consent row as on createOrder (NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 N3 choices 3 and 4).
+/// </param>
 public sealed record CsvOrderImportCommitCommand(
     Guid ActorId,
     Guid OrganizationId,
@@ -156,7 +162,8 @@ public sealed record CsvOrderImportCommitCommand(
     string ContentDigest,
     IReadOnlyList<CsvOrderImportOrderRow> Rows,
     string? RequestId,
-    bool RestrictedGoodsAcknowledged = false)
+    bool RestrictedGoodsAcknowledged = false,
+    string? WhatsAppConsentVersion = null)
 {
     public IReadOnlyList<CsvOrderImportOrderRow> Rows { get; } = Rows.ToImmutableArray();
 }
@@ -197,13 +204,16 @@ public interface ICsvOrderImportCommitService
 /// Identifies one CSV-001 commit: the tenant, the batch key its caller supplied and the exact file
 /// that key is bound to. The actor is carried for the tenant database context only; it is not part
 /// of the identity, so two members of the same organization replaying one batch see one result.
+/// <see cref="WhatsAppConsentVersion"/> (NTF-RECIPIENT-NOTICES-2026-10-20, AI-08 NTF-004) is part of the identity only
+/// when the WhatsApp consent box was ticked, so every batch fingerprint of an unticked commit stays byte-identical.
 /// </summary>
 public sealed record CsvOrderImportBatchIdentity(
     Guid ActorId,
     Guid OrganizationId,
     string IdempotencyKey,
     string ContentDigest,
-    int RowCount);
+    int RowCount,
+    string? WhatsAppConsentVersion = null);
 
 /// <summary>
 /// Raised when a CSV commit <c>Idempotency-Key</c> is replayed for a different batch. The key is a

@@ -271,15 +271,18 @@ public sealed class Sec004RateLimitPlumbingTests
                 .Order(StringComparer.Ordinal),
             limited.Select(item => item.Policy!).Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
 
-        // Only the public tracking surfaces answer the uniform body.
+        // Only the public tracking surfaces and the e-mail unsubscribe (NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25, O3)
+        // answer the uniform body.
         var uniform = host.Services.GetRequiredService<EndpointDataSource>().Endpoints
             .Where(endpoint => endpoint.Metadata.GetMetadata<PublicTrackingRateLimitRejection>() is not null)
             .Select(endpoint => ((RouteEndpoint)endpoint).RoutePattern.RawText!)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
         Assert.Contains(PublicTrackingEndpointDefaults.Path, uniform);
+        Assert.Contains(global::Notifications.Endpoints.RecipientNoticeEndpointDefaults.UnsubscribePath, uniform);
         Assert.All(uniform, pattern => Assert.True(
             pattern == PublicTrackingEndpointDefaults.Path ||
+                pattern == global::Notifications.Endpoints.RecipientNoticeEndpointDefaults.UnsubscribePath ||
                 pattern.StartsWith(RealtimeEndpointDefaults.TrackingPath, StringComparison.Ordinal),
             pattern));
         Assert.Contains(uniform, pattern => pattern.StartsWith(RealtimeEndpointDefaults.TrackingPath + "/negotiate", StringComparison.Ordinal));
@@ -323,7 +326,8 @@ public sealed class Sec004RateLimitPlumbingTests
             .Select(policy => (policy.Name, policy.Partition, Limit: policy.Limit(host.Services)))
             .OrderBy(item => item.Name, StringComparer.Ordinal)
             .ToArray();
-        Assert.Equal(15, registry.Policies.Count);
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O3) adds the four recipient notice policies.
+        Assert.Equal(19, registry.Policies.Count);
         Assert.All(registry.Policies.Where(policy => existing.Contains(policy.Name, StringComparer.Ordinal)), policy =>
         {
             // They keep the framework's own fixed window: no shared window, no in-flight rule.

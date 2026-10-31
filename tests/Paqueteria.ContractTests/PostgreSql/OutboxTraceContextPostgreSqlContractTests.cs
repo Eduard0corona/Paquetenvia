@@ -113,6 +113,8 @@ public sealed class OutboxTraceContextPostgreSqlContractTests(PostgreSqlContract
                 "security.append_operator_order_outbox",
                 "security.emit_notification_status_changed",
                 "security.expand_order_created_notifications",
+                // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-003): the recipient notice expansion.
+                "security.expand_recipient_notice_request",
             ],
             inserts.Select(insert => insert.Function).Distinct().Order(StringComparer.Ordinal));
         Assert.All(inserts, insert => Assert.Matches(@"\btrace_parent\b", insert.Columns ?? string.Empty));
@@ -341,7 +343,7 @@ public sealed class OutboxTraceContextPostgreSqlContractTests(PostgreSqlContract
         var sendClaim = await ClaimAsync(connection, transaction, "claim_notifications_outbox", send);
         Assert.Equal(TraceA, sendClaim.TraceParent);
         Assert.True(await ScalarAsync<bool>(connection, transaction,
-            "SELECT security.apply_notification_outcome(@outbox,@lease,@notification,1,'TRANSIENT','SYNTHETIC_TRANSIENT',clock_timestamp(),clock_timestamp())",
+            "SELECT security.apply_notification_outcome(@outbox,@lease,@notification,1,'TRANSIENT','SYNTHETIC_TRANSIENT',NULL,clock_timestamp(),clock_timestamp())",
             P("outbox", send), P("lease", sendClaim.Lease), P("notification", notification)));
         Assert.Equal(
             $"notifications.send-requested={TraceA},notifications.status-changed={TraceA},notifications.status-changed={TraceA}",
@@ -385,8 +387,9 @@ public sealed class OutboxTraceContextPostgreSqlContractTests(PostgreSqlContract
             Assert.Contains("column:location_outbox_events.trace_parent:text:nullable:-", installed);
             Assert.Contains("column:outbox_events.trace_parent:text:nullable:-", installed);
             Assert.Contains("column-acl:outbox_events.trace_parent:paqueteria_operator_outbox_executor:INSERT:false", installed);
-            // The definer, the two Notifications writers and the two content guards name the column.
-            Assert.Equal(5, installed.Count(line => line.StartsWith("function:", StringComparison.Ordinal) && line.EndsWith(":trace", StringComparison.Ordinal)));
+            // The definer, the two Notifications writers and the two content guards name the column, and so does the
+            // NTF-RECIPIENT-NOTICES-2026-10-20 expansion of the recipient notice lane step that follows the OBS-003 one.
+            Assert.Equal(6, installed.Count(line => line.StartsWith("function:", StringComparison.Ordinal) && line.EndsWith(":trace", StringComparison.Ordinal)));
 
             await using var dispatch = CreateDispatchContext(connection);
             await using var notifications = CreateNotificationsContext(connection);
@@ -429,10 +432,19 @@ public sealed class OutboxTraceContextPostgreSqlContractTests(PostgreSqlContract
             await new DatabaseBaselineAssertions().AssertAsync(connection);
 
             // The Up SQL adopts what it finds and is idempotent; a column of another shape is refused, never altered.
+            // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (a later Notifications step) adds the receipt executor as a grantee
+            // of the status writer; the OBS-003 step is replayed on its own catalog, so that later grant is withdrawn
+            // inside the rolled-back transaction first.
             await using (var again = await connection.BeginTransactionAsync())
             {
                 await ExecuteAsync(connection, again, AddOutboxTraceContext.UpSql);
                 await ExecuteAsync(connection, again, "RESET ROLE");
+                await ExecuteAsync(connection, again,
+                    """
+                    SET ROLE paqueteria_outbox_executor;
+                    REVOKE EXECUTE ON FUNCTION security.emit_notification_status_changed(uuid,uuid,integer,text,text,integer,timestamptz) FROM paqueteria_notification_receipt_executor;
+                    RESET ROLE;
+                    """);
                 await ExecuteAsync(connection, again, CarryOutboxTraceContext.UpSql);
                 await ExecuteAsync(connection, again, "RESET ROLE");
                 await again.RollbackAsync();
@@ -527,7 +539,17 @@ public sealed class OutboxTraceContextPostgreSqlContractTests(PostgreSqlContract
         var ids = context.GetService<IMigrationsAssembly>().Migrations.Keys.Order(StringComparer.Ordinal).ToArray();
         var index = Array.IndexOf(ids, migrationId);
         Assert.True(index > 0, $"{migrationId} must follow an earlier step of its lane");
-        Assert.Equal(ids.Length - 1, index);
+        // Only the DP-INDEXES-ORDERS-DISPATCH-2026-10-20 read-index step (Dispatch), the NTF-RECIPIENT-NOTICES-2026-10-20
+        // recipient notice lane step, the NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 count step and the
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 receipt step (Notifications) may follow the OBS-003 steps: rolling back
+        // to the previous step reverts them first; the read-index, count and receipt steps touch no outbox writer (the
+        // receipt executor only executes the existing status writer), and the recipient notice step keeps the trace
+        // context of every row it writes and restores the OBS-003 emitter on its way down.
+        Assert.All(ids[(index + 1)..], later => Assert.Contains(later, new[]
+        {
+            AddAssignmentReadIndexes.MigrationId, AddRecipientNoticeLane.MigrationId, AddRecipientNoticeCounts.MigrationId,
+            AddRecipientNoticeReceipts.MigrationId,
+        }));
         return ids[index - 1];
     }
 

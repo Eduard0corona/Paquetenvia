@@ -39,6 +39,44 @@ RUNNER_SPEC.loader.exec_module(focused_runner)
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
 
+# The fields a retirement adds to an authorization; a replay drops them again.
+RETIREMENT_FIELDS = ("status", "validated_target_sha", "tracked_pull_request")
+
+
+def reactivate_retired_braces(policy_value: dict[str, Any]) -> dict[str, Any]:
+    """Put the retired braces acceptance back in its active slot, in place, and return it.
+
+    GitHub withdrew GHSA-vfj7-8cjw-p6xm on 2026-10-23, so SEC-2026-10-BRACES-DOS-TRACKED is
+    historical: ``status`` MERGED (PR #181, which accepted it, merged), ``tracked_pull_request``
+    181 and ``validated_target_sha`` b66d83c4. Every replay of an authorization validated while
+    it was active (#181 itself and SEC-2026-11 to SEC-2026-15) reproduces it as the active
+    authorization it was: without the retirement fields, right after SEC-2026-08.
+    """
+
+    historical = policy_value["historical_remediations"]
+    braces = copy.deepcopy(
+        next(item for item in historical if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID)
+    )
+    policy_value["historical_remediations"] = [
+        item for item in historical if item["id"] != rel000.BRACES_KNOWN_ADVISORY_ID
+    ]
+    for field in RETIREMENT_FIELDS:
+        braces.pop(field, None)
+    active = policy_value["active_remediations"]
+    slot = [item["id"] for item in active].index(rel000.WEB_TRANSITIVE_REMEDIATION_ID) + 1
+    active.insert(slot, braces)
+    return braces
+
+
+def policy_before_braces_retirement(directory: Path) -> Path:
+    """The committed policy with braces still active, as it stood right before its retirement."""
+
+    value = json.loads((REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH).read_text(encoding="utf-8"))
+    reactivate_retired_braces(value)
+    path = directory / "policy-before-braces-retirement.json"
+    path.write_text(json.dumps(value), encoding="utf-8")
+    return path
+
 
 class Rel000FocusedTests(unittest.TestCase):
     def setUp(self) -> None:
@@ -5945,18 +5983,19 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
 
     def test_web_transitive_authorization_remains_active_and_unchanged(self):
         policy = self.policy()
+        # SEC-2026-16 (minimatch) is the only other active authorization: an accepted known
+        # advisory that stays active while Issue #324 is open.
         self.assertEqual(
-            {
-                rel000.WEB_TRANSITIVE_REMEDIATION_ID,
-                rel000.BRACES_KNOWN_ADVISORY_ID,
-                rel000.OPENAPI_YAMLREADER_REMEDIATION_ID,
-            },
+            {rel000.WEB_TRANSITIVE_REMEDIATION_ID, rel000.MINIMATCH_KNOWN_ADVISORY_ID},
             {item["id"] for item in policy["active_remediations"]},
         )
         historical = {item["id"]: item for item in policy["historical_remediations"]}
         self.assertEqual("MERGED", historical[rel000.SHARP_REMEDIATION_ID]["status"])
         self.assertEqual(
             "MERGED", historical[rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID]["status"]
+        )
+        self.assertEqual(
+            "MERGED", historical[rel000.OPENAPI_YAMLREADER_REMEDIATION_ID]["status"]
         )
         self.assertEqual("MERGED", historical[rel000.NEXT_CRITICAL_REMEDIATION_ID]["status"])
         self.assertEqual("MERGED", historical[rel000.NEXT_OG_CRITICAL_REMEDIATION_ID]["status"])
@@ -5965,6 +6004,7 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
         )
         self.assertEqual("MERGED", historical[rel000.VITE_REMEDIATION_ID]["status"])
         self.assertEqual("MERGED", historical[rel000.ZOD_REMEDIATION_ID]["status"])
+        self.assertEqual("MERGED", historical[rel000.BRACES_KNOWN_ADVISORY_ID]["status"])
 
     def test_web_transitive_mode_requires_exact_branch_and_id(self):
         policy = self.policy()
@@ -6242,6 +6282,19 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
         self.assertNotIn(
             rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID, fixture["remediation_issues"]
         )
+        self.assertNotIn(
+            rel000.OPENAPI_YAMLREADER_REMEDIATION_ID, fixture["remediation_issues"]
+        )
+        self.assertNotIn(rel000.BRACES_KNOWN_ADVISORY_ID, fixture["remediation_issues"])
+        # Only the active SEC-2026-16 acceptance binds its Issue (see MinimatchKnownAdvisoryTests).
+        self.assertEqual(
+            {rel000.MINIMATCH_KNOWN_ADVISORY_ID: rel000.MINIMATCH_KNOWN_ADVISORY_ISSUE},
+            fixture["remediation_issues"],
+        )
+        self.assertEqual(
+            {rel000.MINIMATCH_KNOWN_ADVISORY_ID: rel000.MINIMATCH_KNOWN_ADVISORY_ISSUE},
+            fixture["known_advisory_issues"],
+        )
         self.assertIn("fix/security-2026-08-web-transitives", workflow)
         self.assertIn("SEC-2026-08-SECURITY-BASELINE", workflow)
         self.assertNotIn("github.head_ref == 'fix/security-sharp-035-override'", workflow)
@@ -6264,6 +6317,14 @@ class WebTransitiveRemediationPolicyTests(unittest.TestCase):
                     "github.head_ref == 'fix/security-2026-12-signalr-common'", retired
                 )
                 self.assertNotIn("SEC-2026-12-SIGNALR-CRYPTOGRAPHY", retired)
+                self.assertNotIn(
+                    "github.head_ref == 'fix/security-2026-13-openapi-yamlreader'", retired
+                )
+                self.assertNotIn("SEC-2026-13-OPENAPI-YAMLREADER", retired)
+                self.assertNotIn(
+                    "github.head_ref == 'fix/security-2026-10-braces-dos-tracked'", retired
+                )
+                self.assertNotIn("SEC-2026-10-BRACES-DOS-TRACKED", retired)
 
 
 class NextCriticalRemediationPolicyTests(unittest.TestCase):
@@ -6290,16 +6351,8 @@ class NextCriticalRemediationPolicyTests(unittest.TestCase):
             for item in self.policy_value["historical_remediations"]
             if item["id"] != rel000.NEXT_CRITICAL_REMEDIATION_ID
         ]
-        active = self.policy_value["active_remediations"]
-        braces_index = next(
-            (
-                index
-                for index, item in enumerate(active)
-                if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
-            ),
-            len(active),
-        )
-        active.insert(braces_index, next_critical)
+        # Its original slot was the last active authorization (it predates the braces one).
+        self.policy_value["active_remediations"].append(next_critical)
         self.policy_path = self.root / "active-policy.json"
         self.policy_path.write_text(json.dumps(self.policy_value), encoding="utf-8")
 
@@ -6616,16 +6669,8 @@ class NextOgCriticalRemediationPolicyTests(unittest.TestCase):
             for item in self.policy_value["historical_remediations"]
             if item["id"] != rel000.NEXT_OG_CRITICAL_REMEDIATION_ID
         ]
-        active = self.policy_value["active_remediations"]
-        braces_index = next(
-            (
-                index
-                for index, item in enumerate(active)
-                if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
-            ),
-            len(active),
-        )
-        active.insert(braces_index, next_og)
+        # Its original slot was the last active authorization (it predates the braces one).
+        self.policy_value["active_remediations"].append(next_og)
         self.policy_path = self.root / "active-policy.json"
         self.policy_path.write_text(json.dumps(self.policy_value), encoding="utf-8")
 
@@ -7104,11 +7149,18 @@ class NextOgCriticalRemediationPolicyTests(unittest.TestCase):
 
 
 class BracesKnownAdvisoryTests(unittest.TestCase):
-    """SEC-2026-10: braces GHSA-vfj7-8cjw-p6xm accepted as a tracked known advisory.
+    """SEC-2026-10: braces GHSA-vfj7-8cjw-p6xm accepted as a tracked known advisory, now retired.
 
-    No braces release patches the advisory, so the owner accepted it ("Registrarlo
+    No braces release patched the advisory, so the owner accepted it ("Registrarlo
     como aviso conocido") only on its exact package, severity, dev-only lock path,
     pinned lock graph and open Issue #180. Everything else fails closed.
+
+    GitHub withdrew the advisory on 2026-10-23T12:53:02Z, and the owner retired the acceptance
+    (decision SEC-2026-10-BRACES-RETIREMENT-2026-10-29): it is historical with status MERGED
+    (PR #181, which accepted it, merged), tracked_pull_request 181 and validated_target_sha
+    b66d83c4, and every recorded value stays as it was. The suite replays #181 as the active
+    authorization it was, reading braces as b66d83c4's policy declared it (the 16.3.6 graph),
+    as the SEC-2026-11 and SEC-2026-14 replays do. Reported again, braces now fails closed.
     """
 
     ADVISORY = "GHSA-vfj7-8cjw-p6xm"
@@ -7173,11 +7225,21 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
         },
     }
 
+    # The head of PR #181, whose 15 checks passed (REL-000 among them), and its merge commit
+    # on main; both have the same tree.
+    VALIDATED_TARGET = "b66d83c43ceee6498268a16bcd3a98fab45b67c9"
+    MERGE_COMMIT = "1799568325dea3844a204b45a728044686ca1dd0"
+
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="rel000-braces-known-tests-")
         self.root = Path(self.temp.name)
-        self.policy_path = REPOSITORY_ROOT / "tools/rel-000/security-remediation-policy.json"
-        self.policy_value = json.loads(self.policy_path.read_text(encoding="utf-8"))
+        self.repository_policy_path = REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH
+        # The acceptance is retired; the regression suite replays it as the active
+        # authorization it was while PR #181 was open.
+        self.policy_value = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+        reactivate_retired_braces(self.policy_value)
+        self.policy_path = self.root / "active-policy.json"
+        self.policy_path.write_text(json.dumps(self.policy_value), encoding="utf-8")
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -7191,14 +7253,63 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
     def policy(self):
         return rel000.load_remediation_policy(self.policy_path)
 
-    def authorization(self):
+    def retired(self) -> dict[str, Any]:
+        """The historical entry exactly as the committed policy records it."""
+
+        policy = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
         return copy.deepcopy(
+            next(
+                item
+                for item in policy["historical_remediations"]
+                if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+            )
+        )
+
+    def target_file(self, relative: str) -> bytes:
+        """The file exactly as PR #181 validated it (validated_target_sha), not the checkout."""
+
+        return subprocess.check_output(
+            ["git", "show", f"{self.retired()['validated_target_sha']}:{relative}"],
+            cwd=REPOSITORY_ROOT,
+        )
+
+    def target_braces_advisory(self) -> dict[str, Any]:
+        """The accepted known advisory exactly as the validated target declared it.
+
+        SEC-2026-11, SEC-2026-14 and SEC-2026-15 later rebound its path and hash, so the replay
+        reads braces on the graph PR #181 validated, as the SEC-2026-11 replay does.
+        """
+
+        target_policy = json.loads(self.target_file(rel000.REMEDIATION_POLICY_PATH))
+        return copy.deepcopy(
+            next(
+                entry["accepted_known_advisory"]
+                for entry in target_policy["active_remediations"]
+                if entry["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+            )
+        )
+
+    def replay_policy(self):
+        """The loaded policy with braces bound as it was when PR #181 was validated."""
+
+        policy = self.policy()
+        for item in policy["active_remediations"]:
+            if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID:
+                item["accepted_known_advisory"] = self.target_braces_advisory()
+        return policy
+
+    def authorization(self):
+        """The authorization as PR #181 validated it: the recorded entry, bound as it was."""
+
+        authorization = copy.deepcopy(
             next(
                 item
                 for item in self.policy_value["active_remediations"]
                 if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
             )
         )
+        authorization["accepted_known_advisory"] = self.target_braces_advisory()
+        return authorization
 
     def policy_with(self, mutate) -> Path:
         value = copy.deepcopy(self.policy_value)
@@ -7208,13 +7319,12 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
         return path
 
     def base_lock(self) -> bytes:
-        """The graph the advisory is accepted on: the committed lockfile, pinned by hash.
+        """The graph the advisory was accepted on: the validated target's lockfile, by hash.
 
-        SEC-2026-11 rebound the accepted path and graph to the lockfile it generated, so
-        the bound graph is the checkout's lockfile and no longer the authorized base's.
+        The acceptance changed no dependency file, so it is also the authorized base's.
         """
         accepted = self.authorization()["accepted_known_advisory"]
-        lock = (REPOSITORY_ROOT / accepted["lockfile"]).read_bytes()
+        lock = self.target_file(accepted["lockfile"])
         self.assertEqual(accepted["expected_lockfile_sha256"], hashlib.sha256(lock).hexdigest())
         return lock
 
@@ -7244,7 +7354,7 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
             ["git", "rev-parse", "HEAD"], cwd=root, text=True
         ).strip()
         for relative in authorization["allowed_non_dependency_files"]:
-            (root / relative).write_bytes((REPOSITORY_ROOT / relative).read_bytes())
+            (root / relative).write_bytes(self.target_file(relative))
         if branch_lock is not None:
             (root / "apps/web/pnpm-lock.yaml").write_bytes(branch_lock)
         return root, base
@@ -7319,7 +7429,7 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
         return rel000.resolve_accepted_known_advisories(
             root,
             base,
-            self.policy(),
+            self.replay_policy(),
             tracking,
             base_audit if base_audit is not None else self.real_audit(),
             branch_audit if branch_audit is not None else self.real_audit(),
@@ -7341,6 +7451,207 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
             rel000.NORMAL_RELEASE_EVIDENCE,
             None,
             accepted,
+        )
+
+    @staticmethod
+    def empty_audit():
+        return {
+            "format_version": "paquetenvia-rel000-audit-v1",
+            "command_executed": True,
+            "command_exit_code": 0,
+            "parse_succeeded": True,
+            "totals": {"critical": 0, "high": 0, "moderate": 0, "low": 0, "total": 0},
+            "affected_packages": [],
+            "advisories": [],
+        }
+
+    def test_acceptance_is_historical_with_its_recorded_values(self):
+        policy = rel000.load_remediation_policy(self.repository_policy_path)
+        # Retired at the end of the list, right after the last retired remediation of that day.
+        historical = [item["id"] for item in policy["historical_remediations"]]
+        self.assertEqual(
+            historical.index(rel000.OPENAPI_YAMLREADER_REMEDIATION_ID) + 1,
+            historical.index(rel000.BRACES_KNOWN_ADVISORY_ID),
+        )
+        retired = policy["historical_remediations"][historical.index(rel000.BRACES_KNOWN_ADVISORY_ID)]
+        # MERGED records that PR #181, which accepted the advisory, merged; the acceptance was
+        # retired because GitHub withdrew the advisory, not because a remediation merged.
+        self.assertEqual("MERGED", retired["status"])
+        self.assertEqual(181, retired["tracked_pull_request"])
+        self.assertEqual(self.VALIDATED_TARGET, retired["validated_target_sha"])
+        self.assertEqual(
+            retired["validated_target_sha"],
+            subprocess.check_output(
+                ["git", "rev-parse", f"{self.MERGE_COMMIT}^2"], cwd=REPOSITORY_ROOT, text=True
+            ).strip(),
+        )
+        self.assertEqual(
+            *(
+                subprocess.check_output(
+                    ["git", "rev-parse", f"{commit}^{{tree}}"], cwd=REPOSITORY_ROOT, text=True
+                ).strip()
+                for commit in (retired["validated_target_sha"], self.MERGE_COMMIT)
+            )
+        )
+        # The retirement fields sit where the earlier retirements put them.
+        self.assertEqual(
+            [
+                "id",
+                "mode",
+                "status",
+                "authorized_base_sha",
+                "authorized_source_branch",
+                "validated_target_sha",
+                "tracked_pull_request",
+                "tracked_issue",
+            ],
+            list(retired)[:8],
+        )
+        # SEC-2026-16 (minimatch) is a separate acceptance, active after SEC-2026-08.
+        self.assertEqual(
+            [rel000.WEB_TRANSITIVE_REMEDIATION_ID, rel000.MINIMATCH_KNOWN_ADVISORY_ID],
+            [item["id"] for item in policy["active_remediations"]],
+        )
+        self.assert_reason(
+            "REMEDIATION_ID_NOT_ACTIVE",
+            lambda: rel000.resolve_rel000_mode(
+                policy, "fix/security-2026-10-braces-dos-tracked", rel000.BRACES_KNOWN_ADVISORY_ID
+            ),
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(policy, "fix/security-2026-10-braces-dos-tracked"),
+        )
+        # Every recorded value stays: without the retirement fields, the entry is exactly the
+        # authorization the exact braces check accepts (the replay loads it), on the graph
+        # SEC-2026-15 bound it to, with its original exit condition.
+        reactivated = next(
+            item
+            for item in self.policy()["active_remediations"]
+            if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+        )
+        self.assertEqual(
+            {key: value for key, value in retired.items() if key not in RETIREMENT_FIELDS},
+            reactivated,
+        )
+        self.assertEqual(
+            {
+                **rel000.BRACES_KNOWN_ADVISORY,
+                "expected_lockfile_sha256": (
+                    "f944eecd2b6dd09f39fbe06677be038e6e38bdbcaca901da330353f02f0b5aa4"
+                ),
+                "exit_condition": self.target_braces_advisory()["exit_condition"],
+            },
+            retired["accepted_known_advisory"],
+        )
+        # Apart from the path and hash that SEC-2026-11, -14 and -15 rebound, it is the entry
+        # PR #181 validated.
+        target_policy = json.loads(self.target_file(rel000.REMEDIATION_POLICY_PATH))
+        self.assertEqual(
+            next(
+                entry
+                for entry in target_policy["active_remediations"]
+                if entry["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+            ),
+            self.authorization(),
+        )
+
+    def test_braces_reported_again_fails_closed_as_an_untracked_advisory(self):
+        """Retired, the acceptance never accepts braces again: REL-000 fails closed."""
+
+        policy = rel000.load_remediation_policy(self.repository_policy_path)
+        # A real report still passes the capture step (sanitize-audit fails only on a failed
+        # audit, #309), so the advisory reaches the evaluation.
+        (self.root / "raw.json").write_text(json.dumps(self.REAL_RAW_AUDIT), encoding="utf-8")
+        rel000.sanitize_audit(self.root / "raw.json", self.root / "sanitized.json", True, 1)
+        audit = json.loads((self.root / "sanitized.json").read_text(encoding="utf-8"))
+        self.assertEqual(self.REAL_DEVELOPMENT_BASE_AUDIT, audit)
+        clean = {"dependency_diff_against_base": "CLEAN", "vulnerable_lock_versions": []}
+        # Nothing accepts it, not even with Issue #180 open and consulted.
+        for issues in ([self.known_issue()], []):
+            with self.subTest(known_issues=len(issues)):
+                tracking = self.normal_tracking(issues)
+                accepted = rel000.resolve_accepted_known_advisories(
+                    REPOSITORY_ROOT, "HEAD", policy, tracking, audit, audit
+                )
+                self.assertEqual([], accepted)
+                failure = self.assert_reason(
+                    "UNTRACKED_DEPENDENCY_ADVISORY",
+                    lambda: rel000.validate_issue_and_audit(
+                        self.issue5(),
+                        tracking,
+                        audit,
+                        audit,
+                        clean,
+                        rel000.NORMAL_RELEASE_EVIDENCE,
+                        None,
+                        accepted,
+                    ),
+                )
+                self.assertEqual([self.ADVISORY.lower()], failure.details["advisories"])
+        # Reported in the branch alone, it is a new advisory.
+        self.assert_reason(
+            "NEW_DEPENDENCY_ADVISORY",
+            lambda: rel000.validate_issue_and_audit(
+                self.issue5(),
+                self.normal_tracking([]),
+                self.empty_audit(),
+                audit,
+                clean,
+                rel000.NORMAL_RELEASE_EVIDENCE,
+                None,
+                [],
+            ),
+        )
+
+    def test_normal_mode_on_the_current_lockfile_is_clean(self):
+        """After the retirement a change that leaves the web dependencies alone stays clean."""
+
+        policy = rel000.load_remediation_policy(self.repository_policy_path)
+        root = Path(tempfile.mkdtemp(prefix="repo-", dir=self.root))
+        for relative in (
+            "apps/web/package.json",
+            "apps/web/pnpm-lock.yaml",
+            "apps/web/pnpm-workspace.yaml",
+        ):
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes((REPOSITORY_ROOT / relative).read_bytes())
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "rel000@example.invalid"], cwd=root, check=True
+        )
+        subprocess.run(["git", "config", "user.name", "REL-000 Tests"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        (root / "README.md").write_text("unrelated\n", encoding="utf-8")
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE, rel000.resolve_rel000_mode(policy, "development")
+        )
+        diff = rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE, None, [])
+        self.assertEqual("CLEAN", diff["dependency_diff_against_base"])
+        # npm no longer reports the withdrawn advisory, and the fixture consults no Issue.
+        tracking = self.normal_tracking([])
+        accepted = rel000.resolve_accepted_known_advisories(
+            root, base, policy, tracking, self.empty_audit(), self.empty_audit()
+        )
+        self.assertEqual([], accepted)
+        result = rel000.validate_issue_and_audit(
+            self.issue5(),
+            tracking,
+            self.empty_audit(),
+            self.empty_audit(),
+            diff,
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            None,
+            accepted,
+        )
+        self.assertEqual("PASSED", result["dependency_security_status"])
+        self.assertEqual([], result["accepted_known_advisories"])
+        self.assertEqual(
+            ["Issue #5", "Issue #38", "Issue #40"],
+            [item["id"] for item in result["known_security_issues"]],
         )
 
     def test_policy_loads_and_mode_requires_exact_branch_id_and_base(self):
@@ -7439,7 +7750,8 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
             )
 
     def test_accepted_graph_is_rebound_to_the_next_16_4_1_lockfile(self):
-        accepted = self.authorization()["accepted_known_advisory"]
+        # The recorded values: the retirement changed none of them.
+        accepted = self.retired()["accepted_known_advisory"]
         self.assertEqual(
             [
                 "eslint-config-next@16.4.1",
@@ -7457,12 +7769,6 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
             "f944eecd2b6dd09f39fbe06677be038e6e38bdbcaca901da330353f02f0b5aa4",
             accepted["expected_lockfile_sha256"],
         )
-        self.assertEqual(
-            accepted["expected_lockfile_sha256"],
-            rel000.validate_known_advisory_lock_graph(self.base_lock(), accepted, "branch"),
-        )
-        # The zod 4.4.3 bytes of the SEC-2026-15 base keep the path but no longer satisfy the
-        # binding: their hash is the one SEC-2026-15 declares as its base binding.
         zod = next(
             item
             for item in [
@@ -7471,6 +7777,17 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
             ]
             if item["id"] == rel000.ZOD_REMEDIATION_ID
         )
+        # It is the graph of the lockfile SEC-2026-15 merged (its validated_target_sha).
+        zod_target = subprocess.check_output(
+            ["git", "show", f"{zod['validated_target_sha']}:apps/web/pnpm-lock.yaml"],
+            cwd=REPOSITORY_ROOT,
+        )
+        self.assertEqual(
+            accepted["expected_lockfile_sha256"],
+            rel000.validate_known_advisory_lock_graph(zod_target, accepted, "branch"),
+        )
+        # The zod 4.4.3 bytes of the SEC-2026-15 base keep the path but no longer satisfy the
+        # binding: their hash is the one SEC-2026-15 declares as its base binding.
         zod_base = subprocess.check_output(
             ["git", "show", f"{zod['authorized_base_sha']}:apps/web/pnpm-lock.yaml"],
             cwd=REPOSITORY_ROOT,
@@ -7520,7 +7837,8 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
             },
             "base",
         )
-        # The 16.3.6 graph the advisory was first accepted on no longer satisfies the binding.
+        # The 16.3.6 graph the advisory was first accepted on no longer satisfies the binding;
+        # it is the graph PR #181 validated, on which the replay reads braces.
         previous = subprocess.check_output(
             [
                 "git",
@@ -7533,33 +7851,71 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
             "KNOWN_ADVISORY_LOCK_PATH_INVALID",
             lambda: rel000.validate_known_advisory_lock_graph(previous, accepted, "base"),
         )
+        self.assertEqual(previous, self.base_lock())
+        target = self.authorization()["accepted_known_advisory"]
+        self.assertEqual(
+            rel000.NEXT_SHARP_SOURCEMAP_KNOWN_ADVISORY_BASE_BINDING["lock_path"],
+            target["lock_path"],
+        )
+        self.assertEqual(
+            target["expected_lockfile_sha256"],
+            rel000.validate_known_advisory_lock_graph(previous, target, "base"),
+        )
 
     def test_exit_condition_is_recorded_in_the_policy(self):
-        exit_condition = self.authorization()["accepted_known_advisory"]["exit_condition"]
+        # The recorded exit condition is unchanged: a patched release never shipped, and the
+        # acceptance was retired because GitHub withdrew the advisory.
+        exit_condition = self.retired()["accepted_known_advisory"]["exit_condition"]
         self.assertIn("braces>=3.0.4", exit_condition)
         self.assertIn('"braces@<3.0.4": 3.0.4', exit_condition)
         self.assertIn("close Issue #180", exit_condition)
+        self.assertEqual(
+            self.authorization()["accepted_known_advisory"]["exit_condition"], exit_condition
+        )
 
     def test_fixture_and_both_workflows_bind_issue_branch_and_remediation(self):
-        fixture = json.loads(
-            (REPOSITORY_ROOT / "tests/fixtures/rel-000/security-tracking.json").read_text(
-                encoding="utf-8"
-            )
-        )
+        # The retirement removed this binding from the checkout (see the web-transitive
+        # binding test); the tree PR #181 validated (validated_target_sha) carried it in the
+        # fixture and in both workflows.
+        fixture = json.loads(self.target_file("tests/fixtures/rel-000/security-tracking.json"))
         self.assertEqual(180, fixture["remediation_issues"][rel000.BRACES_KNOWN_ADVISORY_ID])
         self.assertEqual(
             {rel000.BRACES_KNOWN_ADVISORY_ID: 180}, fixture["known_advisory_issues"]
         )
         for name in ("ci.yml", "pr-validation.yml"):
-            workflow = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            workflow = self.target_file(f".github/workflows/{name}").decode("utf-8")
             with self.subTest(workflow=name):
                 self.assertIn(
                     "github.head_ref == 'fix/security-2026-10-braces-dos-tracked' "
                     "&& 'SEC-2026-10-BRACES-DOS-TRACKED'",
                     workflow,
                 )
+        # The checkout keeps the known-advisory plumbing; braces is gone from it and only the
+        # SEC-2026-16 acceptance (Issue #324) is consulted.
+        fixture = json.loads(
+            (REPOSITORY_ROOT / "tests/fixtures/rel-000/security-tracking.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            {rel000.MINIMATCH_KNOWN_ADVISORY_ID: rel000.MINIMATCH_KNOWN_ADVISORY_ISSUE},
+            fixture["remediation_issues"],
+        )
+        self.assertEqual(
+            {rel000.MINIMATCH_KNOWN_ADVISORY_ID: rel000.MINIMATCH_KNOWN_ADVISORY_ISSUE},
+            fixture["known_advisory_issues"],
+        )
+        for name in ("ci.yml", "pr-validation.yml"):
+            workflow = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            with self.subTest(workflow=name, braces_unbound=True):
+                self.assertNotIn("fix/security-2026-10-braces-dos-tracked", workflow)
+                self.assertNotIn(rel000.BRACES_KNOWN_ADVISORY_ID, workflow)
+        for name in ("ci.yml", "pr-validation.yml"):
+            workflow = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            with self.subTest(workflow=name, checkout=True):
                 self.assertIn('data.get("known_advisory_issues", {})', workflow)
                 self.assertIn("--known-advisory-input", workflow)
+                self.assertIn('${known_advisory_inputs[@]+"${known_advisory_inputs[@]}"}', workflow)
                 self.assertIn("rel000-known-advisory-tracking-raw-*.json", workflow)
 
     def test_sanitize_issue_attaches_the_known_advisory_issue(self):
@@ -7595,7 +7951,7 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
             sanitized["known_advisory_issues"],
         )
         self.assertEqual(
-            {"known.json", "out.json", "tracking.json"},
+            {"active-policy.json", "known.json", "out.json", "tracking.json"},
             {path.name for path in self.root.iterdir()},
         )
         rel000.sanitize_issue(self.root / "tracking.json", self.root / "plain.json")
@@ -7868,6 +8224,1188 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
         self.assertEqual("BLOCKED", blocked["dependency_security_status"])
 
 
+class MinimatchKnownAdvisoryTests(unittest.TestCase):
+    """SEC-2026-16: minimatch GHSA-g3hv-75wg-m249 accepted as a tracked known advisory.
+
+    No minimatch 3.x or 10.x release patches the advisory and no dependent accepts minimatch 11,
+    so the owner accepted it (decision X1, "Aceptarlo como conocido", 2026-10-31) only on its
+    exact package, severity, the two installed versions 3.1.5 and 10.2.5, their exact lockfile
+    parents, its 96 development-only paths, the pinned lockfile and open Issue #324. Unlike
+    braces it resolves to two versions with several parents, so it declares the parent set of
+    each version (lock_parents) and REL-000 proves the package is outside the production graph
+    with the web image smoke's own module. Everything else fails closed.
+    """
+
+    ADVISORY = "GHSA-g3hv-75wg-m249"
+    LOCKFILE = "apps/web/pnpm-lock.yaml"
+    # Sanitized pnpm 11.15.1 audit of the development lockfile (f944eecd), byte-for-byte what
+    # `rel000.py sanitize-audit` produces for the REL-000 base audit on 2026-10-31.
+    REAL_DEVELOPMENT_BASE_AUDIT = {
+        "format_version": "paquetenvia-rel000-audit-v1",
+        "command_executed": True,
+        "command_exit_code": 1,
+        "parse_succeeded": True,
+        "totals": {"critical": 0, "high": 0, "moderate": 1, "low": 0, "total": 1},
+        "affected_packages": ["minimatch"],
+        "advisories": [
+            {
+                "advisory_id": "GHSA-g3hv-75wg-m249",
+                "package": "minimatch",
+                "installed_versions": ["10.2.5", "3.1.5"],
+                "severity": "moderate",
+                "affected_range": "<11.0.1",
+                "patched_range": ">=11.0.1",
+                "direct_or_transitive": "transitive",
+                "dependency_path_count": 96,
+                "fix_available": True,
+                "fix_compatibility": "requires_compatibility_assessment",
+            }
+        ],
+    }
+    # The 96 paths of the raw `pnpm audit --json` report for that lockfile (all `dev: true`).
+    MINIMATCH_3_1_5_AUDIT_PATHS = [
+        ".>eslint>@eslint/config-array>minimatch",
+        ".>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint>minimatch",
+        ".>eslint-config-next>@next/eslint-plugin-next>@eslint-community/eslint-utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>@next/eslint-plugin-next>@eslint-community/eslint-utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>@next/eslint-plugin-next>@eslint-community/eslint-utils>eslint>minimatch",
+        ".>eslint-config-next>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint-module-utils>@typescript-eslint/parser>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint-module-utils>@typescript-eslint/parser>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint-module-utils>@typescript-eslint/parser>eslint>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint-module-utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint-module-utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint-module-utils>eslint>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>@typescript-eslint/parser>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>@typescript-eslint/parser>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>@typescript-eslint/parser>eslint>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>@typescript-eslint/parser>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>@typescript-eslint/parser>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>@typescript-eslint/parser>eslint>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>eslint>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>eslint-import-resolver-typescript>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>eslint-import-resolver-typescript>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>eslint-import-resolver-typescript>eslint>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>@typescript-eslint/parser>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>@typescript-eslint/parser>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>@typescript-eslint/parser>eslint>minimatch",
+        ".>eslint-config-next>eslint-plugin-jsx-a11y>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-plugin-jsx-a11y>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-plugin-jsx-a11y>eslint>minimatch",
+        ".>eslint-config-next>eslint-plugin-jsx-a11y>minimatch",
+        ".>eslint-config-next>eslint-plugin-react>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-plugin-react>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-plugin-react>eslint>minimatch",
+        ".>eslint-config-next>eslint-plugin-react>minimatch",
+        ".>eslint-config-next>eslint-plugin-react-hooks>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>eslint-plugin-react-hooks>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>eslint-plugin-react-hooks>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/parser>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/parser>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/parser>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>@typescript-eslint/utils>@eslint-community/eslint-utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>@typescript-eslint/utils>@eslint-community/eslint-utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>@typescript-eslint/utils>@eslint-community/eslint-utils>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>@typescript-eslint/utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>@typescript-eslint/utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>@typescript-eslint/utils>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/utils>@eslint-community/eslint-utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/utils>@eslint-community/eslint-utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/utils>@eslint-community/eslint-utils>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/utils>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/parser>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/parser>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/parser>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/utils>@eslint-community/eslint-utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/utils>@eslint-community/eslint-utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/utils>@eslint-community/eslint-utils>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/utils>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/utils>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/utils>eslint>minimatch",
+        ".>eslint-config-next>typescript-eslint>eslint>@eslint/config-array>minimatch",
+        ".>eslint-config-next>typescript-eslint>eslint>@eslint/eslintrc>minimatch",
+        ".>eslint-config-next>typescript-eslint>eslint>minimatch",
+    ]
+    MINIMATCH_10_2_5_AUDIT_PATHS = [
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>eslint-module-utils>@typescript-eslint/parser>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>eslint-import-resolver-typescript>eslint-plugin-import>@typescript-eslint/parser>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>eslint-module-utils>@typescript-eslint/parser>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>eslint-plugin-import>@typescript-eslint/parser>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/parser>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/type-utils>@typescript-eslint/utils>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/eslint-plugin>@typescript-eslint/utils>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/parser>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/typescript-estree>minimatch",
+        ".>eslint-config-next>typescript-eslint>@typescript-eslint/utils>@typescript-eslint/typescript-estree>minimatch",
+    ]
+
+    @classmethod
+    def real_raw_audit(cls) -> dict[str, Any]:
+        return {
+            "advisories": {
+                "1244012": {
+                    "findings": [
+                        {
+                            "version": version,
+                            "paths": list(paths),
+                            "dev": True,
+                            "optional": False,
+                            "bundled": False,
+                        }
+                        for version, paths in (
+                            ("3.1.5", cls.MINIMATCH_3_1_5_AUDIT_PATHS),
+                            ("10.2.5", cls.MINIMATCH_10_2_5_AUDIT_PATHS),
+                        )
+                    ],
+                    "id": 1244012,
+                    "title": "minimatch has potential denial of service via globparts amplification",
+                    "module_name": "minimatch",
+                    "vulnerable_versions": "<11.0.1",
+                    "patched_versions": ">=11.0.1",
+                    "severity": "moderate",
+                    "cwe": "CWE-405",
+                    "github_advisory_id": "GHSA-g3hv-75wg-m249",
+                    "url": "https://github.com/advisories/GHSA-g3hv-75wg-m249",
+                }
+            },
+            "metadata": {
+                "vulnerabilities": {"info": 0, "low": 0, "moderate": 1, "high": 0, "critical": 0},
+                "dependencies": 75,
+                "devDependencies": 363,
+                "optionalDependencies": 94,
+                "totalDependencies": 475,
+            },
+        }
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-minimatch-known-tests-")
+        self.root = Path(self.temp.name)
+        self.repository_policy_path = REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH
+        self.policy_value = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def policy(self):
+        return rel000.load_remediation_policy(self.repository_policy_path)
+
+    def authorization(self) -> dict[str, Any]:
+        return copy.deepcopy(
+            next(
+                item
+                for item in self.policy_value["active_remediations"]
+                if item["id"] == rel000.MINIMATCH_KNOWN_ADVISORY_ID
+            )
+        )
+
+    def accepted_advisory(self) -> dict[str, Any]:
+        return self.authorization()["accepted_known_advisory"]
+
+    def policy_with(self, mutate) -> Path:
+        value = copy.deepcopy(self.policy_value)
+        mutate(value)
+        path = self.root / "policy.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return path
+
+    def lock(self) -> bytes:
+        """The graph the advisory was accepted on: the checkout's lockfile, by its pinned hash."""
+
+        lock = (REPOSITORY_ROOT / self.LOCKFILE).read_bytes()
+        self.assertEqual(
+            self.accepted_advisory()["expected_lockfile_sha256"], hashlib.sha256(lock).hexdigest()
+        )
+        return lock
+
+    def mutated_lock(self, old: str, new: str) -> bytes:
+        text = self.lock().decode("utf-8")
+        self.assertEqual(1, text.count(old), old)
+        return text.replace(old, new).encode("utf-8")
+
+    def repo(self, base_lock: bytes | None = None, branch_lock: bytes | None = None):
+        """A repository whose base is the authorized base and whose branch is the checkout."""
+
+        authorization = self.authorization()
+        root = Path(tempfile.mkdtemp(prefix="repo-", dir=self.root))
+        for relative in [self.LOCKFILE, *authorization["allowed_non_dependency_files"]]:
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(
+                (base_lock if base_lock is not None else self.lock())
+                if relative == self.LOCKFILE
+                else subprocess.check_output(
+                    ["git", "show", f"{authorization['authorized_base_sha']}:{relative}"],
+                    cwd=REPOSITORY_ROOT,
+                )
+            )
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(
+            ["git", "config", "user.email", "rel000@example.invalid"], cwd=root, check=True
+        )
+        subprocess.run(["git", "config", "user.name", "REL-000 Tests"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "base"], cwd=root, check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        for relative in authorization["allowed_non_dependency_files"]:
+            (root / relative).write_bytes((REPOSITORY_ROOT / relative).read_bytes())
+        (root / self.LOCKFILE).write_bytes(branch_lock if branch_lock is not None else self.lock())
+        return root, base
+
+    def known_issue(self, **changes):
+        issue = {
+            "number": rel000.MINIMATCH_KNOWN_ADVISORY_ISSUE,
+            "state": "OPEN",
+            "title": rel000.MINIMATCH_KNOWN_ADVISORY_ISSUE_TITLE,
+            "url": "https://github.com/example/issues/324",
+            "tracked_advisory_ids": [self.ADVISORY.upper()],
+        }
+        issue.update(changes)
+        return issue
+
+    def normal_tracking(self, known_issues=None):
+        """The development PR tracking input: Issues #38 and #40 (both CLOSED) plus the known Issue."""
+
+        web = next(
+            item
+            for item in self.policy_value["active_remediations"]
+            if item["id"] == rel000.WEB_TRANSITIVE_REMEDIATION_ID
+        )
+        return {
+            "number": 38,
+            "state": "CLOSED",
+            "title": web["tracked_issue_title"],
+            "url": "https://github.com/example/issues/38",
+            "tracked_advisory_ids": web["issue_advisories"]["38"],
+            "related_issue": {
+                "number": 40,
+                "state": "CLOSED",
+                "title": web["related_tracked_issue_title"],
+                "url": "https://github.com/example/issues/40",
+                "tracked_advisory_ids": web["issue_advisories"]["40"],
+            },
+            "known_advisory_issues": [self.known_issue()] if known_issues is None else known_issues,
+        }
+
+    def remediation_tracking(self, **changes):
+        """The tracking input of this branch: the remediation Issue is #324 itself."""
+
+        tracking = self.known_issue(**changes)
+        tracking["related_issue"] = self.normal_tracking()["related_issue"]
+        tracking["known_advisory_issues"] = [self.known_issue(**changes)]
+        return tracking
+
+    @staticmethod
+    def issue5():
+        return {
+            "number": 5,
+            "state": "CLOSED",
+            "title": "Sharp historical remediation",
+            "url": "https://github.com/example/issues/5",
+            "tracked_advisory_ids": [rel000.ISSUE5_ADVISORY],
+        }
+
+    def real_audit(self, mutate=None):
+        audit = copy.deepcopy(self.REAL_DEVELOPMENT_BASE_AUDIT)
+        if mutate is not None:
+            mutate(audit["advisories"][0])
+        return audit
+
+    @staticmethod
+    def with_advisory(audit, advisory):
+        audit = copy.deepcopy(audit)
+        audit["advisories"].append(advisory)
+        audit["affected_packages"] = sorted({*audit["affected_packages"], advisory["package"]})
+        audit["totals"][advisory["severity"]] += 1
+        audit["totals"]["total"] += 1
+        return audit
+
+    @staticmethod
+    def empty_audit():
+        return {
+            "format_version": "paquetenvia-rel000-audit-v1",
+            "command_executed": True,
+            "command_exit_code": 0,
+            "parse_succeeded": True,
+            "totals": {"critical": 0, "high": 0, "moderate": 0, "low": 0, "total": 0},
+            "affected_packages": [],
+            "advisories": [],
+        }
+
+    def accepted(self, root, base, tracking, base_audit=None, branch_audit=None, policy=None):
+        return rel000.resolve_accepted_known_advisories(
+            root,
+            base,
+            policy if policy is not None else self.policy(),
+            tracking,
+            base_audit if base_audit is not None else self.real_audit(),
+            branch_audit if branch_audit is not None else self.real_audit(),
+        )
+
+    def normal(self, base_audit=None, branch_audit=None, tracking=None, accepted=None):
+        root, base = self.repo()
+        tracking = tracking if tracking is not None else self.normal_tracking()
+        base_audit = base_audit if base_audit is not None else self.real_audit()
+        branch_audit = branch_audit if branch_audit is not None else self.real_audit()
+        if accepted is None:
+            accepted = self.accepted(root, base, tracking, base_audit, branch_audit)
+        return rel000.validate_issue_and_audit(
+            self.issue5(),
+            tracking,
+            base_audit,
+            branch_audit,
+            {"dependency_diff_against_base": "CLEAN", "vulnerable_lock_versions": []},
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            None,
+            accepted,
+        )
+
+    def test_policy_carries_the_exact_active_authorization(self):
+        policy = self.policy()
+        authorization = self.authorization()
+        self.assertEqual(
+            [rel000.WEB_TRANSITIVE_REMEDIATION_ID, rel000.MINIMATCH_KNOWN_ADVISORY_ID],
+            [item["id"] for item in policy["active_remediations"]],
+        )
+        self.assertEqual(rel000.MINIMATCH_KNOWN_ADVISORY_AUTHORIZATION_FIELDS, set(authorization))
+        self.assertEqual(rel000.MINIMATCH_KNOWN_ADVISORY, authorization["accepted_known_advisory"])
+        accepted = authorization["accepted_known_advisory"]
+        self.assertEqual(
+            (self.ADVISORY, "minimatch", "moderate", ["10.2.5", "3.1.5"], 96, "dev"),
+            (
+                accepted["advisory_id"],
+                accepted["package"],
+                accepted["severity"],
+                accepted["installed_versions"],
+                accepted["dependency_path_count"],
+                accepted["dependency_scope"],
+            ),
+        )
+        self.assertEqual(
+            {
+                "3.1.5": [
+                    "@eslint/config-array@0.21.2",
+                    "@eslint/eslintrc@3.3.6",
+                    "eslint-plugin-import@2.32.0",
+                    "eslint-plugin-jsx-a11y@6.10.2",
+                    "eslint-plugin-react@7.37.5",
+                    "eslint@9.39.5",
+                ],
+                "10.2.5": ["@typescript-eslint/typescript-estree@8.64.0"],
+            },
+            accepted["lock_parents"],
+        )
+        self.assertEqual(
+            "f944eecd2b6dd09f39fbe06677be038e6e38bdbcaca901da330353f02f0b5aa4",
+            accepted["expected_lockfile_sha256"],
+        )
+        self.assertEqual(
+            (324, "SEC-2026-16: track minimatch globparts advisory until a compatible patched release ships"),
+            (accepted["tracked_issue"], accepted["tracked_issue_title"]),
+        )
+        self.assertEqual(
+            (authorization["tracked_issue"], authorization["tracked_issue_title"]),
+            (accepted["tracked_issue"], accepted["tracked_issue_title"]),
+        )
+        self.assertEqual("fix/security-2026-16-minimatch-tracked", authorization["authorized_source_branch"])
+        # The acceptance changes no dependency file: the lockfile is the only dependency file it
+        # names, and it must stay as it is.
+        self.assertEqual(["apps/web/pnpm-lock.yaml"], authorization["allowed_dependency_files"])
+        self.assertEqual([], authorization["required_dependency_files"])
+
+    def test_mode_requires_the_exact_branch_id_and_base(self):
+        policy = self.policy()
+        authorization = self.authorization()
+        branch = authorization["authorized_source_branch"]
+        self.assertEqual(
+            rel000.SECURITY_REMEDIATION,
+            rel000.resolve_rel000_mode(policy, branch, authorization["id"]),
+        )
+        self.assertIsNotNone(
+            rel000.validate_mode_authorization(
+                rel000.SECURITY_REMEDIATION,
+                policy,
+                branch,
+                authorization["authorized_base_sha"],
+                authorization["id"],
+            )
+        )
+        self.assert_reason(
+            "REMEDIATION_ID_REQUIRED", lambda: rel000.resolve_rel000_mode(policy, branch)
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE, rel000.resolve_rel000_mode(policy, "feature/other", "")
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(policy, "feature/other", authorization["id"]),
+        )
+        self.assert_reason(
+            "SECURITY_REMEDIATION_BASE_MISMATCH",
+            lambda: rel000.validate_mode_authorization(
+                rel000.SECURITY_REMEDIATION, policy, branch, "0" * 40, authorization["id"]
+            ),
+        )
+
+    def test_authorization_is_exact_and_tampering_is_rejected(self):
+        def minimatch(value):
+            return next(
+                item
+                for item in value["active_remediations"]
+                if item["id"] == rel000.MINIMATCH_KNOWN_ADVISORY_ID
+            )
+
+        def accepted(value):
+            return minimatch(value)["accepted_known_advisory"]
+
+        def move_to_historical(value, mutate=None):
+            entry = minimatch(value)
+            value["active_remediations"].remove(entry)
+            if mutate is not None:
+                mutate(entry)
+            value["historical_remediations"].append(entry)
+
+        mutations = {
+            "other Issue": lambda value: minimatch(value).update(tracked_issue=180),
+            "retitled Issue": lambda value: minimatch(value).update(tracked_issue_title="other"),
+            "other branch": lambda value: minimatch(value).update(
+                authorized_source_branch="fix/security-2026-16-other"
+            ),
+            "Issue tracks another GHSA": lambda value: minimatch(value)["issue_advisories"]["324"].append(
+                "GHSA-aaaa-bbbb-cccc"
+            ),
+            "another base advisory": lambda value: minimatch(value)["expected_base_advisories"].append(
+                "GHSA-aaaa-bbbb-cccc"
+            ),
+            "another base package": lambda value: minimatch(value)["expected_base_packages"].update(
+                {self.ADVISORY: "brace-expansion"}
+            ),
+            "other base totals": lambda value: minimatch(value)["expected_base_totals"].update(
+                moderate=2, total=2
+            ),
+            "other branch totals": lambda value: minimatch(value)["expected_branch_totals"].update(
+                moderate=0, total=0
+            ),
+            "direct package": lambda value: minimatch(value)["allowed_direct_packages"].append(
+                "minimatch"
+            ),
+            "manifest allowed": lambda value: minimatch(value)["allowed_dependency_files"].append(
+                "apps/web/package.json"
+            ),
+            "lockfile required": lambda value: minimatch(value)["required_dependency_files"].append(
+                "apps/web/pnpm-lock.yaml"
+            ),
+            "another file": lambda value: minimatch(value)["allowed_non_dependency_files"].append(
+                "apps/web/next.config.ts"
+            ),
+            "related Issue": lambda value: minimatch(value).update(related_tracked_issue=40),
+            "base severities": lambda value: minimatch(value).update(
+                expected_base_severities={self.ADVISORY: "moderate"}
+            ),
+            "base binding": lambda value: minimatch(value).update(
+                known_advisory_base_binding=copy.deepcopy(rel000.ZOD_KNOWN_ADVISORY_BASE_BINDING)
+            ),
+            "other Sharp version": lambda value: minimatch(value).update(target_sharp_version="0.35.4"),
+            "no Sharp smoke": lambda value: minimatch(value).update(require_sharp_runtime_smoke=False),
+            "prereleases": lambda value: minimatch(value).update(prohibited_prereleases=False),
+            "manual lockfile edits": lambda value: minimatch(value).update(
+                manual_lockfile_edits_allowed=True
+            ),
+            "accepted: another package": lambda value: accepted(value).update(package="brace-expansion"),
+            "accepted: other advisory": lambda value: accepted(value).update(
+                advisory_id="GHSA-aaaa-bbbb-cccc"
+            ),
+            "accepted: higher severity": lambda value: accepted(value).update(severity="high"),
+            "accepted: lower severity": lambda value: accepted(value).update(severity="low"),
+            "accepted: another version added": lambda value: accepted(value)["installed_versions"].append(
+                "9.0.5"
+            ),
+            "accepted: a version dropped": lambda value: accepted(value).update(
+                installed_versions=["3.1.5"]
+            ),
+            "accepted: other version": lambda value: accepted(value).update(
+                installed_versions=["10.2.6", "3.1.5"]
+            ),
+            "accepted: other affected range": lambda value: accepted(value).update(
+                affected_range="<10.2.7"
+            ),
+            "accepted: other patched range": lambda value: accepted(value).update(
+                patched_range=">=10.2.7"
+            ),
+            "accepted: direct": lambda value: accepted(value).update(direct_or_transitive="direct"),
+            "accepted: path count 95": lambda value: accepted(value).update(dependency_path_count=95),
+            "accepted: path count 97": lambda value: accepted(value).update(dependency_path_count=97),
+            "accepted: production scope": lambda value: accepted(value).update(dependency_scope="prod"),
+            "accepted: extra parent": lambda value: accepted(value)["lock_parents"]["3.1.5"].append(
+                "glob@7.2.3"
+            ),
+            "accepted: missing parent": lambda value: accepted(value)["lock_parents"]["3.1.5"].remove(
+                "eslint@9.39.5"
+            ),
+            "accepted: parent of another version": lambda value: accepted(value)["lock_parents"].update(
+                {"9.0.5": ["eslint@9.39.5"]}
+            ),
+            "accepted: linear path": lambda value: accepted(value).update(
+                lock_path=["eslint@9.39.5", "minimatch@3.1.5"]
+            ),
+            "accepted: other lockfile": lambda value: accepted(value).update(lockfile="pnpm-lock.yaml"),
+            "accepted: other hash": lambda value: accepted(value).update(
+                expected_lockfile_sha256="0" * 64
+            ),
+            "accepted: other Issue": lambda value: accepted(value).update(tracked_issue=180),
+            "accepted: retitled Issue": lambda value: accepted(value).update(tracked_issue_title="other"),
+            "accepted: other exit": lambda value: accepted(value).update(exit_condition="never"),
+            "accepted: extra field": lambda value: accepted(value).update(extra=True),
+            "accepted: removed": lambda value: minimatch(value).pop("accepted_known_advisory"),
+            "accepted on another authorization": lambda value: value["active_remediations"][0].update(
+                accepted_known_advisory=copy.deepcopy(accepted(value))
+            ),
+            "accepted on a historical remediation": lambda value: value["historical_remediations"][0].update(
+                accepted_known_advisory=copy.deepcopy(accepted(value))
+            ),
+            "historical with another accepted advisory": lambda value: move_to_historical(
+                value,
+                lambda entry: entry["accepted_known_advisory"].update(installed_versions=["3.1.5"]),
+            ),
+        }
+        for name, mutate in mutations.items():
+            with self.subTest(mutation=name):
+                path = self.policy_with(mutate)
+                self.assert_reason(
+                    "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+                )
+
+    def test_braces_history_still_loads_and_replays(self):
+        """Braces stays historical and exact; its replays and its path validator are unchanged."""
+
+        policy = self.policy()
+        retired = next(
+            item
+            for item in policy["historical_remediations"]
+            if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+        )
+        self.assertEqual("MERGED", retired["status"])
+        self.assertTrue(
+            rel000._retired_braces_accepted_known_advisory_is_exact(retired["accepted_known_advisory"])
+        )
+        # Its recorded graph (the 16.4.1 path on f944eecd) still validates on today's lockfile
+        # through the unchanged linear-path validator.
+        self.assertNotIn("lock_parents", retired["accepted_known_advisory"])
+        self.assertEqual(
+            retired["accepted_known_advisory"]["expected_lockfile_sha256"],
+            rel000.validate_known_advisory_lock_graph(
+                self.lock(), retired["accepted_known_advisory"], "branch"
+            ),
+        )
+        # The replays reactivate braces right after SEC-2026-08; both acceptances then load.
+        replay = rel000.load_remediation_policy(policy_before_braces_retirement(self.root))
+        self.assertEqual(
+            [
+                rel000.WEB_TRANSITIVE_REMEDIATION_ID,
+                rel000.BRACES_KNOWN_ADVISORY_ID,
+                rel000.MINIMATCH_KNOWN_ADVISORY_ID,
+            ],
+            [item["id"] for item in replay["active_remediations"]],
+        )
+
+        def braces(value):
+            return next(
+                item
+                for item in value["historical_remediations"]
+                if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+            )
+
+        for name, mutate in {
+            "other version": lambda value: braces(value)["accepted_known_advisory"].update(
+                installed_versions=["3.0.2"]
+            ),
+            "other path": lambda value: braces(value)["accepted_known_advisory"]["lock_path"].pop(1),
+            "no hash": lambda value: braces(value)["accepted_known_advisory"].pop(
+                "expected_lockfile_sha256"
+            ),
+            "other exit": lambda value: braces(value)["accepted_known_advisory"].update(
+                exit_condition="never"
+            ),
+            "removed": lambda value: braces(value).pop("accepted_known_advisory"),
+        }.items():
+            with self.subTest(retired_braces=name):
+                path = self.policy_with(mutate)
+                self.assert_reason(
+                    "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+                )
+
+    def test_lock_graph_is_exact_on_the_current_lockfile(self):
+        accepted = self.accepted_advisory()
+        self.assertEqual(
+            accepted["expected_lockfile_sha256"],
+            rel000.validate_known_advisory_lock_graph(self.lock(), accepted, "branch"),
+        )
+        # The production graph is the web image smoke's own module, not a second reading.
+        graph = rel000.web_image_dependencies()
+        self.assertEqual(
+            (REPOSITORY_ROOT / "tools/ci/web_image_dependencies.py").resolve(),
+            Path(graph.__file__).resolve(),
+        )
+        import yaml
+
+        lockfile = yaml.safe_load(self.lock().decode("utf-8"))
+        production = graph.production_graph(lockfile)
+        self.assertEqual(112, len(production))
+        self.assertEqual([], [key for key in production if graph.package_of(key)[0] == "minimatch"])
+        # The image smoke itself would reject either version in a production image.
+        manifest = json.loads((REPOSITORY_ROOT / "apps/web/package.json").read_text(encoding="utf-8"))
+        smoke = graph.check(["minimatch@3.1.5", "minimatch@10.2.5"], manifest, lockfile)
+        self.assertIn("minimatch@3.1.5: outside the production graph", smoke.problems)
+        self.assertIn("minimatch@10.2.5: outside the production graph", smoke.problems)
+        # Every path starts at a development dependency, and the lockfile walk reproduces the
+        # audit's 96 paths exactly.
+        roots, paths = rel000.known_advisory_dev_paths(lockfile, "minimatch", 96)
+        self.assertEqual(
+            {("devDependencies", "eslint"), ("devDependencies", "eslint-config-next")}, roots
+        )
+        self.assertEqual(
+            sorted([*self.MINIMATCH_3_1_5_AUDIT_PATHS, *self.MINIMATCH_10_2_5_AUDIT_PATHS]),
+            sorted(paths),
+        )
+        self.assertEqual(85, len(self.MINIMATCH_3_1_5_AUDIT_PATHS))
+        self.assertEqual(11, len(self.MINIMATCH_10_2_5_AUDIT_PATHS))
+
+    def test_real_audit_shape_is_what_the_sanitizer_produces(self):
+        (self.root / "raw.json").write_text(json.dumps(self.real_raw_audit()), encoding="utf-8")
+        rel000.sanitize_audit(self.root / "raw.json", self.root / "sanitized.json", True, 1)
+        self.assertEqual(
+            self.REAL_DEVELOPMENT_BASE_AUDIT,
+            json.loads((self.root / "sanitized.json").read_text(encoding="utf-8")),
+        )
+
+    def assert_lock_rejected(self, text: bytes, message: str) -> None:
+        """Rejected by the validator itself and through the resolver, on the branch or base."""
+
+        accepted = self.accepted_advisory()
+        failure = self.assert_reason(
+            "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+            lambda: rel000.validate_known_advisory_lock_graph(text, accepted, "branch"),
+        )
+        self.assertIn(message, failure.message)
+        for name, kwargs in {"branch": {"branch_lock": text}, "base": {"base_lock": text}}.items():
+            with self.subTest(lock=name):
+                root, base = self.repo(**kwargs)
+                failure = self.assert_reason(
+                    "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+                    lambda: self.accepted(root, base, self.normal_tracking()),
+                )
+                self.assertIn(message, failure.message)
+                shutil.rmtree(root)
+
+    def test_another_minimatch_version_fails_closed(self):
+        cases = {
+            # A third version in the packages section.
+            "third package version": self.mutated_lock(
+                "\n  minimatch@3.1.5:\n    resolution:",
+                "\n  minimatch@9.0.5:\n    resolution: {integrity: sha512-x}\n\n"
+                "  minimatch@3.1.5:\n    resolution:",
+            ),
+            # The typescript-estree edge resolving to another 10.x.
+            "other linked version": self.mutated_lock(
+                "      minimatch: 10.2.5\n", "      minimatch: 10.2.6\n"
+            ),
+        }
+        for name, text in cases.items():
+            with self.subTest(case=name):
+                self.assert_lock_rejected(text, "resolves to a different version set")
+        # Reported by the audit, another version breaks the exact audit identity.
+        for versions in (["10.2.5", "3.1.5", "9.0.5"], ["3.1.5"], ["10.2.6", "3.1.5"]):
+            with self.subTest(audit_versions=versions):
+                self.assert_reason(
+                    "KNOWN_ADVISORY_SCOPE_INVALID",
+                    lambda: self.normal(
+                        branch_audit=self.real_audit(
+                            lambda item: item.update(installed_versions=versions)
+                        )
+                    ),
+                )
+
+    def test_extra_or_missing_parent_fails_closed(self):
+        resolver_node = "  eslint-import-resolver-node@0.3.10(supports-color@7.2.0):\n    dependencies:\n"
+        cases = {
+            "extra parent": self.mutated_lock(
+                resolver_node, resolver_node + "      minimatch: 3.1.5\n"
+            ),
+            "extra parent of the other version": self.mutated_lock(
+                resolver_node, resolver_node + "      minimatch: 10.2.5\n"
+            ),
+            "missing parent": self.mutated_lock(
+                "      js-yaml: 4.3.2\n      minimatch: 3.1.5\n      strip-json-comments: 3.1.1\n",
+                "      js-yaml: 4.3.2\n      strip-json-comments: 3.1.1\n",
+            ),
+        }
+        for name, text in cases.items():
+            with self.subTest(case=name):
+                self.assert_lock_rejected(text, "parents changed")
+        # Without its only parent, 10.2.5 is no longer linked at all.
+        self.assert_lock_rejected(
+            self.mutated_lock("      minimatch: 10.2.5\n", ""),
+            "resolves to a different version set",
+        )
+
+    def test_production_path_fails_closed(self):
+        signalr = "  '@microsoft/signalr@10.0.0':\n    dependencies:\n"
+        # The parents of minimatch stay exact, but a production package now links one of them.
+        production = self.mutated_lock(
+            signalr, signalr + "      '@eslint/eslintrc': 3.3.6(supports-color@7.2.0)\n"
+        )
+        self.assert_lock_rejected(production, "is in the production graph")
+        # The image smoke would ship it: the production graph reaches minimatch 3.1.5.
+        import yaml
+
+        graph = rel000.web_image_dependencies()
+        reached = graph.production_graph(yaml.safe_load(production.decode("utf-8")))
+        self.assertIn("minimatch@3.1.5", reached)
+        # minimatch itself as a direct dependency of the importer.
+        direct = self.mutated_lock(
+            "    devDependencies:\n      '@types/node':\n",
+            "    devDependencies:\n      minimatch:\n        specifier: 3.1.5\n"
+            "        version: 3.1.5\n      '@types/node':\n",
+        )
+        self.assert_lock_rejected(direct, "became a direct dependency")
+        # A snapshot outside the importer graph linking one of its parents.
+        orphan = self.mutated_lock(
+            "  '@eslint/js@9.39.5': {}\n",
+            "  '@eslint/js@9.39.5': {}\n\n  orphan@1.0.0:\n    dependencies:\n"
+            "      '@eslint/eslintrc': 3.3.6(supports-color@7.2.0)\n",
+        )
+        self.assert_lock_rejected(orphan, "outside the importer graph")
+
+    def test_changed_path_count_fails_closed(self):
+        eslint_config_next = (
+            "  eslint-config-next@16.4.1(@typescript-eslint/parser@8.64.0(eslint@9.39.5("
+            "supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3))(eslint@9.39.5("
+            "supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3):\n    dependencies:\n"
+        )
+        # A development-only edge adds one path; parents, versions and roots stay exact.
+        more = self.mutated_lock(
+            eslint_config_next,
+            eslint_config_next + "      '@eslint/eslintrc': 3.3.6(supports-color@7.2.0)\n",
+        )
+        import yaml
+
+        _, paths = rel000.known_advisory_dev_paths(yaml.safe_load(more.decode("utf-8")), "minimatch", 1000)
+        self.assertEqual(97, len(paths))
+        self.assert_lock_rejected(more, "dependency path count changed")
+        # The audit reporting another count breaks the exact audit identity.
+        for count in (95, 97):
+            for label, inputs in (
+                ("base", lambda count=count: {"base_audit": self.count_audit(count), "branch_audit": self.count_audit(count)}),
+                ("branch", lambda count=count: {"branch_audit": self.count_audit(count)}),
+            ):
+                with self.subTest(count=count, audit=label):
+                    self.assert_reason(
+                        "KNOWN_ADVISORY_SCOPE_INVALID", lambda: self.normal(**inputs())
+                    )
+
+    def count_audit(self, count: int) -> dict[str, Any]:
+        return self.real_audit(lambda item: item.update(dependency_path_count=count))
+
+    def test_changed_lockfile_hash_fails_closed(self):
+        changed = self.lock() + b"\n"
+        accepted = self.accepted_advisory()
+        # The graph is still exact; only the bytes differ.
+        rel000.validate_known_advisory_dev_graph(changed, accepted)
+        for name, kwargs in {"branch": {"branch_lock": changed}, "base": {"base_lock": changed}}.items():
+            with self.subTest(lock=name):
+                root, base = self.repo(**kwargs)
+                failure = self.assert_reason(
+                    "KNOWN_ADVISORY_LOCK_GRAPH_CHANGED",
+                    lambda: self.accepted(root, base, self.normal_tracking()),
+                )
+                self.assertIn(name, str(failure))
+                shutil.rmtree(root)
+
+    def test_tracking_issue_must_stay_open_exact_and_consulted(self):
+        root, base = self.repo()
+        self.assert_reason(
+            "KNOWN_ADVISORY_ISSUE_STATE_INVALID",
+            lambda: self.accepted(root, base, self.normal_tracking([self.known_issue(state="CLOSED")])),
+        )
+        for name, issues in {
+            "retitled": [self.known_issue(title="SEC-2026-16: something else")],
+            "tracks another GHSA": [self.known_issue(tracked_advisory_ids=["GHSA-AAAA-BBBB-CCCC"])],
+            "tracks another GHSA too": [
+                self.known_issue(tracked_advisory_ids=[self.ADVISORY.upper(), "GHSA-AAAA-BBBB-CCCC"])
+            ],
+            "tracks nothing": [self.known_issue(tracked_advisory_ids=[])],
+            "other number": [self.known_issue(number=180)],
+            "duplicated": [self.known_issue(), self.known_issue()],
+            "not consulted": [],
+        }.items():
+            with self.subTest(issues=name):
+                self.assert_reason(
+                    "KNOWN_ADVISORY_TRACKING_INVALID",
+                    lambda: self.accepted(root, base, self.normal_tracking(issues)),
+                )
+        tracking = self.normal_tracking()
+        tracking.pop("known_advisory_issues")
+        self.assert_reason(
+            "KNOWN_ADVISORY_TRACKING_INVALID", lambda: self.accepted(root, base, tracking)
+        )
+
+    def test_advisory_with_changed_audit_fields_fails_closed(self):
+        self.assertEqual(
+            (
+                "package",
+                "severity",
+                "installed_versions",
+                "affected_range",
+                "patched_range",
+                "direct_or_transitive",
+                "dependency_path_count",
+            ),
+            rel000.KNOWN_ADVISORY_AUDIT_FIELDS,
+        )
+        cases = {
+            "package": lambda item: item.update(package="brace-expansion"),
+            "severity": lambda item: item.update(severity="low"),
+            "installed_versions": lambda item: item.update(installed_versions=["10.2.5"]),
+            "affected_range": lambda item: item.update(affected_range="<10.2.7"),
+            "patched_range": lambda item: item.update(patched_range=">=10.2.7"),
+            "direct_or_transitive": lambda item: item.update(direct_or_transitive="direct"),
+            "dependency_path_count": lambda item: item.update(dependency_path_count=69),
+        }
+        self.assertEqual(set(rel000.KNOWN_ADVISORY_AUDIT_FIELDS), set(cases))
+        for field, mutate in cases.items():
+            audit = self.real_audit(mutate)
+            if field == "severity":
+                audit["totals"].update(moderate=0, low=1)
+            for label, inputs in (
+                ("base", {"base_audit": audit, "branch_audit": audit}),
+                ("branch", {"branch_audit": audit}),
+            ):
+                with self.subTest(field=field, audit=label):
+                    failure = self.assert_reason(
+                        "KNOWN_ADVISORY_SCOPE_INVALID", lambda: self.normal(**inputs)
+                    )
+                    self.assertEqual([field], failure.details["fields"])
+        # A higher severity breaks the identity too, before any severity comparison.
+        higher = self.real_audit(lambda item: item.update(severity="high"))
+        higher["totals"].update(moderate=0, high=1)
+        self.assert_reason(
+            "KNOWN_ADVISORY_SCOPE_INVALID", lambda: self.normal(higher, higher)
+        )
+
+    def test_another_package_advisory_fails_closed(self):
+        other = {
+            **copy.deepcopy(self.REAL_DEVELOPMENT_BASE_AUDIT["advisories"][0]),
+            "advisory_id": "GHSA-aaaa-bbbb-cccc",
+            "package": "brace-expansion",
+            "installed_versions": ["1.1.21"],
+            "dependency_path_count": 1,
+        }
+        same_package = {**copy.deepcopy(other), "package": "minimatch", "installed_versions": ["3.1.5"]}
+        for name, advisory in {"another package": other, "another minimatch advisory": same_package}.items():
+            with self.subTest(advisory=name, audit="both"):
+                self.assert_reason(
+                    "UNTRACKED_DEPENDENCY_ADVISORY",
+                    lambda: self.normal(
+                        self.with_advisory(self.real_audit(), advisory),
+                        self.with_advisory(self.real_audit(), advisory),
+                    ),
+                )
+            with self.subTest(advisory=name, audit="branch"):
+                self.assert_reason(
+                    "NEW_DEPENDENCY_ADVISORY",
+                    lambda: self.normal(branch_audit=self.with_advisory(self.real_audit(), advisory)),
+                )
+        # The accepted advisory moved to another package is never accepted.
+        moved = self.real_audit(lambda item: item.update(package="brace-expansion"))
+        self.assert_reason("KNOWN_ADVISORY_SCOPE_INVALID", lambda: self.normal(moved, moved))
+
+    def test_todays_base_audit_passes_normal_release_evidence(self):
+        """Once merged, a PR that leaves the web dependencies alone passes normal mode."""
+
+        policy = self.policy()
+        root, base = self.repo()
+        # The branch of an unrelated PR: the acceptance files are the base, a README changes.
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "accepted"], cwd=root, check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        (root / "README.md").write_text("unrelated\n", encoding="utf-8")
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE, rel000.resolve_rel000_mode(policy, "feature/ntf-008")
+        )
+        diff = rel000.validate_dependency_diff(root, base, rel000.NORMAL_RELEASE_EVIDENCE, None, [])
+        self.assertEqual("CLEAN", diff["dependency_diff_against_base"])
+        tracking = self.normal_tracking()
+        accepted = self.accepted(root, base, tracking, policy=policy)
+        self.assertEqual([rel000.MINIMATCH_KNOWN_ADVISORY_ID], [item["remediation_id"] for item in accepted])
+        result = rel000.validate_issue_and_audit(
+            self.issue5(),
+            tracking,
+            self.real_audit(),
+            self.real_audit(),
+            diff,
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            None,
+            accepted,
+        )
+        self.assertEqual("PASSED", result["dependency_security_status"])
+        self.assertEqual("BLOCKED_BY_OWNER_DECISION", result["release_candidate_status"])
+        self.assertEqual([self.ADVISORY], result["remaining_advisory_ids"])
+        self.assertEqual("Issue #324", result["dependency_advisories"][0]["tracking_issue"])
+        self.assertEqual(
+            [
+                {
+                    "advisory_id": self.ADVISORY,
+                    "package": "minimatch",
+                    "severity": "moderate",
+                    "dependency_scope": "dev",
+                    "tracking_issue": "Issue #324",
+                    "remediation_id": rel000.MINIMATCH_KNOWN_ADVISORY_ID,
+                    "lockfile_sha256": "f944eecd2b6dd09f39fbe06677be038e6e38bdbcaca901da330353f02f0b5aa4",
+                }
+            ],
+            result["accepted_known_advisories"],
+        )
+        self.assertEqual(
+            ["Issue #5", "Issue #38", "Issue #40", "Issue #324"],
+            [item["id"] for item in result["known_security_issues"]],
+        )
+        known = result["known_security_issues"][-1]
+        self.assertEqual(("OPEN", "ACCEPTED_KNOWN_ADVISORY"), (known["state"], known["remediation_status"]))
+        rel000.assert_redacted(result["accepted_known_advisories"])
+        # Without the acceptance the same audit is what PR #323 hit.
+        failure = self.assert_reason(
+            "UNTRACKED_DEPENDENCY_ADVISORY", lambda: self.normal(accepted=[])
+        )
+        self.assertEqual([self.ADVISORY.lower()], failure.details["advisories"])
+        # Unused when the advisory is absent: an empty audit stays clean and consults nothing.
+        self.assertEqual(
+            [], self.accepted(root, base, self.normal_tracking([]), self.empty_audit(), self.empty_audit())
+        )
+        self.assertEqual(
+            "PASSED",
+            self.normal(self.empty_audit(), self.empty_audit(), accepted=[])["dependency_security_status"],
+        )
+
+    def test_tracking_only_dependency_diff_is_accepted(self):
+        root, base = self.repo()
+        result = rel000.validate_dependency_diff(
+            root, base, rel000.SECURITY_REMEDIATION, self.authorization()
+        )
+        self.assertEqual("AUTHORIZED_SECURITY_REMEDIATION", result["dependency_diff_against_base"])
+        self.assertEqual([], result["changed_dependency_files"])
+        self.assertFalse(result["dependency_lockfile_changed"])
+        self.assertEqual(rel000.MINIMATCH_KNOWN_ADVISORY_ID, result["remediation_id"])
+        self.assertEqual(
+            "f944eecd2b6dd09f39fbe06677be038e6e38bdbcaca901da330353f02f0b5aa4",
+            result["lockfile_sha256"],
+        )
+
+    def test_dependency_or_out_of_scope_change_is_rejected(self):
+        for name, lock in {
+            "lockfile bytes": self.lock() + b"\n",
+            "lockfile graph": self.lock().replace(b"minimatch: 10.2.5", b"minimatch: 10.2.6"),
+        }.items():
+            with self.subTest(lockfile=name):
+                root, base = self.repo(branch_lock=lock)
+                self.assert_reason(
+                    "SECURITY_REMEDIATION_DEPENDENCY_SCOPE_INVALID",
+                    lambda: rel000.validate_dependency_diff(
+                        root, base, rel000.SECURITY_REMEDIATION, self.authorization()
+                    ),
+                )
+                shutil.rmtree(root)
+        root, base = self.repo()
+        for relative in ("apps/web/package.json", "apps/web/pnpm-workspace.yaml"):
+            with self.subTest(dependency_file=relative):
+                (root / relative).write_text("{}\n", encoding="utf-8")
+                self.assert_reason(
+                    "UNAUTHORIZED_DEPENDENCY_FILE_CHANGED",
+                    lambda: rel000.validate_dependency_diff(
+                        root, base, rel000.SECURITY_REMEDIATION, self.authorization()
+                    ),
+                )
+                (root / relative).unlink()
+        (root / "docs").mkdir(exist_ok=True)
+        (root / "docs/other.md").write_text("x\n", encoding="utf-8")
+        self.assert_reason(
+            "SECURITY_REMEDIATION_FILE_SCOPE_INVALID",
+            lambda: rel000.validate_dependency_diff(
+                root, base, rel000.SECURITY_REMEDIATION, self.authorization()
+            ),
+        )
+
+    def test_remediation_mode_is_ready_for_merge_with_the_open_issue(self):
+        root, base = self.repo()
+        tracking = self.remediation_tracking()
+        accepted = self.accepted(root, base, tracking)
+        diff = rel000.validate_dependency_diff(
+            root, base, rel000.SECURITY_REMEDIATION, self.authorization()
+        )
+        result = rel000.validate_issue_and_audit(
+            self.issue5(),
+            tracking,
+            self.real_audit(),
+            self.real_audit(),
+            diff,
+            rel000.SECURITY_REMEDIATION,
+            self.authorization(),
+            accepted,
+        )
+        self.assertEqual("REMEDIATED_PENDING_MERGE", result["dependency_security_status"])
+        self.assertEqual("ACCEPTED_KNOWN_ADVISORY", result["additional_security_remediation_status"])
+        self.assertEqual(
+            ["Issue #5", "Issue #324"], [item["id"] for item in result["known_security_issues"]]
+        )
+        self.assertEqual(
+            {"executed": False, "status": "NOT_REQUIRED"},
+            rel000.validate_sharp_runtime_smoke(None, rel000.NORMAL_RELEASE_EVIDENCE, None),
+        )
+        self.assert_reason(
+            "SHARP_RUNTIME_SMOKE_NOT_EXECUTED",
+            lambda: rel000.validate_sharp_runtime_smoke(
+                None, rel000.SECURITY_REMEDIATION, self.authorization()
+            ),
+        )
+        self.assert_reason(
+            "ADDITIONAL_SECURITY_ISSUE_STATE_INVALID",
+            lambda: rel000.validate_issue_and_audit(
+                self.issue5(),
+                self.remediation_tracking(state="CLOSED"),
+                self.real_audit(),
+                self.real_audit(),
+                diff,
+                rel000.SECURITY_REMEDIATION,
+                self.authorization(),
+                accepted,
+            ),
+        )
+        self.assert_reason(
+            "KNOWN_ADVISORY_ISSUE_STATE_INVALID",
+            lambda: self.accepted(root, base, self.remediation_tracking(state="CLOSED")),
+        )
+        # The base audit must be exactly the accepted advisory.
+        self.assert_reason(
+            "BASE_AUDIT_UNEXPECTED",
+            lambda: rel000.validate_issue_and_audit(
+                self.issue5(),
+                tracking,
+                self.with_advisory(
+                    self.real_audit(),
+                    {
+                        **copy.deepcopy(self.REAL_DEVELOPMENT_BASE_AUDIT["advisories"][0]),
+                        "advisory_id": "GHSA-aaaa-bbbb-cccc",
+                        "severity": "low",
+                    },
+                ),
+                self.real_audit(),
+                diff,
+                rel000.SECURITY_REMEDIATION,
+                self.authorization(),
+                accepted,
+            ),
+        )
+        # Without the accepted advisory the open finding keeps the remediation blocked.
+        blocked = rel000.validate_issue_and_audit(
+            self.issue5(),
+            tracking,
+            self.real_audit(),
+            self.real_audit(),
+            diff,
+            rel000.SECURITY_REMEDIATION,
+            self.authorization(),
+            [],
+        )
+        self.assertEqual("BLOCKED", blocked["dependency_security_status"])
+
+    def test_exit_condition_records_the_owner_exit(self):
+        exit_condition = self.accepted_advisory()["exit_condition"]
+        self.assertEqual(rel000.MINIMATCH_KNOWN_ADVISORY_EXIT_CONDITION, exit_condition)
+        for fragment in (
+            "patched minimatch 3.x or 10.x",
+            "accept minimatch>=11.0.1",
+            "SEC-2026-15 (zod) route",
+            "withdraws or narrows GHSA-g3hv-75wg-m249",
+            "SEC-2026-10 (braces)",
+            "verify a zero audit",
+            "retire this accepted known advisory",
+            "close Issue #324",
+        ):
+            self.assertIn(fragment, exit_condition)
+
+    def test_fixture_and_both_workflows_bind_issue_branch_and_remediation(self):
+        fixture = json.loads(
+            (REPOSITORY_ROOT / "tests/fixtures/rel-000/security-tracking.json").read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(38, fixture["issue_number"])
+        self.assertEqual({rel000.MINIMATCH_KNOWN_ADVISORY_ID: 324}, fixture["remediation_issues"])
+        self.assertEqual({rel000.MINIMATCH_KNOWN_ADVISORY_ID: 324}, fixture["known_advisory_issues"])
+        lines = []
+        for name in ("ci.yml", "pr-validation.yml"):
+            workflow = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            line = [item for item in workflow.splitlines() if "REL000_REMEDIATION_ID:" in item]
+            with self.subTest(workflow=name):
+                self.assertEqual(1, len(line))
+                self.assertIn(
+                    "github.head_ref == 'fix/security-2026-16-minimatch-tracked' "
+                    "&& 'SEC-2026-16-MINIMATCH-GLOBPARTS-TRACKED'",
+                    line[0],
+                )
+                self.assertIn('data.get("known_advisory_issues", {})', workflow)
+                self.assertIn("--known-advisory-input", workflow)
+            lines.append(line[0])
+        self.assertEqual(lines[0], lines[1])
+
+    def test_sanitize_issue_attaches_the_known_advisory_issue(self):
+        raw = {
+            "number": 324,
+            "state": "open",
+            "title": rel000.MINIMATCH_KNOWN_ADVISORY_ISSUE_TITLE,
+            "html_url": "https://github.com/example/issues/324",
+            "updated_at": "2026-10-31T00:00:00Z",
+            "body": f"Tracks `{self.ADVISORY}` (CVE-2026-118764) in minimatch 3.1.5 and 10.2.5.",
+        }
+        tracking = dict(raw, number=38, title="tracking", body="none")
+        (self.root / "known.json").write_text(json.dumps(raw), encoding="utf-8")
+        (self.root / "tracking.json").write_text(json.dumps(tracking), encoding="utf-8")
+        rel000.sanitize_issue(
+            self.root / "tracking.json", self.root / "out.json", None, [self.root / "known.json"]
+        )
+        sanitized = json.loads((self.root / "out.json").read_text(encoding="utf-8"))
+        self.assertEqual([self.known_issue(url=raw["html_url"], updated_at=raw["updated_at"])], sanitized["known_advisory_issues"])
+
+
 class NextSharpSourcemapRemediationPolicyTests(unittest.TestCase):
     """SEC-2026-11: Next.js, Sharp and source-map-js advisories, mirroring SEC-2026-10.
 
@@ -7902,16 +9440,11 @@ class NextSharpSourcemapRemediationPolicyTests(unittest.TestCase):
             for item in self.policy_value["historical_remediations"]
             if item["id"] != rel000.NEXT_SHARP_SOURCEMAP_REMEDIATION_ID
         ]
+        # The braces acceptance it rebound was active too.
+        reactivate_retired_braces(self.policy_value)
         active = self.policy_value["active_remediations"]
         # Its original slot is right after the braces authorization it rebound.
-        braces_index = next(
-            (
-                index
-                for index, item in enumerate(active)
-                if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
-            ),
-            len(active) - 1,
-        )
+        braces_index = [item["id"] for item in active].index(rel000.BRACES_KNOWN_ADVISORY_ID)
         active.insert(braces_index + 1, next_sharp_sourcemap)
         self.policy_path = self.root / "active-policy.json"
         self.policy_path.write_text(json.dumps(self.policy_value), encoding="utf-8")
@@ -8734,8 +10267,15 @@ class NextSharpSourcemapRemediationPolicyTests(unittest.TestCase):
         )
         rel000.validate_remediation_policy(copy.deepcopy(self.policy_value), base_policy=True)
         # Retired, the authorization still counts: a tested base that records SEC-2026-11 as
-        # MERGED (every base after this retirement) loads only with the rebound graph.
-        retired_policy = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+        # MERGED while braces is still active (every base after this retirement and before the
+        # braces retirement) loads only with the rebound graph. The committed policy, with both
+        # retired, loads too.
+        rel000.validate_remediation_policy(
+            json.loads(self.repository_policy_path.read_text(encoding="utf-8")), base_policy=True
+        )
+        retired_policy = json.loads(
+            policy_before_braces_retirement(self.root).read_text(encoding="utf-8")
+        )
         rel000.validate_remediation_policy(copy.deepcopy(retired_policy), base_policy=True)
 
         def braces(value):
@@ -8905,7 +10445,9 @@ class ViteRemediationPolicyTests(unittest.TestCase):
             for item in self.policy_value["historical_remediations"]
             if item["id"] != rel000.VITE_REMEDIATION_ID
         ]
-        # Its original slot was the last active authorization.
+        # The braces acceptance was active too, and its original slot was the last active
+        # authorization.
+        reactivate_retired_braces(self.policy_value)
         self.policy_value["active_remediations"].append(vite)
         self.policy_path = self.root / "active-policy.json"
         self.policy_path.write_text(json.dumps(self.policy_value), encoding="utf-8")
@@ -9257,9 +10799,10 @@ class ViteRemediationPolicyTests(unittest.TestCase):
     def test_normal_mode_judges_the_merged_table_clean_and_any_move_back_closed(self):
         """Once retired, the merged graph is plain base content for normal release evidence."""
 
-        policy = rel000.load_remediation_policy(self.repository_policy_path)
-        # Braces is read on the graph this remediation bound it to (SEC-2026-15 later rebound
-        # its hash), as replay_policy reads it.
+        # The committed policy as it stood after this retirement, with braces still active
+        # (the braces retirement came later). Braces is read on the graph this remediation
+        # bound it to (SEC-2026-15 later rebound its hash), as replay_policy reads it.
+        policy = rel000.load_remediation_policy(policy_before_braces_retirement(self.root))
         for item in policy["active_remediations"]:
             if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID:
                 item["accepted_known_advisory"] = self.target_braces_advisory()
@@ -9286,6 +10829,19 @@ class ViteRemediationPolicyTests(unittest.TestCase):
             None,
         )
         self.assertEqual([rel000.BRACES_KNOWN_ADVISORY_ID], [item["remediation_id"] for item in accepted])
+        # Since the braces retirement the committed policy accepts nothing there.
+        self.assertEqual(
+            [],
+            rel000.resolve_accepted_known_advisories(
+                root,
+                merged,
+                rel000.load_remediation_policy(self.repository_policy_path),
+                self.tracking(),
+                self.audit([self.braces_advisory()]),
+                self.audit([self.braces_advisory()]),
+                None,
+            ),
+        )
         # Moving vite back to 8.1.5 now fails closed: normal mode admits no dependency drift.
         path = root / self.LOCK
         path.write_text(
@@ -10423,7 +11979,9 @@ class ZodRemediationPolicyTests(unittest.TestCase):
             for item in self.policy_value["historical_remediations"]
             if item["id"] != rel000.ZOD_REMEDIATION_ID
         ]
-        # Its original slot was the last active authorization.
+        # The braces acceptance was active too, and its original slot was the last active
+        # authorization.
+        reactivate_retired_braces(self.policy_value)
         self.policy_value["active_remediations"].append(zod)
         self.policy_path = self.root / "active-policy.json"
         self.policy_path.write_text(json.dumps(self.policy_value), encoding="utf-8")
@@ -10731,10 +12289,12 @@ class ZodRemediationPolicyTests(unittest.TestCase):
     def test_normal_mode_judges_the_merged_table_clean_and_any_move_back_closed(self):
         """Once retired, the merged graph is plain base content for normal release evidence."""
 
-        policy = rel000.load_remediation_policy(self.repository_policy_path)
+        # The committed policy as it stood after this retirement, with braces still active
+        # (the braces retirement came later).
+        policy = rel000.load_remediation_policy(policy_before_braces_retirement(self.root))
         # A later commit on top of the merged tree that leaves the web dependencies alone is
-        # clean. Were the withdrawn braces advisory reported again in both audits, it would be
-        # accepted on the rebound graph.
+        # clean. Were the withdrawn braces advisory reported again in both audits, it would have
+        # been accepted on the rebound graph.
         root, _, _ = self.dependency_repo()
         subprocess.run(["git", "add", "."], cwd=root, check=True)
         subprocess.run(["git", "commit", "-qm", "merged"], cwd=root, check=True)
@@ -10756,6 +12316,19 @@ class ZodRemediationPolicyTests(unittest.TestCase):
             None,
         )
         self.assertEqual([rel000.BRACES_KNOWN_ADVISORY_ID], [item["remediation_id"] for item in accepted])
+        # Since the braces retirement the committed policy accepts nothing there.
+        self.assertEqual(
+            [],
+            rel000.resolve_accepted_known_advisories(
+                root,
+                merged,
+                rel000.load_remediation_policy(self.repository_policy_path),
+                self.tracking(),
+                self.audit([self.braces_advisory()]),
+                self.audit([self.braces_advisory()]),
+                None,
+            ),
+        )
         # Moving zod back to 4.4.3, or dropping its override, now fails closed: normal mode
         # admits no dependency drift.
         for label, relative, old, new in (
@@ -11807,7 +13380,9 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
             for item in self.policy_value["historical_remediations"]
             if item["id"] != rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID
         ]
-        # Its original slot was the last active authorization.
+        # The braces acceptance was active too, and its original slot was the last active
+        # authorization.
+        reactivate_retired_braces(self.policy_value)
         self.policy_value["active_remediations"].append(signalr_cryptography)
         self.policy_path = self.root / "active-policy.json"
         self.policy_path.write_text(json.dumps(self.policy_value), encoding="utf-8")
@@ -11863,8 +13438,9 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
         """A repository at the authorized base files, then the remediation's files on top.
 
         The web lockfile is committed unchanged, so the braces accepted known advisory can
-        be resolved against the same repository. It is the checkout's, the graph braces is
-        bound to today (SEC-2026-14 rebound it), as BracesKnownAdvisoryTests reads it.
+        be resolved against the same repository. It is the validated target's, the graph
+        braces was bound to when this remediation was validated (SEC-2026-11 bound it), as
+        target_braces_advisory reads braces.
         """
 
         authorization = self.authorization()
@@ -11874,7 +13450,7 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
             path = root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(
-                (REPOSITORY_ROOT / relative).read_bytes()
+                self.target_file(relative)
                 if relative == "apps/web/pnpm-lock.yaml"
                 else self.base_file(relative)
             )
@@ -12045,11 +13621,37 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
             "tracked_advisory_ids": [rel000.ISSUE5_ADVISORY],
         }
 
+    def target_braces_advisory(self) -> dict[str, Any]:
+        """The braces accepted known advisory exactly as the validated target declared it.
+
+        SEC-2026-14 and SEC-2026-15 later rebound it and the advisory was then retired, so the
+        replay reads braces on the graph it had when this remediation was validated, as the
+        SEC-2026-11 and SEC-2026-14 replays do.
+        """
+
+        target_policy = json.loads(self.target_file(rel000.REMEDIATION_POLICY_PATH))
+        return copy.deepcopy(
+            next(
+                entry["accepted_known_advisory"]
+                for entry in target_policy["active_remediations"]
+                if entry["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+            )
+        )
+
+    def replay_policy(self):
+        """The loaded policy with braces bound as it was when this remediation was validated."""
+
+        policy = self.policy()
+        for item in policy["active_remediations"]:
+            if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID:
+                item["accepted_known_advisory"] = self.target_braces_advisory()
+        return policy
+
     def accepted(self, root, base, tracking=None):
         return rel000.resolve_accepted_known_advisories(
             root,
             base,
-            self.policy(),
+            self.replay_policy(),
             tracking if tracking is not None else self.tracking(),
             self.audit(self.base_advisories()),
             self.audit([self.braces_advisory()]),
@@ -12123,11 +13725,12 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
 
         policy = rel000.load_remediation_policy(self.repository_policy_path)
         graphs = rel000.security_remediation_nuget_graphs(policy)
-        # SEC-2026-13 is active and declares its own graph, which the checkout also carries.
+        # SEC-2026-13 is retired too and declares its own graph, which the checkout also
+        # carries.
         self.assertEqual(
             [
                 (rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID, "MERGED"),
-                (rel000.OPENAPI_YAMLREADER_REMEDIATION_ID, None),
+                (rel000.OPENAPI_YAMLREADER_REMEDIATION_ID, "MERGED"),
             ],
             [(item["id"], item.get("status")) for item in graphs],
         )
@@ -12393,7 +13996,14 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
                 for item in value["active_remediations"]
                 if item["id"] != rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID
             ]
-            value["historical_remediations"].append(retired)
+            # Back in its own historical slot, just before the retired SEC-2026-13.
+            historical = value["historical_remediations"]
+            historical.insert(
+                [item["id"] for item in historical].index(
+                    rel000.OPENAPI_YAMLREADER_REMEDIATION_ID
+                ),
+                retired,
+            )
             path = self.root / "retired.json"
             path.write_text(json.dumps(value), encoding="utf-8")
             return path
@@ -12656,8 +14266,9 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
         authorization = self.authorization()
         moves = authorization["expected_nuget_package_moves"]
         graphs = rel000.security_remediation_nuget_graphs(policy)
-        # The replay appends SEC-2026-12 after the active SEC-2026-13, whose graph the
-        # checkout also carries.
+        # The replay puts SEC-2026-12 back among the active authorizations, which come after
+        # the historical ones, the retired SEC-2026-13 included; the checkout carries both
+        # graphs.
         self.assertEqual(
             [rel000.OPENAPI_YAMLREADER_REMEDIATION_ID, rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID],
             [item["id"] for item in graphs],
@@ -12821,7 +14432,8 @@ class SignalrCryptographyRemediationPolicyTests(unittest.TestCase):
             self.root / "pnpm.json",
             output,
             True,
-            1,
+            # pnpm lists no advisory here, so it exits 0 (exit 1 without one fails closed).
+            0,
             [self.root / "contract.json", self.root / "integration.json"],
         )
         sanitized = json.loads(output.read_text(encoding="utf-8"))
@@ -12940,8 +14552,31 @@ class OpenApiYamlReaderRemediationPolicyTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="rel000-openapi-yamlreader-tests-")
         self.root = Path(self.temp.name)
-        self.policy_path = REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH
-        self.policy_value = json.loads(self.policy_path.read_text(encoding="utf-8"))
+        self.repository_policy_path = REPOSITORY_ROOT / rel000.REMEDIATION_POLICY_PATH
+        current_policy = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+        # PR #282 merged, so the authorization is historical; the regression suite replays it
+        # as the active authorization it was while the remediation branch was open.
+        openapi_yamlreader = copy.deepcopy(
+            next(
+                item
+                for item in current_policy["historical_remediations"]
+                if item["id"] == rel000.OPENAPI_YAMLREADER_REMEDIATION_ID
+            )
+        )
+        for field in ("status", "validated_target_sha", "tracked_pull_request"):
+            openapi_yamlreader.pop(field, None)
+        self.policy_value = copy.deepcopy(current_policy)
+        self.policy_value["historical_remediations"] = [
+            item
+            for item in self.policy_value["historical_remediations"]
+            if item["id"] != rel000.OPENAPI_YAMLREADER_REMEDIATION_ID
+        ]
+        # The braces acceptance was active too, and its original slot was the last active
+        # authorization.
+        reactivate_retired_braces(self.policy_value)
+        self.policy_value["active_remediations"].append(openapi_yamlreader)
+        self.policy_path = self.root / "active-policy.json"
+        self.policy_path.write_text(json.dumps(self.policy_value), encoding="utf-8")
 
     def tearDown(self) -> None:
         self.temp.cleanup()
@@ -12970,18 +14605,33 @@ class OpenApiYamlReaderRemediationPolicyTests(unittest.TestCase):
             cwd=REPOSITORY_ROOT,
         )
 
+    def retired(self) -> dict[str, Any]:
+        policy = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+        return next(
+            item
+            for item in policy["historical_remediations"]
+            if item["id"] == rel000.OPENAPI_YAMLREADER_REMEDIATION_ID
+        )
+
     def target_file(self, relative: str) -> bytes:
-        # The remediation is active, so its graph is the checkout's (as SEC-2026-12 did while
-        # PR #261 was open). Once a later change moves the graph, pin validated_target_sha
-        # and replay that commit instead.
-        return (REPOSITORY_ROOT / relative).read_bytes()
+        """The file exactly as PR #282 validated it (validated_target_sha), not the checkout.
+
+        Later changes may move the checkout past this graph, so the regression suite replays
+        the exact target that Foundation CI passed 13/13 on.
+        """
+
+        return subprocess.check_output(
+            ["git", "show", f"{self.retired()['validated_target_sha']}:{relative}"],
+            cwd=REPOSITORY_ROOT,
+        )
 
     def dependency_repo(self):
         """A repository at the authorized base files, then the remediation's files on top.
 
         The web lockfile is committed unchanged, so the braces accepted known advisory can
-        be resolved against the same repository. It is the checkout's, the graph braces is
-        bound to today (SEC-2026-14 rebound it), as BracesKnownAdvisoryTests reads it.
+        be resolved against the same repository. It is the validated target's, the graph
+        braces was bound to when this remediation was validated (SEC-2026-11 bound it), as
+        target_braces_advisory reads braces.
         """
 
         authorization = self.authorization()
@@ -12991,7 +14641,7 @@ class OpenApiYamlReaderRemediationPolicyTests(unittest.TestCase):
             path = root / relative
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(
-                (REPOSITORY_ROOT / relative).read_bytes()
+                self.target_file(relative)
                 if relative == "apps/web/pnpm-lock.yaml"
                 else self.base_file(relative)
             )
@@ -13141,11 +14791,37 @@ class OpenApiYamlReaderRemediationPolicyTests(unittest.TestCase):
             "tracked_advisory_ids": [rel000.ISSUE5_ADVISORY],
         }
 
+    def target_braces_advisory(self) -> dict[str, Any]:
+        """The braces accepted known advisory exactly as the validated target declared it.
+
+        SEC-2026-14 and SEC-2026-15 later rebound it and the advisory was then retired, so the
+        replay reads braces on the graph it had when this remediation was validated, as the
+        SEC-2026-11 and SEC-2026-14 replays do.
+        """
+
+        target_policy = json.loads(self.target_file(rel000.REMEDIATION_POLICY_PATH))
+        return copy.deepcopy(
+            next(
+                entry["accepted_known_advisory"]
+                for entry in target_policy["active_remediations"]
+                if entry["id"] == rel000.BRACES_KNOWN_ADVISORY_ID
+            )
+        )
+
+    def replay_policy(self):
+        """The loaded policy with braces bound as it was when this remediation was validated."""
+
+        policy = self.policy()
+        for item in policy["active_remediations"]:
+            if item["id"] == rel000.BRACES_KNOWN_ADVISORY_ID:
+                item["accepted_known_advisory"] = self.target_braces_advisory()
+        return policy
+
     def accepted(self, root, base, tracking=None):
         return rel000.resolve_accepted_known_advisories(
             root,
             base,
-            self.policy(),
+            self.replay_policy(),
             tracking if tracking is not None else self.tracking(),
             self.audit(self.base_advisories()),
             self.audit([self.braces_advisory()]),
@@ -13172,6 +14848,161 @@ class OpenApiYamlReaderRemediationPolicyTests(unittest.TestCase):
             authorization or self.authorization(),
             accepted,
         )
+
+    def test_merged_authorization_is_historical_and_not_active(self):
+        policy = rel000.load_remediation_policy(self.repository_policy_path)
+        retired = {item["id"]: item for item in policy["historical_remediations"]}[
+            rel000.OPENAPI_YAMLREADER_REMEDIATION_ID
+        ]
+        self.assertEqual("MERGED", retired["status"])
+        self.assertEqual(282, retired["tracked_pull_request"])
+        # The head Foundation CI passed 13/13 on, as #263 pinned PR #261's head; its tree is
+        # the one main got from merge commit b949dd8.
+        self.assertEqual(
+            "39252f466e7e7f352faa0c12c03ba74a3d541400", retired["validated_target_sha"]
+        )
+        self.assertEqual(
+            *(
+                subprocess.check_output(
+                    ["git", "rev-parse", f"{commit}^{{tree}}"], cwd=REPOSITORY_ROOT, text=True
+                ).strip()
+                for commit in (retired["validated_target_sha"], "b949dd8")
+            )
+        )
+        # The policy still loads, so the exact graph stays declared on the historical entry.
+        self.assertEqual(
+            rel000.OPENAPI_YAMLREADER_NUGET_PACKAGE_MOVES,
+            retired["expected_nuget_package_moves"],
+        )
+        self.assertNotIn(
+            rel000.OPENAPI_YAMLREADER_REMEDIATION_ID,
+            {item["id"] for item in policy["active_remediations"]},
+        )
+        self.assert_reason(
+            "REMEDIATION_ID_NOT_ACTIVE",
+            lambda: rel000.resolve_rel000_mode(
+                policy,
+                "fix/security-2026-13-openapi-yamlreader",
+                rel000.OPENAPI_YAMLREADER_REMEDIATION_ID,
+            ),
+        )
+        self.assertEqual(
+            rel000.NORMAL_RELEASE_EVIDENCE,
+            rel000.resolve_rel000_mode(policy, "fix/security-2026-13-openapi-yamlreader"),
+        )
+
+    def test_permanent_graph_reads_the_retired_authorization(self):
+        """test_k keeps accepting exactly the 2 moves once the entry is historical."""
+
+        policy = rel000.load_remediation_policy(self.repository_policy_path)
+        graphs = rel000.security_remediation_nuget_graphs(policy)
+        # Both NuGet remediations are retired, in the order they merged.
+        self.assertEqual(
+            [
+                (rel000.SIGNALR_CRYPTOGRAPHY_REMEDIATION_ID, "MERGED"),
+                (rel000.OPENAPI_YAMLREADER_REMEDIATION_ID, "MERGED"),
+            ],
+            [(item["id"], item["status"]) for item in graphs],
+        )
+        self.assertEqual(
+            rel000.OPENAPI_YAMLREADER_NUGET_PACKAGE_MOVES,
+            graphs[1]["expected_nuget_package_moves"],
+        )
+        admissions = policy["dependency_admissions"]
+        changed = sorted(
+            {
+                path
+                for output in (
+                    rel000.run_git(REPOSITORY_ROOT, "diff", "--name-only", self.MVP0_BASELINE),
+                    rel000.run_git(REPOSITORY_ROOT, "ls-files", "--others", "--exclude-standard"),
+                )
+                for path in output.splitlines()
+                if path.strip()
+            }
+        )
+        lockfiles = sorted(path for path in changed if Path(path).name == "packages.lock.json")
+        self.assertTrue(set(rel000.OPENAPI_YAMLREADER_LOCK_FILES) <= set(lockfiles))
+        # With the retired graph the checkout passes the permanent check; without it (alone
+        # or next to SEC-2026-12's), it fails.
+        self.assertEqual(
+            lockfiles,
+            rel000.package_graph_lockfile_diff(
+                REPOSITORY_ROOT, self.MVP0_BASELINE, changed, admissions, graphs
+            )[0],
+        )
+        self.assertTrue(
+            rel000.validate_admitted_central_packages(
+                REPOSITORY_ROOT, self.MVP0_BASELINE, admissions, graphs
+            )["changed"]
+        )
+        for name, subset in (("none", None), ("SEC-2026-12 only", graphs[:1])):
+            with self.subTest(graphs=name):
+                self.assert_reason(
+                    "BASELINE_CENTRAL_PACKAGES_CHANGED",
+                    lambda: rel000.validate_admitted_central_packages(
+                        REPOSITORY_ROOT, self.MVP0_BASELINE, admissions, subset
+                    ),
+                )
+                self.assert_reason(
+                    "BASELINE_CENTRAL_PACKAGES_CHANGED",
+                    lambda: rel000.package_graph_lockfile_diff(
+                        REPOSITORY_ROOT, self.MVP0_BASELINE, changed, admissions, subset
+                    ),
+                )
+        # Retired with any other move, the policy no longer loads (see the exclusivity test).
+        value = json.loads(self.repository_policy_path.read_text(encoding="utf-8"))
+        for item in value["historical_remediations"]:
+            if item["id"] == rel000.OPENAPI_YAMLREADER_REMEDIATION_ID:
+                item["expected_nuget_package_moves"]["Microsoft.OpenApi.YamlReader"][
+                    "lock_files"
+                ].append(self.INTEGRATION_LOCK)
+        path = self.root / "tampered-retired.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        self.assert_reason(
+            "REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path)
+        )
+
+    def test_release_evidence_never_undoes_the_remediation_graph(self):
+        """Normal mode judges the moves as plain drift: only test_k passes the graph."""
+
+        root, base, _ = self.dependency_repo()
+        admissions = rel000.load_remediation_policy(self.repository_policy_path)[
+            "dependency_admissions"
+        ]
+        calls: list[Any] = []
+        original_lock = rel000._nuget_remediations_reverted_lock
+        original_props = rel000._nuget_remediations_reverted_props
+
+        def record_lock(relative, lock, remediations):
+            calls.append(remediations)
+            return original_lock(relative, lock, remediations)
+
+        def record_props(text, remediations):
+            calls.append(remediations)
+            return original_props(text, remediations)
+
+        # Against a base without the remediation (13765fb), normal mode finds the two central
+        # versions moved from the MVP-0 freeze and fails closed; it never undoes the graph.
+        with patch.object(rel000, "_nuget_remediations_reverted_lock", record_lock), patch.object(
+            rel000, "_nuget_remediations_reverted_props", record_props
+        ):
+            failure = self.assert_reason(
+                "BASELINE_CENTRAL_PACKAGES_CHANGED",
+                lambda: rel000.validate_dependency_diff(
+                    root,
+                    base,
+                    rel000.NORMAL_RELEASE_EVIDENCE,
+                    None,
+                    admissions,
+                    "feature/other",
+                    "2026-10-20",
+                ),
+            )
+        self.assertEqual(
+            ["Microsoft.OpenApi", "Microsoft.OpenApi.YamlReader"], failure.details["packages"]
+        )
+        self.assertTrue(calls)
+        self.assertFalse([value for value in calls if value])
 
     def test_policy_loads_and_mode_requires_exact_branch_id_and_base(self):
         policy = self.policy()
@@ -13896,7 +15727,8 @@ class OpenApiYamlReaderRemediationPolicyTests(unittest.TestCase):
             self.root / "pnpm.json",
             output,
             True,
-            1,
+            # pnpm lists no advisory here, so it exits 0 (exit 1 without one fails closed).
+            0,
             [self.root / "contract.json", self.root / "integration.json"],
         )
         sanitized = json.loads(output.read_text(encoding="utf-8"))
@@ -13970,17 +15802,16 @@ class OpenApiYamlReaderRemediationPolicyTests(unittest.TestCase):
         )
 
     def test_fixture_and_both_workflows_bind_issue_branch_and_remediation(self):
-        fixture = json.loads(
-            (REPOSITORY_ROOT / "tests/fixtures/rel-000/security-tracking.json").read_text(
-                encoding="utf-8"
-            )
-        )
+        # The retirement removed this binding from the checkout (see the web-transitive
+        # binding test); the tree PR #282 validated (validated_target_sha) carried it in the
+        # fixture and in both workflows.
+        fixture = json.loads(self.target_file("tests/fixtures/rel-000/security-tracking.json"))
         self.assertEqual(
             280, fixture["remediation_issues"][rel000.OPENAPI_YAMLREADER_REMEDIATION_ID]
         )
         self.assertEqual({rel000.BRACES_KNOWN_ADVISORY_ID: 180}, fixture["known_advisory_issues"])
         for name in ("ci.yml", "pr-validation.yml"):
-            workflow = (REPOSITORY_ROOT / ".github/workflows" / name).read_text(encoding="utf-8")
+            workflow = self.target_file(f".github/workflows/{name}").decode("utf-8")
             with self.subTest(workflow=name):
                 self.assertIn(
                     "github.head_ref == 'fix/security-2026-13-openapi-yamlreader' "
@@ -14591,6 +16422,456 @@ class TestedBaseWorkflowGuardTests(unittest.TestCase):
         self.assertEqual(
             len(self.PROVENANCE_JOBS),
             self.text.count(f"- name: {self.RESOLVE_STEP}"),
+        )
+
+
+class AuditCommandFailureTests(unittest.TestCase):
+    """A dependency audit that fails is a failed gate, never a clean audit.
+
+    The raw shapes below are what the pinned pnpm 11.15.1 and the .NET 10 SDK
+    (`dotnet package list --vulnerable --include-transitive --format json`) wrote on
+    2026-10-22 for a clean report, a report with advisories and a failing registry.
+    """
+
+    # Clean `pnpm audit --json` (exit 0).
+    PNPM_CLEAN = {
+        "advisories": {},
+        "metadata": {
+            "vulnerabilities": {"info": 0, "low": 0, "moderate": 0, "high": 0, "critical": 0},
+            "dependencies": 1,
+            "devDependencies": 0,
+            "optionalDependencies": 0,
+            "totalDependencies": 1,
+        },
+    }
+    # `pnpm audit --json` of the apps/web lockfile on development 11f35da (exit 1).
+    PNPM_ADVISORY = {
+        "advisories": {
+            "1240992": {
+                "findings": [
+                    {
+                        "version": "3.0.3",
+                        "paths": [
+                            ".>eslint-config-next>@next/eslint-plugin-next>fast-glob>micromatch>braces"
+                        ],
+                        "dev": True,
+                        "optional": False,
+                        "bundled": False,
+                    }
+                ],
+                "id": 1240992,
+                "title": "braces vulnerable to stack-exhaustion denial of service through deeply nested patterns",
+                "module_name": "braces",
+                "vulnerable_versions": "<=3.0.3",
+                "patched_versions": ">=3.0.4",
+                "severity": "high",
+                "cwe": "CWE-674",
+                "github_advisory_id": "GHSA-vfj7-8cjw-p6xm",
+                "url": "https://github.com/advisories/GHSA-vfj7-8cjw-p6xm",
+            }
+        },
+        "metadata": {
+            "vulnerabilities": {"info": 0, "low": 0, "moderate": 0, "high": 1, "critical": 0},
+            "dependencies": 75,
+            "devDependencies": 363,
+            "optionalDependencies": 94,
+            "totalDependencies": 475,
+        },
+    }
+    # `pnpm audit --json` when the registry fails (all exit 1, nothing on stderr).
+    PNPM_FAILURES = {
+        "23": {"error": {"code": 23, "message": "The operation was aborted due to timeout"}},
+        "pnpm": {"error": {"code": "pnpm", "message": "fetch failed"}},
+        "ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS": {
+            "error": {
+                "code": "ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS",
+                "message": (
+                    "The audit endpoint (at https://httpbin.org/status/500/-/npm/v1/security/"
+                    "advisories/bulk) doesn't exist."
+                ),
+            }
+        },
+    }
+    NUGET_PROJECT = "tests/Paqueteria.ContractTests/Paqueteria.ContractTests.csproj"
+    # Clean `dotnet package list --vulnerable` (exit 0): the project carries no frameworks.
+    NUGET_CLEAN = {
+        "version": 1,
+        "parameters": "--vulnerable --include-transitive",
+        "sources": ["https://api.nuget.org/v3/index.json"],
+        "projects": [{"path": NUGET_PROJECT}],
+    }
+    # A rejected package source (exit 1): JSON with an error-level problem and a project
+    # without frameworks, which reads exactly like the clean report above.
+    NUGET_SOURCE_REJECTED = {
+        "version": 1,
+        "parameters": "--vulnerable --include-transitive",
+        "problems": [
+            {
+                "project": NUGET_PROJECT,
+                "level": "error",
+                "text": (
+                    "You are running the 'list package' operation with an 'HTTP' source, "
+                    "'nuget.org [http://127.0.0.1:9/v3/index.json]'. NuGet requires HTTPS "
+                    "sources. To use HTTP sources, you must explicitly set "
+                    "'allowInsecureConnections' to true in your NuGet.Config file. Refer to "
+                    "https://aka.ms/nuget-https-everywhere for more information."
+                ),
+            }
+        ],
+        "sources": ["http://127.0.0.1:9/v3/index.json"],
+        "projects": [{"path": NUGET_PROJECT}],
+    }
+    NUGET_ADVISORY = {
+        "version": 1,
+        "parameters": "--vulnerable --include-transitive",
+        "sources": ["https://api.nuget.org/v3/index.json"],
+        "projects": [
+            {
+                "path": NUGET_PROJECT,
+                "frameworks": [
+                    {
+                        "framework": "net10.0",
+                        "topLevelPackages": [
+                            {
+                                "id": "Newtonsoft.Json",
+                                "requestedVersion": "12.0.1",
+                                "resolvedVersion": "12.0.1",
+                                "vulnerabilities": [
+                                    {
+                                        "severity": "High",
+                                        "advisoryurl": "https://github.com/advisories/GHSA-5crp-9r3c-p9vr",
+                                    }
+                                ],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ],
+    }
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory(prefix="rel000-audit-failure-tests-")
+        self.root = Path(self.temp.name)
+
+    def tearDown(self) -> None:
+        self.temp.cleanup()
+
+    def assert_reason(self, expected: str, action) -> rel000.ValidationFailure:
+        with self.assertRaises(rel000.ValidationFailure) as raised:
+            action()
+        self.assertEqual(expected, raised.exception.reason_code)
+        return raised.exception
+
+    def write(self, name: str, value: Any) -> Path:
+        path = self.root / name
+        path.write_text(json.dumps(value), encoding="utf-8")
+        return path
+
+    def sanitize(self, raw: Any, exit_code: int, nuget: list[Any] | None = None) -> Path:
+        output = self.root / "rel000-branch-audit.json"
+        rel000.sanitize_audit(
+            self.write("rel000-branch-audit-raw.json", raw),
+            output,
+            True,
+            exit_code,
+            [
+                self.write(f"rel000-branch-nuget-{index}.json", value)
+                for index, value in enumerate(nuget or [])
+            ]
+            or None,
+        )
+        return output
+
+    def test_pnpm_error_object_fails_closed_with_the_tool_error(self):
+        for code, raw in self.PNPM_FAILURES.items():
+            with self.subTest(code=code):
+                failure = self.assert_reason(
+                    "AUDIT_COMMAND_FAILED", lambda: self.sanitize(raw, 1)
+                )
+                self.assertEqual("rel000-branch-audit-raw.json", failure.details["input"])
+                self.assertEqual(code, failure.details["tool_error_code"])
+                self.assertIn("rel000-branch-audit-raw.json", failure.message)
+                self.assertIn(code, failure.message)
+                self.assertIn(failure.details["tool_error_summary"], failure.message)
+                self.assertFalse((self.root / "rel000-branch-audit.json").exists())
+                rel000.assert_redacted(failure.as_dict())
+        timeout = self.assert_reason(
+            "AUDIT_COMMAND_FAILED", lambda: self.sanitize(self.PNPM_FAILURES["23"], 1)
+        )
+        self.assertEqual(
+            "The operation was aborted due to timeout", timeout.details["tool_error_summary"]
+        )
+        endpoint = self.assert_reason(
+            "AUDIT_COMMAND_FAILED",
+            lambda: self.sanitize(self.PNPM_FAILURES["ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS"], 1),
+        )
+        self.assertEqual(
+            "The audit endpoint (at <url>) doesn't exist.",
+            endpoint.details["tool_error_summary"],
+        )
+
+    def test_error_object_fails_whatever_the_exit_code_or_its_shape(self):
+        for raw, exit_code in (
+            (self.PNPM_FAILURES["pnpm"], 0),
+            ({**self.PNPM_CLEAN, "error": {"code": "pnpm", "message": "fetch failed"}}, 0),
+            ({**self.PNPM_ADVISORY, "error": {"code": "pnpm", "message": "fetch failed"}}, 1),
+            ({"error": "fetch failed"}, 1),
+            ({"error": None}, 1),
+        ):
+            with self.subTest(raw=raw, exit_code=exit_code):
+                self.assert_reason("AUDIT_COMMAND_FAILED", lambda: self.sanitize(raw, exit_code))
+        npm_style = self.assert_reason(
+            "AUDIT_COMMAND_FAILED",
+            lambda: self.sanitize(
+                {
+                    "error": {
+                        "code": "ENOAUDIT",
+                        "summary": "Your configured registry does not support audit requests.",
+                        "detail": "Try again later.",
+                    }
+                },
+                1,
+            ),
+        )
+        self.assertEqual("ENOAUDIT", npm_style.details["tool_error_code"])
+        self.assertEqual(
+            "Your configured registry does not support audit requests.",
+            npm_style.details["tool_error_summary"],
+        )
+        unknown = self.assert_reason(
+            "AUDIT_COMMAND_FAILED", lambda: self.sanitize({"error": {}}, 1)
+        )
+        self.assertEqual("UNKNOWN", unknown.details["tool_error_code"])
+        self.assertEqual("no summary", unknown.details["tool_error_summary"])
+
+    def test_tool_error_never_carries_credentials_or_registry_urls(self):
+        # Token-shaped synthetic values are built at runtime so the secret scan never sees
+        # a credential-shaped literal in the source.
+        npm_token = "npm" + "_" + "AbCdEf0123456789" * 2 + "AbCd"
+        access_key = "AKIA" + "ABCDEFGHIJKLMNOP"
+        secrets = (
+            "s3cr3t-value",
+            npm_token,
+            "eyJhbGciOiJIUzI1NiJ9.e30.c2lnbmF0dXJl",
+            "registry.example.test",
+            "?_authToken",
+            "ci-bot@example.com",
+            "0f8fad5b-d9cb-469f-a165-70867728950e",
+            access_key,
+            "\n",
+        )
+        failure = self.assert_reason(
+            "AUDIT_COMMAND_FAILED",
+            lambda: self.sanitize(
+                {
+                    "error": {
+                        "code": "E401",
+                        "message": (
+                            "Unable to authenticate at "
+                            "https://ci:s3cr3t-value@registry.example.test/-/npm/v1/security/"
+                            "advisories/bulk?_authToken=s3cr3t-value, "
+                            "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.e30.c2lnbmF0dXJl, "
+                            "//registry.example.test/:_authToken=s3cr3t-value "
+                            f"{npm_token} for ci-bot@example.com "
+                            f"request 0f8fad5b-d9cb-469f-a165-70867728950e\nkey {access_key}"
+                        ),
+                    }
+                },
+                1,
+            ),
+        )
+        reported = json.dumps(failure.as_dict(), ensure_ascii=False) + str(failure)
+        for secret in secrets:
+            with self.subTest(secret=secret):
+                self.assertNotIn(secret, reported)
+        self.assertEqual("E401", failure.details["tool_error_code"])
+        self.assertTrue(failure.details["tool_error_summary"].startswith("Unable to authenticate"))
+        rel000.assert_redacted(failure.as_dict())
+        long_summary = self.assert_reason(
+            "AUDIT_COMMAND_FAILED",
+            lambda: self.sanitize({"error": {"code": "pnpm", "message": "x " * 400}}, 1),
+        )
+        self.assertLessEqual(len(long_summary.details["tool_error_summary"]), 240)
+
+    def test_long_opaque_values_are_redacted_with_or_without_digits(self):
+        letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ" + "ABCDEFGH"
+        lowercase = letters.lower()
+        mixed = "QWErtyUIOpasDFGhjkLZXcvbNMqwERtyUI"
+        for opaque in (letters, lowercase, mixed, letters + "_" + letters, "AB_" * 12):
+            with self.subTest(opaque=opaque):
+                failure = self.assert_reason(
+                    "AUDIT_COMMAND_FAILED",
+                    lambda: self.sanitize(
+                        {
+                            "error": {
+                                "code": opaque,
+                                "message": f"Secret rotation required for value {opaque} ahead of audit",
+                            }
+                        },
+                        1,
+                    ),
+                )
+                reported = json.dumps(failure.as_dict(), ensure_ascii=False) + str(failure)
+                self.assertNotIn(opaque, reported)
+                self.assertEqual("<redacted>", failure.details["tool_error_code"])
+                self.assertEqual(
+                    "Secret rotation required for value <redacted> ahead of audit",
+                    failure.details["tool_error_summary"],
+                )
+        # A short tool error code and an UPPER_SNAKE code of short words are kept.
+        for code in ("ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS", "ERR_PNPM_FETCH_401", "ENOAUDIT"):
+            with self.subTest(code=code):
+                self.assertEqual(
+                    code,
+                    self.assert_reason(
+                        "AUDIT_COMMAND_FAILED",
+                        lambda: self.sanitize({"error": {"code": code, "message": "x"}}, 1),
+                    ).details["tool_error_code"],
+                )
+
+    def test_unrecognised_pnpm_report_fails_closed(self):
+        for raw in (
+            {},
+            {"metadata": self.PNPM_CLEAN["metadata"]},
+            {"advisories": []},
+            {"advisories": None},
+            {"vulnerabilities": None},
+            {"advisories": {}, "vulnerabilities": []},
+        ):
+            with self.subTest(raw=raw):
+                failure = self.assert_reason(
+                    "AUDIT_REPORT_UNRECOGNIZED", lambda: self.sanitize(raw, 0)
+                )
+                self.assertEqual("rel000-branch-audit-raw.json", failure.details["input"])
+
+    def test_exit_one_without_a_listed_advisory_fails_closed(self):
+        for raw, nuget in (
+            (self.PNPM_CLEAN, None),
+            ({"vulnerabilities": {}}, None),
+            # A modern entry without a GHSA identifier lists no advisory either.
+            ({"vulnerabilities": {"left-pad": {"severity": "high", "via": ["left-pad"]}}}, None),
+            # The exit code is pnpm's own; a NuGet finding does not explain it.
+            (self.PNPM_CLEAN, [self.NUGET_ADVISORY]),
+        ):
+            with self.subTest(raw=raw, nuget=nuget):
+                failure = self.assert_reason(
+                    "AUDIT_EXIT_CODE_INCONSISTENT", lambda: self.sanitize(raw, 1, nuget)
+                )
+                self.assertEqual(1, failure.details["exit_code"])
+                self.assertEqual("rel000-branch-audit-raw.json", failure.details["input"])
+
+    def test_real_clean_report_passes(self):
+        sanitized = json.loads(self.sanitize(self.PNPM_CLEAN, 0).read_text(encoding="utf-8"))
+        self.assertEqual(
+            {
+                "format_version": "paquetenvia-rel000-audit-v1",
+                "command_executed": True,
+                "command_exit_code": 0,
+                "parse_succeeded": True,
+                "totals": {"critical": 0, "high": 0, "moderate": 0, "low": 0, "total": 0},
+                "affected_packages": [],
+                "advisories": [],
+            },
+            sanitized,
+        )
+        with_nuget = json.loads(
+            self.sanitize(self.PNPM_CLEAN, 0, [self.NUGET_CLEAN, self.NUGET_CLEAN]).read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(sanitized, with_nuget)
+
+    def test_real_advisory_report_passes_as_today(self):
+        sanitized = json.loads(self.sanitize(self.PNPM_ADVISORY, 1).read_text(encoding="utf-8"))
+        self.assertEqual(BracesKnownAdvisoryTests.REAL_DEVELOPMENT_BASE_AUDIT, sanitized)
+        with_nuget = json.loads(
+            self.sanitize(self.PNPM_ADVISORY, 1, [self.NUGET_ADVISORY, self.NUGET_CLEAN]).read_text(
+                encoding="utf-8"
+            )
+        )
+        self.assertEqual(
+            {"critical": 0, "high": 2, "moderate": 0, "low": 0, "total": 2}, with_nuget["totals"]
+        )
+        self.assertEqual(
+            ["GHSA-5CRP-9R3C-P9VR", "GHSA-vfj7-8cjw-p6xm"],
+            [item["advisory_id"] for item in with_nuget["advisories"]],
+        )
+
+    def test_nuget_error_problem_fails_closed(self):
+        failure = self.assert_reason(
+            "AUDIT_COMMAND_FAILED",
+            lambda: self.sanitize(
+                self.PNPM_ADVISORY, 1, [self.NUGET_CLEAN, self.NUGET_SOURCE_REJECTED]
+            ),
+        )
+        self.assertEqual("rel000-branch-nuget-1.json", failure.details["input"])
+        self.assertEqual("error", failure.details["tool_error_code"])
+        self.assertIn("NuGet requires HTTPS sources", failure.details["tool_error_summary"])
+        self.assertIn("rel000-branch-nuget-1.json", failure.message)
+        self.assertNotIn("127.0.0.1", json.dumps(failure.as_dict()))
+        self.assertNotIn(self.NUGET_PROJECT, json.dumps(failure.as_dict()))
+        rel000.assert_redacted(failure.as_dict())
+        coded = copy.deepcopy(self.NUGET_SOURCE_REJECTED)
+        coded["problems"][0]["level"] = "Error"
+        coded["problems"][0]["text"] = "error NU1301: Unable to load the service index for source."
+        self.assertEqual(
+            "NU1301",
+            self.assert_reason(
+                "AUDIT_COMMAND_FAILED", lambda: self.sanitize(self.PNPM_ADVISORY, 1, [coded])
+            ).details["tool_error_code"],
+        )
+        self.assertFalse((self.root / "rel000-branch-audit.json").exists())
+
+    def test_invalid_nuget_report_fails_closed(self):
+        for nuget in (
+            [],
+            "error: Unable to load the service index for source.",
+            {**self.NUGET_CLEAN, "problems": {"level": "error"}},
+            {**self.NUGET_CLEAN, "problems": ["error"]},
+        ):
+            with self.subTest(nuget=nuget):
+                self.assert_reason(
+                    "AUDIT_PARSE_FAILED", lambda: self.sanitize(self.PNPM_CLEAN, 0, [nuget])
+                )
+        # Text on stdout (an unreachable feed, exit 1) is not JSON at all.
+        text = self.root / "rel000-branch-nuget-text.json"
+        text.write_text(
+            "error: Unable to load the service index for source.\n", encoding="utf-8"
+        )
+        self.assert_reason(
+            "JSON_INPUT_INVALID",
+            lambda: rel000.sanitize_audit(
+                self.write("raw.json", self.PNPM_CLEAN), self.root / "out.json", True, 0, [text]
+            ),
+        )
+
+    def test_cli_exits_non_zero_and_writes_nothing_for_a_failed_audit(self):
+        output = self.root / "rel000-base-audit.json"
+        argv = [
+            "rel000.py",
+            "sanitize-audit",
+            "--input",
+            str(self.write("rel000-base-audit-raw.json", self.PNPM_FAILURES["23"])),
+            "--output",
+            str(output),
+            "--command-executed",
+            "--command-exit-code",
+            "1",
+        ]
+        with patch.object(sys, "argv", argv), patch("sys.stderr", new=io.StringIO()) as stderr:
+            self.assertEqual(1, rel000.main())
+        reported = json.loads(stderr.getvalue())
+        self.assertEqual("AUDIT_COMMAND_FAILED", reported["reason_code"])
+        self.assertEqual("REL000_TECHNICAL_VALIDATION_FAILED", reported["result"])
+        self.assertEqual("rel000-base-audit-raw.json", reported["details"]["input"])
+        self.assertFalse(output.exists())
+        argv[3] = str(self.write("rel000-base-audit-raw.json", self.PNPM_ADVISORY))
+        with patch.object(sys, "argv", argv):
+            self.assertEqual(0, rel000.main())
+        self.assertEqual(
+            BracesKnownAdvisoryTests.REAL_DEVELOPMENT_BASE_AUDIT,
+            json.loads(output.read_text(encoding="utf-8")),
         )
 
 

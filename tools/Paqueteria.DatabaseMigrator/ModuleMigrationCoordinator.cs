@@ -45,24 +45,24 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Identity/Identity.Infrastructure/Persistence/Migrations/20260927000400_AddBffSessionStore.cs"),
         ("Organizations", "__ef_migrations_history_organizations", VersionDispatchPoliciesPerOrganization.MigrationId,
             "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20261002000100_VersionDispatchPoliciesPerOrganization.cs"),
-        ("Locations", "__ef_migrations_history_locations", AdoptCanonicalLocationsBaseline.MigrationId,
-            "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalLocationsBaseline.cs"),
+        ("Locations", "__ef_migrations_history_locations", AddRecipientNoticeContact.MigrationId,
+            "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20261020000100_AddRecipientNoticeContact.cs"),
         ("Drivers", "__ef_migrations_history_drivers", AddDriverVoiceBridge.MigrationId,
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20261011000100_AddDriverVoiceBridge.cs"),
         ("Pricing", "__ef_migrations_history_pricing", RequireMazatlanTimeZoneInMasterDataLoader.MigrationId,
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20261002000100_RequireMazatlanTimeZoneInMasterDataLoader.cs"),
-        ("Orders", "__ef_migrations_history_orders", AddOrderAutoCloseDiscovery.MigrationId,
-            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20261010000100_AddOrderAutoCloseDiscovery.cs"),
-        ("Dispatch", "__ef_migrations_history_dispatch", AddOutboxTraceContext.MigrationId,
-            "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20261013000100_AddOutboxTraceContext.cs"),
+        ("Orders", "__ef_migrations_history_orders", AddRecipientNoticeConsents.MigrationId,
+            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20261023000200_AddRecipientNoticeConsents.cs"),
+        ("Dispatch", "__ef_migrations_history_dispatch", AddAssignmentReadIndexes.MigrationId,
+            "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20261020000100_AddAssignmentReadIndexes.cs"),
         ("Custody", "__ef_migrations_history_custody", AddBffSessionPurge.MigrationId,
             "src/Modules/Custody/Custody.Infrastructure/Persistence/Migrations/20260927000400_AddBffSessionPurge.cs"),
         ("Incidents", "__ef_migrations_history_incidents", AllowDispatchDecidedNextAction.MigrationId,
             "src/Modules/Incidents/Incidents.Infrastructure/Persistence/Migrations/20261011000100_AllowDispatchDecidedNextAction.cs"),
         ("Finance", "__ef_migrations_history_finance", EnforceSettlementLedgerIntegrity.MigrationId,
             "src/Modules/Finance/Finance.Infrastructure/Persistence/Migrations/20260925000100_EnforceSettlementLedgerIntegrity.cs"),
-        ("Notifications", "__ef_migrations_history_notifications", CarryOutboxTraceContext.MigrationId,
-            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261013000200_CarryOutboxTraceContext.cs"),
+        ("Notifications", "__ef_migrations_history_notifications", AddRecipientNoticeReceipts.MigrationId,
+            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261029000100_AddRecipientNoticeReceipts.cs"),
         ("DataProtection", PlatformDataProtectionSchema.MigrationsHistoryTable,
             AddDistributedDataProtectionKeyRing.MigrationId,
             "src/BuildingBlocks/Paqueteria.Infrastructure/DataProtection/Migrations/20260922000100_AddDistributedDataProtectionKeyRing.cs"),
@@ -104,11 +104,13 @@ internal sealed class ModuleMigrationCoordinator
                 // America/Mazatlan only); its rollback restores the previous function. No grant, table, role or
                 // row is added, dropped, deleted or rewritten.
                 "Pricing" => IsMazatlanTimeZoneLoaderSource(source),
-                // OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13: the lane's latest step only replaces the bodies of the two
-                // Notifications outbox writers with ones derived from the published NTF-001 bodies by reviewed edits;
-                // its rollback restores the published bodies. RTM-API-REALTIME-DISPATCHER-ROLE and the earlier steps are
-                // verified below with their own rules.
-                "Notifications" => IsNotificationsTraceContextSource(source),
+                // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006): the lane's latest step creates the receipt
+                // executor (idempotently, never dropped), the automatic-reply store and the five executor functions with
+                // their exact column grants; its rollback refuses while any automatic-reply request exists and otherwise
+                // drops only those and revokes the executor's privileges. NTF-RECIPIENT-NOTICE-CAPS-2026-10-23,
+                // NTF-RECIPIENT-NOTICES-2026-10-20, OBS-003-OUTBOX-TRACE-CONTEXT, RTM-API-REALTIME-DISPATCHER-ROLE and the
+                // earlier steps are verified below with their own rules.
+                "Notifications" => IsRecipientNoticeReceiptsSource(source),
                 // SET-001: the settlement ledger is append-only, so the lane only ever adds guards to
                 // the canonical tables and its rollback fails closed.
                 "Finance" =>
@@ -118,11 +120,12 @@ internal sealed class ModuleMigrationCoordinator
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
-                // ORD-AUTO-CLOSE-2026-10-10: the lane's latest step only adds the auto-close executor, its two column
-                // grants and its read-only discovery function; its rollback drops exactly that function (role and
-                // grants are declared by AI-18 and stay inert). ORD-SERVICE-WINDOW-OPTIONAL, TRK-002-AUTO-LINK and
-                // LIF-001 are verified below with their own fail-closed rollbacks.
-                "Orders" => IsOrderAutoCloseSource(source),
+                // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-004): the lane's latest step only creates the append-only
+                // WhatsApp consent table with its FORCE RLS policy, trigger and exact runtime privileges; its rollback
+                // refuses while any consent exists and otherwise drops only that table. DP-INDEXES-ORDERS-DISPATCH and
+                // ORD-AUTO-CLOSE are verified below with their own rules; ORD-SERVICE-WINDOW-OPTIONAL, TRK-002-AUTO-LINK
+                // and LIF-001 with their fail-closed rollbacks.
+                "Orders" => IsRecipientNoticeConsentsSource(source),
                 // OPS-003-CLEANUP-ROLE: the lane only adds the cleanup executor, its two functions and the
                 // BFF session purge; every purged row is a lifecycle fact, so its rollback fails closed.
                 "Custody" =>
@@ -142,12 +145,19 @@ internal sealed class ModuleMigrationCoordinator
                 // trace_parent column and its check to both outbox tables, one executor column grant and the operator
                 // outbox definer body derived from the published one; its rollback, refused while the Notifications
                 // step that writes the column is recorded, restores the definer and drops exactly those two columns.
-                // DSP-OPERATOR-OWNER-OUTBOX is verified below with its own rule.
-                "Dispatch" => IsOutboxTraceContextDispatchSource(source),
+                // DSP-OPERATOR-OWNER-OUTBOX is verified below with its own rule. DP-INDEXES-ORDERS-DISPATCH-2026-10-20
+                // follows it: the lane's latest step only adds two read indexes (or adopts the AI-06 ones) and its
+                // rollback drops exactly those two; the OBS-003 step is verified below with its own rule.
+                "Dispatch" => IsAssignmentReadIndexesSource(source),
                 // VOICE-001-MASKED-CALLS-2026-10-11: the lane's latest migration only adds the driver phone columns
                 // and the recipient call request table; its rollback refuses while any request or phone exists and
                 // otherwise drops exactly those objects. DRV-003 is verified below as an adoption.
                 "Drivers" => IsDriverVoiceBridgeSource(source),
+                // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002): the lane's latest step only adds the four nullable
+                // recipient contact columns of locations.locations and their two checks (or adopts the AI-06 ones); its
+                // rollback refuses while any of them holds a value and otherwise drops exactly those. The GEO-001
+                // adoption before it is verified below as an adoption.
+                "Locations" => IsRecipientNoticeContactSource(source),
                 // INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: the lane's latest step only lets
                 // incidents.incidents.next_action be NULL (dispatch decides); its rollback restores NOT NULL and
                 // refuses while any incident leaves the decision to dispatch. The evidence index before it is
@@ -184,6 +194,16 @@ internal sealed class ModuleMigrationCoordinator
 
         VerifyOrdersSource(
             root,
+            AddOrderReadIndexes.MigrationId,
+            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20261020000100_AddOrderReadIndexes.cs",
+            IsOrderReadIndexesSource);
+        VerifyOrdersSource(
+            root,
+            AddOrderAutoCloseDiscovery.MigrationId,
+            "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20261010000100_AddOrderAutoCloseDiscovery.cs",
+            IsOrderAutoCloseSource);
+        VerifyOrdersSource(
+            root,
             AddOrderServiceWindow.MigrationId,
             "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20261002000100_AddOrderServiceWindow.cs",
             IsOrderServiceWindowSource);
@@ -203,6 +223,11 @@ internal sealed class ModuleMigrationCoordinator
             root,
             ApplyPilotContractDeltas.MigrationId,
             "src/BuildingBlocks/Paqueteria.Infrastructure/Database/Evolution/Migrations/20260927000100_ApplyPilotContractDeltas.cs");
+        VerifyAdoptionSource(
+            root,
+            "Locations",
+            AdoptCanonicalLocationsBaseline.MigrationId,
+            "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20260722_AdoptCanonicalLocationsBaseline.cs");
         VerifyAdoptionSource(
             root,
             "Identity",
@@ -302,9 +327,33 @@ internal sealed class ModuleMigrationCoordinator
         VerifyLaneSource(
             root,
             "Notifications",
+            AddRecipientNoticeLane.MigrationId,
+            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261020000100_AddRecipientNoticeLane.cs",
+            IsRecipientNoticeLaneSource);
+        VerifyLaneSource(
+            root,
+            "Notifications",
+            AddRecipientNoticeCounts.MigrationId,
+            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261023000100_AddRecipientNoticeCounts.cs",
+            IsRecipientNoticeCountsSource);
+        VerifyLaneSource(
+            root,
+            "Notifications",
+            CarryOutboxTraceContext.MigrationId,
+            "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261013000200_CarryOutboxTraceContext.cs",
+            IsNotificationsTraceContextSource);
+        VerifyLaneSource(
+            root,
+            "Notifications",
             AddRealtimeDispatcherRole.MigrationId,
             "src/Modules/Notifications/Notifications.Infrastructure/Persistence/Migrations/20261012000100_AddRealtimeDispatcherRole.cs",
             IsRealtimeDispatcherRoleSource);
+        VerifyLaneSource(
+            root,
+            "Dispatch",
+            AddOutboxTraceContext.MigrationId,
+            "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20261013000100_AddOutboxTraceContext.cs",
+            IsOutboxTraceContextDispatchSource);
         VerifyLaneSource(
             root,
             "Dispatch",
@@ -512,6 +561,8 @@ internal sealed class ModuleMigrationCoordinator
 
         string[] expectedIds = contract.Module switch
         {
+            "Locations" =>
+                [AdoptCanonicalLocationsBaseline.MigrationId, AddRecipientNoticeContact.MigrationId],
             "Drivers" =>
                 [
                     AdoptCanonicalDriversBaseline.MigrationId,
@@ -536,6 +587,8 @@ internal sealed class ModuleMigrationCoordinator
                     AddTrackingLinkGenerations.MigrationId,
                     AddOrderServiceWindow.MigrationId,
                     AddOrderAutoCloseDiscovery.MigrationId,
+                    AddOrderReadIndexes.MigrationId,
+                    AddRecipientNoticeConsents.MigrationId,
                 ],
             "Notifications" =>
                 [
@@ -547,6 +600,9 @@ internal sealed class ModuleMigrationCoordinator
                     FailStaleWhatsAppNotificationLeases.MigrationId,
                     AddRealtimeDispatcherRole.MigrationId,
                     CarryOutboxTraceContext.MigrationId,
+                    AddRecipientNoticeLane.MigrationId,
+                    AddRecipientNoticeCounts.MigrationId,
+                    AddRecipientNoticeReceipts.MigrationId,
                 ],
             "Identity" =>
                 [AdoptCanonicalIdentityBaseline.MigrationId, AddBffSessionStore.MigrationId],
@@ -574,6 +630,7 @@ internal sealed class ModuleMigrationCoordinator
                     AdoptCanonicalDispatchAssignmentsBaseline.MigrationId,
                     AddOperatorOwnerOutboxExecutor.MigrationId,
                     AddOutboxTraceContext.MigrationId,
+                    AddAssignmentReadIndexes.MigrationId,
                 ],
             "DataProtection" =>
                 [AddDistributedDataProtectionKeyRing.MigrationId],
@@ -589,6 +646,27 @@ internal sealed class ModuleMigrationCoordinator
                 : "DRIFT";
         return new ModuleMigrationState(contract.Module, $"platform.{contract.HistoryTable}", contract.MigrationId, status);
     }
+
+    /// <summary>NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002): the four recipient contact columns and their two checks
+    /// only; the rollback is guarded by <c>NTF002_DOWNGRADE_BLOCKED_DATA_PRESENT</c> and drops no table, role, function,
+    /// policy or row.</summary>
+    private static bool IsRecipientNoticeContactSource(string source) =>
+        source.Contains(AddRecipientNoticeContact.DecisionId, StringComparison.Ordinal) &&
+        source.Contains(AddRecipientNoticeContact.DowngradeBlockedMessage, StringComparison.Ordinal) &&
+        source.Contains("ALTER TABLE locations.locations", StringComparison.Ordinal) &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP INDEX", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE locations", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("GRANT ", StringComparison.Ordinal) &&
+        !source.Contains("REVOKE ", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
 
     /// <summary>VOICE-001-MASKED-CALLS-2026-10-11: the driver phone columns and the recipient call request table only;
     /// the rollback is guarded by <c>VOICE001_DOWNGRADE_BLOCKED_DATA_PRESENT</c> and drops exactly that table.</summary>
@@ -653,6 +731,94 @@ internal sealed class ModuleMigrationCoordinator
                 "Notifications evolution migration is destructive or has an unexpected identifier.");
         }
     }
+
+    /// <summary>NTF-RECIPIENT-NOTICES-2026-10-20 (Orders lane, AI-08 NTF-004): one new append-only table,
+    /// <c>orders.recipient_notice_consents</c>, with FORCE RLS, its tenant policy, the AI-06 append-only trigger and exactly
+    /// SELECT and INSERT for paqueteria_app and SELECT for paqueteria_worker; its rollback refuses while any consent exists
+    /// and otherwise drops only that table. No other table, column, role, function or row is added, dropped or rewritten,
+    /// and no role gains UPDATE, DELETE or a grant option.</summary>
+    private static bool IsRecipientNoticeConsentsSource(string source) =>
+        source.Contains(AddRecipientNoticeConsents.DecisionId, StringComparison.Ordinal) &&
+        source.Contains(AddRecipientNoticeConsents.DowngradeBlockedMessage, StringComparison.Ordinal) &&
+        source.Contains("ADD CONSTRAINT recipient_notice_consents_downgrade_guard CHECK (false);", StringComparison.Ordinal) &&
+        source.Split("CREATE TABLE", StringSplitOptions.None).Length - 1 == 1 &&
+        source.Contains("CREATE TABLE orders.recipient_notice_consents (", StringComparison.Ordinal) &&
+        source.Split("DROP TABLE", StringSplitOptions.None).Length - 1 == 1 &&
+        source.Contains("DROP TABLE orders.recipient_notice_consents;", StringComparison.Ordinal) &&
+        source.Contains("FOR EACH ROW EXECUTE FUNCTION platform.reject_runtime_mutation();", StringComparison.Ordinal) &&
+        source.Contains("GRANT SELECT,INSERT ON orders.recipient_notice_consents TO paqueteria_app;", StringComparison.Ordinal) &&
+        source.Contains("GRANT SELECT ON orders.recipient_notice_consents TO paqueteria_worker;", StringComparison.Ordinal) &&
+        source.Split("GRANT ", StringSplitOptions.None).Length - 1 == 2 &&
+        !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP INDEX", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE OR REPLACE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("BYPASSRLS", StringComparison.Ordinal) &&
+        !source.Contains("NO FORCE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DISABLE ROW LEVEL SECURITY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DISABLE TRIGGER", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("WITH GRANT OPTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("GRANT UPDATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("GRANT DELETE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("INSERT INTO", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE orders", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>DP-INDEXES-ORDERS-DISPATCH-2026-10-20 (Orders lane): only the four read indexes (G3, and the two order list
+    /// parts of I1), created with a plain CREATE INDEX IF NOT EXISTS in the lane's transaction (never CONCURRENTLY); the
+    /// rollback drops exactly those four indexes. No table, column, constraint, policy, grant, function, role or row is
+    /// added, dropped or rewritten.</summary>
+    private static bool IsOrderReadIndexesSource(string source) =>
+        source.Contains(AddOrderReadIndexes.DecisionId, StringComparison.Ordinal) &&
+        source.Contains("DROP INDEX IF EXISTS orders.order_events_actor_status_time_idx;", StringComparison.Ordinal) &&
+        source.Contains("DROP INDEX IF EXISTS orders.orders_price_review_idx;", StringComparison.Ordinal) &&
+        source.Contains("DROP INDEX IF EXISTS orders.orders_owner_created_idx;", StringComparison.Ordinal) &&
+        source.Contains("DROP INDEX IF EXISTS orders.orders_operator_created_idx;", StringComparison.Ordinal) &&
+        IsReadIndexesOnlySource(source, indexes: 4);
+
+    /// <summary>DP-INDEXES-ORDERS-DISPATCH-2026-10-20 (Dispatch lane): only the two read indexes, created with a plain
+    /// CREATE INDEX IF NOT EXISTS in the lane's transaction (never CONCURRENTLY); the rollback drops exactly those two
+    /// indexes. No table, column, constraint, policy, grant, function, role or row is added, dropped or rewritten.</summary>
+    private static bool IsAssignmentReadIndexesSource(string source) =>
+        source.Contains(AddAssignmentReadIndexes.DecisionId, StringComparison.Ordinal) &&
+        source.Contains("DROP INDEX IF EXISTS dispatch.assignments_driver_open_idx;", StringComparison.Ordinal) &&
+        source.Contains("DROP INDEX IF EXISTS dispatch.assignments_order_driver_idx;", StringComparison.Ordinal) &&
+        IsReadIndexesOnlySource(source, indexes: 2);
+
+    /// <summary>The shape both DP-INDEXES-ORDERS-DISPATCH steps share: its indexes created, the same number dropped,
+    /// nothing else.</summary>
+    private static bool IsReadIndexesOnlySource(string source, int indexes) =>
+        source.Split("CREATE INDEX IF NOT EXISTS", StringSplitOptions.None).Length - 1 == indexes &&
+        source.Split("DROP ", StringSplitOptions.None).Length - 1 == indexes &&
+        source.Split("DROP INDEX IF EXISTS", StringSplitOptions.None).Length - 1 == indexes &&
+        !source.Contains("INDEX CONCURRENTLY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE UNIQUE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("ALTER ", StringComparison.Ordinal) &&
+        !source.Contains("CREATE TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE OR REPLACE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("GRANT ", StringComparison.Ordinal) &&
+        !source.Contains("REVOKE ", StringComparison.Ordinal) &&
+        !source.Contains("SET ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("SET LOCAL ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("INSERT INTO", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE orders", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE dispatch", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
 
     /// <summary>ORD-AUTO-CLOSE-2026-10-10: only the auto-close executor, its two column grants and its read-only
     /// discovery function; the rollback drops exactly that function and nothing else.</summary>
@@ -749,6 +915,98 @@ internal sealed class ModuleMigrationCoordinator
         !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("UPDATE platform", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("WITH GRANT OPTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>NTF-RECIPIENT-NOTICES-2026-10-20 (Notifications lane, AI-08 NTF-003): the recipient notice lane step. Its only
+    /// table drop is the opt-out store it creates, its only row deletion is the recipient notice templates it provisions
+    /// (behind the data guard of its rollback), no role is created or dropped and no runtime role gains a table
+    /// privilege.</summary>
+    private static bool IsRecipientNoticeLaneSource(string source) =>
+        source.Contains(AddRecipientNoticeLane.DecisionId, StringComparison.Ordinal) &&
+        source.Contains(AddRecipientNoticeLane.DowngradeBlockedMessage, StringComparison.Ordinal) &&
+        source.Contains("NTF-001 rollback blocked", StringComparison.Ordinal) &&
+        source.Contains("AddTenantSafeOutboxNotifications.UpSql", StringComparison.Ordinal) &&
+        source.Contains("CarryOutboxTraceContext.EmitSql", StringComparison.Ordinal) &&
+        source.Contains("FORCE ROW LEVEL SECURITY;", StringComparison.Ordinal) &&
+        source.Contains("REVOKE ALL ON notifications.recipient_opt_outs FROM PUBLIC,paqueteria_app,paqueteria_worker;", StringComparison.Ordinal) &&
+        source.Split("DROP TABLE", StringSplitOptions.None).Length - 1 == 1 &&
+        source.Contains("DROP TABLE notifications.recipient_opt_outs;", StringComparison.Ordinal) &&
+        source.Split("DELETE FROM", StringSplitOptions.None).Length - 1 == 1 &&
+        source.Contains("DELETE FROM notifications.notification_templates WHERE template_key IN (", StringComparison.Ordinal) &&
+        !source.Contains("CREATE ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("BYPASSRLS", StringComparison.Ordinal) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("WITH GRANT OPTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TO paqueteria_app", StringComparison.Ordinal) &&
+        !source.Contains("GRANT INSERT", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("GRANT UPDATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 (Notifications lane, AI-08 NTF-005): one read-only SECURITY DEFINER
+    /// count function and two partial indexes; its rollback drops only those. No table, column, constraint, row or role is
+    /// added, dropped, deleted or rewritten, and no runtime role gains a table privilege.</summary>
+    private static bool IsRecipientNoticeCountsSource(string source) =>
+        source.Contains(AddRecipientNoticeCounts.DecisionId, StringComparison.Ordinal) &&
+        source.Contains("NTF-001 rollback blocked", StringComparison.Ordinal) &&
+        source.Contains("GRANT EXECUTE ON FUNCTION security.read_recipient_notice_counts(uuid,uuid) TO paqueteria_worker;", StringComparison.Ordinal) &&
+        source.Split("DROP FUNCTION", StringSplitOptions.None).Length - 1 == 1 &&
+        source.Split("DROP INDEX", StringSplitOptions.None).Length - 1 == 2 &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE ", StringComparison.Ordinal) &&
+        !source.Contains("INSERT INTO", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("ALTER TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("POLICY", StringComparison.Ordinal) &&
+        !source.Contains("BYPASSRLS", StringComparison.Ordinal) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("WITH GRANT OPTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TO paqueteria_app", StringComparison.Ordinal) &&
+        !source.Contains("GRANT SELECT", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("GRANT INSERT", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("GRANT UPDATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (Notifications lane, AI-08 NTF-006): the receipt executor, created
+    /// idempotently as NOLOGIN BYPASSRLS and never dropped, the automatic-reply store (its only table drop, behind the
+    /// data guard of its rollback), the five executor functions (EXECUTE for paqueteria_app or paqueteria_worker only) and
+    /// the executor's exact column grants, revoked by the rollback. No policy, no row deletion or rewrite, no grant option
+    /// and no table privilege for a runtime role.</summary>
+    private static bool IsRecipientNoticeReceiptsSource(string source) =>
+        source.Contains(AddRecipientNoticeReceipts.DecisionId, StringComparison.Ordinal) &&
+        source.Contains(AddRecipientNoticeReceipts.DowngradeBlockedMessage, StringComparison.Ordinal) &&
+        source.Contains("NTF-001 rollback blocked", StringComparison.Ordinal) &&
+        source.Contains("CREATE ROLE paqueteria_notification_receipt_executor NOLOGIN BYPASSRLS;", StringComparison.Ordinal) &&
+        source.Contains("EXCEPTION WHEN duplicate_object THEN NULL;", StringComparison.Ordinal) &&
+        source.Contains("REVOKE paqueteria_notification_receipt_executor FROM paqueteria_app, paqueteria_worker, paqueteria_realtime;", StringComparison.Ordinal) &&
+        source.Contains("REVOKE ALL ON notifications.recipient_auto_replies FROM PUBLIC,paqueteria_app,paqueteria_worker;", StringComparison.Ordinal) &&
+        source.Contains("FORCE ROW LEVEL SECURITY;", StringComparison.Ordinal) &&
+        source.Split("DROP TABLE", StringSplitOptions.None).Length - 1 == 1 &&
+        source.Contains("DROP TABLE notifications.recipient_auto_replies;", StringComparison.Ordinal) &&
+        source.Split("CREATE ROLE", StringSplitOptions.None).Length - 1 == 1 &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("CREATE POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("ALTER TABLE notifications.notifications", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE notifications.recipient_opt_outs", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("WITH GRANT OPTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains(" ON notifications.notifications TO paqueteria_app", StringComparison.Ordinal) &&
+        !source.Contains(" ON notifications.recipient_auto_replies TO paqueteria_app", StringComparison.Ordinal) &&
+        !source.Contains(" ON notifications.recipient_auto_replies TO paqueteria_worker", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
@@ -2004,6 +2262,23 @@ internal sealed class ModuleMigrationCoordinator
             {
                 throw new InvalidOperationException(
                     "E002_ROUTINE_MAP_STATE_UNRESOLVED; Notifications changed before migration; STOP_FOR_CONTRACT_REVIEW");
+            }
+
+            // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: the lane step 20261029000100_AddRecipientNoticeReceipts creates
+            // its five functions as the receipt executor (AI-18), so the deployment principal needs SET on it; an Azure
+            // administrator creates the role before the bridge runs. Nothing is written before this check.
+            stage = "capability-gate";
+            await using (var capability = new NpgsqlCommand("""
+                SELECT pg_catalog.to_regrole(@role) IS NOT NULL
+                   AND pg_catalog.pg_has_role(session_user,@role,'SET')
+                """, connection, transaction))
+            {
+                capability.Parameters.AddWithValue("role", AddRecipientNoticeReceipts.Role);
+                if (await capability.ExecuteScalarAsync(cancellationToken) is not true)
+                {
+                    throw new InvalidOperationException(
+                        $"E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles={AddRecipientNoticeReceipts.Role}; STOP_FOR_CONTRACT_REVIEW");
+                }
             }
 
             stage = "grant-temporary-create";

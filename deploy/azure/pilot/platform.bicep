@@ -30,6 +30,16 @@ param malwareScanningCapGbPerMonth int = 10
 @description('Resource id of the custom role granting only blobs/tags/read (created once by the bootstrap).')
 param blobTagReaderRoleDefinitionId string
 
+// OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20 (owner: "Que el despliegue lo siga (Recommended)"): the PostgreSQL server the
+// pilot uses. The default is the server the first deployment created, so a deployment without the setting changes
+// nothing. After a real restore (README §6.4) the owner sets the azure-pilot variable PILOT_POSTGRES_SERVER_NAME to the
+// restored server; the workflow checks that it exists and passes it here, this template updates it in place, and every
+// consumer follows the postgresName and postgresHost outputs. The original server is never deleted here.
+@description('PostgreSQL flexible server of the pilot: empty PILOT_POSTGRES_SERVER_NAME keeps this default (the first server).')
+@minLength(3)
+@maxLength(63)
+param postgresServerName string = 'pg-pv-pilot-${uniqueString(subscription().id, resourceGroup().id)}'
+
 var suffix = uniqueString(subscription().id, resourceGroup().id)
 var tags = {
   project: 'Paquetenvia'
@@ -325,8 +335,13 @@ resource workerProofsTagReader 'Microsoft.Authorization/roleAssignments@2022-04-
 }
 
 // ---------------------------------------------------------------- PostgreSQL (PILOT-DB-PRIVATE-NETWORK)
+// A server made by a point-in-time restore of this one already has every value below that it cannot change later
+// (administrator login, version, delegated subnet and private DNS zone, geo-redundant backup off; the restore copies
+// the source's network when no other is given) and is updated in place. The restore does not copy the server
+// parameters, so the three configurations below set them again. The workflow refuses a named server that does not
+// exist or differs in one of those values (env001_pilot_guards.py postgres-adoption-check).
 resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' = {
-  name: 'pg-pv-pilot-${suffix}'
+  name: postgresServerName
   location: location
   tags: tags
   sku: {

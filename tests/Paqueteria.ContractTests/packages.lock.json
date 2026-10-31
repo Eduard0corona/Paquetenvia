@@ -691,6 +691,7 @@
         "dependencies": {
           "Identity.Application": "[1.0.0, )",
           "Notifications.Domain": "[1.0.0, )",
+          "Orders.Application": "[1.0.0, )",
           "Organizations.Application": "[1.0.0, )",
           "Paqueteria.Application": "[1.0.0, )"
         }
@@ -701,6 +702,15 @@
           "Paqueteria.Domain": "[1.0.0, )"
         }
       },
+      "notifications.endpoints": {
+        "type": "Project",
+        "dependencies": {
+          "Notifications.Application": "[1.0.0, )",
+          "Organizations.Application": "[1.0.0, )",
+          "Organizations.Endpoints": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )"
+        }
+      },
       "notifications.infrastructure": {
         "type": "Project",
         "dependencies": {
@@ -708,6 +718,7 @@
           "Notifications.Application": "[1.0.0, )",
           "Notifications.Domain": "[1.0.0, )",
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Orders.Application": "[1.0.0, )",
           "Organizations.Application": "[1.0.0, )",
           "Paqueteria.Application": "[1.0.0, )",
           "Paqueteria.Infrastructure": "[1.0.0, )"

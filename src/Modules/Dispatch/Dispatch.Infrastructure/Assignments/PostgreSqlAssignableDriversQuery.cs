@@ -34,7 +34,7 @@ public sealed class PostgreSqlAssignableDriversQuery(
         Meter.CreateHistogram<long>("dispatch.assignable_drivers.count");
 
     /// <summary>The requirement that makes the policy report PACKAGE_REQUIREMENT_INVALID, as assignDriver refuses.</summary>
-    private static readonly DriverCapacityRequirement InvalidRequirement = new(0, 0, 0, null, null, null);
+    private static readonly DriverCapacityRequirement InvalidRequirement = new(0, 0, 0, []);
 
     public async Task<AssignableDriverPage> ListAsync(
         ListAssignableDriversQuery query,
@@ -201,7 +201,7 @@ public sealed class PostgreSqlAssignableDriversQuery(
     {
         // Every OWN profile of the active organization that is not retired (INACTIVE), with the same profile,
         // user, DRIVER membership, service-area and latest-document projection the per-driver eligibility read
-        // performs, plus its ACCEPTED or ACTIVE assignments (assignments_driver_idx). Only the status is read from
+        // performs, plus its ACCEPTED or ACTIVE assignments (assignments_driver_open_idx). Only the status is read from
         // identity.users (no email ciphertext); document keys and hashes feed the policy and are never returned.
         const string sql =
             """

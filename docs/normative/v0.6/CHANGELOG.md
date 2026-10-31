@@ -1,5 +1,635 @@
 # Changelog
 
+## Aviso conocido aceptado de minimatch (SEC-2026-16-MINIMATCH-KNOWN-ADVISORY-2026-10-31) — 2026-10-31
+
+- Respuesta literal del project owner (ronda X, pregunta X1, 2026-10-31), registrada en `decision-log.md` con su contexto,
+  el texto de la opción y las opciones no elegidas ("Remediar con la tabla" y "Esperar a upstream"): X1 "Aceptarlo como
+  conocido (Recommended)".
+- El aviso: `GHSA-g3hv-75wg-m249` (CVE-2026-118764, moderado). `minimatch` `<11.0.1` puede gastar mucha CPU y memoria con
+  un patrón glob hecho a propósito. En `apps/web/pnpm-lock.yaml` llegan `minimatch` 3.1.5 y 10.2.5 sólo por las
+  herramientas de lint, en 96 rutas de desarrollo; no está en el grafo de producción. No hay 3.x ni 10.x corregido y
+  ningún dependiente acepta `minimatch` 11. Desde que se publicó, REL-000 fallaba con `UNTRACKED_DEPENDENCY_ADVISORY` en
+  todo PR a `development` (#323).
+- REL-000: la autorización activa `SEC-2026-16-MINIMATCH-GLOBPARTS-TRACKED` (Issue #324, rama
+  `fix/security-2026-16-minimatch-tracked`) acepta el aviso sólo en `minimatch` 3.1.5 y 10.2.5, moderado, con los padres
+  exactos de cada versión, sus 96 rutas de desarrollo, fuera del grafo de producción y sobre el lockfile actual
+  (`f944eecd…`), mientras el Issue #324 siga abierto con su título exacto. `rel000.py` gana un validador de varias
+  versiones y varios padres que usa el grafo de producción de `tools/ci/web_image_dependencies.py`, la exclusividad
+  extendida (braces retirada o SEC-2026-16, cada una exacta) y un validador de diff que no admite cambios de
+  dependencias. Cualquier otra versión, padre, ruta de producción, conteo, hash, estado o título del Issue, campo del
+  audit u otro aviso falla cerrado.
+- La línea `REL000_REMEDIATION_ID` de ambos flujos nombra la rama y el fixture de tracking vincula el ID con el Issue #324.
+  Nota: `docs/development/rel-000-internal-release.md`.
+- Salida: un 3.x o 10.x corregido, o dependientes que acepten `minimatch>=11.0.1`, se remedian como SEC-2026-15; si GitHub
+  retira o acota el aviso, se retira como braces. Entonces se verifica el audit en cero, se retira la aceptación y se
+  cierra el Issue #324. Todo cambio posterior del lockfile debe revincular o retirar la aceptación.
+- Un solo PR a `development` con esta entrada y la fila del decision-log; `main` lo recibe en la próxima promoción.
+- Sin cambios en código de la aplicación, dependencias, lockfiles, `package.json`, workspace, migraciones, AI-04, AI-05,
+  AI-06, AI-12, AI-18, roles ni permisos.
+
+## Avisos al destinatario: panel y "Detener avisos" (NTF-RECIPIENT-NOTICE-PANEL-2026-10-30, AI-08 NTF-007) — 2026-10-30
+
+- Respuestas literales del project owner (ronda T, preguntas T1 a T6, 2026-10-30), registradas en `decision-log.md` con
+  su contexto, los textos de las opciones, las vistas previas y las opciones no elegidas: T1 "Así, como I4
+  (Recommended)", T2 "Sin hora, con nota (Recommended)", T3 "Mensaje y botón siempre (Recommended)", T4 "Panel con una
+  línea (Recommended)", T5 "Aprobar estos textos (Recommended)" y T6 "Aprobarlas todas (Recommended)". T1 registra la
+  decisión I4 ("Sí, decirlo (Recommended)"), cuya pregunta original no se conservó. Es el PR-6 de la secuencia de
+  `docs/development/ntf-recipient-notices.md`; aplica además `NTF-RECIPIENT-NOTICES-2026-10-20` (E4-P8 y E4-P16).
+- AI-05 publica la parte NTF-007 (etiqueta Orders): `listOrderRecipientNotices` (los avisos de la orden por aviso y
+  canal, orden de creación y WhatsApp antes que correo, máximo 100, sin hora programada por T2, con `last_code` de un
+  conjunto cerrado explícito que incluye `MAX_ATTEMPTS_EXHAUSTED`, más `whatsapp_consent_attested` y `email_on_file`) y
+  `stopOrderRecipientNotices` (sin cuerpo, `Idempotency-Key` obligatoria; registra las bajas de WhatsApp y correo con
+  origen DISPATCHER, nombra los canales aunque ya estuvieran dados de baja, 409 `RECIPIENT_CONTACT_UNAVAILABLE` si
+  ningún contacto sirve, 503 sin la llave de datos personales o la de bajas). Ambas con `Cache-Control: no-store`, el
+  404 uniforme para una orden ajena, inexistente o solo operada, y la nueva sección `recipient_notice_operations` de
+  `x-capability-matrix` (DISPATCHER, y PLATFORM_ADMIN con MFA, de la empresa dueña). Sin límite nuevo de SEC-004.
+- El teléfono y el correo del destino se abren en memoria con la llave de datos personales de la API, fuera de toda
+  transacción abierta, mediante los abridores de Locations (nuevo `IRecipientPhoneOpener`, con modo de prueba y modo
+  apagado); la auditoría `RECIPIENT_NOTICES_STOPPED` lleva la clave de idempotencia y solo los canales. Sin migración ni
+  permisos nuevos; ningún flujo nuevo de AI-13 §4.
+- AI-07 `/ops/orders/:id` `recipient_notices` queda implementado, con su bloque `texts` (diálogo de T1, línea del horario
+  de T2, línea de avisos apagados de T4, etiquetas de T5) y el comportamiento después de detener (T3). El panel se lee
+  con cada lectura de la orden, después de detener y con cada `NotificationStatusChanged` v2 de la orden (250 ms y
+  espaciado de 3 s); el tablero y la bandeja no escuchan ese aviso. AI-24 `recipient_notices` registra NTF-007 y
+  `dispatcher_view` gana los campos de la lista, los pasos y la respuesta de la baja y la nota de los ambientes de prueba
+  (T6, punto 11). AI-08 NTF-007 gana su criterio `DECIDED`.
+- Todos los interruptores siguen apagados; GATE-004 y GATE-007 siguen abiertas. Nota:
+  `docs/development/ntf-007-recipient-notice-panel.md`.
+
+## Avisos al destinatario: acuses, bajas y respuesta automática (NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25, AI-08 NTF-006) — 2026-10-25
+
+- Respuestas literales del project owner (ronda O, preguntas O2 a O11, 2026-10-24 y 2026-10-25), registradas en
+  `decision-log.md` con sus contextos, los textos de las opciones, las vistas previas y las opciones no elegidas: O2
+  "Secreto en un encabezado (Recommended)", O3 "Los propuestos (Recommended)", O4 "404 siempre; baja sin interruptor
+  (Recommended)", O5 "Ampliar AI-18 (Recommended)", O6 "Cuarentena = bloqueado; Expanded se ignora (Recommended)", O7
+  "Aprobar lo propuesto (Recommended)", O8 "Registrar al cerrar las compuertas (Recommended)", O9 "Aprobar estos textos
+  (Recommended)", O10 "Sí, el registro de la baja basta (Recommended)" y O11 "Aprobarlas todas (Recommended)". Es el PR-5
+  de la secuencia de `docs/development/ntf-recipient-notices.md`; aplica además `NTF-RECIPIENT-NOTICES-2026-10-20` (E4-P8,
+  E4-P9 y E4-P15).
+- AI-05 publica las cuatro operaciones anónimas de la parte NTF-006 (etiqueta Messaging): `verifyMetaWhatsAppWebhook`,
+  `receiveMetaWhatsAppWebhook` (firma `X-Hub-Signature-256` en tiempo constante antes de leer el JSON, 256 KiB),
+  `receiveAcsEmailEvents` (handshake de Event Grid y secreto de Key Vault `X-Paquetenvia-Event-Secret` con dos ranuras,
+  comparado antes de leer el cuerpo, 64 KiB) y `unsubscribeRecipientNotices` (cuerpo vacío, `List-Unsubscribe=One-Click`
+  o `{}`, 1 KiB, 204, 404 y 503 uniformes, sin GET ni redirección). Límites de SEC-004 por red y minuto: 10, 300, 120 y 20
+  (este con el 429 uniforme del seguimiento público). Un webhook apagado responde siempre el 404 uniforme, nunca 429; la
+  baja por correo no tiene interruptor.
+- Paso de carril Notifications `20261029000100_AddRecipientNoticeReceipts`, con ida, vuelta e ida probadas en PostgreSQL 18
+  y PostGIS 3.6: el rol `paqueteria_notification_receipt_executor` (DDL de AI-18, NOLOGIN y BYPASSRLS, otorgado a ningún
+  rol de runtime) es dueño de las tres funciones de la API (acuses, bajas, solicitud de respuesta automática) y de las dos
+  del Worker (tomar y cerrar solicitudes), con 59 privilegios de columna y EXECUTE sobre el escritor del cambio de estado
+  (O5: un acuse `FAILED` guarda su código). El almacén `notifications.recipient_auto_replies` (AI-06) tiene FORCE RLS sin
+  política; su `Down` se niega mientras exista una solicitud. AI-18 declara los permisos byte a byte (paso 3 de avisos,
+  ahora instalado, y aserción 41) y `validate_contracts.py` los verifica.
+- Acuses solo hacia adelante (SENT → DELIVERED o FAILED), con el mapa de ACS de O6; bajas globales por WhatsApp (palabra o
+  botón, por payload o texto) y por el enlace del correo, sin auditoría (O10); una sola confirmación por baja; respuesta
+  automática una vez por contacto cada 24 h, sin horario ni tope diario y descartada con el número borrado si los avisos
+  o WhatsApp están apagados (O7). El número del remitente se sella con la llave de avisos, ligado a un identificador fijo
+  de plataforma, y el Worker lo borra tras el intento.
+- AI-07 `/avisos/baja/:token`: implementada con el botón "Dejar de recibir correos" y los cuatro mensajes de O9. AI-24
+  `recipient_notices` registra O2 a O11; AI-08 NTF-006 gana su criterio `DECIDED` y lee el vector "repetido" como un
+  duplicado firmado que no cambia nada; AI-08 NTF-008 y AI-24 `pilot_wiring` preparan la suscripción de Event Grid tras
+  un parámetro de fase y registran el callback de Meta después de las compuertas, con el secreto de Event Grid, el
+  `phone_number_id` y el id del recurso de Azure (O8, O11). ADR-NTF-002 nombra las funciones del rol para el Worker.
+- Todos los interruptores siguen apagados; GATE-004 y GATE-007 siguen abiertas. Nota:
+  `docs/development/ntf-006-receipts-optouts-autoreply.md`.
+
+## Retiro del aviso conocido de braces (SEC-2026-10-BRACES-RETIREMENT-2026-10-29) — 2026-10-29
+
+- Respuestas literales del project owner (ronda O, pregunta O12, 2026-10-25; ronda P, preguntas P1, 2026-10-29, y P2,
+  2026-10-30), registradas en `decision-log.md` con sus contextos, los textos de las opciones y las opciones no elegidas
+  ("Dejarla", "Primero en main (ruta K4)", "Como las retiradas antiguas" y "Un estado nuevo (WITHDRAWN)"):
+  O12 "Retirar SEC-2026-10 después (Recommended)", P1 "A development, un solo PR (Recommended)" y
+  P2 "Como las retiradas recientes (Recommended)".
+- El motivo es el retiro del aviso en GitHub: `GHSA-vfj7-8cjw-p6xm` (`braces` 3.0.3, Issue #180) se retiró el
+  2026-10-23T12:53:02Z y ni el audit de npm ni osv.dev lo reportan. No se publicó `braces>=3.0.4`, la condición de salida
+  registrada, y ninguna dependencia cambia: `apps/web/pnpm-lock.yaml` sigue con `braces` 3.0.3.
+- REL-000: la autorización `SEC-2026-10-BRACES-DOS-TRACKED` pasa a `historical_remediations` con `status` `MERGED`,
+  `tracked_pull_request` 181 y `validated_target_sha` `b66d83c`, como SEC-2026-12 a SEC-2026-15. Aquí `MERGED` registra que
+  se fusionó #181, el PR que aceptó el aviso. Ningún otro valor registrado cambia, tampoco la condición de salida.
+- La línea `REL000_REMEDIATION_ID` de ambos flujos ya no nombra la rama de braces y el fixture de tracking queda sin Issues
+  de remediación ni de aviso conocido. `rel000.py` no cambia: si braces vuelve a aparecer en un audit, REL-000 falla
+  cerrado (`UNTRACKED_DEPENDENCY_ADVISORY` o `NEW_DEPENDENCY_ADVISORY`), y el modo normal sobre el lockfile actual sigue
+  `CLEAN`.
+- Las pruebas reproducen #181 y SEC-2026-11 a SEC-2026-15 con braces como la autorización activa que fue, cada una sobre el
+  grafo que declaraba su `validated_target_sha`. Nota: `docs/development/rel-000-internal-release.md`.
+- Un solo PR a `development`, como #292, con esta entrada y la fila del decision-log; sin back-sync. `main` conserva la
+  autorización hasta la próxima promoción. El owner cierra el Issue #180 después de la fusión.
+- Sin cambios en código de la aplicación, dependencias, lockfiles, migraciones, AI-04, AI-05, AI-06, AI-12, AI-18, roles ni
+  permisos.
+
+## Remediación de seguridad pnpm: zod 4.6.6 (SEC-2026-15-PNPM-REMEDIATION-2026-10-24) — 2026-10-24
+
+- Respuesta literal del project owner (2026-10-24, ronda O, pregunta O1), registrada en `decision-log.md` con su
+  contexto, el texto de la opción, la tabla que vio y las opciones no elegidas: O1 "Remediar con la tabla
+  (Recommended)", por la ruta de SEC-2026-14 (K4).
+- La tabla corrige el aviso del Issue #315: GHSA-mrhx-c7xc-m3w5 (CVE-2023-54404, alto) en `zod` `<4.6.6`, que puede
+  agotar memoria al validar arreglos grandes. `zod` 4.4.3 sólo llegaba por las herramientas de lint
+  (`eslint-config-next` 16.4.1 → `eslint-plugin-react-hooks` 7.1.1 y `zod-validation-error` 4.0.2); ningún código de
+  la aplicación lo importa.
+- `apps/web/package.json` no cambia. `apps/web/pnpm-workspace.yaml` gana un override, `"zod@<4.6.6": 4.6.6`, justo
+  antes de la arista de Sharp; Sharp sigue en 0.35.5.
+- `apps/web/pnpm-lock.yaml`, regenerado con pnpm 11.15.1, mueve sólo `zod` de 4.4.3 a 4.6.6. Sigue con 475 paquetes,
+  ninguno nuevo. Además de la línea del override, de la integridad de `zod` 4.6.6 y de las claves y referencias que
+  nombran a `zod`, cambia una línea de metadatos: el rango peer que el lockfile anota para `zod-validation-error@4.0.2`
+  pasa a `zod: 4.6.6`, porque pnpm aplica el override también a los rangos peer.
+- REL-000:
+  - la autorización `SEC-2026-15-ZOD`, con un validador de grafo exacto (`validate_zod_remediation_diff`) y la
+    prueba de Sharp 0.35.5 en ejecución;
+  - el aviso conocido de braces (SEC-2026-10, Issue #180) queda revinculado sólo al hash nuevo del lockfile; ruta,
+    paquete y versión no cambian. GitHub retiró ese aviso el 2026-10-23, así que la base autorizada tenía sólo el de
+    `zod`. Nota: `docs/development/rel-000-internal-release.md`.
+- En el orden de K4: fusionada en `main` por #316 (2f39bcc), retirada a `historical_remediations` en `main` por #317
+  (11bb7f2) y sincronizada a `development` por #318 (9387e1c). Este PR sólo agrega la fila del decision-log, esta
+  entrada y la historia del back-sync en la nota de REL-000.
+- Sin cambios en código de la aplicación, migraciones, AI-04, AI-05, AI-06, AI-12, AI-18, roles ni permisos.
+
+## Avisos al destinatario: productor en ORD-002 y permiso de WhatsApp (NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23, AI-08 NTF-004) — 2026-10-23
+
+- Respuestas literales del project owner (2026-10-23, ronda N, preguntas N1 a N3), registradas en `decision-log.md` con
+  su contexto, los textos de las opciones, la lista de N3 y las opciones no elegidas: N1 "Seis, y corregir los textos
+  (Recommended)", N2 "Mismo texto y una nota (Recommended)" y N3 "Aprobarlas todas (Recommended)". Es el PR-3 de la
+  secuencia de `docs/development/ntf-recipient-notices.md`; aplica además `NTF-RECIPIENT-NOTICES-2026-10-20` (E4-P1, E4-P3,
+  E4-P4 y E4-P5).
+- Productor: `RecipientNoticeRequestPolicy` nombra exactamente `DRAFT → CONFIRMED`, `PICKED_UP → IN_TRANSIT`,
+  `IN_TRANSIT → FAILED_ATTEMPT`, `DELIVERING → FAILED_ATTEMPT` y `DELIVERING → DELIVERED` (nunca `AT_PICKUP →
+  FAILED_ATTEMPT`), y la transición ORD-002 escribe en su misma transacción, junto a la fila de Despacho, una fila
+  `orders.recipient-notice-requested` (`recipient-notice-requested-v1`, solo ids) con todos los valores, sin RETURNING y sin
+  datos personales, aunque los avisos estén apagados: el Worker la liquida al momento con `RECIPIENT_NOTICES_DISABLED`.
+  Una repetición idempotente no escribe otra fila y una falla posterior la deshace. Una prueba fija las 29 transiciones
+  de AI-04.
+- Permiso de WhatsApp: casilla opcional y sin marcar en "Nueva orden" y una para todo el archivo en la carga CSV, con el
+  texto de AI-24 y la versión `NTF-RECIPIENT-WHATSAPP-CONSENT-V1` (constante de la web); la casilla del CSV lleva la nota
+  fija "Aplica a todas las filas de este archivo. Márcala solo si cada destinatario lo aceptó." (N2, AI-07
+  `csv_order_import.recipient_notices.wording`). AI-05 publica la parte NTF-004: `CreateOrderRequest.recipient_notices` y
+  los campos `recipient_whatsapp_consent_attested` y `recipient_whatsapp_consent_version` de `commitOrderCsv`; cualquier otra
+  forma es el 409 uniforme antes de crear algo. La casilla entra en la huella de la solicitud y del lote solo cuando está
+  marcada; la auditoría `ORDER_CREATED` guarda solo el booleano y cada orden del CSV recibe su propia fila.
+- Paso de carril Orders `20261023000200_AddRecipientNoticeConsents`, con ida, vuelta e ida probadas en PostgreSQL 18 y
+  PostGIS 3.6: `orders.recipient_notice_consents` (orden, empresa, canal WHATSAPP, versión V1, quién y cuándo; una fila por
+  orden y canal), ENABLE y FORCE ROW LEVEL SECURITY con la política de la empresa dueña, disparador append-only y
+  exactamente SELECT e INSERT para `paqueteria_app` y SELECT para `paqueteria_worker`; su `Down` se niega mientras exista un
+  permiso. AI-06 declara la tabla y AI-18 los permisos byte a byte (paso 2 de avisos, ahora instalado, y aserción 40); las
+  aserciones de la línea base revisan la tabla.
+- El Worker lee el permiso de esa tabla bajo RLS (`PostgreSqlRecipientNoticeConsentReader`) y la prueba de punta a punta de
+  NTF-005 registra el permiso creando la orden con `createOrder`.
+- N1: siguen los seis flujos de AI-13 §4 y la prueba de arquitectura lo exige sin escritura nueva en otro módulo; los
+  textos "cinco"/"sin sexto flujo" pasan a "seis"/"sin flujo nuevo" en AI-08 NTF-004, AI-13 §7.1, §7.2 y §14.5, AI-24
+  `recipient_notices.producer.pattern`, el escenario de AI-09 y el ADR de avisos.
+- Todo sigue apagado: `Notifications:RecipientNotices:Enabled` falso y proveedores `Disabled`. GATE-004 y GATE-007 siguen
+  abiertas. Nota: `docs/development/ntf-004-recipient-notice-producer.md`.
+
+## Avisos al destinatario: entrega en el Worker y topes (NTF-RECIPIENT-NOTICE-CAPS-2026-10-23, AI-08 NTF-005) — 2026-10-23
+
+- Respuestas literales del project owner (2026-10-23, ronda L, preguntas L1 a L4), registradas en `decision-log.md` con
+  su contexto, los textos de las opciones, la lista de L4 y las opciones no elegidas: "Avisos al destinatario (NTF-005): AI-24 pide topes de 8 avisos por orden y canal, y 500 al día por canal (hora de Mazatlán). Con lo que hoy declaran los contratos, el Worker no puede contar los avisos ya enviados, así que esos topes no se pueden cumplir. ¿Cómo seguimos?" Respuesta: "Función de conteo (Recommended)"; L2 "Toda la plataforma (Recommended)";
+  L3 "Destinatario inválido (Recommended)"; L4 "Aprobarlas todas (Recommended)"; L5 "Aceptar el conteo estricto
+  (Recommended)", preguntada después de abrir el PR. Es el PR-4 de la secuencia de `docs/development/ntf-recipient-notices.md`.
+- Paso de carril Notifications `20261023000100_AddRecipientNoticeCounts`, con ida, vuelta e ida probadas en PostgreSQL 18 y
+  PostGIS 3.6: `security.read_recipient_notice_counts(uuid,uuid)`, de solo lectura, propiedad de
+  `paqueteria_outbox_executor`, SECURITY DEFINER con `search_path` fijo, sin SQL dinámico ni RETURNING y con EXECUTE solo
+  para `paqueteria_worker`. Solo responde bajo el `lease_token` vigente de una solicitud de envío cuyo aviso sigue
+  PENDING, y devuelve solo dos números: los otros avisos de la misma orden y canal con intentos, y los otros avisos del
+  canal en toda la plataforma cuyo último intento cae en el día de hoy de America/Mazatlan (calculado en SQL). "Con
+  intentos" es `attempts > 0`, el conteo de `apply_notification_outcome`: incluye los avisos que terminaron FAILED antes
+  de llamar al proveedor (contacto inutilizable, sin enlace, canal apagado); una falla pasajera antes de la llamada solo
+  reprograma la solicitud y no cuenta. Así un tope se alcanza igual o antes que contando solo llamadas al proveedor (L5).
+  Dos
+  índices parciales sobre los avisos; ninguna tabla, columna, fila, rol ni privilegio de tabla cambia, y el Worker sigue
+  sin privilegio sobre `notifications.notifications`. AI-06 declara los dos índices byte a byte, AI-18 el paso 6 y la
+  aserción 39, AI-24 `recipient_notices.caps` (decisión, alcance de cada tope y `count`) y `contact.unusable`, y AI-08
+  NTF-005 un criterio DECIDED y una prueba de contrato.
+- El Worker consume `orders.recipient-notice-requested` y `notifications.send-requested` de los avisos: lee la orden y su
+  enlace activo bajo RLS, deriva el enlace en memoria y lo compara con el hash guardado, abre la copia del contacto solo
+  con la llave de avisos (solo unwrap), revisa horario (08:00:00 sí sale, 21:00:00 ya no), vigencia, topes y bajas antes
+  de llamar al proveedor, y nunca llama al proveedor con una transacción abierta. Un contacto inutilizable termina FAILED
+  con `MESSAGING_RECIPIENT_INVALID` (L3); avisos apagados, `MESSAGING_CHANNEL_DISABLED`; sin enlace,
+  `TRACKING_LINK_UNAVAILABLE`.
+- Adaptadores: la plantilla de WhatsApp lleva el botón URL (índice 0, sufijo = token) y la respuesta rápida "No recibir
+  avisos" (índice 1); el correo lleva `List-Unsubscribe` y `List-Unsubscribe-Post` de un clic. Textos exactamente los de
+  AI-24, comparados por una prueba.
+- Todo sigue apagado: `Notifications:RecipientNotices:Enabled` falso, proveedores Disabled; el Worker no arranca con un
+  proveedor real en Development, Testing o DEV_SYNTHETIC, ni sin los identificadores de decisión de GATE-004 y GATE-007.
+  Sin consentimiento registrado (llega con NTF-004) no se crea ningún aviso de WhatsApp. GATE-004 y GATE-007 siguen
+  abiertas.
+
+## Remediación de seguridad pnpm: vite 8.1.6, vitest 4.1.12 y Next.js 16.4.1 (SEC-2026-14-PNPM-REMEDIATION-2026-10-21) — 2026-10-21
+
+- Respuestas literales del project owner (2026-10-21 y 2026-10-22, ronda K), registradas en `decision-log.md` con su
+  contexto y las opciones no elegidas: K1 "Remediar con la tabla (Recommended)", K3 "Incluir los 3 (Recommended)",
+  K4 "Retirar en main primero (Recommended)", K5 "Agregar vitest 4.1.12 (Recommended)" y K6 "Sumar next 16.4.1
+  (Recommended)".
+- La tabla corrige los 9 avisos del Issue #304:
+  - cinco en `vite` `>=8.0.0 <8.1.6`: GHSA-698v-4r3x-3vcv, GHSA-587h-7wmj-h5pm, GHSA-r825-w8mm-5pxw,
+    GHSA-rq7h-c2jc-7f22 y GHSA-9jrq-w75r-8gcw;
+  - dos en `@vitest/mocker`: GHSA-xp26-3454-mjgp y GHSA-qxg6-89mg-rqv8;
+  - dos en `next` `>=16.0.0 <16.4.1`: GHSA-2464-fhr4-w9xw (crítico) y GHSA-p3m5-59mp-jv5r (alto).
+- `apps/web/package.json`: `next` y `eslint-config-next` pasan de 16.3.8 a 16.4.1 y `vitest` de 4.1.11 a 4.1.12.
+  `apps/web/pnpm-workspace.yaml`: el override de Sharp pasa a `"next@16.4.1>sharp": 0.35.5`; Sharp sigue en 0.35.5.
+- `apps/web/pnpm-lock.yaml`, regenerado con pnpm 11.15.1, mueve exactamente 21 paquetes: `vite` a 8.1.6; `vitest` y
+  los 7 `@vitest/*` que fija a 4.1.12; `next`, `eslint-config-next` y 10 `@next/*` a 16.4.1. Sigue con 475 paquetes,
+  ninguno nuevo.
+- REL-000:
+  - la autorización `SEC-2026-14-VITE`, con un validador de grafo exacto (`validate_vite_remediation_diff`) y la
+    prueba de Sharp 0.35.5 en ejecución;
+  - el aviso conocido de braces (SEC-2026-10, Issue #180) queda revinculado a la ruta de 16.4.1 y al hash nuevo del
+    lockfile. Nota: `docs/development/rel-000-internal-release.md`.
+- La prueba Playwright del tablero de operaciones acepta el `Cache-Control: no-store` que `next dev` 16.4 envía en
+  cada documento; la página sigue sin guardarse.
+- En el orden de K4: fusionada en `main` por #305 (059e2e9), retirada a `historical_remediations` en `main` por #306
+  (9e55771) y sincronizada a `development` por #307 (11f35da). Este PR sólo agrega la fila del decision-log, esta
+  entrada y la historia del back-sync en la nota de REL-000.
+- Sin cambios en código de la aplicación, migraciones, AI-04, AI-05, AI-06, AI-12, AI-18, roles ni permisos.
+
+## El rollback reutiliza la imagen del commit (ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21) — 2026-10-21
+
+- Respuesta literal del project owner (2026-10-21, ronda K, pregunta K2), registrada en `decision-log.md` con su
+  contexto y las opciones no elegidas: "Despliegue (F-05): un rollback hoy reconstruye la imagen con las bases del día, no vuelve a los mismos bytes. ¿Qué hacemos?" Respuesta: "Reusar la imagen (Recommended)" ("Si la imagen de ese commit ya está en el registro, el despliegue la reutiliza en vez de reconstruirla: el rollback vuelve a los mismos bytes. Las bases (.NET, Node) siguen sin fijar para que cada build nuevo reciba parches.").
+- El paso de imágenes del despliegue del piloto (*Build or reuse the images by digest*) busca, para cada una de las
+  cuatro imágenes, la etiqueta `paquetenvia-<imagen>:<tested_git_sha>` en el registro del piloto. Si existe (una
+  corrida anterior de ese commit la subió), reutiliza su digest y no construye ni sube nada (`reusing ...`), así que
+  un rollback vuelve a los mismos bytes; si no existe, construye y sube como antes (`building ...`). Todo lo que viene
+  después (jobs de la etapa 3, apps de la etapa 4, comprobación de revisiones y resumen) sigue usando el digest.
+- La etiqueta nunca se reemplaza en silencio: tras subirla, y también al reutilizar una anterior a esta decisión, el
+  paso la bloquea con `az acr repository update --write-enabled false` y la vuelve a leer (mismo digest y
+  `writeEnabled` falso). Desde entonces el registro rechaza cualquier push sobre ella y su borrado, hasta que alguien
+  la desbloquee a propósito. Se eligió el bloqueo, y no solo una comprobación antes del push, porque lo hace cumplir el
+  registro para cualquiera y también impide borrar la etiqueta; no hace falta un rol nuevo: el *Contributor* del
+  desplegador ya tiene acceso completo al plano de datos del registro en el modo *RBAC Registry Permissions*.
+- Falla cerrado: una lectura del registro o un bloqueo que falla detiene el paso antes de construir
+  (`shopt -s inherit_errexit`; antes, un build fallido dejaba el paso en verde con salidas vacías). El resumen del run
+  dice, por imagen, si se construyó o se reutilizó.
+- Las bases (.NET, Node) siguen sin fijar por digest para que cada build nuevo reciba parches: un parche de la base, y
+  un cambio de `PILOT_TRACKING_SUPPORT_URL` (compilado en la imagen web), llegan al piloto con el siguiente commit, no
+  al volver a correr un commit ya desplegado. Fijar las bases, su proceso de actualización y el escaneo de imágenes
+  siguen pendientes.
+- Guarda P27 y pruebas del paso con un `az` y un `docker` simulados (etiqueta existente reutilizada sin build ni push;
+  etiqueta ausente construida, subida, bloqueada y releída; push sobre una etiqueta bloqueada rechazado; lectura del
+  registro fallida sin build). AI-08 ENV-001 gana un criterio DECIDED y una prueba requerida. README §6.2, §6.3,
+  §6.7, §8 y §9, guía del owner (nota de `PILOT_TRACKING_SUPPORT_URL` y Run 3) y `docs/development/branching-and-ci.md`.
+
+## Avisos al destinatario: carril de notificaciones para WhatsApp y correo (NTF-RECIPIENT-NOTICES-2026-10-20, AI-08 NTF-003) — 2026-10-20
+
+- Aplica la parte NTF-003 de la decisión ya registrada `NTF-RECIPIENT-NOTICES-2026-10-20` (E4 "Los 4 del plan
+  (Recommended)"); no hay pregunta ni respuesta nueva del owner. Es el PR-2 de la secuencia de
+  `docs/development/ntf-recipient-notices.md`. Inerte: ningún productor escribe todavía `orders.recipient-notice-requested`
+  (NTF-004), ningún interruptor se enciende y nada se envía (NTF-005); GATE-004 y GATE-007 siguen abiertas.
+- Paso de carril Notifications `20261020000100_AddRecipientNoticeLane`, con ida, vuelta e ida probadas en PostgreSQL 18 y
+  PostGIS 3.6 y el catálogo idéntico tras cada vuelta:
+  - `notification_templates`: canal IN_APP, WHATSAPP o EMAIL; cuerpo solo (y siempre) en IN_APP; catálogo cerrado de
+    variables por clave (`notification_templates_catalog_check`: `order_public_id` es la única variable de un aviso);
+    las cuatro plantillas `recipient.*` versión 1 en WhatsApp y correo, sin texto, para cada organización que tiene la
+    de NTF-001 y para cada organización nueva (`notifications.provision_default_templates`).
+  - `notifications`: `recipient_kind` (OWNER_ORG_USER u ORDER_DESTINATION), `order_event_id`, `delivered_at`;
+    `recipient_user_id` presente exactamente en IN_APP; un aviso no guarda nunca destinatario, usuario ni copia
+    cifrada; índices únicos `notifications_order_destination_uq` (una notificación por organización, evento de la orden,
+    canal y plantilla) y `notifications_provider_reference_uq` (referencia del proveedor única por canal).
+  - `notification_status_events`: también DELIVERED y CANCELLED.
+  - `notifications.recipient_opt_outs`: almacén de bajas de toda la plataforma, solo hashes con llave de 32 bytes,
+    append-only, FORCE ROW LEVEL SECURITY sin política; los roles de runtime no tienen ningún privilegio y el ejecutor
+    del outbox solo lo lee.
+  - `security.resolve_outbox_consumer` enruta `orders.recipient-notice-requested` al lane NOTIFICATIONS. Funciones nuevas o
+    v2, de `paqueteria_outbox_executor`, SECURITY DEFINER con `search_path` fijo, sin SQL dinámico ni RETURNING y con
+    EXECUTE solo para `paqueteria_worker`: `expand_recipient_notice_request` (una notificación por canal elegible, WhatsApp
+    primero, con su evento de estado, su fila de tiempo real y su solicitud de envío disponible al inicio del horario de
+    8:00 a 21:00 de America/Mazatlan, bajo el `lease_token` de la solicitud; liquida PROCESSED con SOURCE_EXPANDED,
+    RECIPIENT_NOTICES_DISABLED, NOTICE_STALE o NO_ELIGIBLE_CHANNEL), `read_notification_delivery` v2,
+    `apply_notification_outcome` v2 (referencia del proveedor, lista cerrada de códigos por familia de canal y resultado
+    CANCELLED sin contar intento; la firma publicada de 8 argumentos se elimina y el Worker pasa a v2),
+    `cancel_notification` e `is_recipient_opted_out`. Las reglas de WhatsApp ambiguo y de lease vencido se mantienen.
+  - La vuelta se niega (`NTF003_DOWNGRADE_BLOCKED_DATA_PRESENT`) mientras exista un aviso, un estado DELIVERED o
+    CANCELLED, una referencia del proveedor, una baja, una solicitud de aviso activa o una fila de tiempo real v2 activa;
+    si no, restaura las funciones, columnas, restricciones y permisos publicados.
+- `security.emit_notification_status_changed` escribe `notification-status-changed-v2`: un aviso lleva además `order_id` y
+  `notice`; IN_APP, ninguno. El parser de tiempo real acepta v1 (ahora también WhatsApp y correo, que antes terminaban
+  DEAD) y v2, y publica `NotificationStatusChanged.v1` o `NotificationStatusChanged.v2`; AI-12 publica la enmienda
+  decidida (`order_id` y `notice` en el payload).
+- AI-06 y AI-18: el contrato declarado del paso NTF-003 pasa a instalado con los nombres exactos que crea el paso, que
+  sigue dueño de su DDL (las tablas de Notifications son del carril); AI-18 suma la aserción 38. Las aserciones de la
+  línea base, el mapa E-002 (`_PLUS_NTFRECIPIENT`) y el migrador siguen el paso. Se vuelven a fijar los hashes de AI-06,
+  AI-18 y AI-12.
+- Sin cambios de API, de la web, de roles, de Locations ni de Orders. Nota: `docs/development/ntf-003-notifications-lane.md`.
+
+## Avisos al destinatario, PR-1: correo opcional del destinatario y llave de avisos (NTF-RECIPIENT-NOTICES-2026-10-20, AI-08 NTF-002) — 2026-10-20
+
+- Aplica, sin decisión nueva, la fila `NTF-RECIPIENT-NOTICES-2026-10-20` (E4 "Los 4 del plan (Recommended)": "se agrega
+  como campo opcional en la nueva orden"; E4-P2 "Llave propia para avisos (Recommended)"; E4-P17 "Dos copias, como el
+  teléfono (Recommended)"). Todo sigue apagado: nada se envía, GATE-004 y GATE-007 siguen abiertas y la configuración del
+  piloto no cambia.
+- AI-05: `createQuote` publica la parte NTF-002 de `x-pilot-contract-deltas` NTF-RECIPIENT-NOTICES. El destino pasa a
+  `DestinationAddressInput` (`AddressInput` más `email` opcional: ASCII, máximo 254 caracteres, una sola `@`, dominio con
+  punto, sin espacios; se recorta y el dominio va en minúsculas); el origen sigue siendo `AddressInput`. Un correo
+  inválido es 422 antes de cualquier efecto y nunca se repite en la respuesta. El correo entra en el hash de la
+  cotización y en la huella de la Idempotency-Key solo cuando viene, así que los hashes existentes no cambian (vector
+  fijo en las pruebas). Esquemas: 126; referencias: 663.
+- AI-06: el DDL declarado entra a la línea base: `locations.locations` gana `email_ciphertext`,
+  `notice_phone_ciphertext`, `notice_email_ciphertext` y `notice_key_version` (nulas) y los checks
+  `locations_notice_key_version_check` y `locations_notice_email_check`. Carril Locations
+  `20261020000100_AddRecipientNoticeContact`: adopta el DDL de AI-06 en una instalación nueva, lo crea en una que lo
+  antecede sin reescribir filas, rechaza cualquier otra forma y su bajada se niega mientras alguna de las cuatro columnas
+  tenga valor. Las aserciones de la línea base revisan las columnas y los checks según el historial del carril. AI-18
+  sin cambios: el Worker ya lee `locations.locations` bajo RLS.
+- Al cotizar, la API sella el correo del destino con la llave PII (propósito `locations.email`) y, cuando la llave de
+  avisos está configurada, guarda además copias del teléfono y del correo con la llave RSA de Key Vault
+  `recipient-notice-kek` (propósitos `locations.notice_phone` y `locations.notice_email`, sobre ADP-001 v1). La API solo
+  envuelve, con la parte pública de esa llave: no tiene forma de abrir una copia, y el Worker no gana acceso a la llave
+  PII. `Locations:NoticeKeyProtector` es `Disabled` por omisión y en el piloto (`Mock` solo en Development, Testing y
+  DEV_SYNTHETIC; `AzureKeyVault` solo junto a la llave PII de Key Vault, con `PiiProtection:RecipientNoticeKey:KeyId`
+  distinto de la llave PII); AI-08 NTF-008 la conecta en el piloto. El origen nunca lleva correo ni copia.
+- El correo y las copias nunca se devuelven, registran en logs, auditan ni van a `request_snapshot_redacted`, a un
+  outbox ni a un evento; los tipos que los llevan imprimen `[redacted]`.
+- AI-07: el campo "Correo del destinatario (opcional)" del paso "Dónde" de "Nueva orden" está construido. AI-24:
+  `recipient_notices.status` registra lo que existe. `docs/legal`: los borradores listan el correo opcional del
+  destinatario como pendiente de GATE-007. Nota: `docs/development/ntf-002-recipient-contact.md`.
+
+## La restauración real sigue al servidor restaurado (OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20) — 2026-10-20
+
+- Respuesta literal del project owner (2026-10-20, ronda J, pregunta J1), registrada en `decision-log.md` con su
+  contexto y las opciones no elegidas: "Restauración real de la base del piloto: ¿cómo queda en servicio el servidor restaurado?" Respuesta: "Que el despliegue lo siga (Recommended)" ("Tarea de código, un PR: el nombre del servidor pasa a ser un parámetro. Tras restaurar cambias ese valor y vuelves a correr el despliegue; migraciones, API, Worker, alertas y ensayos apuntan al restaurado. El original queda intacto, con sus 14 días de respaldos, hasta que lo borres.").
+- El servidor PostgreSQL del piloto es un solo ajuste: la variable `PILOT_POSTGRES_SERVER_NAME` del environment
+  `azure-pilot` (vacía = el primer servidor). `platform.bicep` y `observability.bicep` reciben el parámetro
+  `postgresServerName`, cuyo valor por defecto es exactamente el nombre de hoy, así que un despliegue sin la variable no
+  cambia nada. Siguen al ajuste las salidas `postgresName` y `postgresHost`, `pg-migrate-connection`, los jobs de
+  migración, logins y verificación, las seis alertas SCL-007 y `restore-drill.sh`.
+- El workflow valida el formato antes de entrar a Azure (`postgres-server-name`); con la variable llena, antes de la
+  etapa 2 exige que el servidor exista y que la plantilla pueda tomarlo tal como está (`postgres-adoption-check`: listo,
+  no réplica, misma región, mismo login de administrador y versión, red privada en la subred y la zona DNS de la
+  plantilla, sin respaldo geográfico y disco no mayor de 32 GiB), así que un nombre mal escrito nunca crea otro servidor
+  vacío. Una credencial de runtime guardada se conserva solo mientras su host sea el servidor en servicio; si no, se
+  genera otra (como `rotate_runtime_logins`), el job de logins la aplica en el servidor nuevo y la API y el Worker se
+  reinician justo después; ese mismo paso, entre los logins y la etapa 4, enciende la API o el Worker si su revisión
+  está detenida. Nada imprime un secreto.
+- Procedimiento (README §6.4 y guía §7.7): detener la API y el Worker (`az containerapp revision set-mode --mode
+  multiple` y `az containerapp revision deactivate`; el texto anterior usaba `--max-replicas 0`, por debajo del mínimo
+  documentado de 1), `restore-drill.sh --real` (servidor nuevo `<base>-r<minuto UTC>` en la misma red privada,
+  verificado con `assert`, conservado solo si todo sale bien y nunca sobre un nombre que ya existe), revisar la línea
+  `EVIDENCE`, poner la variable, volver a correr el despliegue, comprobar y, más tarde, borrar el servidor anterior
+  (sus respaldos se borran con él; cuesta unos 17.70 USD al mes mientras exista). Reemplaza las opciones «cambiar
+  nombres» y «apuntar los secretos», también en la recuperación E1b de TEN-003.
+- Guarda P25 y pruebas: parámetro y valor por defecto, una sola escritura del nombre en `deploy/`, `.github/`, `tools/`
+  y la documentación de operación y desarrollo, el cableado del workflow y del script; el paso de credenciales, el de
+  reinicio y `restore-drill.sh` se ejecutan con un `az` simulado. Sin cambios en AI-04, AI-05, AI-06, AI-18 ni AI-24,
+  sin migraciones, roles ni paquetes.
+
+## Índices de lectura de órdenes y despacho (DP-INDEXES-ORDERS-DISPATCH-2026-10-20) — 2026-10-20
+
+- Respuesta literal del project owner (2026-10-20, pregunta G3), registrada en `decision-log.md` con su contexto y la
+  opción no elegida: "Índices de rendimiento: «hechas hoy» lee todos los eventos de la organización, el selector de repartidor lee todo el historial de asignaciones y la lista de órdenes recorre todas las órdenes. Con 20 entregas al día no se nota. ¿Los agregamos?" Respuesta: "Ahora, en un PR (Recommended)" ("Cambio a AI-06 y migración con subida y bajada probadas. 0 USD. Crearlos con las tablas casi vacías es instantáneo; después tardan más.").
+- Respuestas literales del project owner (2026-10-20, ronda I, preguntas I1, I2 e I3 sobre lo que un índice solo no
+  resolvía en este PR), registradas en `decision-log.md` con su contexto y las opciones no elegidas:
+  - "Índices (#294): la lista de órdenes por defecto («Todos los estados», sin fechas) no mejora con un índice, porque el permiso filtra por dueño O por operador y la lista ordena por fecha. Con 150 mil órdenes de prueba tarda 87-104 ms. ¿Qué hacemos?" Respuesta: "Reescribir la consulta (Recommended)" ("Se divide en dos partes (como dueño y como operador) con un índice para cada una. No cambia nada visible. Va en el mismo PR #294, con su prueba.");
+  - "Los conteos de la bandeja cuentan todas las órdenes de la historia en cada refresco (381 ms con 150 mil órdenes de prueba; con el volumen del piloto, mucho menos). ¿Qué hacemos?" Respuesta: "Dejarlo para el piloto (Recommended)" ("Sin cambio. A 20 entregas al día tarda poco; se revisa con las alertas de CPU.");
+  - "El filtro «Cobros pendientes» (solo finanzas) recorre todas las órdenes de la organización (198-233 ms con 150 mil de prueba), por cómo está escrita la consulta. ¿Lo mejoramos?" Respuesta: "Dejarlo por ahora (Recommended)" ("Lo usa solo finanzas y poco; se revisa con datos reales.").
+- AI-06 declara seis índices de lectura y las instalaciones existentes los reciben por su carril: Orders
+  `20261020000100_AddOrderReadIndexes` (`order_events_actor_status_time_idx`, `orders_price_review_idx` y, por I1,
+  `orders_owner_created_idx` y `orders_operator_created_idx`) y Dispatch `20261020000100_AddAssignmentReadIndexes`
+  (`assignments_driver_open_idx` y `assignments_order_driver_idx`). Cada paso adopta el índice que AI-06 ya creó, rechaza
+  uno con el mismo nombre y otra forma, comprueba la definición exacta y su bajada quita solo sus índices (cuatro y
+  dos). Se crean con `CREATE INDEX` normal dentro de la transacción del carril (nunca `CONCURRENTLY`); con las tablas casi
+  vacías es instantáneo.
+- «Hechas hoy» del repartidor lee solo sus cambios de estado del día y una consulta por cambio, en vez de todas las
+  asignaciones que tuvo; las paradas, la lista de repartidores y el selector de repartidor leen solo las asignaciones
+  abiertas; el filtro de revisión de precio del tablero lee solo las órdenes sin terminar en revisión. En PostgreSQL 18.4
+  con 150 000 órdenes sintéticas: 11.7 a 1.5 ms, 55 a 19 ms, 35 a 5.6 ms y 216 a 0.14 ms.
+- Lista de órdenes sin filtro de dueña, de número de guía ni de cobros pendientes (la vista «Todos los estados», también
+  con estado, fechas y cursor), por I1: se lee en dos partes por cada organización de `app.current_org_ids` (el mismo
+  ajuste que lee RLS): las órdenes que es dueña, con `orders_owner_created_idx`, y las que solo opera (su dueña no está
+  en el contexto), con `orders_operator_created_idx`; cada parte en el orden de la lista y con su límite, y luego se
+  juntan. Mismas filas, orden, tamaño de página y cursor; RLS sigue filtrando cada fila. Con dueña, número de guía o
+  cobros pendientes la consulta es la de siempre. Para esa sola transacción el runtime apaga los bitmap scans
+  (`SET LOCAL enable_bitmapscan = off`): PostgreSQL subestima las órdenes de una organización con poca parte de la tabla
+  y, si no, las recorre todas. Con 150 000 órdenes sintéticas: primera página de la organización grande 166-221 a 0.23
+  ms, del aliado 15-22 a 0.29 ms, de un negocio chico 4.1 a 0.21 ms; estado CLOSED 142 a 0.30 ms; últimos 30 días 35 a
+  0.26 ms.
+- Sin cambio, por I2 e I3: los conteos de la bandeja y el filtro de cobros contra entrega pendientes siguen leyendo todas
+  las órdenes de la organización.
+- AI-08 SCL-003: un criterio DECIDED y las pruebas requeridas de planes y de equivalencia de la lista. Sin cambios de
+  AI-18, API, columnas, restricciones, políticas, roles, permisos ni paquetes; la única consulta que cambia es la lista
+  de órdenes de I1. Nota: `docs/development/dp-indexes-orders-dispatch.md`.
+
+## Reglas de elegibilidad por tipo de vehículo en el piloto y tarea de documentos de repartidor (GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20) — 2026-10-20
+
+- Respuestas literales del project owner (2026-10-20, preguntas G4, H1, H2 y H3), registradas en `decision-log.md` con
+  el contexto de las rondas G y H y las opciones no elegidas:
+  - "Reglas de elegibilidad por vehículo (GATE-010): sin ellas la API del piloto no arranca, y cada uno de los 5 tipos necesita capacidad mayor a cero (peso, volumen y número de paquetes). ¿Te propongo valores?" Respuesta: "Sí, propónmelos (Recommended)" ("Te paso una tabla con valores por tipo de vehículo, con su fuente, para que la apruebes o la cambies. No se aplica nada sin tu respuesta.");
+  - "Bloqueo nuevo (G4): hoy no hay forma de registrar documentos de repartidor. El API los define, pero nada los guarda ni los valida; solo los datos sintéticos tienen. La regla exige documentos válidos, así que con cualquier valor la API arranca pero no se puede asignar a ningún repartidor real. ¿Qué hacemos?" Respuesta: "Tarea nueva, tras GATE-007 (Recommended)" ("Se aprueba la lista de documentos como objetivo y se abre una tarea para registrarlos y que despacho los valide. Depende de GATE-007, igual que los perfiles reales de repartidor, así que casi no agrega espera.");
+  - "Capacidad por pedido (propuesta con fuentes: Lalamove, Uber Envíos Culiacán, NOM-036 de carga). Moto 5 paq./20 kg/10 kg por paquete/40×40×35 cm. Auto 10/100 kg/20 kg/90×80×60. Van 20/400 kg/20 kg/200×120×120. Bici 3/10 kg/10 kg/45×40×30. A pie 2/5 kg/5 kg/45×40×30. Medidas opcionales. Los límites son por pedido; despacho decide cuántos pedidos lleva cada quien. ¿La apruebas?" Respuesta: "Aprobar la tabla (Recommended)" ("Tal cual. Los números de paquetes de moto, auto, bici y a pie, y el peso y tamaño a pie, son supuestos sin fuente; se ajustan después con la operación real. Pickup cuenta como van y bici de carga como bici.");
+  - "Documentos exigidos: moto, auto y van piden INE, licencia, tarjeta de circulación y seguro; bici y a pie solo INE. Todos con fecha de vencimiento; a una licencia permanente de Sinaloa se le pone una fecha de revisión que tú definas. Sin antecedentes penales por ahora (se decide con GATE-007 y GATE-008). ¿La apruebas?" Respuesta: "Aprobar la lista (Recommended)" ("Tal cual. El seguro es política tuya (GATE-009 sigue abierto); si contratas una póliza de flotilla se quita.").
+- `deploy/azure/pilot/apps.settings.json` conserva `Finance__OperationalTimeZone` y agrega las reglas aprobadas, iguales
+  para todas las organizaciones. Por pedido (paquetes / peso total / paquete más pesado / largo × ancho × alto): moto 5 /
+  20 kg / 10 kg / 40 × 40 × 35 cm, auto 10 / 100 kg / 20 kg / 90 × 80 × 60 cm, van 20 / 400 kg / 20 kg / 200 × 120 ×
+  120 cm, bici 3 / 10 kg / 10 kg / 45 × 40 × 30 cm, a pie 2 / 5 kg / 5 kg / 45 × 40 × 30 cm; medidas opcionales en los
+  cinco. Documentos: INE, licencia, tarjeta de circulación y seguro para moto, auto y van; solo INE para bici y a pie;
+  todos con fecha de vencimiento y sin antecedentes penales. Pickup cuenta como van y bici de carga como bici.
+- La API del piloto ya arranca con su propia configuración y `settings-check` imprime `ENV001_SETTINGS=PASS`. Ningún
+  repartidor real se puede asignar todavía: nada registra ni valida documentos, así que cada repartidor recibe
+  `REQUIRED_DOCUMENT_MISSING` hasta que lleguen DRV-DOC-001 y GATE-007. Los límites son por pedido; despacho decide
+  cuántos pedidos lleva cada repartidor.
+- AI-08: nueva tarea DRV-DOC-001 (registro de documentos de repartidor y validación por despacho: `registerMyDriverDocument`
+  y `listMyDriverDocuments` de `/driver/me/documents` más una operación de despacho que marca VALID o REJECTED, o una
+  extensión del cargador MDM-001, a elegir con un ADR), depende de DSP-001 y MDM-001, `approval_gate` GATE-007; MDM-001
+  gana un criterio DECIDED con los valores. Sin código nuevo.
+- Pruebas: `PilotApiStartupConfigurationTests` arranca la API con la configuración del piloto, comprueba que Drivers,
+  Routing, Dispatch y Orders leen exactamente esas reglas y sigue fijando las dos fallas de arranque sin ellas;
+  `test_env001_pilot_guards.py` fija los valores aprobados. Ninguna regla del guard cambia.
+- GATE-010 sigue abierto (zonas, horarios, artículos prohibidos, SLA) y GATE-009 también. Fuentes de los valores en la
+  fila del decision-log. Sin cambios de esquema, roles, permisos, migraciones, paquetes, `apps.bicep` ni topología de CI.
+
+## Medidas del paquete ordenadas antes de compararlas con el vehículo (DRV-ELIGIBILITY-SORTED-DIMENSIONS-2026-10-20) — 2026-10-20
+
+- Respuesta literal del project owner (2026-10-20, pregunta H4 de la ronda H), registrada en `decision-log.md` con su
+  contexto y la opción no elegida: "El sistema compara largo con largo, ancho con ancho y alto con alto, sin girar el paquete; el formulario deja capturarlos en cualquier orden. Un paquete de 30×45 capturado al revés no pasaría para moto aunque quepa girado. ¿Cómo lo manejamos?" Respuesta: "Que el sistema las ordene" ("Tarea pequeña: antes de comparar, el sistema ordena las tres medidas de mayor a menor (paquete y límite). Evita rechazos por capturar al revés. Toca la regla que usan despacho, órdenes y rutas."). No elegida: "Convención de captura"
+  ("Sin código: «Largo» siempre es el lado más largo y «Alto» el más corto, y despacho lo aprende. Un error de captura rechaza un pedido que sí cabe."). La opción elegida no era la recomendada (la recomendada era la convención de captura).
+- `DriverEligibilityPolicy`, la regla que usan despacho (selector de repartidor, asignación y ofertas externas),
+  órdenes (`capacity_available` de ORD-002) y rutas (agregar parada), ordena de mayor a menor las tres medidas de
+  cada paquete y los tres límites del tipo de vehículo antes de comparar. Un paquete cabe si cada medida ordenada es
+  menor o igual que el límite en el mismo lugar, y la orden cabe si cabe cada paquete: un paquete de 300 × 450 × 200 mm
+  capturado así cabe en el límite de 450 × 400 × 300 mm de bici y a pie.
+- `DriverCapacityRequirement` lleva ahora las medidas de cada paquete en vez del máximo de largo, ancho y alto entre
+  paquetes, que juntaba lados de paquetes distintos. Los tres agregadores de los módulos solo reúnen las medidas; el
+  ordenamiento existe una sola vez, en la política. Ningún SQL agregaba medidas.
+- Una medida que falta no se revisa (las presentes, ordenadas, se comparan con los límites mayores). Una medida que
+  no cabe da el código de su lugar: la mayor `PACKAGE_LENGTH_EXCEEDED`, la de en medio `PACKAGE_WIDTH_EXCEEDED`, la
+  menor `PACKAGE_HEIGHT_EXCEEDED`. Con `RequireDimensions=true`, una medida en blanco falla con el código de su campo,
+  ahora en cada paquete de la orden. Mismos códigos, sin cambios de API, esquema, roles, migraciones, configuración,
+  paquetes ni textos de la interfaz; AI-04 no cambia.
+- AI-08 DSP-001: un criterio DECIDED y su prueba. Notas: `docs/development/dsp-001-own-driver-eligibility.md`,
+  `docs/operations/env-001-pilot/README.md` §4 y la guía del owner.
+
+## Repartidor: fotos de evidencia reducidas y sin metadatos (DRV-PROOF-PHOTO-REDUCE-2026-10-20) — 2026-10-20
+
+- Respuesta literal del project owner (2026-10-20, pregunta G2), registrada en `decision-log.md` con su contexto y las
+  opciones no elegidas: "Fotos de entrega: hoy se suben tal como las toma el teléfono (2 a 5 MB, con metadatos que pueden incluir GPS). Sin señal caben solo de 5 a 12 fotos en la cola. ¿Las procesamos en el teléfono antes de guardarlas?" Respuesta: "Reducir y quitar metadatos (Recommended)" ("JPEG de máximo 1600 px por lado y calidad 80 % (unos 300-500 KB), sin metadatos. La evidencia guardada es esa foto reducida (su huella se calcula después). Caben unas 50 fotos sin señal. Se ve menos detalle al hacer zoom.").
+- La app del repartidor reduce cada foto de evidencia en el teléfono antes de calcular su huella y guardarla en la
+  cola: la de recolección, la de entrega y la "Foto del lugar" de "No se pudo entregar". Decodifica la foto con su
+  orientación visual (`createImageBitmap` con `imageOrientation: "from-image"`, o un `<img>` donde falta esa opción) y
+  la vuelve a codificar en un canvas como JPEG de calidad 0.8 con el lado mayor de 1600 px como máximo, sin agrandarla
+  y sin cambiar su proporción. Un PNG también se guarda como JPEG; lo transparente queda blanco.
+- Sin metadatos: la foto guardada solo conserva el encabezado JFIF y los datos de la imagen. Se quitan EXIF (con GPS,
+  modelo del teléfono y hora), XMP, perfiles ICC, comentarios y todo lo que vaya después del fin de la imagen, también
+  lo que escribe el propio codificador del navegador (Chromium agrega un perfil ICC).
+- La evidencia guardada es esa foto reducida: la vista previa la muestra, y esos mismos bytes son los que se hashean
+  (SHA-256), se guardan en IndexedDB, se declaran (`image/jpeg`), se suben y valida el servidor (bytes mágicos y
+  SHA-256), sin cambios en el servidor. El archivo que eligió el repartidor no se guarda, no se muestra ni se envía.
+- Si el teléfono no puede procesar la foto (formato, archivo dañado o memoria), el paso dice «No se pudo procesar la
+  foto en el teléfono. Tómala de nuevo.», no guarda nada y nunca usa el archivo original en su lugar. Mientras la
+  reduce dice «Preparando la foto…».
+- Límites sin cambio: 10 MiB por foto, 25 MiB de fotos y 100 operaciones por partición. Tamaño típico: unos
+  300-500 KB por foto de una cámara de 12 MP (estimación del owner), unas 50 fotos sin señal. Medido en Chromium con
+  imágenes sintéticas: una de 4000x3000 y 3.78 MB queda en 1600x1200 y 258 KB; 12 MP de ruido puro (peor caso), de
+  10.5 MB a 661 KB.
+- Una foto que una versión anterior de la app ya había guardado en la cola se envía como se guardó.
+- AI-07 `driver_stop.proof_photo` (nuevo) y `failed_delivery.photo`; AI-08 DRV-002: criterio DECIDED y prueba
+  requerida. Pruebas: vitest con una foto sintética con EXIF y GPS inventados (coordenadas imposibles) y Playwright en
+  Chromium real (lo guardado, hasheado, declarado y subido es un solo JPEG de 800x1600, derecho y sin metadatos; una
+  foto que no se puede decodificar no deja nada). Notas: `docs/development/drv-002-offline-events-pod.md`; borradores
+  legales actualizados. Sin cambios de API, SQL, migraciones, roles, esquema de IndexedDB, Service Worker ni paquetes.
+
+## Rutas y asignaciones como flujo atómico 6, con catálogo de escrituras entre módulos (RTE-001-ROUTING-ASSIGNMENT-FLOW6-2026-10-20) — 2026-10-20
+
+- Respuesta literal del project owner (2026-10-20, pregunta G1), registrada en `decision-log.md` con su contexto y la
+  opción no elegida: "Rutas: al agregar o quitar una parada, el módulo de Rutas escribe directo en las asignaciones de Despacho, en la misma transacción. Lo exige RTE-001, pero no está entre los 5 flujos permitidos (AI-13 §4) y no hay prueba que detecte escrituras nuevas entre módulos. ¿Qué hacemos?" Respuesta: "Registrarlo como flujo 6 (Recommended)" ("Fila de decisión y ADR que lo agregan a la lista, más la prueba que cataloga cada escritura entre módulos y falla con cualquiera nueva. Sin cambio de comportamiento.").
+- AI-13 §4 agrega el flujo 6, route stop ↔ assignment.route_id (RTE-001): lo coordina Routes y, en una sola
+  transacción, `addRouteStop` fija y `removeRouteStop` limpia `dispatch.assignments.route_id` junto con la parada, la
+  versión de la ruta, la auditoría, el outbox `routes.route-changed` y la idempotencia. Los otros cinco flujos no
+  cambian. ADR: `docs/adr/ADR-RTE-001-ROUTE-ASSIGNMENT-FLOW6.md`.
+- La cuenta sube a seis en AI-13 §15, AI-03 §25.9 y `CLAUDE.md`; AI-04 `transaction_coordinator_allowlist` agrega
+  `route_stop_to_assignment_route_id`; AI-01 §4.18 y AI-11 prohíben ahora un séptimo flujo sin ADR y pruebas. AI-08
+  RTE-001: un criterio DECIDED y la prueba exigida.
+- Nueva prueba de arquitectura `CrossSchemaWriteCatalogTests`: cataloga cada escritura SQL de runtime en el esquema de
+  otro módulo (hoy ocho: flujos 1, 2, 5 y 6, y ADR-031 para el provisioning) y falla ante una nueva, una retirada o una
+  sin flujo, con un mensaje que pide el ADR. Nota: `docs/development/rte-001-routing-assignment-flow6.md`.
+- Sin cambios de código de `src/`, SQL, migraciones, roles, permisos, RLS, outbox ni paquetes; el comportamiento no
+  cambia.
+
+## Avisos al destinatario: contratos (NTF-RECIPIENT-NOTICES-2026-10-20) — 2026-10-20
+
+- Respuestas literales del project owner (2026-10-19 y 2026-10-20), registradas en `decision-log.md` con su
+  contexto, las preguntas y las opciones no elegidas: E4 "Los 4 del plan (Recommended)" ("Enlace de seguimiento al crear la orden, "Va en camino", "No se pudo entregar" y "Entregado", por WhatsApp. Por correo solo si hay correo del destinatario: hoy no se captura, se agrega como campo opcional en la nueva orden."); E4-P1 "Casilla en la orden (Recommended)" ("En la nueva orden: "El destinatario aceptó recibir avisos de su envío por WhatsApp". Si no se marca, no se manda WhatsApp (sí correo si hay). Queda registro de quién la marcó y cuándo."); E4-P2 "Llave propia para avisos (Recommended)" ("Al cotizar se guarda además una copia cifrada del teléfono y del correo con una llave que solo sirve para avisos. El Worker solo abre esa llave, nunca direcciones, nombres ni descripciones. Una llave más en Key Vault (centavos al mes)."); E4-P3 "Al iniciar traslado (Recommended)" ("Avisa con tiempo. En rutas con varias paradas puede llegar horas antes; el texto no promete hora."); E4-P4 "Al quedar confirmada (Recommended)" ("Nunca se manda el enlace de una orden que no llegó a confirmarse."); E4-P5 "Sin motivo, con enlace (Recommended)" (""Intentamos entregar y no fue posible; en el seguimiento verás el siguiente paso". No expone motivos delicados."); E4-P6 "De "tú", sin nombres (Recommended)" ("Como el ejemplo: sin nombre de la empresa que envía ni de nadie. Los 4 textos completos quedan en el PR para que los revises antes de mandarlos a Meta."); E4-P7 "La razón social (Recommended)" ("Es el responsable legal del aviso de privacidad y no es la marca comercial."); E4-P8 "Las tres vías (Recommended)" ("Responder "BAJA" o tocar "No recibir avisos" en WhatsApp, un enlace en cada correo, y un botón "Detener avisos" en la orden para cuando lo pida por teléfono. Aplica a todas las empresas que le envíen, porque el número de WhatsApp es uno solo."); E4-P9 "Respuesta automática (Recommended)" (""Este número solo envía avisos. Para dudas sobre tu envío contacta a quien te lo envió." Se cobra como mensaje de servicio."); E4-P10 "8:00 a 21:00 (Recommended)" ("Lo que pase fuera de ese horario se manda a las 8:00, salvo que ya no aplique (por ejemplo, "Va en camino" si ya se entregó)."); E4-P11 "Por los dos siempre (Recommended)" ("Más simple y no depende de los avisos de entrega de Meta; el correo cuesta casi nada."); E4-P12 "avisos@paquetenvia.com (Recommended)" ("Nombre visible "Seguimiento de envío", sin buzón de respuestas. Coherente con la marca neutra; el dominio ya es el del enlace."); E4-P13 "Fuera de este trabajo (Recommended)" ("El despachador ya ve los estados en la plataforma; se decide después, con el portal de negocios (BUS-001).").
+- Ronda F (2026-10-20, sobre los borradores de este cambio; también en la fila con su contexto, preguntas y opciones no elegidas): E4-P14 "Corregir los dos (Recommended)" ("WhatsApp: «Intentamos entregar tu envío con número de guía {{1}} y no fue posible. Con el botón Ver seguimiento verás el siguiente paso.» (como tu respuesta E4-P5). Correo: «con el botón Ver seguimiento» pasa a «en el enlace de abajo» en los 4 avisos."); E4-P15 "Sí, una línea (Recommended)" ("«Listo. Ya no recibirás avisos en este número.» Una sola vez, por la misma vía que la respuesta automática (mensaje de servicio). En el correo la página de baja ya lo confirma en pantalla."); E4-P16 "No en el piloto (Recommended)" ("La baja es definitiva durante el piloto. Si alguien la pidió por error, no hay forma de reactivarla; se revisa al terminar el piloto. Sin trabajo extra."). En AI-24: "No se pudo entregar" ya no empieza con "Hoy"; los cuatro cuerpos de correo quedan escritos con "en el enlace de abajo"; una baja por WhatsApp recibe una sola confirmación ("Listo. Ya no recibirás avisos en este número.") por la vía de la respuesta automática y fuera de su límite de 24 h; la baja es definitiva durante el piloto (riesgo residual: una baja por error no se deshace). Lo reflejan AI-05, AI-03, AI-06 (comentario del almacén de respuestas automáticas) y AI-08 NTF-006.
+- E4-P17 (2026-10-20, tras el hallazgo MAJOR de la revisión automática sobre las dos copias del correo; también en la fila): "Dos copias, como el teléfono (Recommended)" ("La API conserva el correo con la llave de datos personales, igual que el teléfono, y el Worker solo abre la copia de avisos. Ninguna se muestra, registra ni publica, y al borrar la ubicación se borran las dos. Queda como hoy en el PR."). El contrato no cambia: el correo se guarda con la llave PII, como el teléfono, y con una copia bajo `recipient-notice-kek` para el Worker. AI-24 usa ahora el mismo nombre de parámetro que AI-05 en la baja por correo (`{unsubscribeToken}`).
+- Solo contratos (PR-0): nada se construye, configura ni enciende; GATE-004 y GATE-007 siguen abiertas. ADR
+  `docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md` y nota `docs/development/ntf-recipient-notices.md` (arquitectura,
+  secuencia PR-1 a PR-8, acciones del owner y reversión).
+- AI-24 gana la sección `recipient_notices`: cuatro avisos al destinatario en cinco transiciones de ORD-002 (enlace al
+  confirmar, "Va en camino" al iniciar traslado, "No se pudo entregar" sin motivo y nunca por una recolección fallida,
+  "Entregado"), revisados otra vez al enviarse; WhatsApp solo con la casilla de permiso y correo solo si hay correo,
+  los dos cuando aplican; de 8:00 a 21:00 hora de Mazatlán; llave propia de avisos que el Worker solo desenvuelve;
+  textos neutros para revisión del owner antes de Meta; bajas globales por tres vías guardadas como hashes con llave;
+  respuesta automática; acuses firmados; interruptores apagados. `tracking_token.derivation.key` también la lee el
+  Worker.
+- AI-05: entrada `DECIDED` `NTF-RECIPIENT-NOTICES` de `x-pilot-contract-deltas` (correo opcional solo en el destino,
+  permiso de WhatsApp en `createOrder` y en la carga CSV, webhooks de Meta y de Event Grid, baja por correo, lista y
+  "Detener avisos" del despachador y su capacidad). La superficie HTTP no cambia hasta que cada ítem publique su parte
+  con código y pruebas; los conteos de rutas, esquemas y referencias no cambian.
+- AI-12: `decided_amendment` de `NotificationStatusChanged` (payload v2 con `order_id` y `notice`, canales WhatsApp y
+  correo, estados `DELIVERED` y `CANCELLED`). AI-06 y AI-18: contrato declarado en comentarios (columnas de Locations,
+  cambios del carril Notifications, almacén de bajas, respuestas automáticas, tabla de permisos, funciones y el rol
+  `paqueteria_notification_receipt_executor`); su DDL entra con cada paso de carril, así que solo se vuelven a fijar
+  sus hashes. AI-04: correo como dato sensible e invariantes de privacidad y outbox, sin estados nuevos. AI-07: campo
+  de correo, casillas de permiso, panel "Avisos al destinatario" y página `/avisos/baja/:token`. AI-08: ítems NTF-002
+  a NTF-008, criterio en TRK-002 y REL-001 depende de NTF-005. AI-09, AI-03 §15/§16 y AI-13 §7.2.
+- Sin cambios de comportamiento, migraciones, roles, permisos, Bicep ni paquetes: solo se vuelven a fijar los hashes de
+  AI-05, AI-06 y AI-18 (constantes de la línea base, manifiesto del migrador, flujos de CI, documentación y pruebas) y el
+  conteo de ítems de AI-08 en las pruebas.
+
+## Alertas de CPU, memoria, disco y créditos de CPU de PostgreSQL en el piloto (SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20) — 2026-10-20
+
+- Respuestas literales del project owner (2026-10-20, preguntas D2, D2-a, D2-b, D2-c y D2-d), registradas en
+  `decision-log.md` con su contexto y las opciones no elegidas:
+  - "La base de datos del piloto solo tiene las 2 alertas de conexiones. ¿Agregamos alertas para ver un problema antes de que lo reporten los usuarios?" Respuesta: "CPU, memoria y disco (Recommended)" ("3 alertas de métrica más al mismo correo de alertas. Con las 2 de conexiones son 5 de las 10 gratis por recurso; si no, unos 0.10 USD por serie al mes.");
+  - "Alertas de la base (D2): elegiste 3 alertas (CPU, memoria y disco). Las de conexiones tienen dos niveles (aviso y crítico). ¿Las nuevas tienen uno o dos niveles?" Respuesta: "Un nivel, de aviso (Recommended)" ("3 reglas, tal como respondiste. Con las 2 de conexiones son 5 de las 10 series gratis.");
+  - "¿Con qué umbrales? Los contratos solo fijan CPU (70 % aviso, 85 % crítico, en 30 min). El disco de 32 GB crece solo al 80 % (y duplica su costo) y la base se pone en solo lectura al quedar menos de 5 GB libres (84 %)." Respuesta: "CPU 70, memoria 80, disco 70 (Recommended)" ("CPU: promedio de 30 min ≥ 70 % (contrato). Memoria: máximo en 5 min ≥ 80 %, como conexiones. Disco ≥ 70 % (22 GB): avisa antes de que crezca y antes del solo lectura. Si eliges dos niveles: CPU 70/85, memoria 80/95, disco 70/80.");
+  - "La base del piloto es de tipo económico (Burstable). Cuando se le acaban los créditos de CPU se frena mucho, y Microsoft recomienda una alerta de «créditos de CPU restantes». ¿La agregamos como cuarta alerta?" Respuesta: "Sí, agregarla (Recommended)" ("Una regla más (avisa con pocos créditos). Sigue dentro de las 10 series gratis. Es la falla más probable de este tipo de servidor, y la alerta de CPU sola podría no mostrarla.");
+  - "Alerta de créditos de CPU: el servidor del piloto (B1ms) guarda hasta 288 créditos y gana 12 por hora. A CPU llena gasta cerca de 0.8 por minuto; con 0 se frena al 20 %. ¿Con cuántos créditos avisa?" Respuesta: "Menos de 72 (25 %) (Recommended)" ("Avisa con 72 créditos o menos (mínimo en 5 min, cada minuto). A CPU llena da cerca de hora y media antes del freno. Las cifras de 288 y 12 por hora son las de las máquinas B1ms; la página de PostgreSQL no las repite, así que se revisan en el primer despliegue.").
+- `deploy/azure/pilot/observability.bicep` (etapa 5 del flujo del piloto, sin cambios en el flujo) agrega cuatro alertas
+  de métrica de Azure Monitor sobre el servidor `pg-pv-pilot-<suffix>`, de un solo nivel (aviso, severidad 2), evaluadas
+  cada minuto, con estado (un correo al dispararse y otro al resolverse) y al grupo de acciones `ag-pv-pilot-ops`:
+  `mar-pv-pilot-pg-cpu-warning` (`cpu_percent`, promedio de 30 minutos ≥ 70, el `db_cpu_utilization` de AI-15),
+  `mar-pv-pilot-pg-memory-warning` (`memory_percent`, máximo en 5 minutos ≥ 80), `mar-pv-pilot-pg-storage-warning`
+  (`storage_percent`, máximo en 5 minutos ≥ 70, 22.4 de 32 GiB) y `mar-pv-pilot-pg-cpu-credits-warning`
+  (`cpu_credits_remaining`, mínimo en 5 minutos ≤ 72, el 25 % de los 288 créditos del B1ms). Las dos alertas de
+  conexiones no cambian. Métricas, unidades, agregaciones y dimensiones verificadas en learn.microsoft.com (*Supported
+  metrics for Microsoft.DBforPostgreSQL/flexibleServers*). El disco no tenía ventana en la respuesta: usa el máximo en
+  5 minutos, como las de conexiones. Los créditos siguen el texto de la opción ("72 créditos o menos"), no la etiqueta
+  "Menos de 72".
+- Costo: con las 2 de conexiones son 6 series, dentro de las 10 gratis por recurso; si no, unos 0.10 USD por serie al
+  mes. La opción de D2 contaba "5 de las 10" para tres reglas; la cuarta (D2-c) sigue gratis. Los totales del piloto no
+  cambian.
+- Guardas del piloto: P21 exige exactamente las seis alertas de métrica (métrica, agregación, operador, umbral entero,
+  ventana, frecuencia, severidad, servidor, grupo de acciones, activas y con estado, sin dimensión ni correo), rechaza
+  cualquier otra (un segundo nivel incluido), exige el SKU Standard_B1ms y el disco de 32 GiB en la plantilla y suma
+  las seis series al tope de 5 USD de las alertas. Las pruebas prueban que cada desviación de cada regla falla cerrada.
+- AI-08 SCL-007: un criterio DECIDED y la prueba de la guarda. AI-15 no lista reglas de alerta y no cambia. Sin cambios
+  de código, esquema, roles, permisos, paquetes ni topología de CI. Revisar en el primer despliegue: las cifras de
+  créditos del B1ms (máximo 288, 12 por hora) en el servidor real, y que los porcentajes del disco suponen 32 GiB
+  (después de un crecimiento automático son de un disco mayor). Notas: `docs/operations/env-001-pilot/README.md` §10.3 y
+  la guía del owner §6.2.
+
+## Organización de plataforma y primer administrador (TEN-003-PLATFORM-BOOTSTRAP-2026-10-19) — 2026-10-19
+
+- Respuesta literal del project owner (2026-10-19, decisión E1), registrada en `decision-log.md` con su contexto y la
+  opción no elegida: "Comando único auditado (Recommended)" ("Un comando del migrador que corres una sola vez, antes de tu primer inicio de sesión: crea la organización de plataforma y te hace administrador con tu cuenta de AuthCenter, deja registro en auditoría y se niega a correr una segunda vez."). No elegida: "SQL manual con runbook" ("Un procedimiento paso a paso que ejecutas tú como administrador de PostgreSQL. Sin código nuevo, pero sin auditoría automática y con más riesgo de error.").
+- Seguimiento E1b del project owner (2026-10-20, en el PR #283), registrado en `decision-log.md` con su contexto y
+  la opción no elegida: "Restaurar y repetir (Recommended)" ("Se mantiene la negativa, sin código nuevo. Si pasa, se restaura la base a un punto antes de tu inicio de sesión (la base del piloto aún está vacía) y corres el comando. La guía lo explica paso a paso. Coincide con E1: 'antes de tu primer inicio de sesión'."). No elegida: "Tomar ese usuario si está solo" ("El comando acepta tu usuario ya creado solo si es el único de la base y no tiene ninguna membresía. Evita la restauración, pero agrega código y pruebas al PR y una ruta más que revisar.").
+  Sin código nuevo: el comando sigue negándose (`SUBJECT_ALREADY_SIGNED_IN`, código 11, sin escribir nada). La salida
+  es restaurar la base del piloto a un punto anterior a ese primer inicio de sesión (README de ENV-001 §6.4) y correr
+  el comando otra vez. Solo sirve mientras nadie haya usado el piloto, y pierde lo escrito después de ese punto, que
+  entonces es solo el usuario del owner y su sesión. La guía del owner §7.5 lo explica paso a paso.
+- Nuevo comando del migrador `platform-bootstrap --connection-env NAME --identity-subject <sub de AuthCenter>
+  --legal-name TEXT --display-name TEXT`. El owner lo corre una sola vez, antes de su primer inicio de sesión, en una
+  ejecución del job de migración que solo cambia los argumentos (README de ENV-001 §6.1 paso 10; guía del owner
+  §7.5). Primero verifica la base y todas las lanes de módulo.
+- En una transacción, con el aprovisionador de TEN-003 y un autorizador ligado a ese único `sub`, crea:
+  - la organización PLATFORM (ACTIVE);
+  - el usuario de ese `sub` (el id de usuario de AuthCenter, un UUID en minúsculas);
+  - su membresía PLATFORM_ADMIN (ACTIVE, predeterminada);
+  - una fila de auditoría `INITIAL_ORGANIZATION_PROVISIONED`, escrita con el escritor append-only compartido.
+- La transacción toma una llave de advisory lock y revisa, como el login de despliegue, si ya hay datos. Con
+  `set_config(..., true)` después de `BEGIN` preautoriza solo los UUID nuevos y escribe como `paqueteria_migrator`
+  (NOBYPASSRLS) bajo FORCE RLS, igual que `master-data-gate`. No usa `paqueteria_app`: el login de despliegue de
+  Azure no puede asumirlo, y ese rol no ve otros tenants para negarse a una segunda corrida.
+- Se niega sin escribir nada (código 11) si ya existe cualquier organización PLATFORM, cualquier PLATFORM_ADMIN o un
+  usuario con ese `sub`, y también con un login que no salta RLS. Su salida no muestra el `sub`, los nombres ni
+  ningún id, y un error de argumentos no repite el valor.
+- El aprovisionador de TEN-003 ahora recibe la interfaz existente `ITenantTransactionRunner<OrganizationsDbContext>`.
+  La API lo sigue armando con `TenantTransactionContext` (`paqueteria_app`) y el autorizador que niega.
+  `Paqueteria.Infrastructure` expone sus internos al migrador.
+- Sin cambios en AI-04, AI-05, AI-06 ni AI-18, ni migraciones, roles, permisos, funciones, paquetes o flujos entre
+  módulos. AI-08 TEN-003 registra el comando, su criterio y su prueba. Pruebas: validación de argumentos y contrato en
+  PostgreSQL real. Nota: `docs/development/ten-003-platform-bootstrap.md`.
+
+## Remediación de seguridad NuGet: Microsoft.OpenApi y Microsoft.OpenApi.YamlReader a 2.12.0 (SEC-2026-13-NUGET-REMEDIATION-2026-10-19) — 2026-10-19
+
+- Respuesta literal del project owner (2026-10-19), registrada en `decision-log.md` con su contexto y las opciones no
+  elegidas ("Subir a 2.12.2" y "Registrar y esperar"): "Remediar con la tabla (Recommended)".
+- Un aviso del 2026-10-14, corregido en 2.12.0: `GHSA-7pxr-59rr-hqj2` (CVE-2026-72923, alta), denegación de servicio
+  por expansión de alias YAML en `Microsoft.OpenApi.YamlReader` `>=2.0.0-preview.11 <2.12.0`. Sólo ContractTests usa
+  ese paquete. El tracking es el Issue #280 y la ruta es la de SEC-2026-12 (PR de remediación a `main`, back-sync a
+  `development` y retiro).
+- `Directory.Packages.props`: `Microsoft.OpenApi` y `Microsoft.OpenApi.YamlReader` pasan de 2.7.5 a 2.12.0, en su
+  lugar. No se agrega ningún `PackageVersion` y el fijado transitivo sigue como lo dejó SEC-2026-12.
+- Los locks se regeneran con `dotnet restore --force-evaluate` y se mueve exactamente la tabla del owner:
+  - `Microsoft.OpenApi` en los locks de la API y de ContractTests (`Direct`) y en los de ArchitectureTests e
+    IntegrationTests (`CentralTransitive`), sin cambiar de tipo; en esos dos últimos, el nodo `Project`
+    `paqueteria.api` pide `[2.12.0, )` en vez de `[2.7.5, )`;
+  - `Microsoft.OpenApi.YamlReader` sólo en el lock de ContractTests, con su arista a `Microsoft.OpenApi`.
+
+  `SharpYaml` sigue en 2.1.4, byte a byte. Ningún otro lock cambia, tampoco el del Worker. El documento OpenAPI que
+  genera la API es idéntico byte a byte y las pruebas de la línea base de AI-05 pasan sin cambios.
+- REL-000 agrega:
+  - la autorización `SEC-2026-13-OPENAPI-YAMLREADER`;
+  - el validador de grafo exacto de SEC-2026-12, ahora compartido (`validate_nuget_security_remediation_diff`):
+    ediciones del manifiesto en su lugar, los 2 movimientos con versiones y hashes exactos, y el SHA-256 de cada lock;
+  - dos extensiones exactas de ese validador, simétricas al deshacer: un nodo que ya es `CentralTransitive` con
+    `requested` igual a `[from, )` se mueve a `[to, )` y conserva su tipo, y la petición de un nodo `Project` por un
+    paquete movido sigue al movimiento sólo si es exactamente `[from, )`.
+- El grafo permanente MVP-0 (`test_k`) también acepta exactamente esos movimientos (`nuget_remediations`). La evidencia
+  de liberación no lo usa, así que el modo normal y el código de admisión de dependencias no cambian. Nota:
+  `docs/development/rel-000-internal-release.md`.
+- Sin cambios en código de producción, migraciones, AI-04, AI-05, AI-06, AI-18, roles ni permisos.
+- Fusionada en `main` por #282 (b949dd8), sincronizada a `development` por #286 (be6e84c) y retirada a
+  `historical_remediations` por este PR.
+
 ## Repartidor: sesión vencida y recarga sin señal (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19) — 2026-10-19
 
 - Respuestas literales del project owner (2026-10-19), registradas en `decision-log.md` con su contexto y las opciones

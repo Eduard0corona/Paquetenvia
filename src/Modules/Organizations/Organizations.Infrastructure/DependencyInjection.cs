@@ -91,7 +91,13 @@ public static class DependencyInjection
             });
         services.TryAddScoped<IInitialOrganizationProvisioningAuthorizer, DenyInitialOrganizationProvisioningAuthorizer>();
         services.TryAddScoped<IProvisioningFailureInjector, NoOpProvisioningFailureInjector>();
-        services.AddScoped<IInitialOrganizationProvisioner, PostgreSqlInitialOrganizationProvisioner>();
+        // TEN-003: in the API the provisioner always runs as paqueteria_app (TenantTransactionContext).
+        services.AddScoped<IInitialOrganizationProvisioner>(serviceProvider => new PostgreSqlInitialOrganizationProvisioner(
+            serviceProvider.GetRequiredService<IInitialOrganizationProvisioningAuthorizer>(),
+            serviceProvider.GetRequiredService<IProvisioningFailureInjector>(),
+            serviceProvider.GetRequiredService<TenantTransactionContext<OrganizationsDbContext>>(),
+            serviceProvider.GetRequiredService<IAppendOnlyAuditWriter>(),
+            serviceProvider.GetRequiredService<IClock>()));
 
         // REG-001 (AUTH-OPEN-REGISTRATION): self-service onboarding, own applications and ALLY approval.
         services.TryAddSingleton<ISelfServiceOrganizationAuthorizer, VerifiedEmailSelfServiceOrganizationAuthorizer>();

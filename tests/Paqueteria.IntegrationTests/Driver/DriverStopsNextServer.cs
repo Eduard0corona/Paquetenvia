@@ -1,6 +1,4 @@
 using System.Diagnostics;
-using System.Net;
-using System.Net.Sockets;
 using System.Text;
 using Paqueteria.IntegrationTests.Realtime;
 
@@ -13,19 +11,22 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
     private readonly StringBuilder _output;
     private readonly FileStream _crossProcessLease;
     private readonly NextEnvDeclarationSnapshot _nextEnvDeclaration;
+    private readonly LoopbackPortLease? _ownedPort;
 
     private DriverStopsNextServer(
         Process process,
         Uri baseAddress,
         StringBuilder output,
         FileStream crossProcessLease,
-        NextEnvDeclarationSnapshot nextEnvDeclaration)
+        NextEnvDeclarationSnapshot nextEnvDeclaration,
+        LoopbackPortLease? ownedPort)
     {
         _process = process;
         BaseAddress = baseAddress;
         _output = output;
         _crossProcessLease = crossProcessLease;
         _nextEnvDeclaration = nextEnvDeclaration;
+        _ownedPort = ownedPort;
     }
 
     internal Uri BaseAddress { get; }
@@ -36,13 +37,6 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
         {
             return _output.ToString().Contains(value, StringComparison.Ordinal);
         }
-    }
-
-    internal static int ReservePort()
-    {
-        using var listener = new TcpListener(IPAddress.Loopback, 0);
-        listener.Start();
-        return ((IPEndPoint)listener.LocalEndpoint).Port;
     }
 
     private enum NextRuntime
@@ -158,10 +152,15 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
     /// Starts the Next.js development server. Use it only for suites that
     /// assert development-runtime behaviour.
     /// </summary>
+    /// <param name="port">
+    /// The port a suite had to know first (an origin the API allows); the
+    /// suite keeps the lease until the server is disposed. Without one the
+    /// server leases its own port.
+    /// </param>
     internal static Task<DriverStopsNextServer> StartAsync(
         string? apiBaseUrl = null,
-        int? requestedPort = null) =>
-        StartCoreAsync(NextRuntime.Development, apiBaseUrl, requestedPort, connectSources: null, runtimeEnvironment: null, bff: false);
+        LoopbackPortLease? port = null) =>
+        StartCoreAsync(NextRuntime.Development, apiBaseUrl, port, connectSources: null, runtimeEnvironment: null, bff: false);
 
     /// <summary>
     /// Builds the deployable artifact and serves it with <c>next start</c>.
@@ -169,6 +168,7 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
     /// navigation, caching and CSP, which are contracts of the deployable
     /// artifact rather than of the development runtime.
     /// </summary>
+    /// <param name="port">As for <see cref="StartAsync"/>.</param>
     /// <param name="connectSources">
     /// Extra exact origins for the runtime CSP <c>connect-src</c>
     /// (<c>PAQUETERIA_CSP_CONNECT_SOURCES</c>), such as the signed-upload
@@ -181,10 +181,10 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
     /// </param>
     internal static Task<DriverStopsNextServer> StartProductionAsync(
         string apiBaseUrl,
-        int? requestedPort = null,
+        LoopbackPortLease? port = null,
         string? connectSources = null,
         IReadOnlyDictionary<string, string>? runtimeEnvironment = null) =>
-        StartCoreAsync(NextRuntime.Production, apiBaseUrl, requestedPort, connectSources, runtimeEnvironment, bff: false);
+        StartCoreAsync(NextRuntime.Production, apiBaseUrl, port, connectSources, runtimeEnvironment, bff: false);
 
     /// <summary>
     /// The deployable artifact in the pilot's sign-in mode, AuthCenter BFF
@@ -196,13 +196,13 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
     /// suite serves it through <see cref="LoopbackTlsTunnel"/>
     /// (<see cref="DriverStopsBffNextServerFixture"/>).
     /// </summary>
-    internal static Task<DriverStopsNextServer> StartProductionBffAsync(int? requestedPort = null) =>
-        StartCoreAsync(NextRuntime.Production, apiBaseUrl: null, requestedPort, connectSources: null, runtimeEnvironment: null, bff: true);
+    internal static Task<DriverStopsNextServer> StartProductionBffAsync() =>
+        StartCoreAsync(NextRuntime.Production, apiBaseUrl: null, port: null, connectSources: null, runtimeEnvironment: null, bff: true);
 
     private static async Task<DriverStopsNextServer> StartCoreAsync(
         NextRuntime runtime,
         string? apiBaseUrl,
-        int? requestedPort,
+        LoopbackPortLease? port,
         string? connectSources,
         IReadOnlyDictionary<string, string>? runtimeEnvironment,
         bool bff)
@@ -220,7 +220,7 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
             return await StartOwnedAsync(
                 runtime,
                 apiBaseUrl,
-                requestedPort,
+                port,
                 connectSources,
                 runtimeEnvironment,
                 bff,
@@ -245,7 +245,7 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
     private static async Task<DriverStopsNextServer> StartOwnedAsync(
         NextRuntime runtime,
         string? apiBaseUrl,
-        int? requestedPort,
+        LoopbackPortLease? requestedPort,
         string? connectSources,
         IReadOnlyDictionary<string, string>? runtimeEnvironment,
         bool bff,
@@ -258,7 +258,12 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
         {
             await EnsureProductionBuildAsync(web, apiBaseUrl, bff);
         }
-        var port = requestedPort ?? ReservePort();
+        // A suite's own lease stays with the suite; otherwise the server owns
+        // one until it is disposed (LoopbackPortLease: nothing else can take
+        // the port before next binds it, nor while it runs).
+        var ownedPort = requestedPort is null ? LoopbackPortLease.Acquire() : null;
+        var lease = requestedPort ?? ownedPort!;
+        var port = lease.Port;
         var output = new StringBuilder();
         var process = new Process
         {
@@ -299,9 +304,19 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
         {
             if (args.Data is not null) output.AppendLine(args.Data);
         };
-        if (!process.Start())
+        lease.BeforeServerBinds();
+        try
         {
-            throw new InvalidOperationException("The Next.js development server did not start.");
+            if (!process.Start())
+            {
+                throw new InvalidOperationException("The Next.js development server did not start.");
+            }
+        }
+        catch
+        {
+            process.Dispose();
+            ownedPort?.Dispose();
+            throw;
         }
         process.BeginOutputReadLine();
         process.BeginErrorReadLine();
@@ -330,7 +345,8 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
                             address,
                             output,
                             crossProcessLease,
-                            nextEnvDeclaration);
+                            nextEnvDeclaration,
+                            ownedPort);
                     }
                 }
                 catch (HttpRequestException)
@@ -343,11 +359,13 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
         {
             TryTerminate(process);
             process.Dispose();
+            ownedPort?.Dispose();
             throw;
         }
 
         TryTerminate(process);
         process.Dispose();
+        ownedPort?.Dispose();
         throw new TimeoutException(
             $"The Next.js development server did not become ready.{Environment.NewLine}{output}");
     }
@@ -365,6 +383,7 @@ internal sealed class DriverStopsNextServer : IAsyncDisposable
             try
             {
                 _process.Dispose();
+                _ownedPort?.Dispose();
                 _nextEnvDeclaration.Restore();
             }
             finally

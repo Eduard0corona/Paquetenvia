@@ -28,8 +28,33 @@ import env001_pilot_guards as guards  # noqa: E402
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
+# GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20 (owner answers G4, H2 and H3): the per-order capacity of each vehicle
+# type (packages, total grams, grams of the heaviest package, length, width and height in millimetres; dimensions
+# optional) and its required documents, each with an expiry date (no NonExpiringDocumentTypes, no BACKGROUND_CHECK).
+APPROVED_CAPACITY = {
+    "MOTORCYCLE": (5, 20000, 10000, 400, 400, 350),
+    "CAR": (10, 100000, 20000, 900, 800, 600),
+    "VAN": (20, 400000, 20000, 2000, 1200, 1200),
+    "BICYCLE": (3, 10000, 10000, 450, 400, 300),
+    "WALKER": (2, 5000, 5000, 450, 400, 300),
+}
+MOTOR_VEHICLE_DOCUMENTS = ("IDENTITY", "DRIVER_LICENSE", "VEHICLE_CARD", "INSURANCE")
+APPROVED_DOCUMENTS = {
+    "MOTORCYCLE": MOTOR_VEHICLE_DOCUMENTS,
+    "CAR": MOTOR_VEHICLE_DOCUMENTS,
+    "VAN": MOTOR_VEHICLE_DOCUMENTS,
+    "BICYCLE": ("IDENTITY",),
+    "WALKER": ("IDENTITY",),
+}
+
+
+def without_eligibility(entries):
+    """The settings with every Drivers__Eligibility entry removed."""
+    return [entry for entry in entries if not guards.is_eligibility_name(entry["name"])]
+
 # A complete, synthetic driver eligibility policy: the values OrderTransitionGuardsApiFactory.DriverEligibilitySettings
-# gives the API (PilotApiStartupConfigurationTests starts the pilot API with them). Never the owner's rules.
+# gives the API in its tests. Never the owner's rules, which apps.settings.json carries since
+# GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20 (PilotApiStartupConfigurationTests starts the pilot API with them).
 SYNTHETIC_CAPACITY = {
     "MaximumPackageCount": "4",
     "MaximumTotalWeightGrams": "4000",
@@ -86,16 +111,20 @@ class ScramVerifierTests(unittest.TestCase):
 
 
 class SettingsTests(unittest.TestCase):
-    def test_repository_settings_are_well_formed_and_still_await_the_driver_eligibility_rules(self):
+    def test_repository_settings_are_well_formed_and_carry_the_driver_eligibility_rules(self):
         # POLICY-VERSIONS-PER-ORG-2026-10-02 removed the last two OWNER_DECISION_REQUIRED settings (the global
-        # assignment and eligibility policy versions), but the file still lacks the driver eligibility rules the pilot
-        # API needs to start: the static guard (P17) accepts the file, the deploy (settings-check) does not.
+        # assignment and eligibility policy versions) and GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20 added the
+        # driver eligibility rules the pilot API needs to start: the static guard (P17) and the deploy (settings-check)
+        # both accept the file. Without the rules the deploy still stops, once per vehicle type.
         entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
         self.assertEqual([], guards.validate_settings(entries, allow_sentinel=True))
-        failures = guards.validate_settings(entries, allow_sentinel=False)
+        self.assertEqual([], guards.validate_settings(entries, allow_sentinel=False))
+        failures = guards.validate_settings(without_eligibility(entries), allow_sentinel=False)
         self.assertEqual(len(guards.ELIGIBILITY_VEHICLE_TYPES), len(failures), failures)
         self.assertTrue(all(failure.startswith("driver eligibility rules for vehicle type ") for failure in failures), failures)
-        self.assertEqual([], guards.validate_settings(entries + SYNTHETIC_ELIGIBILITY, allow_sentinel=False))
+        self.assertEqual([], guards.validate_settings(without_eligibility(entries), allow_sentinel=True))
+        self.assertEqual(
+            [], guards.validate_settings(without_eligibility(entries) + SYNTHETIC_ELIGIBILITY, allow_sentinel=False))
         self.assertTrue(guards.validate_settings([{"name": "Finance__OperationalTimeZone", "value": guards.OWNER_SENTINEL}], allow_sentinel=False))
 
     def test_platform_managed_mock_and_secret_settings_are_rejected(self):
@@ -269,8 +298,9 @@ class SettingsTests(unittest.TestCase):
 
 class DriverEligibilitySettingsTests(unittest.TestCase):
     """The pilot API (Drivers__Provider and Routing__Provider PostgreSql) refuses to start without a driver eligibility
-    policy for every vehicle type (PilotApiStartupConfigurationTests.OwnerPendingStartFailures). The rules are the
-    owner's: settings-check stops while any is missing and holds every entry present to the API's start validation."""
+    policy for every vehicle type (PilotApiStartupConfigurationTests.MissingEligibilityStartFailures). The rules are the
+    owner's (GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20): settings-check stops while any is missing and holds every
+    entry present to the API's start validation."""
 
     VEHICLES = ("MOTORCYCLE", "CAR", "VAN", "BICYCLE", "WALKER")
     DOCUMENT = "Drivers__Eligibility__RequiredDocumentTypesByVehicleType__{}__{}"
@@ -288,8 +318,41 @@ class DriverEligibilitySettingsTests(unittest.TestCase):
         return subprocess.run([sys.executable, guards.__file__, "settings-check", "--file", str(path)],
                               capture_output=True, text=True)
 
-    def test_the_repository_file_stops_the_deploy_naming_each_vehicle_type_and_setting(self):
+    def test_the_repository_file_passes_the_deploy_check(self):
         result = self.settings_check(REPO_ROOT / guards.SETTINGS_FILE)
+        self.assertEqual(0, result.returncode, result.stdout)
+        self.assertEqual("ENV001_SETTINGS=PASS", result.stdout.strip())
+
+    def test_the_repository_file_carries_exactly_the_approved_rules(self):
+        # GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20: G4, H2 "Aprobar la tabla (Recommended)" and H3 "Aprobar la
+        # lista (Recommended)", applied as approved. Changing a value is a new owner decision, so it fails here first.
+        expected = {}
+        for vehicle in self.VEHICLES:
+            for index, document in enumerate(APPROVED_DOCUMENTS[vehicle]):
+                expected[self.DOCUMENT.format(vehicle, index)] = document
+            for field, value in zip(SYNTHETIC_CAPACITY, APPROVED_CAPACITY[vehicle]):
+                expected[self.CAPACITY.format(vehicle, field)] = str(value)
+            expected[self.CAPACITY.format(vehicle, "RequireDimensions")] = "false"
+        entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
+        eligibility = [entry for entry in entries if guards.is_eligibility_name(entry["name"])]
+        self.assertEqual(len(expected), len(eligibility))
+        self.assertEqual(expected, {entry["name"]: entry["value"] for entry in eligibility})
+        self.assertFalse(any("NonExpiringDocumentTypes" in entry["name"] for entry in eligibility))
+        self.assertFalse(any(entry["value"] == "BACKGROUND_CHECK" for entry in eligibility))
+        self.assertIn({"name": "Finance__OperationalTimeZone", "value": "America/Mazatlan"}, entries)
+        # Length, width and height are compared axis by axis, so every row keeps length >= width >= height.
+        for vehicle, (_, total, single, length, width, height) in APPROVED_CAPACITY.items():
+            with self.subTest(vehicle=vehicle):
+                self.assertLessEqual(single, total)
+                self.assertGreaterEqual(length, width)
+                self.assertGreaterEqual(width, height)
+
+    def test_without_its_rules_the_file_stops_the_deploy_naming_each_vehicle_type_and_setting(self):
+        entries = without_eligibility(guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE))
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "apps.settings.json"
+            path.write_text(json.dumps(entries), encoding="utf-8")
+            result = self.settings_check(path)
         self.assertEqual(1, result.returncode, result.stdout)
         lines = result.stdout.splitlines()
         self.assertEqual("ENV001_SETTINGS=FAIL", lines[-1])
@@ -301,7 +364,7 @@ class DriverEligibilitySettingsTests(unittest.TestCase):
                 self.assertIn(name, line)
 
     def test_a_complete_policy_passes(self):
-        entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE) + SYNTHETIC_ELIGIBILITY
+        entries = without_eligibility(guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)) + SYNTHETIC_ELIGIBILITY
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "apps.settings.json"
             path.write_text(json.dumps(entries), encoding="utf-8")
@@ -448,8 +511,9 @@ class DriverEligibilitySettingsTests(unittest.TestCase):
                               re.findall(r"public (\w+) (\w+) \{ get; set; \}", body.group(1))}
                 self.assertEqual(expected, properties)
 
-        # The policy that passes settings-check here is the one PilotApiStartupConfigurationTests starts the pilot API
-        # with, so the guard and the API agree on a complete policy as well as on a missing one.
+        # The synthetic policy that passes settings-check here is the one the OrderTransitionGuards API tests start the
+        # API with, so the guard and the API agree on a complete policy as well as on a missing one (the repository
+        # file itself starts the pilot API in PilotApiStartupConfigurationTests).
         fixture = (REPO_ROOT / "tests/Paqueteria.IntegrationTests/Orders/OrderTransitionGuardsHttpFixture.cs").read_text(
             encoding="utf-8")
         body = re.search(r"Dictionary<string, string\?> CreateEligibility\(\)\n    \{\n(.*?)\n    \}\n", fixture, re.DOTALL)
@@ -746,16 +810,1063 @@ class NonRootImageTests(unittest.TestCase):
 
     def test_workflow_must_build_exactly_the_checked_images(self):
         extra = self.workflow.replace(
-            '          echo "api=$(build api deploy/azure/Dockerfile.api)" >> "${GITHUB_OUTPUT}"\n',
-            '          echo "api=$(build api deploy/azure/Dockerfile.api)" >> "${GITHUB_OUTPUT}"\n'
-            '          echo "tool=$(build tool deploy/azure/Dockerfile.tool)" >> "${GITHUB_OUTPUT}"\n', 1)
-        missing = self.workflow.replace('          echo "worker=$(build worker deploy/azure/Dockerfile.worker)" >> "${GITHUB_OUTPUT}"\n', "", 1)
+            '          image="$(build api deploy/azure/Dockerfile.api)"\n',
+            '          image="$(build api deploy/azure/Dockerfile.api)"\n'
+            '          image="$(build tool deploy/azure/Dockerfile.tool)"\n', 1)
+        missing = self.workflow.replace('          image="$(build worker deploy/azure/Dockerfile.worker)"\n', "", 1)
         for case, workflow in (("fifth image", extra), ("worker not built", missing)):
             with self.subTest(case=case):
                 self.assertNotEqual(self.workflow, workflow)
                 failures = guards.pilot_image_user_failures(self.root, workflow)
                 self.assertEqual(1, len(failures), failures)
                 self.assertIn("the workflow must build exactly the images", failures[0])
+
+
+VALID_SERVER_NAMES = (
+    "pg-pv-pilot-abcdefghijklm",
+    "pg-pv-pilot-0123456789abc-r202610201310",
+    "pg-pv-pilot-abcdefghijklm-drill-202610201310",
+    "pg-pv-pilot-abcdefghijklm-a-b-c",
+    "pg-pv-pilot-abcdefghijklm-" + "x" * 37,  # exactly 63 characters
+)
+INVALID_SERVER_NAMES = (
+    "pg-pv-pilot-abcdefghijkl",  # 12-character suffix
+    "pg-pv-pilot-abcdefghijklmn",  # 14 characters before a part
+    "pg-pv-pilot-abcdefghijklm-",
+    "pg-pv-pilot-abcdefghijklm--r1",
+    "pg-pv-pilot-ABCDEFGHIJKLM",
+    "PG-PV-PILOT-abcdefghijklm",
+    "pg-pv-pilot-abcdefghijklm_r1",
+    "pg-pv-pilot-abcdefghijklm r1",
+    "pg-pv-pilot-abcdefghijklm\n",
+    "pg-pv-other-abcdefghijklm",
+    "pg-pv-azrdev-abcdefghijklm",
+    "@pg-pv-pilot-abcdefghijklm",
+    "pg-pv-pilot-abcdefghijklm-" + "x" * 38,  # 64 characters
+    " ",
+)
+
+
+class PostgresServerNameTests(unittest.TestCase):
+    """OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20: PILOT_POSTGRES_SERVER_NAME is empty (the first server) or a pilot server
+    name, checked fail-closed before the workflow touches Azure; the drill script applies the same pattern."""
+
+    def run_cli(self, value: str) -> subprocess.CompletedProcess:
+        return subprocess.run([sys.executable, guards.__file__, "postgres-server-name", "--value", value],
+                              capture_output=True, text=True)
+
+    def test_empty_means_the_default_server(self):
+        self.assertEqual([], guards.validate_postgres_server_name(""))
+        result = self.run_cli("")
+        self.assertEqual(0, result.returncode, result.stdout)
+        self.assertIn("ENV001_POSTGRES_SERVER=PASS default", result.stdout)
+
+    def test_pilot_server_names_pass(self):
+        for value in VALID_SERVER_NAMES:
+            with self.subTest(value=value):
+                self.assertLessEqual(len(value), 63)
+                self.assertEqual([], guards.validate_postgres_server_name(value))
+                result = self.run_cli(value)
+                self.assertEqual(0, result.returncode, result.stdout)
+                self.assertIn(f"ENV001_POSTGRES_SERVER=PASS {value}", result.stdout)
+
+    def test_anything_else_fails_closed_without_echoing_the_value(self):
+        for value in INVALID_SERVER_NAMES + (None, 7):
+            with self.subTest(value=value):
+                failures = guards.validate_postgres_server_name(value)
+                self.assertEqual(1, len(failures))
+                self.assertIn("PILOT_POSTGRES_SERVER_NAME must be empty", failures[0])
+                if isinstance(value, str):
+                    result = self.run_cli(value)
+                    self.assertEqual(1, result.returncode)
+                    self.assertIn("ENV001_POSTGRES_SERVER=FAIL", result.stdout)
+                    if value.strip():
+                        self.assertNotIn(value.strip(), result.stdout + result.stderr)
+
+    def test_the_drill_script_checks_the_same_pattern(self):
+        script = (REPO_ROOT / guards.RESTORE_DRILL_SCRIPT).read_text(encoding="utf-8")
+        line = next(line for line in script.splitlines() if guards.POSTGRES_SERVER_NAME_PATTERN in line)
+        self.assertIn('"${SOURCE}" =~ ' + guards.POSTGRES_SERVER_NAME_PATTERN, line)
+        probe = ('[[ "$1" =~ ' + guards.POSTGRES_SERVER_NAME_PATTERN + ' && ${#1} -le 63 ]] && printf "%s" "${BASH_REMATCH[1]}"')
+        for value in VALID_SERVER_NAMES + INVALID_SERVER_NAMES:
+            with self.subTest(value=value):
+                result = subprocess.run(["bash", "-c", probe, "probe", value], capture_output=True, text=True)
+                valid = not guards.validate_postgres_server_name(value)
+                self.assertEqual(valid, result.returncode == 0)
+                if valid:
+                    self.assertEqual(value[:25], result.stdout, "group 1 is the base name: the prefix and the 13-character suffix")
+
+
+class ConnectionHostTests(unittest.TestCase):
+    """The workflow keeps a runtime credential only while its Host is the server in service; the host is read without
+    ever printing the connection string."""
+
+    PASSWORD = "ab" * 32  # a 64-character stand-in, like the workflow's hex passwords
+    HOST = "pg-pv-pilot-abcdefghijklm.postgres.database.azure.com"
+
+    def connection(self, host: str = HOST, key: str = "Host") -> str:
+        return (f"{key}={host};Database=paqueteria;Username=pv_pilot_api;Password={self.PASSWORD};Maximum Pool Size=5;"
+                "Minimum Pool Size=0;SSL Mode=VerifyFull;Timeout=15;Command Timeout=60")
+
+    def test_the_host_is_read_from_the_workflow_format_and_npgsql_aliases(self):
+        self.assertEqual(self.HOST, guards.connection_host(self.connection()))
+        self.assertEqual(self.HOST, guards.connection_host(self.connection(key="host") + "\n"))
+        self.assertEqual(self.HOST, guards.connection_host(self.connection(key=" Server ")))
+
+    def test_missing_duplicated_or_foreign_hosts_fail_without_quoting_the_input(self):
+        cases = {
+            "no host": self.connection().replace(f"Host={self.HOST};", ""),
+            "two hosts": self.connection() + f";Server={self.HOST}",
+            "not a flexible server": self.connection(host="db.example.com"),
+            "upper case": self.connection(host=self.HOST.upper()),
+            "empty": "",
+        }
+        for name, text in cases.items():
+            with self.subTest(name=name):
+                with self.assertRaises(guards.GuardError) as raised:
+                    guards.connection_host(text)
+                self.assertNotIn(self.PASSWORD, str(raised.exception))
+                result = subprocess.run([sys.executable, guards.__file__, "connection-host"], input=text, capture_output=True, text=True)
+                self.assertEqual(2, result.returncode)
+                self.assertEqual("", result.stdout)
+                self.assertNotIn(self.PASSWORD, result.stderr)
+        result = subprocess.run([sys.executable, guards.__file__, "connection-host"], input=self.connection(), capture_output=True, text=True)
+        self.assertEqual((0, self.HOST + "\n"), (result.returncode, result.stdout))
+
+
+# A stand-in for the Azure CLI: Key Vault secrets are files in $AZ_STATE/secrets, Container Apps revisions are
+# $AZ_STATE/apps/<app> (the word active or inactive), and every call is logged to $AZ_STATE/calls without values.
+FAKE_AZ = r'''#!/usr/bin/env python3
+import json, os, re, sys
+state = os.environ["AZ_STATE"]
+args = sys.argv[1:]
+def opt(name):
+    return args[args.index(name) + 1] if name in args else None
+with open(os.path.join(state, "calls"), "a", encoding="utf-8") as log:
+    log.write(" ".join(a for a in args[:3]) + " " + (opt("--name") or "") + "\n")
+secrets = os.path.join(state, "secrets")
+if args[:3] == ["keyvault", "secret", "list"]:
+    name = re.search(r"name=='([^']+)'", opt("--query")).group(1)
+    print(1 if os.path.exists(os.path.join(secrets, name)) else 0)
+elif args[:3] == ["keyvault", "secret", "show"]:
+    path = os.path.join(secrets, opt("--name"))
+    if not os.path.exists(path):
+        print("ERROR: SecretNotFound", file=sys.stderr); sys.exit(3)
+    print(open(path, encoding="utf-8").read())
+elif args[:3] == ["keyvault", "secret", "set"]:
+    with open(opt("--file"), encoding="utf-8") as source, open(os.path.join(secrets, opt("--name")), "w", encoding="utf-8") as target:
+        target.write(source.read())
+elif args[:2] == ["containerapp", "list"]:
+    name = re.search(r"name=='([^']+)'", opt("--query")).group(1)
+    if os.path.exists(os.path.join(state, "apps", name)):
+        print(name)
+elif args[:2] == ["containerapp", "show"]:
+    print(opt("--name") + "--rev1")
+elif args[:3] == ["containerapp", "revision", "show"]:
+    print("true" if open(os.path.join(state, "apps", opt("--name")), encoding="utf-8").read().strip() == "active" else "false")
+elif args[:3] == ["containerapp", "revision", "activate"] or args[:3] == ["containerapp", "revision", "restart"]:
+    if opt("--revision") != opt("--name") + "--rev1":
+        sys.exit(4)
+    if args[2] == "activate":
+        open(os.path.join(state, "apps", opt("--name")), "w", encoding="utf-8").write("active")
+else:
+    print("unexpected az call: " + " ".join(args[:3]), file=sys.stderr); sys.exit(9)
+'''
+
+
+def workflow_step(predicate) -> dict:
+    workflow = guards.load_yaml(REPO_ROOT / guards.PILOT_WORKFLOW)
+    steps = [s for s in workflow["jobs"]["deploy"]["steps"] if predicate(s)]
+    assert len(steps) == 1, steps
+    return steps[0]
+
+
+class WorkflowStepHarness(unittest.TestCase):
+    """Runs one step of the pilot workflow as GitHub does (`bash --noprofile --norc -eo pipefail`), from the repository
+    root, with the fake Azure CLI first on PATH."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="env001-step-")
+        self.root = Path(self.tmp.name)
+        for directory in ("bin", "state/secrets", "state/apps", "runner"):
+            (self.root / directory).mkdir(parents=True)
+        az = self.root / "bin" / "az"
+        az.write_text(FAKE_AZ, encoding="utf-8")
+        az.chmod(0o755)
+        self.state = self.root / "state"
+        self.output = self.root / "runner" / "github-output"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def run_step(self, step: dict, **env: str) -> subprocess.CompletedProcess:
+        script = self.root / "step.sh"
+        script.write_text(step["run"], encoding="utf-8")
+        self.output.write_text("", encoding="utf-8")
+        environment = dict(os.environ, PATH=f"{self.root / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}", AZ_STATE=str(self.state),
+                           RUNNER_TEMP=str(self.root / "runner"), GITHUB_OUTPUT=str(self.output), PILOT_RESOURCE_GROUP="rg-pv-pilot")
+        environment.update(env)
+        return subprocess.run(["bash", "--noprofile", "--norc", "-eo", "pipefail", str(script)], cwd=REPO_ROOT,
+                              capture_output=True, text=True, env=environment)
+
+    def outputs(self) -> dict[str, str]:
+        return dict(line.split("=", 1) for line in self.output.read_text(encoding="utf-8").splitlines() if "=" in line)
+
+    def secret(self, name: str) -> str:
+        return (self.state / "secrets" / name).read_text(encoding="utf-8")
+
+    def put_secret(self, name: str, value: str) -> None:
+        (self.state / "secrets" / name).write_text(value, encoding="utf-8")
+
+
+class WorkflowConnectionSecretsTests(WorkflowStepHarness):
+    """OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20: the connections step rebuilds pg-migrate-connection for the server in
+    service on every run and keeps each runtime credential only while its Host is that server; otherwise (or with
+    rotate_runtime_logins) it writes a new password and its SCRAM verifier, which the logins job applies on that server.
+    No secret value is ever printed except inside an ::add-mask:: command."""
+
+    OLD_HOST = "pg-pv-pilot-abcdefghijklm.postgres.database.azure.com"
+    NEW_HOST = "pg-pv-pilot-abcdefghijklm-r202610201310.postgres.database.azure.com"
+    ROLES = ("api", "worker", "realtime")
+
+    def setUp(self):
+        super().setUp()
+        self.step = workflow_step(lambda s: s.get("id") == "connections")
+        self.assertEqual("${{ steps.platform.outputs.postgresHost }}", self.step["env"]["PGHOST_FQDN"])
+        self.put_secret("pg-admin-password", "Pv1-" + "a" * 54)
+        for name in ("authcenter-paquetenvia-client-secret", "google-maps-api-key", "public-tracking-link-key",
+                     "paquetenvia-telemetry-pseudonym-key-1"):
+            self.put_secret(name, f"owner-value-of-{name}-0123456789")
+
+    def run_connections(self, host: str, rotate: str = "false") -> subprocess.CompletedProcess:
+        return self.run_step(self.step, VAULT="kv-pvp-test", PGHOST_FQDN=host, PGADMIN_LOGIN="pvpilotadmin", ROTATE_RUNTIME_LOGINS=rotate)
+
+    def runtime(self) -> dict[str, tuple[str, str]]:
+        return {role: (self.secret(f"pg-{role}-runtime-connection"), self.secret(f"pg-{role}-login-verifier")) for role in self.ROLES}
+
+    def assert_no_secret_printed(self, result: subprocess.CompletedProcess) -> None:
+        values = [p.read_text(encoding="utf-8") for p in (self.state / "secrets").iterdir()]
+        values += [v.split("Password=", 1)[1].split(";", 1)[0] for v in values if "Password=" in v]
+        for line in (result.stdout + result.stderr).splitlines():
+            if line.startswith("::add-mask::"):
+                continue
+            for value in values:
+                self.assertNotIn(value, line)
+
+    def assert_credential(self, role: str, host: str) -> None:
+        connection, verifier = self.runtime()[role]
+        self.assertEqual(host, guards.connection_host(connection))
+        self.assertIn(f"Username=pv_pilot_{role};", connection)
+        password = connection.split("Password=", 1)[1].split(";", 1)[0]
+        self.assertRegex(password, r"^[0-9a-f]{64}$")
+        iterations, rest = verifier.removeprefix("SCRAM-SHA-256$").split(":", 1)
+        salt = base64.b64decode(rest.split("$", 1)[0])
+        self.assertEqual(verifier, guards.scram_sha256_verifier(password, salt=salt, iterations=int(iterations)))
+
+    def test_first_run_generates_every_credential_for_the_server(self):
+        result = self.run_connections(self.OLD_HOST)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("true", self.outputs()["runtime_logins_changed"])
+        for role in self.ROLES:
+            self.assert_credential(role, self.OLD_HOST)
+        self.assertEqual(self.OLD_HOST, guards.connection_host(self.secret("pg-migrate-connection")))
+        self.assert_no_secret_printed(result)
+
+    def test_same_server_keeps_every_credential(self):
+        self.assertEqual(0, self.run_connections(self.OLD_HOST).returncode)
+        before = self.runtime()
+        result = self.run_connections(self.OLD_HOST)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual(before, self.runtime())
+        self.assertEqual("false", self.outputs()["runtime_logins_changed"])
+        self.assertNotIn("Generated runtime login credential", result.stdout)
+        # The kept values were read, and masked before anything else was printed.
+        masks = [line for line in result.stdout.splitlines() if line.startswith("::add-mask::")]
+        for connection, _ in before.values():
+            self.assertIn("::add-mask::" + connection, masks)
+            self.assertIn("::add-mask::" + connection.split("Password=", 1)[1].split(";", 1)[0], masks)
+        self.assert_no_secret_printed(result)
+
+    def test_a_new_server_regenerates_every_credential_and_the_migration_connection(self):
+        self.assertEqual(0, self.run_connections(self.OLD_HOST).returncode)
+        before = self.runtime()
+        result = self.run_connections(self.NEW_HOST)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertEqual("true", self.outputs()["runtime_logins_changed"])
+        after = self.runtime()
+        for role in self.ROLES:
+            with self.subTest(role=role):
+                self.assertNotEqual(before[role][0].split("Password=")[1], after[role][0].split("Password=")[1])
+                self.assertNotEqual(before[role][1], after[role][1])
+                self.assert_credential(role, self.NEW_HOST)
+                self.assertIn(f"The runtime login credential for {role} names another PostgreSQL server", result.stdout)
+        self.assertEqual(self.NEW_HOST, guards.connection_host(self.secret("pg-migrate-connection")))
+        self.assert_no_secret_printed(result)
+        # Going back (the variable emptied again) follows the first server the same way.
+        self.assertEqual(0, self.run_connections(self.OLD_HOST).returncode)
+        for role in self.ROLES:
+            self.assert_credential(role, self.OLD_HOST)
+
+    def test_only_the_credential_on_another_server_is_regenerated(self):
+        self.assertEqual(0, self.run_connections(self.NEW_HOST).returncode)
+        before = self.runtime()
+        self.put_secret("pg-worker-runtime-connection", before["worker"][0].replace(self.NEW_HOST, self.OLD_HOST))
+        result = self.run_connections(self.NEW_HOST)
+        self.assertEqual(0, result.returncode, result.stderr)
+        after = self.runtime()
+        self.assertEqual((before["api"], before["realtime"]), (after["api"], after["realtime"]))
+        self.assertNotEqual(before["worker"][1], after["worker"][1])
+        self.assert_credential("worker", self.NEW_HOST)
+        self.assertEqual("true", self.outputs()["runtime_logins_changed"])
+
+    def test_rotation_still_regenerates_every_credential_on_the_same_server(self):
+        self.assertEqual(0, self.run_connections(self.OLD_HOST).returncode)
+        before = self.runtime()
+        result = self.run_connections(self.OLD_HOST, rotate="true")
+        self.assertEqual(0, result.returncode, result.stderr)
+        after = self.runtime()
+        for role in self.ROLES:
+            self.assertNotEqual(before[role][1], after[role][1])
+            self.assert_credential(role, self.OLD_HOST)
+        self.assertEqual("true", self.outputs()["runtime_logins_changed"])
+        self.assert_no_secret_printed(result)
+
+    def test_a_kept_credential_without_a_readable_host_stops_the_run(self):
+        self.assertEqual(0, self.run_connections(self.OLD_HOST).returncode)
+        broken = "Database=paqueteria;Username=pv_pilot_api;Password=" + "f" * 64
+        self.put_secret("pg-api-runtime-connection", broken)
+        verifier = self.secret("pg-api-login-verifier")
+        result = self.run_connections(self.NEW_HOST)
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual((broken, verifier), (self.secret("pg-api-runtime-connection"), self.secret("pg-api-login-verifier")))
+        self.assertNotIn("runtime_logins_changed", self.outputs())
+        self.assert_no_secret_printed(result)
+
+
+class WorkflowAppRestartTests(WorkflowStepHarness):
+    """Once stage 3 has applied the logins, the API and Worker run on the current credentials: a revision the real
+    restore stopped is started (it reads the current secrets as it starts), a running one restarts only when a
+    credential changed, and an app not deployed yet is left to stage 4."""
+
+    APPS = ("ca-pv-pilot-api", "ca-pv-pilot-worker")
+
+    def setUp(self):
+        super().setUp()
+        self.step = workflow_step(lambda s: "az containerapp revision restart" in str(s.get("run", "")))
+        self.assertEqual("${{ steps.connections.outputs.runtime_logins_changed }}", self.step["env"]["RUNTIME_LOGINS_CHANGED"])
+
+    def run_apps(self, changed: str, **states: str) -> list[str]:
+        for app in self.APPS:
+            path = self.state / "apps" / app
+            state = states.get(app.split("-")[-1], "active")
+            if state == "absent":
+                path.unlink(missing_ok=True)
+            else:
+                path.write_text(state, encoding="utf-8")
+        calls = self.state / "calls"
+        calls.write_text("", encoding="utf-8")
+        result = self.run_step(self.step, RUNTIME_LOGINS_CHANGED=changed)
+        self.assertEqual(0, result.returncode, result.stderr)
+        return [line.strip() for line in calls.read_text(encoding="utf-8").splitlines()
+                if line.startswith(("containerapp revision activate", "containerapp revision restart"))]
+
+    def test_changed_credentials_restart_both_running_apps(self):
+        self.assertEqual([f"containerapp revision restart {app}" for app in self.APPS], self.run_apps("true"))
+
+    def test_unchanged_credentials_leave_running_apps_alone(self):
+        self.assertEqual([], self.run_apps("false"))
+        self.assertEqual([], self.run_apps(""))
+
+    def test_stopped_revisions_are_started_whatever_changed(self):
+        for changed in ("true", "false"):
+            with self.subTest(changed=changed):
+                self.assertEqual([f"containerapp revision activate {app}" for app in self.APPS],
+                                 self.run_apps(changed, api="inactive", worker="inactive"))
+        self.assertEqual(["containerapp revision restart ca-pv-pilot-api", "containerapp revision activate ca-pv-pilot-worker"],
+                         self.run_apps("true", worker="inactive"))
+
+    def test_apps_not_deployed_yet_are_left_to_stage_4(self):
+        self.assertEqual([], self.run_apps("true", api="absent", worker="absent"))
+        self.assertEqual(["containerapp revision restart ca-pv-pilot-worker"], self.run_apps("true", api="absent"))
+
+    def test_the_step_runs_after_the_logins_job_and_before_stage_4(self):
+        names = [s.get("name", "") for s in guards.load_yaml(REPO_ROOT / guards.PILOT_WORKFLOW)["jobs"]["deploy"]["steps"]]
+        index = names.index(self.step["name"])
+        self.assertTrue(names[index - 1].startswith("Stage 3 - "), names[index - 1])
+        self.assertTrue(names[index + 1].startswith("Stage 4 - "), names[index + 1])
+
+
+# A stand-in for the Azure CLI as the revision check calls it. $AZ_STATE/revisions.json holds, per app, the
+# [latestRevisionName, latestReadyRevisionName] pairs that successive `az containerapp show` calls return, and per
+# "<app>/<revision>" the {active, health, images} states that successive `az containerapp revision show` calls return;
+# the last item of each list repeats. Only the step's two queries are answered; every call is logged to $AZ_STATE/calls.
+FAKE_AZ_REVISIONS = r'''#!/usr/bin/env python3
+import json, os, sys
+state = os.environ["AZ_STATE"]
+args = sys.argv[1:]
+def opt(name):
+    return args[args.index(name) + 1] if name in args else None
+with open(os.path.join(state, "calls"), "a", encoding="utf-8") as log:
+    log.write(" ".join(args[:3] if args[1] == "revision" else args[:2]) + " " + (opt("--name") or "") + " " + (opt("--revision") or "") + "\n")
+path = os.path.join(state, "revisions.json")
+data = json.load(open(path, encoding="utf-8"))
+counts = data.setdefault("counts", {})
+def next_item(key, items):
+    index = counts.get(key, 0)
+    counts[key] = index + 1
+    json.dump(data, open(path, "w", encoding="utf-8"))
+    return items[min(index, len(items) - 1)]
+if opt("--resource-group") != "rg-pv-pilot" or opt("-o") != "json":
+    print("unexpected resource group or output", file=sys.stderr); sys.exit(8)
+if args[:2] == ["containerapp", "show"] and opt("--query") == "{latest: properties.latestRevisionName, ready: properties.latestReadyRevisionName}":
+    latest, ready = next_item(opt("--name"), data["apps"][opt("--name")])
+    print(json.dumps({"latest": latest, "ready": ready}, indent=2))
+elif args[:3] == ["containerapp", "revision", "show"] and opt("--query") == (
+        "{active: properties.active, health: properties.healthState, images: properties.template.containers[].image}"):
+    key = opt("--name") + "/" + opt("--revision")
+    print(json.dumps(next_item(key, data["revisions"][key]), indent=2))
+else:
+    print("unexpected az call: " + " ".join(args), file=sys.stderr); sys.exit(9)
+'''
+
+
+class WorkflowRevisionCheckTests(WorkflowStepHarness):
+    """ENV-001 F-06: after stage 4 each of the API, the Worker and the Web must reach a latest revision that is ready,
+    runs this run's digest, is active and Healthy. The poll is bounded (40 polls 15 s apart for the three apps
+    together); a ready revision on another image is polled again within that budget, because right after stage 4 the
+    control plane can still report the previous revision as the latest one. A failure names the app and the revision
+    and points to its system log; nothing secret is read."""
+
+    APPS = (guards.API_APP, guards.WORKER_APP, guards.WEB_APP)
+    REGISTRY = "crpvpilotabcdefghijklm.azurecr.io"
+
+    def setUp(self):
+        super().setUp()
+        self.step = workflow_step(lambda s: s.get("id") == "revisions")
+        (self.root / "bin" / "az").write_text(FAKE_AZ_REVISIONS, encoding="utf-8")
+        sleep = self.root / "bin" / "sleep"
+        sleep.write_text('#!/bin/sh\necho "sleep $*" >> "${AZ_STATE}/calls"\n', encoding="utf-8")
+        sleep.chmod(0o755)
+        self.images = {app: f"{self.REGISTRY}/paquetenvia-{app.split('-')[-1]}@sha256:{digit * 64}"
+                       for app, digit in zip(self.APPS, "abc")}
+
+    def healthy(self, app: str, **changes) -> dict:
+        return {"active": True, "health": "Healthy", "images": [self.images[app]], **changes}
+
+    def run_check(self, apps: dict | None = None, revisions: dict | None = None, **env: str) -> subprocess.CompletedProcess:
+        """Every app ready on the first poll with a healthy revision `<app>--new`, unless `apps`/`revisions` say otherwise."""
+        state = {"apps": {app: [[f"{app}--new", f"{app}--new"]] for app in self.APPS},
+                 "revisions": {f"{app}/{app}--new": [self.healthy(app)] for app in self.APPS}}
+        state["apps"].update(apps or {})
+        state["revisions"].update(revisions or {})
+        (self.state / "revisions.json").write_text(json.dumps(state), encoding="utf-8")
+        (self.state / "calls").write_text("", encoding="utf-8")
+        images = {"API_IMAGE": self.images[guards.API_APP], "WORKER_IMAGE": self.images[guards.WORKER_APP],
+                  "WEB_IMAGE": self.images[guards.WEB_APP]}
+        images.update(env)
+        return self.run_step(self.step, **images)
+
+    def calls(self) -> list[str]:
+        return [line.strip() for line in (self.state / "calls").read_text(encoding="utf-8").splitlines()]
+
+    def sleeps(self) -> int:
+        return sum(1 for line in self.calls() if line == "sleep 15")
+
+    def assert_failed(self, result: subprocess.CompletedProcess, app: str, message: str) -> None:
+        self.assertNotEqual(0, result.returncode)
+        errors = [line for line in result.stdout.splitlines() if line.startswith("::error::")]
+        self.assertEqual(1, len(errors), result.stdout)
+        self.assertTrue(errors[0].startswith(f"::error::{app}: "), errors[0])
+        self.assertIn(message, errors[0])
+        self.assertIn(f"az containerapp logs show --name {app} --resource-group rg-pv-pilot --type system", errors[0])
+
+    def test_the_step_reads_only_this_runs_images_and_runs_after_stage_4_and_before_the_smoke_test(self):
+        self.assertEqual(guards.REVISION_IMAGE_ENV, self.step["env"])
+        names = [s.get("name", "") for s in guards.load_yaml(REPO_ROOT / guards.PILOT_WORKFLOW)["jobs"]["deploy"]["steps"]]
+        index = names.index(self.step["name"])
+        self.assertLess(next(i for i, name in enumerate(names) if name.startswith("Stage 4 - ")), index)
+        self.assertEqual("Smoke test same-origin routing", names[index + 1])
+
+    def test_revisions_ready_on_the_first_poll_pass(self):
+        result = self.run_check()
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(0, self.sleeps())
+        self.assertEqual({"api_revision": f"{guards.API_APP}--new", "worker_revision": f"{guards.WORKER_APP}--new",
+                          "web_revision": f"{guards.WEB_APP}--new"}, self.outputs())
+        for app in self.APPS:
+            self.assertIn(f"{app}: revision {app}--new is ready, active and Healthy, and runs {self.images[app]}", result.stdout)
+        self.assertNotIn("::error::", result.stdout)
+
+    def test_revisions_that_become_ready_after_some_polls_pass(self):
+        api, worker = guards.API_APP, guards.WORKER_APP
+        result = self.run_check(apps={api: [[f"{api}--new", f"{api}--old"]] * 3 + [[f"{api}--new", f"{api}--new"]],
+                                      worker: [[f"{worker}--new", None]] * 2 + [[f"{worker}--new", f"{worker}--new"]]})
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(5, self.sleeps())
+        self.assertIn(f"{api}: latest revision {api}--new is not ready (latest ready revision: {api}--old); polling again in 15 s",
+                      result.stdout)
+        self.assertIn(f"{worker}: latest revision {worker}--new is not ready (latest ready revision: none); polling again",
+                      result.stdout)
+        self.assertEqual(f"{api}--new", self.outputs()["api_revision"])
+        # A revision is only read once it is the latest ready one.
+        self.assertNotIn(f"containerapp revision show {api} {api}--old", self.calls())
+
+    def test_a_revision_that_never_becomes_ready_fails_with_the_system_log_hint(self):
+        api = guards.API_APP
+        result = self.run_check(apps={api: [[f"{api}--new", f"{api}--old"]]})
+        self.assert_failed(result, api, f"latest revision {api}--new is not ready (latest ready revision: {api}--old) "
+                                        "after about 10 minutes; the previous revision, if any, is still serving.")
+        self.assertEqual(40, self.sleeps())
+        self.assertEqual(41, self.calls().count(f"containerapp show {api}"))
+        # The run stops at the first app that fails; nothing is reported as serving.
+        self.assertFalse(any(guards.WORKER_APP in line for line in self.calls()))
+        self.assertEqual({}, self.outputs())
+
+    def test_a_first_deploy_that_never_becomes_ready_fails(self):
+        web = guards.WEB_APP
+        result = self.run_check(apps={web: [[f"{web}--first", None]]})
+        self.assert_failed(result, web, f"latest revision {web}--first is not ready (latest ready revision: none) after about 10 minutes")
+        self.assertEqual({"api_revision", "worker_revision"}, set(self.outputs()))
+
+    def test_the_three_apps_share_one_poll_budget(self):
+        api, worker = guards.API_APP, guards.WORKER_APP
+        result = self.run_check(apps={api: [[f"{api}--new", f"{api}--old"]] * 30 + [[f"{api}--new", f"{api}--new"]],
+                                      worker: [[f"{worker}--new", f"{worker}--old"]]})
+        self.assert_failed(result, worker, f"latest revision {worker}--new is not ready")
+        self.assertEqual(40, self.sleeps())
+        # Polls spent waiting for this run's image count against the same budget.
+        result = self.run_check(revisions={f"{api}/{api}--new": [self.healthy(api, images=[self.old_image(api)])] * 30 + [self.healthy(api)],
+                                           f"{worker}/{worker}--new": [self.healthy(worker, images=[self.old_image(worker)])]})
+        self.assert_failed(result, worker, f"revision {worker}--new is ready but runs '{self.old_image(worker)}'")
+        self.assertEqual(40, self.sleeps())
+
+    def old_image(self, app: str) -> str:
+        return f"{self.REGISTRY}/paquetenvia-{app.split('-')[-1]}@sha256:{'d' * 64}"
+
+    def test_a_ready_revision_on_another_image_is_polled_again_until_this_runs_image_serves(self):
+        api, worker = guards.API_APP, guards.WORKER_APP
+        with self.subTest(case="the previous revision is still reported as latest and ready, then the new one"):
+            result = self.run_check(apps={api: [[f"{api}--old", f"{api}--old"]] * 2 + [[f"{api}--new", f"{api}--new"]]},
+                                    revisions={f"{api}/{api}--old": [self.healthy(api, images=[self.old_image(api)])]})
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(2, self.sleeps())
+            self.assertIn(f"{api}: revision {api}--old is ready but runs '{self.old_image(api)}', not this run's image "
+                          f"({self.images[api]}); polling again in 15 s", result.stdout)
+            self.assertEqual(f"{api}--new", self.outputs()["api_revision"])
+            self.assertNotIn("::error::", result.stdout)
+        with self.subTest(case="another image, then this run's image"):
+            result = self.run_check(revisions={f"{worker}/{worker}--new": [self.healthy(worker, images=[self.old_image(worker)])] * 3
+                                               + [self.healthy(worker)]})
+            self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+            self.assertEqual(3, self.sleeps())
+            self.assertEqual(f"{worker}--new", self.outputs()["worker_revision"])
+            self.assertNotIn("::error::", result.stdout)
+
+    def test_a_ready_revision_on_another_image_until_the_budget_ends_fails_naming_both_images(self):
+        api, worker = guards.API_APP, guards.WORKER_APP
+        old = self.old_image(worker)
+        for images, shown in (([old], old), ([], ""), ([self.images[worker], old], f"{self.images[worker]} {old}")):
+            with self.subTest(images=images):
+                result = self.run_check(revisions={f"{worker}/{worker}--new": [self.healthy(worker, images=images)]})
+                self.assert_failed(result, worker, f"revision {worker}--new is ready but runs '{shown}', not this run's image "
+                                                   f"({self.images[worker]}) after about 10 minutes; the previous revision, "
+                                                   "if any, is still serving.")
+                self.assertEqual(40, self.sleeps())
+                self.assertNotIn("worker_revision", self.outputs())
+        with self.subTest(case="the previous revision is reported as latest and ready until the end"):
+            result = self.run_check(apps={api: [[f"{api}--old", f"{api}--old"]]},
+                                    revisions={f"{api}/{api}--old": [self.healthy(api, images=[self.old_image(api)])]})
+            self.assert_failed(result, api, f"revision {api}--old is ready but runs '{self.old_image(api)}', not this run's image "
+                                            f"({self.images[api]}) after about 10 minutes")
+            self.assertEqual(40, self.sleeps())
+            self.assertEqual({}, self.outputs())
+
+    def test_an_unhealthy_or_inactive_revision_fails(self):
+        web = guards.WEB_APP
+        for changes, status in (({"health": "Unhealthy"}, "active=true, healthState=Unhealthy"),
+                                ({"health": "None"}, "active=true, healthState=None"),
+                                ({"health": None}, "active=true, healthState=none"),
+                                ({"active": False}, "active=false, healthState=Healthy")):
+            with self.subTest(changes=changes):
+                result = self.run_check(revisions={f"{web}/{web}--new": [self.healthy(web, **changes)]})
+                self.assert_failed(result, web, f"revision {web}--new is ready but {status} after about 10 minutes")
+                self.assertEqual(40, self.sleeps())
+                self.assertNotIn("web_revision", self.outputs())
+
+    def test_a_revision_the_start_step_reactivated_passes_once_its_replicas_are_healthy(self):
+        # Real restore (README §6.4): the start step activated the stopped revision before stage 4. When stage 4 creates
+        # no new revision, the reactivated one is still the latest ready revision, and becomes Healthy once its
+        # replicas pass their probes.
+        api = guards.API_APP
+        result = self.run_check(apps={api: [[f"{api}--old", f"{api}--old"]]},
+                                revisions={f"{api}/{api}--old": [self.healthy(api, health="None"), self.healthy(api, health="Unhealthy"),
+                                                                 self.healthy(api)]})
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(2, self.sleeps())
+        self.assertEqual(f"{api}--old", self.outputs()["api_revision"])
+
+    def test_after_a_real_restore_the_new_revision_replaces_the_reactivated_one(self):
+        # Real restore (README §6.4): stage 4 puts the apps back in single revision mode with this run's images; the
+        # reactivated revision serves until the new one is ready, and only the new one is accepted.
+        result = self.run_check(apps={app: [[f"{app}--new", f"{app}--old"]] * 2 + [[f"{app}--new", f"{app}--new"]]
+                                      for app in (guards.API_APP, guards.WORKER_APP)})
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        self.assertEqual(4, self.sleeps())
+        self.assertEqual({f"{app}--new" for app in self.APPS}, set(self.outputs().values()))
+        self.assertFalse(any(line.endswith("--old") and "revision show" in line for line in self.calls()))
+
+    def test_an_image_that_is_not_digest_pinned_fails_before_reading_azure(self):
+        for image in (f"{self.REGISTRY}/paquetenvia-api:{'a' * 40}", "", f"{self.REGISTRY}/paquetenvia-api@sha256:{'A' * 64}"):
+            with self.subTest(image=image):
+                result = self.run_check(API_IMAGE=image)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(f"::error::{guards.API_APP}: this run has no digest-pinned image for it", result.stdout)
+                self.assertEqual([], self.calls())
+
+
+# A stand-in for the Azure CLI and the Docker CLI as the images step calls them, sharing one registry:
+# $AZ_STATE/registry.json maps each repository to its tags, {tag: {"digest", "writeEnabled"}}. A tag listed in "hidden"
+# exists but is not listed yet (it appeared after the step looked). FAKE_AZ_FAIL makes one `az acr repository`
+# subcommand fail; FAKE_LOCK_IGNORED makes the lock a no-op; FAKE_BUILD_FAIL names a Dockerfile whose build fails;
+# FAKE_PUSH_DRIFT makes the registry keep another digest than the pushed one. Every call is logged to $AZ_STATE/calls
+# as a JSON array whose first item is "az" or "docker". Only the step's exact calls are answered.
+FAKE_REGISTRY_CLI = r'''#!/usr/bin/env python3
+import hashlib, json, os, sys
+state = os.environ["AZ_STATE"]
+tool = os.path.basename(sys.argv[0])
+args = sys.argv[1:]
+with open(os.path.join(state, "calls"), "a", encoding="utf-8") as log:
+    log.write(json.dumps([tool] + args) + "\n")
+path = os.path.join(state, "registry.json")
+data = json.load(open(path, encoding="utf-8"))
+repositories = data.setdefault("repositories", {})
+hidden = set(data.get("hidden", []))
+def save():
+    json.dump(data, open(path, "w", encoding="utf-8"))
+def fail(message, code=1):
+    print(message, file=sys.stderr); sys.exit(code)
+def visible(repository):
+    return [tag for tag in repositories.get(repository, {}) if f"{repository}:{tag}" not in hidden]
+REGISTRY, SERVER = os.environ["REGISTRY"], os.environ["REGISTRY_SERVER"]
+QUIET = ["--only-show-errors", "--output", "json"]
+if tool == "az":
+    if args == ["acr", "login", "--name", REGISTRY, "--only-show-errors"]:
+        sys.exit(0)
+    if args[:2] != ["acr", "repository"]:
+        fail("unexpected az call: " + " ".join(args), 9)
+    command = args[2]
+    if os.environ.get("FAKE_AZ_FAIL") == command:
+        fail(f"ERROR: az acr repository {command} failed (stand-in)")
+    if args[2:] == ["list", "--name", REGISTRY] + QUIET:
+        print(json.dumps([name for name in repositories if visible(name)]))
+    elif args[2:5] == ["show-tags", "--name", REGISTRY] and args[5] == "--repository" and args[7:] == QUIET:
+        if not visible(args[6]):
+            fail("ERROR: Error: repository name not known to registry.")
+        print(json.dumps(visible(args[6])))
+    elif args[2:5] in (["show", "--name", REGISTRY], ["update", "--name", REGISTRY]) and args[5] == "--image":
+        repository, tag = args[6].split(":", 1)
+        item = repositories.get(repository, {}).get(tag)
+        if item is None:
+            fail("ERROR: Error: the specified tag does not exist.")
+        if command == "show" and args[7:] == QUIET:
+            print(json.dumps({"name": tag, "digest": item["digest"], "signed": False,
+                              "changeableAttributes": {"deleteEnabled": True, "listEnabled": True, "readEnabled": True,
+                                                       "writeEnabled": item["writeEnabled"]}}, indent=2))
+        elif command == "update" and args[7:] == ["--write-enabled", "false", "--only-show-errors", "--output", "none"]:
+            if not os.environ.get("FAKE_LOCK_IGNORED"):
+                item["writeEnabled"] = False
+                save()
+        else:
+            fail("unexpected az call: " + " ".join(args), 9)
+    else:
+        fail("unexpected az call: " + " ".join(args), 9)
+elif tool == "docker":
+    local = data.setdefault("local", {})
+    if args[0] == "build":
+        dockerfile = args[args.index("--file") + 1]
+        if dockerfile in os.environ.get("FAKE_BUILD_FAIL", "").split(","):
+            fail(f"build of {dockerfile} failed (stand-in)")
+        ref = args[args.index("--tag") + 1]
+        local[ref] = "sha256:" + hashlib.sha256(json.dumps(args).encode()).hexdigest()
+        save()
+    elif args[0] == "push" and len(args) == 2:
+        ref = args[1]
+        repository, tag = ref[len(SERVER) + 1:].split(":", 1)
+        existing = repositories.get(repository, {}).get(tag)
+        if existing is not None and not existing["writeEnabled"]:
+            fail("denied: The operation is disallowed on this registry, repository or image.")
+        digest = local[ref]
+        if os.environ.get("FAKE_PUSH_DRIFT"):
+            digest = "sha256:" + "e" * 64
+        repositories.setdefault(repository, {})[tag] = {"digest": digest, "writeEnabled": True}
+        data.setdefault("pushed", []).append(ref)
+        save()
+    elif args[:3] == ["inspect", "--format", "{{index .RepoDigests 0}}"] and len(args) == 4:
+        ref = args[3]
+        if ref not in data.get("pushed", []):
+            fail(f"Error: {ref} has no repository digest")
+        print(ref.rsplit(":", 1)[0] + "@" + local[ref])
+    else:
+        fail("unexpected docker call: " + " ".join(args), 9)
+'''
+
+
+class WorkflowImageStepTests(WorkflowStepHarness):
+    """ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21 (owner K2): when paquetenvia-<name>:<tested sha> is already in the pilot
+    registry the images step reuses its digest, with no build and no push, so a rollback deploys the same bytes; a
+    missing tag is built from the floating bases and pushed. Every tag is then locked (write-enabled false), so the
+    registry refuses a later push over it, and read back. A registry read or a build that fails stops the step."""
+
+    REGISTRY = "pvpilotabcdefghijklm"
+    SERVER = "pvpilotabcdefghijklm.azurecr.io"
+    SHA = "0123456789abcdef0123456789abcdef01234567"
+    OTHER_SHA = "fedcba9876543210fedcba9876543210fedcba98"
+    IMAGES = (("api", "api", "deploy/azure/Dockerfile.api"), ("worker", "worker", "deploy/azure/Dockerfile.worker"),
+              ("dbops", "db-ops", "deploy/azure/pilot/Dockerfile.db-ops"), ("web", "web", "deploy/azure/pilot/Dockerfile.web"))
+
+    def setUp(self):
+        super().setUp()
+        self.step = workflow_step(lambda s: s.get("id") == "images")
+        for tool in ("az", "docker"):
+            (self.root / "bin" / tool).write_text(FAKE_REGISTRY_CLI, encoding="utf-8")
+            (self.root / "bin" / tool).chmod(0o755)
+        git = self.root / "bin" / "git"
+        git.write_text('#!/bin/sh\n[ "$*" = "rev-parse HEAD" ] && echo "${FAKE_HEAD}" && exit 0\nexit 9\n', encoding="utf-8")
+        git.chmod(0o755)
+
+    @staticmethod
+    def digest(digit: str) -> str:
+        return "sha256:" + digit * 64
+
+    def run_images(self, repositories: dict | None = None, hidden: tuple[str, ...] = (), **env: str) -> subprocess.CompletedProcess:
+        state = {"repositories": repositories or {}, "hidden": list(hidden)}
+        (self.state / "registry.json").write_text(json.dumps(state), encoding="utf-8")
+        (self.state / "calls").write_text("", encoding="utf-8")
+        environment = {"REGISTRY": self.REGISTRY, "REGISTRY_SERVER": self.SERVER, "TESTED_GIT_SHA": self.SHA,
+                       "FAKE_HEAD": self.SHA, "PILOT_TRACKING_SUPPORT_URL": ""}
+        environment.update(env)
+        return self.run_step(self.step, **environment)
+
+    def registry(self) -> dict:
+        return json.loads((self.state / "registry.json").read_text(encoding="utf-8"))
+
+    def calls(self, tool: str) -> list[list[str]]:
+        lines = (self.state / "calls").read_text(encoding="utf-8").splitlines()
+        return [call[1:] for call in map(json.loads, lines) if call[0] == tool]
+
+    def tag(self, digest: str, locked: bool = False) -> dict:
+        return {"digest": digest, "writeEnabled": not locked}
+
+    def every_image(self, locked: bool = False) -> dict:
+        return {f"paquetenvia-{name}": {self.SHA: self.tag(self.digest(digit), locked)}
+                for (_, name, _), digit in zip(self.IMAGES, "abcd")}
+
+    def test_images_already_in_the_registry_are_reused_without_a_build_or_a_push(self):
+        for locked in (True, False):  # False: a tag pushed before this decision is locked on reuse
+            with self.subTest(locked=locked):
+                result = self.run_images(self.every_image(locked))
+                self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+                self.assertEqual([], self.calls("docker"))
+                outputs = self.outputs()
+                for (key, name, _), digit in zip(self.IMAGES, "abcd"):
+                    reference = f"{self.SERVER}/paquetenvia-{name}@{self.digest(digit)}"
+                    self.assertEqual(reference, outputs[key])
+                    self.assertEqual("reused", outputs[f"{key}_source"])
+                    self.assertIn(f"reusing {reference}\n", result.stderr)
+                    self.assertNotIn(f"building {self.SERVER}/paquetenvia-{name}", result.stderr)
+                    self.assertEqual(self.tag(self.digest(digit), locked=True),
+                                     self.registry()["repositories"][f"paquetenvia-{name}"][self.SHA])
+                self.assertNotIn("::error::", result.stdout + result.stderr)
+
+    def test_a_missing_image_is_built_on_floating_bases_pushed_and_locked(self):
+        result = self.run_images(PILOT_TRACKING_SUPPORT_URL="https://soporte.example.invalid/ayuda")
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        builds = [call for call in self.calls("docker") if call[0] == "build"]
+        self.assertEqual([dockerfile for _, _, dockerfile in self.IMAGES], [call[call.index("--file") + 1] for call in builds])
+        for call in builds:
+            self.assertEqual(["build", "--pull"], call[:2])
+            self.assertIn(f"SOURCE_SHA={self.SHA}", call)
+        self.assertIn("NEXT_PUBLIC_TRACKING_SUPPORT_URL=https://soporte.example.invalid/ayuda", builds[-1])
+        registry, outputs = self.registry(), self.outputs()
+        self.assertEqual([f"{self.SERVER}/paquetenvia-{name}:{self.SHA}" for _, name, _ in self.IMAGES], registry["pushed"])
+        for key, name, _ in self.IMAGES:
+            ref = f"{self.SERVER}/paquetenvia-{name}:{self.SHA}"
+            pushed = registry["local"][ref]
+            self.assertEqual(f"{self.SERVER}/paquetenvia-{name}@{pushed}", outputs[key])
+            self.assertEqual("built", outputs[f"{key}_source"])
+            self.assertIn(f"building {ref}\n", result.stderr)
+            self.assertEqual(self.tag(pushed, locked=True), registry["repositories"][f"paquetenvia-{name}"][self.SHA])
+        # An empty registry has nothing to list tags of; each tag is locked and read back right after its own push.
+        sequence = [(call[0], call[3] if call[0] == "az" and call[2] == "repository" else call[2] if call[0] == "az" else call[1])
+                    for call in map(json.loads, (self.state / "calls").read_text(encoding="utf-8").splitlines())]
+        self.assertEqual([("az", "login"), ("az", "list")]
+                         + [("docker", "build"), ("docker", "push"), ("docker", "inspect"), ("az", "update"), ("az", "show")] * 4,
+                         sequence)
+
+    def test_only_the_images_of_this_commit_that_are_missing_are_built(self):
+        repositories = {"paquetenvia-api": {self.OTHER_SHA: self.tag(self.digest("1"), locked=True)},
+                        "paquetenvia-worker": {self.OTHER_SHA: self.tag(self.digest("2"), locked=True),
+                                               self.SHA: self.tag(self.digest("b"), locked=True)},
+                        "paquetenvia-web": {self.SHA: self.tag(self.digest("d"), locked=True)}}
+        result = self.run_images(repositories)
+        self.assertEqual(0, result.returncode, result.stdout + result.stderr)
+        outputs = self.outputs()
+        self.assertEqual({"api": "built", "worker": "reused", "dbops": "built", "web": "reused"},
+                         {key: outputs[f"{key}_source"] for key, _, _ in self.IMAGES})
+        self.assertEqual([f"{self.SERVER}/paquetenvia-api:{self.SHA}", f"{self.SERVER}/paquetenvia-db-ops:{self.SHA}"],
+                         self.registry()["pushed"])
+        self.assertEqual(f"{self.SERVER}/paquetenvia-worker@{self.digest('b')}", outputs["worker"])
+        # The other commit's image is untouched.
+        self.assertEqual(self.tag(self.digest("1"), locked=True), self.registry()["repositories"]["paquetenvia-api"][self.OTHER_SHA])
+
+    def test_a_push_over_an_existing_tag_is_refused(self):
+        # The tag appeared after the step looked (it is not listed yet), so the step builds; the registry refuses the
+        # push over the locked tag, and the step stops without reporting the image.
+        api = {self.SHA: self.tag(self.digest("a"), locked=True)}
+        for hidden, repositories in ((f"paquetenvia-api:{self.SHA}", {"paquetenvia-api": api}),
+                                     (f"paquetenvia-api:{self.SHA}", {"paquetenvia-api": {**api, self.OTHER_SHA: self.tag(self.digest("1"))}})):
+            with self.subTest(repositories=sorted(repositories["paquetenvia-api"])):
+                result = self.run_images(repositories, hidden=(hidden,))
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn("denied: The operation is disallowed on this registry, repository or image.", result.stderr)
+                self.assertEqual(self.tag(self.digest("a"), locked=True), self.registry()["repositories"]["paquetenvia-api"][self.SHA])
+                self.assertEqual({}, self.outputs())
+                self.assertEqual([], [call for call in self.calls("az") if call[2:3] == ["update"]])
+
+    def test_a_tag_that_does_not_read_back_locked_on_the_digest_stops_the_step(self):
+        for env in ({"FAKE_LOCK_IGNORED": "1"}, {"FAKE_PUSH_DRIFT": "1"}):
+            with self.subTest(env=env):
+                result = self.run_images(**env)
+                self.assertNotEqual(0, result.returncode)
+                pushed = self.registry()["local"][f"{self.SERVER}/paquetenvia-api:{self.SHA}"]
+                self.assertIn(f"::error::tag paquetenvia-api:{self.SHA} is not locked on {pushed} (README §6.7)", result.stderr)
+                self.assertEqual({}, self.outputs())
+        # A reused tag that does not lock stops the step too.
+        result = self.run_images(self.every_image(), FAKE_LOCK_IGNORED="1")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(f"::error::tag paquetenvia-api:{self.SHA} is not locked on {self.digest('a')}", result.stderr)
+        self.assertEqual([], self.calls("docker"))
+
+    def test_a_registry_read_that_fails_stops_the_step_before_any_build(self):
+        for command in ("list", "show-tags", "show"):
+            with self.subTest(command=command):
+                result = self.run_images(self.every_image(locked=True), FAKE_AZ_FAIL=command)
+                self.assertNotEqual(0, result.returncode)
+                self.assertIn(f"az acr repository {command} failed (stand-in)", result.stderr)
+                self.assertEqual([], self.calls("docker"))
+                self.assertEqual({}, self.outputs())
+
+    def test_a_failed_build_stops_the_step(self):
+        # build() runs inside a command substitution; inherit_errexit makes its failure fail the step.
+        result = self.run_images(self.every_image(locked=True) | {"paquetenvia-web": {}},
+                                 FAKE_BUILD_FAIL="deploy/azure/pilot/Dockerfile.web")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("build of deploy/azure/pilot/Dockerfile.web failed (stand-in)", result.stderr)
+        self.assertNotIn("push", [call[0] for call in self.calls("docker")])
+        outputs = self.outputs()
+        self.assertNotIn("web", outputs)
+        self.assertNotIn("web_source", outputs)
+        self.assertEqual("reused", outputs["dbops_source"])
+
+    def test_a_checkout_other_than_tested_git_sha_stops_before_the_registry(self):
+        result = self.run_images(FAKE_HEAD=self.OTHER_SHA)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("::error::checkout is not tested_git_sha", result.stdout)
+        self.assertEqual([], self.calls("az") + self.calls("docker"))
+
+
+# A stand-in for the Azure CLI as restore-drill.sh calls it. Servers are files in $AZ_STATE/servers; every call is
+# logged to $AZ_STATE/calls (command and names only); FAKE_VERIFY_STATUS is the verify job's final status.
+FAKE_DRILL_AZ = r'''#!/usr/bin/env python3
+import json, os, sys
+state = os.environ["AZ_STATE"]
+args = sys.argv[1:]
+def opt(*names):
+    for name in names:
+        if name in args:
+            return args[args.index(name) + 1]
+    return None
+servers = os.path.join(state, "servers")
+name = opt("--name", "-n")
+with open(os.path.join(state, "calls"), "a", encoding="utf-8") as log:
+    log.write(" ".join(args[:3]) + " " + (name or "") + (" source=" + opt("--source-server") if "--source-server" in args else "") + "\n")
+if args[:3] == ["deployment", "group", "show"]:
+    if name == "env001-security":
+        print(json.dumps({"vaultName": {"value": "kv-pvp-abcdefghijklm"}}))
+    else:
+        print(json.dumps({"postgresName": {"value": os.environ["FAKE_SOURCE"]}, "postgresAdministratorLogin": {"value": "pvpilotadmin"}}))
+elif args[:2] == ["identity", "show"]:
+    print("00000000-0000-0000-0000-00000000000a")
+elif args[:3] == ["postgres", "flexible-server", "show"]:
+    if not os.path.exists(os.path.join(servers, name)):
+        print("ERROR: ResourceNotFound", file=sys.stderr); sys.exit(3)
+    if "--query" in args:
+        print(name + ".postgres.database.azure.com")
+elif args[:3] == ["postgres", "flexible-server", "restore"]:
+    if not os.path.exists(os.path.join(servers, opt("--source-server"))):
+        sys.exit(3)
+    open(os.path.join(servers, name), "w").close()
+elif args[:3] == ["postgres", "flexible-server", "delete"]:
+    os.remove(os.path.join(servers, name))
+elif args[:2] == ["keyvault", "show"]:
+    print("/subscriptions/s/resourceGroups/rg-pv-pilot/providers/Microsoft.KeyVault/vaults/kv-pvp-abcdefghijklm")
+elif args[:3] == ["keyvault", "secret", "show"]:
+    print(os.environ["FAKE_ADMIN_PASSWORD"])
+elif args[:3] in (["keyvault", "secret", "set"], ["keyvault", "secret", "set-attributes"]) or args[:2] == ["role", "assignment"] \
+        or args[:3] == ["containerapp", "job", "update"]:
+    pass
+elif args[:3] == ["containerapp", "job", "start"]:
+    print("job-pv-pilot-verify-exec1")
+elif args[:4] == ["containerapp", "job", "execution", "show"]:
+    print(os.environ["FAKE_VERIFY_STATUS"])
+else:
+    print("unexpected az call: " + " ".join(args[:4]), file=sys.stderr); sys.exit(9)
+'''
+
+
+class RestoreDrillScriptTests(unittest.TestCase):
+    """restore-drill.sh restores the server in service (the postgresName output, which follows
+    PILOT_POSTGRES_SERVER_NAME) into a new server named after the base name: a drill `<base>-drill-<UTC minute>`, deleted
+    unless --keep; a real restore (--real) `<base>-r<UTC minute>`, kept only when `assert` succeeds. The source server
+    is never deleted, an existing target is never touched, and the administrator password is never printed."""
+
+    BASE = "pg-pv-pilot-abcdefghijklm"
+    PASSWORD = "Pv1-" + "s" * 54
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory(prefix="env001-drill-")
+        self.root = Path(self.tmp.name)
+        for directory in ("bin", "pilot", "state/servers"):
+            (self.root / directory).mkdir(parents=True)
+        for name, text in (("az", FAKE_DRILL_AZ), ("sleep", "#!/bin/sh\nexit 0\n")):
+            (self.root / "bin" / name).write_text(text, encoding="utf-8")
+            (self.root / "bin" / name).chmod(0o755)
+        shutil.copy(REPO_ROOT / guards.RESTORE_DRILL_SCRIPT, self.root / "pilot" / "restore-drill.sh")
+        (self.root / "pilot" / "kv-firewall.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
+        self.state = self.root / "state"
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def drill(self, source: str, *flags: str, status: str = "Succeeded", servers: tuple[str, ...] = ()) -> tuple[subprocess.CompletedProcess, list[str]]:
+        for server in (source,) + servers:
+            (self.state / "servers" / server).touch()
+        (self.state / "calls").write_text("", encoding="utf-8")
+        env = dict(os.environ, PATH=f"{self.root / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}", AZ_STATE=str(self.state),
+                   FAKE_SOURCE=source, FAKE_VERIFY_STATUS=status, FAKE_ADMIN_PASSWORD=self.PASSWORD)
+        result = subprocess.run(["bash", str(self.root / "pilot" / "restore-drill.sh"), "--resource-group", "rg-pv-pilot",
+                                 "--restore-time", "2026-10-20T13:10:00Z", *flags], capture_output=True, text=True, env=env)
+        self.assertNotIn(self.PASSWORD, result.stdout + result.stderr)
+        calls = [line.strip() for line in (self.state / "calls").read_text(encoding="utf-8").splitlines()]
+        return result, calls
+
+    def servers(self) -> set[str]:
+        return {p.name for p in (self.state / "servers").iterdir()}
+
+    def target(self, result) -> str:
+        return re.search(r"target=(\S+)", result.stdout).group(1)
+
+    def test_a_drill_restores_the_server_in_service_and_deletes_its_copy(self):
+        for source in (self.BASE, f"{self.BASE}-r202610011200", f"{self.BASE}-drill-202610011200"):
+            with self.subTest(source=source):
+                result, calls = self.drill(source)
+                self.assertEqual(0, result.returncode, result.stderr)
+                target = self.target(result)
+                self.assertRegex(target, rf"^{self.BASE}-drill-\d{{12}}$")
+                self.assertIn(f"postgres flexible-server restore {target} source={source}", calls)
+                self.assertIn(f"postgres flexible-server delete {target}", calls)
+                self.assertEqual({source}, self.servers())
+                (self.state / "servers" / source).unlink()
+
+    def test_keep_leaves_the_drill_server(self):
+        result, calls = self.drill(self.BASE, "--keep", status="Failed")
+        self.assertNotEqual(0, result.returncode)
+        self.assertEqual({self.BASE, self.target(result)}, self.servers())
+
+    def test_a_real_restore_is_kept_only_when_assert_succeeds(self):
+        result, calls = self.drill(f"{self.BASE}-r202610011200", "--real")
+        self.assertEqual(0, result.returncode, result.stderr)
+        target = self.target(result)
+        self.assertRegex(target, rf"^{self.BASE}-r\d{{12}}$")
+        self.assertEqual([], guards.validate_postgres_server_name(target))
+        self.assertEqual({f"{self.BASE}-r202610011200", target}, self.servers())
+        self.assertIn(f"restored_server_kept={target} source_unchanged={self.BASE}-r202610011200", result.stdout)
+        self.assertIn(f"next_step=set the azure-pilot variable PILOT_POSTGRES_SERVER_NAME to {target}", result.stdout)
+        self.assertFalse(any(" delete " in f" {call} " for call in calls if call.startswith("postgres")))
+
+    def test_a_failed_real_restore_deletes_only_its_new_server(self):
+        result, calls = self.drill(self.BASE, "--real", status="Failed")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn(f"postgres flexible-server delete {self.target(result)}", calls)
+        self.assertEqual({self.BASE}, self.servers())
+        self.assertNotIn("restored_server_kept", result.stdout)
+
+    def test_an_existing_target_or_a_foreign_source_stops_before_any_restore(self):
+        existing = subprocess.run(["date", "-u", "+%Y%m%d%H%M"], capture_output=True, text=True).stdout.strip()
+        # Both the current and the next minute exist, so the check holds even if the minute turns during the run.
+        later = subprocess.run(["date", "-u", "-d", "+1 minute", "+%Y%m%d%H%M"], capture_output=True, text=True).stdout.strip()
+        taken = (f"{self.BASE}-r{existing}", f"{self.BASE}-r{later}")
+        result, calls = self.drill(self.BASE, "--real", servers=taken)
+        self.assertEqual(1, result.returncode)
+        self.assertIn("already exists", result.stderr)
+        self.assertFalse(any(call.startswith(("postgres flexible-server restore", "postgres flexible-server delete")) for call in calls))
+        self.assertEqual({self.BASE, *taken}, self.servers())
+        for source in ("null", "pg-pv-other-abcdefghijklm", f"{self.BASE}-", "PG-PV-PILOT-ABCDEFGHIJKLM"):
+            with self.subTest(source=source):
+                result, calls = self.drill(source)
+                self.assertEqual(1, result.returncode)
+                self.assertIn("no pilot PostgreSQL server name", result.stderr)
+                self.assertFalse(any(call.startswith("postgres") for call in calls))
+                (self.state / "servers" / source).unlink()
+
+    def test_keep_and_real_are_exclusive(self):
+        result, calls = self.drill(self.BASE, "--keep", "--real")
+        self.assertEqual(2, result.returncode)
+        self.assertEqual([], calls)
+
+
+class ServerNameSettingTests(unittest.TestCase):
+    """OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20: no file names the pilot PostgreSQL server except through the setting. In
+    deploy/, .github/ and tools/ the name prefix appears only in the default definition (the postgresServerName default
+    of platform.bicep and observability.bicep), the guards' one prefix constant and the drill script's format check; in
+    the operations and development docs every line that names it also names PILOT_POSTGRES_SERVER_NAME."""
+
+    DEFAULT_DEFINITION = "param postgresServerName string = 'pg-pv-pilot-${uniqueString(subscription().id, resourceGroup().id)}'"
+
+    def allowed(self, path: str, line: str) -> bool:
+        if path in ("deploy/azure/pilot/platform.bicep", "deploy/azure/pilot/observability.bicep"):
+            return line == self.DEFAULT_DEFINITION
+        if path == "deploy/azure/pilot/restore-drill.sh":
+            return guards.POSTGRES_SERVER_NAME_PATTERN in line
+        if path == "tools/azr-001/env001_pilot_guards.py":
+            return line == f'POSTGRES_SERVER_PREFIX = "{guards.POSTGRES_SERVER_PREFIX}"'
+        if path.startswith("docs/"):
+            return guards.POSTGRES_SERVER_VARIABLE in line
+        return False
+
+    def test_the_server_is_named_only_through_the_setting(self):
+        self.assertEqual("pg-pv-pilot-", guards.POSTGRES_SERVER_PREFIX)
+        found, offending = [], []
+        roots = ("deploy", ".github", "tools", "docs/operations", "docs/development")
+        for root in roots:
+            for path in sorted((REPO_ROOT / root).rglob("*")):
+                relative = path.relative_to(REPO_ROOT).as_posix()
+                if not path.is_file() or "__pycache__" in relative or relative == "tools/azr-001/test_env001_pilot_guards.py" \
+                        or "/bin/" in relative or "/obj/" in relative:
+                    continue
+                try:
+                    text = path.read_text(encoding="utf-8")
+                except UnicodeDecodeError:
+                    continue
+                for number, line in enumerate(text.splitlines(), 1):
+                    if guards.POSTGRES_SERVER_PREFIX in line:
+                        found.append(relative)
+                        if not self.allowed(relative, line.strip()):
+                            offending.append(f"{relative}:{number}: {line.strip()}")
+        self.assertEqual([], offending)
+        for required in ("deploy/azure/pilot/platform.bicep", "deploy/azure/pilot/observability.bicep",
+                         "deploy/azure/pilot/restore-drill.sh", "tools/azr-001/env001_pilot_guards.py"):
+            self.assertEqual(1, found.count(required), required)
 
 
 @unittest.skipUnless(_bicep(), "pinned Bicep CLI not available (set BICEP_BIN); the azr-static CI job installs it")
@@ -1267,7 +2378,7 @@ class TemplateGuardTests(unittest.TestCase):
         self.assert_fails(21, self.context(metric_alert), "metric alerts must be exactly")
 
         def metric_alert_on_application_insights(t):
-            alert = copy.deepcopy(self.resource(t, "observability", "Microsoft.Insights/metricAlerts", "warning"))
+            alert = copy.deepcopy(self.resource(t, "observability", "Microsoft.Insights/metricAlerts", "connections-warning"))
             alert["name"] = "mar-pv-pilot-appi-requests"
             alert["properties"]["scopes"] = ["[resourceId('Microsoft.Insights/components', format('appi-pv-pilot-{0}', variables('suffix')))]"]
             t["observability"]["resources"].append(alert)
@@ -1277,17 +2388,18 @@ class TemplateGuardTests(unittest.TestCase):
         """SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14: two metric alerts on the pilot server's active_connections,
         28 (Sev 2) and 33 (Sev 1), Maximum over 5 minutes every minute, stateful, through ag-pv-pilot-ops."""
         def warning(t):
-            return self.resource(t, "observability", "Microsoft.Insights/metricAlerts", "warning")
+            return self.resource(t, "observability", "Microsoft.Insights/metricAlerts", "connections-warning")
 
         def critical(t):
-            return self.resource(t, "observability", "Microsoft.Insights/metricAlerts", "critical")
+            return self.resource(t, "observability", "Microsoft.Insights/metricAlerts", "connections-critical")
 
         def criterion(alert):
             return alert["properties"]["criteria"]["allOf"][0]
 
         compiled = self.context().templates["observability"]
         alerts = {r["name"]: r for r in compiled["resources"] if r.get("type") == "Microsoft.Insights/metricAlerts"}
-        self.assertEqual({"mar-pv-pilot-pg-connections-warning", "mar-pv-pilot-pg-connections-critical"}, set(alerts))
+        self.assertEqual({"mar-pv-pilot-pg-connections-warning", "mar-pv-pilot-pg-connections-critical"},
+                         {name for name in alerts if "-connections-" in name})
         for name, (severity, threshold) in guards.REQUIRED_CONNECTION_ALERTS.items():
             properties = alerts[name]["properties"]
             self.assertEqual((severity, threshold), (properties["severity"], criterion(alerts[name])["threshold"]))
@@ -1360,12 +2472,424 @@ class TemplateGuardTests(unittest.TestCase):
             self.edit(t, "observability", "Paquetenvia pilot operations (OBS-002)", "Paquetenvia pilot operations (ops@example.com)")
         self.assert_fails(21, self.context(email_in_workbook), "observability.bicep must not contain an e-mail address")
 
-        # The two series count against the 5 USD bound (0.10 each at worst): log alerts at 4.95 USD pass alone, not with them.
+        # The six metric alert series (the two connection alerts and, since SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20,
+        # the four resource alerts) count against the 5 USD bound (0.10 each at worst): log alerts at 4.95 USD pass
+        # alone, not with them.
         def log_alerts_at_4_95(t):
             for rule in t["observability"]["variables"]["rules"][:4]:
                 rule["frequency"] = "PT10M"
                 rule["window"] = "PT15M"
-        self.assert_fails(21, self.context(log_alerts_at_4_95), "alert rules cost 5.15 USD per month")
+        self.assert_fails(21, self.context(log_alerts_at_4_95), "alert rules cost 5.55 USD per month")
+
+    def test_scl007_postgres_resource_alerts_fail_closed(self):
+        """SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20: four more metric alerts on the pilot server, one level each
+        (severity 2), every minute, stateful, through ag-pv-pilot-ops: CPU Average over 30 minutes >= 70, memory Maximum
+        over 5 minutes >= 80, storage Maximum over 5 minutes >= 70 and CPU credits Minimum over 5 minutes <= 72. With the
+        two connection alerts, six metric alerts in all; each drift fails closed."""
+        # name -> (metric, aggregation, operator symbol, threshold, window, the metric's dimension on Microsoft Learn).
+        rules = {
+            "mar-pv-pilot-pg-cpu-warning": ("cpu_percent", "Average", ">=", 70, "PT30M", "ServerName"),
+            "mar-pv-pilot-pg-memory-warning": ("memory_percent", "Maximum", ">=", 80, "PT5M", "ServerName"),
+            "mar-pv-pilot-pg-storage-warning": ("storage_percent", "Maximum", ">=", 70, "PT5M", "ServerName"),
+            "mar-pv-pilot-pg-cpu-credits-warning": ("cpu_credits_remaining", "Minimum", "<=", 72, "PT5M", "LogicalServerName"),
+        }
+        operators = {">=": "GreaterThanOrEqual", "<=": "LessThanOrEqual"}
+
+        def alert(t, name):
+            return self.resource(t, "observability", "Microsoft.Insights/metricAlerts", name)
+
+        def criterion(resource):
+            return resource["properties"]["criteria"]["allOf"][0]
+
+        compiled = self.context().templates["observability"]
+        alerts = {r["name"]: r for r in compiled["resources"] if r.get("type") == "Microsoft.Insights/metricAlerts"}
+        self.assertEqual(sorted(["mar-pv-pilot-pg-connections-warning", "mar-pv-pilot-pg-connections-critical", *rules]), sorted(alerts))
+        self.assertEqual(sorted(alerts), sorted(guards.REQUIRED_METRIC_ALERTS))
+        for name, (metric, aggregation, symbol, threshold, window, _) in rules.items():
+            properties = alerts[name]["properties"]
+            self.assertEqual(
+                (2, True, True, "PT1M", window, [guards.POSTGRES_SERVER_ID], [{"actionGroupId": guards.PILOT_ACTION_GROUP_ID}], "global"),
+                (properties["severity"], properties["enabled"], properties["autoMitigate"], properties["evaluationFrequency"],
+                 properties["windowSize"], properties["scopes"], properties["actions"], alerts[name]["location"]))
+            self.assertEqual({
+                "criterionType": "StaticThresholdCriterion",
+                "name": metric.replace("_", "-"),
+                "metricNamespace": "Microsoft.DBforPostgreSQL/flexibleServers",
+                "metricName": metric,
+                "timeAggregation": aggregation,
+                "operator": operators[symbol],
+                "threshold": threshold,
+            }, criterion(alerts[name]))
+
+        # CPU takes the AI-15 db_cpu_utilization warning and window; 70 % of the 32 GiB disk is 22.4 GiB; 72 is 25 % of
+        # the 288 credits a B1ms banks at most.
+        contract = guards.yaml.safe_load(
+            (REPO_ROOT / "docs/normative/v0.6/specs/AI-15_SCALABILITY_CONTRACT.yaml").read_text(encoding="utf-8"))
+        signal = next(item for item in contract["scaling_signals"]["database"] if item["metric"] == "db_cpu_utilization")
+        self.assertEqual((70, "PT30M"), (round(signal["warning"] * 100), "PT" + signal["window"].upper()))
+        self.assertEqual((22.4, 72), (guards.POSTGRES_STORAGE_GB * 70 / 100, guards.POSTGRES_MAX_CPU_CREDITS * 25 // 100))
+
+        other_aggregation = {"Average": "Maximum", "Maximum": "Average", "Minimum": "Average"}
+        strict = {">=": "GreaterThan", "<=": "LessThan"}
+        other_window = {"PT30M": "PT15M", "PT5M": "PT15M"}
+        for name, (metric, aggregation, symbol, threshold, window, dimension) in rules.items():
+            def rule(t, name=name):
+                return alert(t, name)
+
+            expected = f"{metric} {symbol} {threshold}"
+            window_message = f"over {guards._iso_minutes(window)} minutes ({window})"
+            mutations = {
+                "threshold + 1": (lambda t: criterion(rule(t)).update(threshold=threshold + 1), expected),
+                "threshold - 1": (lambda t: criterion(rule(t)).update(threshold=threshold - 1), expected),
+                "fractional threshold": (lambda t: criterion(rule(t)).update(threshold=float(threshold)), expected),
+                "other aggregation": (lambda t: criterion(rule(t)).update(timeAggregation=other_aggregation[aggregation]),
+                                      f"{aggregation} of {metric}"),
+                "strict operator": (lambda t: criterion(rule(t)).update(operator=strict[symbol]), expected),
+                "opposite operator": (lambda t: criterion(rule(t)).update(
+                    operator="LessThanOrEqual" if symbol == ">=" else "GreaterThanOrEqual"), expected),
+                "other metric": (lambda t: criterion(rule(t)).update(metricName="cpu_percent" if metric != "cpu_percent" else "memory_percent"),
+                                 expected),
+                "other namespace": (lambda t: criterion(rule(t)).update(metricNamespace="Microsoft.DBforMySQL/flexibleServers"), expected),
+                "dimension": (lambda t: criterion(rule(t)).update(dimensions=[{"name": dimension, "operator": "Include", "values": ["*"]}]),
+                              "no dimension"),
+                "dynamic threshold": (lambda t: criterion(rule(t)).update(criterionType="DynamicThresholdCriterion"), expected),
+                "second criterion": (lambda t: rule(t)["properties"]["criteria"]["allOf"].append(copy.deepcopy(criterion(rule(t)))),
+                                     "no dimension or other criterion"),
+                "multi-resource criteria": (lambda t: rule(t)["properties"]["criteria"].update(
+                    {"odata.type": "Microsoft.Azure.Monitor.MultipleResourceMultipleMetricCriteria"}), expected),
+                "severity 1": (lambda t: rule(t)["properties"].update(severity=1), "must have severity 2"),
+                "severity 3": (lambda t: rule(t)["properties"].update(severity=3), "must have severity 2"),
+                "every 5 minutes": (lambda t: rule(t)["properties"].update(evaluationFrequency="PT5M"), "every minute (PT1M)"),
+                "other window": (lambda t: rule(t)["properties"].update(windowSize=other_window[window]), window_message),
+                "one-hour window": (lambda t: rule(t)["properties"].update(windowSize="PT1H"), window_message),
+                "stateless": (lambda t: rule(t)["properties"].update(autoMitigate=False), "stateful"),
+                "disabled": (lambda t: rule(t)["properties"].update(enabled=False), "enabled and stateful"),
+                "scope Application Insights": (lambda t: rule(t)["properties"].update(
+                    scopes=["[resourceId('Microsoft.Insights/components', format('appi-pv-pilot-{0}', variables('suffix')))]"]),
+                    "only the pilot PostgreSQL server"),
+                "scope another server": (lambda t: rule(t)["properties"].update(
+                    scopes=["[resourceId('Microsoft.DBforPostgreSQL/flexibleServers', 'pg-pv-other')]"]), "only the pilot PostgreSQL server"),
+                "scope the resource group": (lambda t: rule(t)["properties"].update(scopes=["[resourceGroup().id]"]),
+                                             "only the pilot PostgreSQL server"),
+                "two scopes": (lambda t: rule(t)["properties"]["scopes"].append("[resourceGroup().id]"), "only the pilot PostgreSQL server"),
+                "multi-resource target": (lambda t: rule(t)["properties"].update(
+                    targetResourceType="Microsoft.DBforPostgreSQL/flexibleServers", targetResourceRegion="mexicocentral"),
+                    "unexpected properties"),
+                "webhook": (lambda t: rule(t)["properties"]["actions"][0].update(webHookProperties={"route": "x"}),
+                            "only through the pilot action group"),
+                "other action group": (lambda t: rule(t)["properties"].update(
+                    actions=[{"actionGroupId": "[resourceId('Microsoft.Insights/actionGroups', 'ag-other')]"}]),
+                    "only through the pilot action group"),
+                "no action": (lambda t: rule(t)["properties"].update(actions=[]), "only through the pilot action group"),
+                "copy loop": (lambda t: rule(t).update(copy={"name": "c", "count": 1}), "one literal global resource"),
+                "regional": (lambda t: rule(t).update(location="mexicocentral"), "one literal global resource"),
+                # Assembled from parts so no address literal is committed (example.com is reserved, RFC 2606).
+                "hard-coded e-mail": (lambda t: rule(t)["properties"].update(description="Write to ops" + "@" + "example.com"),
+                                      "must not contain an e-mail address"),
+                "dropped": (lambda t: t["observability"]["resources"].remove(rule(t)), "metric alerts must be exactly"),
+                "duplicated": (lambda t: t["observability"]["resources"].append(copy.deepcopy(rule(t))), "metric alerts must be exactly"),
+                "renamed": (lambda t: rule(t).update(name=name + "-x"), "metric alerts must be exactly"),
+            }
+            for case, (mutate, fragment) in mutations.items():
+                with self.subTest(rule=name, case=case):
+                    self.assert_fails(21, self.context(mutate), fragment)
+
+            def in_platform(t, name=name):
+                t["platform"]["resources"].append(copy.deepcopy(alert(t, name)))
+            with self.subTest(rule=name, case="in platform.bicep"):
+                self.assert_fails(1, self.context(in_platform), "allowed only in observability.bicep")
+
+        # One level only (D2-a): a critical level for any of them is a seventh rule and is refused.
+        def cpu_critical(t):
+            extra = copy.deepcopy(alert(t, "mar-pv-pilot-pg-cpu-warning"))
+            extra["name"] = "mar-pv-pilot-pg-cpu-critical"
+            extra["properties"]["severity"] = 1
+            criterion(extra)["threshold"] = 85
+            t["observability"]["resources"].append(extra)
+        self.assert_fails(21, self.context(cpu_critical), "metric alerts must be exactly")
+
+        # The thresholds belong to the B1ms server (288 CPU credits at most) and to its 32 GiB disk.
+        def other_sku(t):
+            self.resource(t, "platform", "Microsoft.DBforPostgreSQL/flexibleServers")["sku"].update(name="Standard_B2s")
+        self.assert_fails(21, self.context(other_sku), "the CPU credits alert (72) is 25 % of its 288 credits")
+
+        def other_disk(t):
+            self.resource(t, "platform", "Microsoft.DBforPostgreSQL/flexibleServers")["properties"]["storage"].update(storageSizeGB=64)
+        self.assert_fails(21, self.context(other_disk), "revisit it with the disk size, found 64")
+
+        def no_disk_size(t):
+            del self.resource(t, "platform", "Microsoft.DBforPostgreSQL/flexibleServers")["properties"]["storage"]["storageSizeGB"]
+        self.assert_fails(21, self.context(no_disk_size), "revisit it with the disk size, found None")
+
+    # ------------------------------------------------------------------ OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20
+    def test_the_default_server_name_is_exactly_the_first_server(self):
+        """An existing deployment changes nothing: the parameter default is the name the template computed before,
+        format('pg-pv-pilot-{0}', suffix) with suffix = uniqueString(subscription().id, resourceGroup().id)."""
+        before = "[format('pg-pv-pilot-{0}', variables('suffix'))]"
+        for name in ("platform", "observability"):
+            template = self.compiled[name]
+            suffix = template["variables"]["suffix"]
+            self.assertEqual("[uniqueString(subscription().id, resourceGroup().id)]", suffix)
+            default = template["parameters"]["postgresServerName"]["defaultValue"]
+            self.assertEqual(before.replace("variables('suffix')", suffix[1:-1]), default)
+            self.assertEqual(guards.POSTGRES_SERVER_DEFAULT, default)
+        server = self.resource(self.compiled, "platform", "Microsoft.DBforPostgreSQL/flexibleServers")
+        self.assertEqual("[parameters('postgresServerName')]", server["name"])
+        self.assertEqual("[parameters('postgresServerName')]", self.compiled["platform"]["outputs"]["postgresName"]["value"])
+        alerts = [r for r in self.compiled["observability"]["resources"] if r.get("type") == "Microsoft.Insights/metricAlerts"]
+        self.assertEqual(6, len(alerts))
+        self.assertTrue(all(a["properties"]["scopes"] == [guards.POSTGRES_SERVER_ID] for a in alerts))
+
+    def test_p25_server_setting_fails_closed(self):
+        def server(t):
+            return self.resource(t, "platform", "Microsoft.DBforPostgreSQL/flexibleServers")
+
+        template_mutations = {
+            "other default": (lambda t: t["platform"]["parameters"]["postgresServerName"].update(
+                defaultValue="[format('pg-pv-pilot-{0}-r1', uniqueString(subscription().id, resourceGroup().id))]"), "default is exactly"),
+            "observability default differs": (lambda t: t["observability"]["parameters"]["postgresServerName"].update(
+                defaultValue="[format('pg-pv-pilot-{0}', uniqueString(resourceGroup().id))]"), "observability.bicep must take"),
+            "no length limit": (lambda t: t["platform"]["parameters"]["postgresServerName"].pop("maxLength"), "3-63 character"),
+            "no parameter": (lambda t: t["observability"]["parameters"].pop("postgresServerName"), "observability.bicep must take"),
+            "literal name": (lambda t: server(t).update(name="[format('pg-pv-pilot-{0}', variables('suffix'))]"),
+                             "must declare the only PostgreSQL server"),
+            "second server": (lambda t: t["observability"]["resources"].append(copy.deepcopy(server(t))), "must declare the only"),
+            "name spelled in jobs": (lambda t: t["jobs"]["variables"].update(server="pg-pv-pilot-x"), "jobs.bicep spells pg-pv-pilot-"),
+            "name output": (lambda t: t["platform"]["outputs"]["postgresName"].update(value="pg"), "must output postgresName and postgresHost"),
+            "host output": (lambda t: t["platform"]["outputs"]["postgresHost"].update(value="[variables('suffix')]"), "must output postgresName"),
+        }
+        for name, (mutate, fragment) in template_mutations.items():
+            with self.subTest(name=name):
+                self.assert_fails(25, self.context(mutate), fragment)
+
+        text = (REPO_ROOT / guards.PILOT_WORKFLOW).read_text(encoding="utf-8")
+        validate = 'postgres-server-name --value "${PILOT_POSTGRES_SERVER_NAME:-}"'
+        workflow_mutations = {
+            "variable not read": (("PILOT_POSTGRES_SERVER_NAME: ${{ vars.PILOT_POSTGRES_SERVER_NAME }}", "PILOT_POSTGRES_SERVER_NAME: ''"),
+                                  "must read PILOT_POSTGRES_SERVER_NAME once"),
+            "read twice": (("      CUSTOM_DOMAIN_PHASE: ${{ inputs.custom_domain_phase }}\n      ROTATE",
+                            "      CUSTOM_DOMAIN_PHASE: ${{ inputs.custom_domain_phase }}\n      X: ${{ vars.PILOT_POSTGRES_SERVER_NAME }}\n      ROTATE"),
+                           "must read PILOT_POSTGRES_SERVER_NAME once"),
+            "not validated": ((validate, "true"), "must validate PILOT_POSTGRES_SERVER_NAME"),
+            "no adoption check": (("postgres-adoption-check --name", "true --name"), "postgres-adoption-check before stage 2"),
+            "other API version": (("--api-version 2024-08-01", "--api-version 2025-08-01"), "the template's API version 2024-08-01"),
+            "not passed to platform": (('parameters["postgresServerName"]', 'parameters["other"]'), "must carry postgresServerName"),
+            "host not checked": (('"${name}.postgres.database.azure.com"', '"${name}"'), "must export postgresName"),
+            "alerts on the default": (('"postgresServerName=${POSTGRES_NAME}"', '"other=${POSTGRES_NAME}"'), "stage 5 must pass"),
+            "alerts from another source": (("POSTGRES_NAME: ${{ steps.platform.outputs.postgresName }}\n        run: |\n          set -euo pipefail\n          python3",
+                                            "POSTGRES_NAME: ${{ vars.X }}\n        run: |\n          set -euo pipefail\n          python3"), "stage 5 must pass"),
+            "host never compared": (('if [[ "${kept_host}" == "${PGHOST_FQDN}" ]]; then continue; fi', "continue"),
+                                    "keep a runtime credential only while its host"),
+            "no change output": (('echo "runtime_logins_changed=${changed}" >> "${GITHUB_OUTPUT}"', "true"), "report runtime_logins_changed"),
+            "stopped apps stay stopped": (("az containerapp revision activate", "true"), "start a stopped API or Worker revision"),
+            "restart not tied to the change": (("RUNTIME_LOGINS_CHANGED: ${{ steps.connections.outputs.runtime_logins_changed }}",
+                                                "RUNTIME_LOGINS_CHANGED: ${{ inputs.rotate_runtime_logins }}"), "restart a running one"),
+        }
+        for name, ((old, new), fragment) in workflow_mutations.items():
+            with self.subTest(name=name):
+                self.assertIn(old, text)
+                self.assert_fails(25, self.context(workflow_text=text.replace(old, new, 1)), fragment)
+        # Validation must come before the first Azure call.
+        block = ("      - name: Validate the PostgreSQL server setting (PILOT_POSTGRES_SERVER_NAME)\n        shell: bash\n"
+                 f"        run: python3 ./tools/azr-001/env001_pilot_guards.py {validate}\n\n")
+        self.assertIn(block, text)
+        late = text.replace(block, "", 1).replace("      - name: Stage 1 - ", block + "      - name: Stage 1 - ", 1)
+        self.assert_fails(25, self.context(workflow_text=late), "before azure/login")
+        # Starting or restarting the apps must wait for the logins job and come before stage 4.
+        restart = text[text.index("      # The apps read their Key Vault secrets once at start."):text.index("      - name: Stage 4 - ")]
+        alerts = "      # OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20: the SCL-007 alerts watch"
+        moved = text.replace(restart, "", 1).replace(alerts, restart + alerts, 1)
+        self.assertNotEqual(text, moved)
+        self.assert_fails(25, self.context(workflow_text=moved), "after the logins job (stage 3) and before stage 4")
+
+        # The drill script must restore the server in service and check its name with the guard's pattern.
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / guards.PILOT_DIR).mkdir(parents=True)
+            script = (REPO_ROOT / guards.RESTORE_DRILL_SCRIPT).read_text(encoding="utf-8")
+            for old, new in ((guards.POSTGRES_SERVER_NAME_PATTERN, "^pg-.*$"), (".postgresName.value", ".other.value")):
+                (root / guards.RESTORE_DRILL_SCRIPT).write_text(script.replace(old, new), encoding="utf-8")
+                ctx = self.context()
+                ctx.repo_root = root
+                self.assertFalse(guards.guard_25_postgres_server_setting(ctx).passed, old)
+
+    def test_p26_revision_check_fails_closed(self):
+        text = (REPO_ROOT / guards.PILOT_WORKFLOW).read_text(encoding="utf-8")
+        mutations = {
+            "no revision step": (("        id: revisions\n", "        id: other\n"), "one deploy step (id revisions)"),
+            "another app's image": (("WEB_IMAGE: ${{ steps.images.outputs.web }}\n        run: |\n          set -euo pipefail\n          polls_left",
+                                     "WEB_IMAGE: ${{ steps.images.outputs.api }}\n        run: |\n          set -euo pipefail\n          polls_left"),
+                                    "must read exactly this run's images"),
+            "latest never compared with ready": (('[[ -n "${latest}" && "${latest}" == "${ready}" ]]', '[[ -n "${latest}" ]]'),
+                                                 "must poll, assert and hint"),
+            "image not compared": (('[[ "${images}" != "${image}" ]]', '[[ -z "${images}" ]]'), "must poll, assert and hint"),
+            "health not asserted": (('[[ "${active}" == "true" && "${health}" == "Healthy" ]]', '[[ "${active}" == "true" ]]'),
+                                    "must poll, assert and hint"),
+            "unbounded poll": (("polls_left=40\n", "polls_left=4000\n"), "must poll, assert and hint"),
+            "no system-log hint": (("--type system (README §6.7)", "(README §6.7)"), "must poll, assert and hint"),
+            "an app left unchecked": (('          check_revision web_revision ca-pv-pilot-web "${WEB_IMAGE}"\n', ""), "must end with"),
+            "allowed to fail": (("        id: revisions\n", "        id: revisions\n        continue-on-error: true\n"),
+                                "must always run"),
+            "conditional": (("        id: revisions\n", "        id: revisions\n        if: success()\n"), "must always run"),
+            "summary only on success": (("      - name: Summary and DNS records for the owner\n        if: always()\n",
+                                         "      - name: Summary and DNS records for the owner\n"), "always-run summary"),
+            "summary without the db-ops digest": (("| \\`${DBOPS_IMAGE:-none}\\` |", "| |"), "always-run summary"),
+            "another image fails at once": ((guards.REVISION_IMAGE_NOT_YET + "\n",
+                                             guards.REVISION_IMAGE_NOT_YET + "\n                  return 1\n"),
+                                            "polled again, not failed at once"),
+            "another image fails the app": ((guards.REVISION_IMAGE_NOT_YET + "\n",
+                                             guards.REVISION_IMAGE_NOT_YET + '\n                  fail "${app}" "${status}."\n'),
+                                            "polled again, not failed at once"),
+            "summary without the serving revision": (("API_REVISION: ${{ steps.revisions.outputs.api_revision }}",
+                                                      "API_REVISION: ${{ steps.revisions.outputs.worker_revision }}"),
+                                                     "always-run summary"),
+        }
+        for name, ((old, new), fragment) in mutations.items():
+            with self.subTest(name=name):
+                self.assertEqual(1, text.count(old), old)
+                self.assert_fails(26, self.context(workflow_text=text.replace(old, new, 1)), fragment)
+        # The check must come after stage 4 and before the smoke test.
+        check = text[text.index("      # ENV-001 F-06: a successful stage 4"):text.index("      - name: Smoke test same-origin routing")]
+        summary = "      - name: Summary and DNS records for the owner\n"
+        stage_4 = "      - name: Stage 4 - "
+        for moved in (text.replace(check, "", 1).replace(summary, check + summary, 1),
+                      text.replace(check, "", 1).replace(stage_4, check + stage_4, 1)):
+            self.assertNotEqual(text, moved)
+            self.assert_fails(26, self.context(workflow_text=moved), "after stage 4 and before the smoke test")
+
+    def test_p27_image_reuse_and_tag_lock_fail_closed(self):
+        text = (REPO_ROOT / guards.PILOT_WORKFLOW).read_text(encoding="utf-8")
+        reuse = "must reuse an existing tag, else build and push, then lock it"
+        push_block = ('              docker push "${ref}" >&2\n'
+                      '              digest="$(docker inspect --format \'{{index .RepoDigests 0}}\' "${ref}")"\n'
+                      '              digest="${digest##*@}"\n'
+                      '            fi\n')
+        mutations = {
+            "no images step": (("        id: images\n", "        id: other\n"), "one deploy step (id images)"),
+            "the reuse branch never taken": (('            if [[ -n "${digest}" ]]; then\n', "            if false; then\n"), reuse),
+            "no tag lookup": (('--repository "${repository}" --only-show-errors --output json)"', '--repository "${repository}")"'), reuse),
+            "build failures ignored": (("          shopt -s inherit_errexit\n", ""), reuse),
+            "push in both branches": ((push_block, push_block.replace('              docker push "${ref}" >&2\n', "")
+                                       .replace("            fi\n", '            fi\n            docker push "${ref}" >&2\n')), reuse),
+            "tag not locked": (("--write-enabled false \\\n", "\\\n"), reuse),
+            "lock not read back": ((".changeableAttributes.writeEnabled", ".changeableAttributes.readEnabled"), reuse),
+            "source not reported": (('echo "${name//-/}_source=${source}" >> "${GITHUB_OUTPUT}"', 'true'), reuse),
+            "a second push": (('          echo "web=${image}" >> "${GITHUB_OUTPUT}"\n',
+                               '          echo "web=${image}" >> "${GITHUB_OUTPUT}"\n          docker push "${REGISTRY_SERVER}/x:y"\n'),
+                              "docker push exactly once"),
+            "an unlock": (('          echo "web=${image}" >> "${GITHUB_OUTPUT}"\n',
+                           '          echo "web=${image}" >> "${GITHUB_OUTPUT}"\n'
+                           '          az acr repository update --name "${REGISTRY}" --image "x:y" --write-enabled true\n'),
+                          "az acr repository update exactly once"),
+            "a deletion": (('          echo "web=${image}" >> "${GITHUB_OUTPUT}"\n',
+                            '          echo "web=${image}" >> "${GITHUB_OUTPUT}"\n          az acr repository delete --name "${REGISTRY}" --image "x:y" --yes\n'),
+                           "never unlock, delete, untag or import"),
+            "web not reported": (('          echo "web=${image}" >> "${GITHUB_OUTPUT}"\n', ""), "right after its build() call"),
+            "registry from elsewhere": (("          REGISTRY: ${{ steps.platform.outputs.registryName }}\n", "          REGISTRY: other\n"),
+                                        "the images step must read exactly"),
+            "allowed to fail": (("        id: images\n", "        id: images\n        continue-on-error: true\n"), "must always run"),
+            "summary without the sources": (("${WEB_SOURCE:-no image}", "no image"), "built or reused"),
+        }
+        for name, ((old, new), fragment) in mutations.items():
+            with self.subTest(name=name):
+                self.assertEqual(1, text.count(old), old)
+                self.assert_fails(27, self.context(workflow_text=text.replace(old, new, 1)), fragment)
+
+    def restored_server(self, **changes):
+        """A restored server as `az resource show --api-version 2024-08-01` describes it (ARM GET)."""
+        base = "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-pv-pilot/providers/Microsoft.Network"
+        server = {
+            "id": "/subscriptions/00000000-0000-0000-0000-000000000001/resourceGroups/rg-pv-pilot/providers/"
+                  "Microsoft.DBforPostgreSQL/flexibleServers/pg-pv-pilot-abcdefghijklm-r202610201310",
+            "name": "pg-pv-pilot-abcdefghijklm-r202610201310",
+            "type": "Microsoft.DBforPostgreSQL/flexibleServers",
+            "location": "Mexico Central",
+            "sku": {"name": "Standard_B1ms", "tier": "Burstable"},
+            "properties": {
+                "administratorLogin": "pvpilotadmin", "version": "18", "state": "Ready", "replicationRole": "Primary",
+                "fullyQualifiedDomainName": "pg-pv-pilot-abcdefghijklm-r202610201310.postgres.database.azure.com",
+                "storage": {"storageSizeGB": 32, "autoGrow": "Enabled", "tier": "P4"},
+                "backup": {"backupRetentionDays": 14, "geoRedundantBackup": "Disabled"},
+                "highAvailability": {"mode": "Disabled"},
+                "network": {"publicNetworkAccess": "Disabled",
+                            "delegatedSubnetResourceId": f"{base}/virtualNetworks/vnet-pv-pilot/subnets/snet-postgres",
+                            "privateDnsZoneArmResourceId": f"{base}/privateDnsZones/pv-pilot.private.postgres.database.azure.com"},
+            },
+        }
+        for path, value in changes.items():
+            target = server
+            *parents, leaf = path.split(".")
+            for key in parents:
+                target = target[key]
+            target[leaf] = value
+        return server
+
+    def adoption(self, server, name="pg-pv-pilot-abcdefghijklm-r202610201310"):
+        return guards.postgres_adoption_failures(name, server, self.compiled["platform"],
+                                                 subscription_id="00000000-0000-0000-0000-000000000001",
+                                                 resource_group="rg-pv-pilot", region="mexicocentral")
+
+    def test_a_restored_server_in_the_template_network_is_adopted(self):
+        self.assertEqual([], self.adoption(self.restored_server()))
+        # Resource ids compare without case, as ARM does; sku, HA, retention and parameters are the template's to set.
+        upper = self.restored_server(**{"properties.network.privateDnsZoneArmResourceId":
+                                        self.restored_server()["properties"]["network"]["privateDnsZoneArmResourceId"].upper(),
+                                        "sku.name": "Standard_B2s", "properties.highAvailability.mode": "SameZone",
+                                        "properties.backup.backupRetentionDays": 7, "properties.storage.storageSizeGB": 32})
+        self.assertEqual([], self.adoption(upper))
+
+    def test_a_server_the_template_cannot_update_in_place_is_refused(self):
+        cases = {
+            "other login": ({"properties.administratorLogin": "someoneelse"}, "another administrator login"),
+            "other version": ({"properties.version": "17"}, "runs PostgreSQL 17"),
+            "public access": ({"properties.network.publicNetworkAccess": "Enabled"}, "private access"),
+            "other subnet": ({"properties.network.delegatedSubnetResourceId": "/subscriptions/00000000-0000-0000-0000-000000000001/"
+                              "resourceGroups/rg-pv-pilot/providers/Microsoft.Network/virtualNetworks/vnet-pv-pilot/subnets/snet-other"},
+                             "not in the template's delegated subnet"),
+            "other DNS zone": ({"properties.network.privateDnsZoneArmResourceId": "/subscriptions/00000000-0000-0000-0000-000000000001/"
+                                "resourceGroups/rg-pv-pilot/providers/Microsoft.Network/privateDnsZones/x.private.postgres.database.azure.com"},
+                               "not in the template's private DNS zone"),
+            "other resource group": ({"properties.network.delegatedSubnetResourceId": "/subscriptions/00000000-0000-0000-0000-000000000001/"
+                                      "resourceGroups/rg-other/providers/Microsoft.Network/virtualNetworks/vnet-pv-pilot/subnets/snet-postgres"},
+                                     "delegated subnet"),
+            "geo backup": ({"properties.backup.geoRedundantBackup": "Enabled"}, "geo-redundant backup Enabled"),
+            "grown disk": ({"properties.storage.storageSizeGB": 64}, "a disk never shrinks"),
+            "stopped": ({"properties.state": "Stopped"}, "is Stopped, not Ready"),
+            "replica": ({"properties.replicationRole": "AsyncReplica"}, "read replica"),
+            "other region": ({"location": "East US"}, "not mexicocentral"),
+            "other server": ({"name": "pg-pv-pilot-abcdefghijklm"}, "the description is of"),
+        }
+        for name, (changes, fragment) in cases.items():
+            with self.subTest(name=name):
+                failures = self.adoption(self.restored_server(**changes))
+                self.assertTrue(any(fragment in f for f in failures), failures)
+        self.assertEqual(["x: the server description is not an ARM resource"], self.adoption({"name": "x"}, name="x"))
+
+    def test_adoption_check_cli(self):
+        with tempfile.TemporaryDirectory() as directory:
+            server, platform = Path(directory) / "server.json", Path(directory) / "platform.json"
+            platform.write_text(json.dumps(self.compiled["platform"]), encoding="utf-8")
+
+            def run(name, document):
+                server.write_text(json.dumps(document), encoding="utf-8")
+                return subprocess.run([sys.executable, guards.__file__, "postgres-adoption-check", "--name", name, "--server-json", str(server),
+                                       "--platform-arm", str(platform), "--subscription-id", "00000000-0000-0000-0000-000000000001",
+                                       "--resource-group", "rg-pv-pilot"], capture_output=True, text=True)
+
+            ok = run("pg-pv-pilot-abcdefghijklm-r202610201310", self.restored_server())
+            self.assertEqual(0, ok.returncode, ok.stdout)
+            self.assertIn("ENV001_POSTGRES_ADOPTION=PASS pg-pv-pilot-abcdefghijklm-r202610201310", ok.stdout)
+            bad = run("pg-pv-pilot-abcdefghijklm-r202610201310", self.restored_server(**{"properties.backup.geoRedundantBackup": "Enabled"}))
+            self.assertEqual(1, bad.returncode)
+            self.assertIn("ENV001_POSTGRES_ADOPTION=FAIL", bad.stdout)
+            malformed = run("PG", self.restored_server())
+            self.assertEqual(1, malformed.returncode)
+            self.assertIn("PILOT_POSTGRES_SERVER_NAME must be empty", malformed.stdout)
+            server.write_text("{", encoding="utf-8")
+            unreadable = subprocess.run([sys.executable, guards.__file__, "postgres-adoption-check", "--name", "pg-pv-pilot-abcdefghijklm",
+                                         "--server-json", str(server), "--platform-arm", str(platform), "--subscription-id", "s",
+                                         "--resource-group", "rg"], capture_output=True, text=True)
+            self.assertEqual(1, unreadable.returncode)
 
 
 if __name__ == "__main__":

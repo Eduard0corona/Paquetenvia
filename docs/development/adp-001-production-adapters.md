@@ -106,6 +106,23 @@ migrator job only to its migration connection.
 `Incidents__PiiKeyVersion` is ignored by the `AzureKeyVault` protector: the server takes the
 key version from Key Vault, never from configuration or the client.
 
+### Recipient-notice key (NTF-002, API wraps only)
+
+NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P2) adds a second RSA key, `recipient-notice-kek`, distinct from the PII key, that
+seals copies of the destination phone and e-mail for the Worker's recipient notices
+(`docs/development/ntf-002-recipient-contact.md`). It is off by default and in the pilot until AI-08 NTF-008.
+
+| Variable | Value | Required |
+| --- | --- | --- |
+| `Locations__NoticeKeyProtector` | `Disabled` (default: no notice copy), `Mock` (Development, Testing, DEV_SYNTHETIC) or `AzureKeyVault` (only with `Locations__PiiProtector=AzureKeyVault`) | no |
+| `PiiProtection__RecipientNoticeKey__KeyId` | `https://<vault>.vault.azure.net/keys/recipient-notice-kek` — **versionless**, never the PII key | yes when the selector is `AzureKeyVault` |
+| `PiiProtection__RecipientNoticeKey__CurrentVersionRefreshSeconds` / `HealthCacheSeconds` | `300` (default; 30–3600) | no |
+
+The API reads the key (`GET /keys/{name}`) and wraps each data key in process with its public part (RSA-OAEP-256), so
+it needs only the `Microsoft.KeyVault/vaults/keys/read` data action on that key and never `wrapKey`, `unwrapKey` or
+`decrypt`; it has no code that could open a notice copy. The Worker gets unwrap on this key only (never the PII key)
+with NTF-005 and NTF-008, which fixes the roles and secret names. Ready check: `recipient_notice_key`.
+
 Key requirements: RSA key (3072 bits recommended; `RSA-HSM` optional), permitted operations
 `wrapKey` and `unwrapKey`, algorithm `RSA-OAEP-256`. Rotation creates a **new version of the same
 key name**; earlier versions must stay **enabled** (never disabled, expired or purged) while any row

@@ -93,13 +93,41 @@ documentos reales.
 ### Capacidad
 
 `DriverCapacityRequirement` exige al menos un paquete, pesos positivos,
-peso individual máximo no mayor que el total y dimensiones positivas cuando
-existan. Las comparaciones usan enteros (`int`/`long`) y no suman valores, por
-lo que no existe una operación aritmética susceptible de overflow.
+peso individual máximo no mayor que el total y, por cada paquete, sus tres
+medidas tal como se capturaron (positivas cuando existan; una lista por paquete
+que no coincide con la cantidad de paquetes es inválida). Las comparaciones usan
+enteros (`int`/`long`) y no suman valores, por lo que no existe una operación
+aritmética susceptible de overflow.
 
 Cada vehículo debe configurar límites de cantidad, peso total, peso individual
-y largo/ancho/alto. Si `RequireDimensions=true`, una dimensión nula produce el
-código específico de esa dimensión. No hay cifras de producto hardcodeadas.
+y largo/ancho/alto. No hay cifras de producto hardcodeadas.
+
+**Medidas ordenadas (DRV-ELIGIBILITY-SORTED-DIMENSIONS-2026-10-20, owner H4:
+"Que el sistema las ordene").** El orden de las medidas no importa, ni en el
+paquete ni en el límite. Antes de comparar, la política ordena de mayor a menor
+las tres medidas de cada paquete y los tres límites del vehículo; un paquete
+cabe si cada medida ordenada es menor o igual que el límite en el mismo lugar, y
+la orden cabe si cabe cada uno de sus paquetes. Un paquete de 300 × 450 × 200 mm
+capturado así cabe en un límite de 450 × 400 × 300 mm. El ordenamiento vive solo
+en `DriverEligibilityPolicy`, que usan Dispatch (selector, `assignDriver`,
+ofertas externas), Orders (`capacity_available`) y Routing (`addRouteStop`).
+
+- Por eso cada lector pasa las medidas de cada paquete y ya no el máximo de
+  cada campo entre paquetes: ese máximo junta lados de paquetes distintos
+  (300 × 450 y 450 × 300 dan 450 × 450, que no cabe en 450 × 400 aunque cada
+  paquete sí quepa girado), y tampoco dice qué paquete no trae medidas.
+- Una medida que falta no se revisa: las medidas presentes, ordenadas, se
+  comparan con los límites mayores (una con el mayor, dos con los dos mayores).
+  Es exactamente "cabe girado en alguna posición" para las medidas capturadas.
+- Códigos: una medida que no cabe da el código de su lugar en el orden: la
+  mayor `PACKAGE_LENGTH_EXCEEDED`, la de en medio `PACKAGE_WIDTH_EXCEEDED` y la
+  menor `PACKAGE_HEIGHT_EXCEEDED`, en ese orden fijo y sin duplicados aunque
+  fallen varios paquetes. Para un paquete capturado de mayor a menor contra
+  límites escritos de mayor a menor, los códigos son los mismos que antes.
+- Si `RequireDimensions=true`, una medida nula produce el código de su campo
+  (`length_mm` → `PACKAGE_LENGTH_EXCEEDED`, etc.), como antes, y ahora en
+  cada paquete: antes una medida presente en otro paquete de la orden ocultaba
+  la que faltaba.
 
 ## Configuración
 

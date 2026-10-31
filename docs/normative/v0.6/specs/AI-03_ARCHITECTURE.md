@@ -375,7 +375,7 @@ Interfaces mínimas:
 - `IIdentityProvider`
 - `IGeocodingProvider`
 - `IRoutingProvider`
-- `IMessagingProvider`
+- `IMessagingProvider` (GATE-004-CHANNELS: WhatsApp por Meta Cloud API y correo por Azure Communication Services; NTF-RECIPIENT-NOTICES-2026-10-20, sin implementar: avisos al destinatario con botón URL "Ver seguimiento" de sufijo dinámico redactado en `ToString`, respuesta rápida "No recibir avisos", un mensaje de texto libre solo para la respuesta automática y la confirmación de la baja dentro de la ventana de atención de 24 h y las cabeceras `List-Unsubscribe` del correo; AI-24 `recipient_notices`)
 - `IVoiceBridgeProvider` (VOICE-001-MASKED-CALLS-2026-10-11: llamada puente enmascarada repartidor-destinatario; adaptador Twilio Programmable Voice por VOICE-001-PROVIDER-TWILIO-2026-10-11)
 - `IPaymentProvider`
 - `IInvoiceProvider`
@@ -395,7 +395,8 @@ Cada puerto tiene fake determinista y contract tests. Domain/Application no refe
 - cancellation tokens en toda I/O;
 - compensaciones explícitas, no transacciones distribuidas;
 - feature flags para activar proveedores y funciones por tenant;
-- degradación controlada: tracking/operación principal no debe caer por fallo de notificaciones.
+- degradación controlada: tracking/operación principal no debe caer por fallo de notificaciones;
+- avisos al destinatario (NTF-RECIPIENT-NOTICES-2026-10-20) detrás de interruptores apagados por defecto (`Notifications:RecipientNotices:Enabled`, proveedores `Disabled`, webhooks inertes con 404) hasta que GATE-004 y GATE-007 se resuelvan; ninguna llamada al proveedor ocurre con una transacción abierta y un fallo de mensajería nunca revierte ni retrasa la orden.
 
 ## 17. Seguridad
 
@@ -640,7 +641,7 @@ La PWA envía lotes de 1–20 posiciones. Todas las posiciones válidas se persi
 
 ### 25.9 Coordinación cross-module
 
-Solo cinco flujos pueden compartir transacción cross-module: quote→order, assignment→order event, proof/custody→transition, COD reconciliation→close y offer acceptance→assignment. Una prueba de arquitectura usa lista blanca y falla ante cualquier flujo adicional.
+Solo seis flujos pueden compartir transacción cross-module: quote→order, assignment→order event, proof/custody→transition, COD reconciliation→close, offer acceptance→assignment y route stop↔assignment.route_id (RTE-001-ROUTING-ASSIGNMENT-FLOW6-2026-10-20). Una prueba de arquitectura usa lista blanca y falla ante cualquier flujo adicional: `CrossSchemaWriteCatalogTests` cataloga cada escritura SQL de runtime en el esquema de otro módulo con su flujo o su ADR y falla ante cualquiera nueva, retirada o sin flujo.
 
 
 ## 26. Endurecimiento normativo v0.6

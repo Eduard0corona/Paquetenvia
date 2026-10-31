@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text.Json.Serialization;
+using Orders.Application.RecipientNotices;
 using Orders.Application.Tracking;
 using Orders.Endpoints;
 using Paqueteria.ContractTests.Support;
@@ -75,13 +76,21 @@ public sealed class PublicTrackingImplementationContractTests
             .Order(StringComparer.Ordinal)
             .ToArray();
         Assert.Equal(["Generation", "OrderId", "Token", "TokenId", "ValidUntil"], grantProperties);
+        // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-24 recipient_notices.tracking_link.derive, AI-08 NTF-005): the Worker's
+        // recipient notice link is the only other carrier of a token - derived in memory, checked against the stored
+        // hash, never stored or logged, and printed as [redacted].
         Assert.DoesNotContain(
             typeof(GetOrCreatePublicTrackingLinkCommand).Assembly.GetTypes(),
             type =>
                 type != typeof(PublicTrackingTokenGrant) &&
+                type != typeof(RecipientNoticeTrackingLink) &&
                 type.GetProperties().Any(property =>
                     property.Name == "Token" &&
                     property.PropertyType == typeof(string)));
+        Assert.Equal(
+            ["Token", "Url"],
+            typeof(RecipientNoticeTrackingLink).GetProperties().Select(property => property.Name).Order(StringComparer.Ordinal));
+        Assert.Equal("[redacted]", new RecipientNoticeTrackingLink("ntf005-token", "https://paquetenvia.test/track/ntf005-token").ToString());
     }
 
     private static void AssertJsonProperties<T>(params string[] expected)

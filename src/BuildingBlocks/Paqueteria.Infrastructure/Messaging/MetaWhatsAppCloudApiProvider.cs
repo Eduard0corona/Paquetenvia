@@ -10,9 +10,10 @@ namespace Paqueteria.Infrastructure.Messaging;
 
 /// <summary>
 /// GATE-004-CHANNELS WhatsApp adapter over the Meta WhatsApp Cloud API
-/// (<c>POST {BaseUri}/{ApiVersion}/{PhoneNumberId}/messages</c>, template messages only). Business-initiated
-/// messages must use an approved template, so free-form text is not offered. The Cloud API has no
-/// idempotency key: an ambiguous timeout retried by the outbox may deliver twice.
+/// (<c>POST {BaseUri}/{ApiVersion}/{PhoneNumberId}/messages</c>). Business-initiated messages use an approved template;
+/// the only free-form text is the fixed answer to an inbound message inside its 24-hour customer service window
+/// (<see cref="MessagingRequest.FreeFormText"/>, AI-08 NTF-006). The Cloud API has no idempotency key: an ambiguous
+/// timeout retried by the outbox may deliver twice.
 /// </summary>
 internal sealed class MetaWhatsAppCloudApiProvider(
     IHttpClientFactory httpClientFactory,
@@ -30,36 +31,22 @@ internal sealed class MetaWhatsAppCloudApiProvider(
 
     internal MessagingProviderGuard Guard => _guard;
 
-    // Meta error codes (https://developers.facebook.com/docs/whatsapp/cloud-api/support/error-codes).
-    private static readonly HashSet<long> TransientCodes =
-    [
-        1,      // API unknown
-        2,      // API service
-        4,      // API too many calls
-        80007,  // WABA rate limit
-        130429, // throughput rate limit
-        131000, // something went wrong
-        131016, // service unavailable
-        131048, // spam rate limit
-        131056, // business/consumer pair rate limit
-        131057, // account in maintenance mode
-        133004, // server temporarily unavailable
-    ];
-
-    private static readonly HashSet<long> ThrottleCodes = [4, 80007, 130429, 131048, 131056];
-
     public MessagingChannel Channel => MessagingChannel.WhatsApp;
 
     public async ValueTask<MessagingResult> SendAsync(MessagingRequest request, CancellationToken cancellationToken)
     {
         var channel = options.Value.WhatsApp;
         var meta = channel.MetaCloudApi;
-        if (!channel.Templates.TryGetValue(request.TemplateKey, out var template))
+        WhatsAppTemplateOptions? template = null;
+        if (request.FreeFormText is null && !channel.Templates.TryGetValue(request.TemplateKey, out template))
         {
             return Log(new(MessagingOutcome.PermanentFailure, MessagingResultCodes.TemplateNotConfigured), null);
         }
 
-        if (!MessagingHttp.AreParametersValid(request.Parameters, template.ParameterCount))
+        if ((template is null
+                ? !MessagingHttp.IsFreeFormTextValid(request)
+                : !MessagingHttp.AreParametersValid(request.Parameters, template.ParameterCount)) ||
+            !MessagingHttp.AreExtrasValid(request))
         {
             return Log(new(MessagingOutcome.PermanentFailure, MessagingResultCodes.TemplateParametersInvalid), null);
         }
@@ -74,9 +61,20 @@ internal sealed class MetaWhatsAppCloudApiProvider(
             ["messaging_product"] = "whatsapp",
             ["recipient_type"] = "individual",
             ["to"] = to,
-            ["type"] = "template",
-            ["template"] = BuildTemplate(template, request.Parameters),
         };
+        if (template is null)
+        {
+            // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-24 recipient_notices.auto_reply.how): a free-form text inside
+            // the customer service window the inbound message opened, without a link preview.
+            body["type"] = "text";
+            body["text"] = new JsonObject { ["preview_url"] = false, ["body"] = request.FreeFormText };
+        }
+        else
+        {
+            body["type"] = "template";
+            body["template"] = BuildTemplate(template, request);
+        }
+
         var uri = new Uri(
             $"{meta.BaseUri.TrimEnd('/')}/{Uri.EscapeDataString(meta.ApiVersion)}/{Uri.EscapeDataString(meta.PhoneNumberId)}/messages",
             UriKind.Absolute);
@@ -129,45 +127,70 @@ internal sealed class MetaWhatsAppCloudApiProvider(
             return MessagingHttp.ClassifyStatus(response.StatusCode, response.Headers, time);
         }
 
-        if (TransientCodes.Contains(code.Value))
+        if (MetaWhatsAppErrorCodes.IsTransient(code.Value))
         {
             return new(
                 MessagingOutcome.TransientFailure,
-                ThrottleCodes.Contains(code.Value) ? MessagingResultCodes.RateLimited : MessagingResultCodes.Unavailable,
+                MetaWhatsAppErrorCodes.Classify(code.Value),
                 RetryAfter: MessagingHttp.ReadRetryAfter(response.Headers, time));
         }
 
-        return code.Value switch
-        {
-            190 or 0 or 3 or 10 or (>= 200 and <= 299) => new(MessagingOutcome.PermanentFailure, MessagingResultCodes.AuthenticationFailed),
-            131026 or 131030 or 133010 => new(MessagingOutcome.PermanentFailure, MessagingResultCodes.RecipientUndeliverable),
-            131047 => new(MessagingOutcome.PermanentFailure, MessagingResultCodes.ReengagementRequired),
-            131008 or 131009 or (>= 132000 and <= 132999) => new(MessagingOutcome.PermanentFailure, MessagingResultCodes.ProviderTemplateRejected),
-            368 or 131031 or 131049 or 131050 => new(MessagingOutcome.PermanentFailure, MessagingResultCodes.PolicyBlocked),
-            _ when MessagingHttp.IsServerOrThrottle(response.StatusCode) => MessagingHttp.ClassifyStatus(response.StatusCode, response.Headers, time),
-            _ => new(MessagingOutcome.PermanentFailure, MessagingResultCodes.Rejected),
-        };
+        var classified = MetaWhatsAppErrorCodes.Classify(code.Value);
+        return classified == MessagingResultCodes.Rejected && MessagingHttp.IsServerOrThrottle(response.StatusCode)
+            ? MessagingHttp.ClassifyStatus(response.StatusCode, response.Headers, time)
+            : new(MessagingOutcome.PermanentFailure, classified);
     }
 
-    private static JsonObject BuildTemplate(WhatsAppTemplateOptions template, IReadOnlyList<string> parameters)
+    /// <summary>
+    /// The template object of a send: the body parameters and, for a recipient notice (AI-24
+    /// <c>recipient_notices.templates.whatsapp</c>, NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 L4 choice 9), the URL button
+    /// "Ver seguimiento" as the first button (index 0, its dynamic suffix) and the quick reply "No recibir avisos" as the
+    /// second (index 1, its payload). The approved template must declare the buttons in that order.
+    /// </summary>
+    internal static JsonObject BuildTemplate(WhatsAppTemplateOptions template, MessagingRequest request)
     {
         var result = new JsonObject
         {
             ["name"] = template.Name,
             ["language"] = new JsonObject { ["code"] = template.LanguageCode },
         };
-        if (parameters.Count > 0)
+        var components = new JsonArray();
+        if (request.Parameters.Count > 0)
         {
             var values = new JsonArray();
-            foreach (var parameter in parameters)
+            foreach (var parameter in request.Parameters)
             {
                 values.Add(new JsonObject { ["type"] = "text", ["text"] = parameter });
             }
 
-            result["components"] = new JsonArray
+            components.Add(new JsonObject { ["type"] = "body", ["parameters"] = values });
+        }
+
+        if (request.UrlButtonSuffix is { } suffix)
+        {
+            components.Add(new JsonObject
             {
-                new JsonObject { ["type"] = "body", ["parameters"] = values },
-            };
+                ["type"] = "button",
+                ["sub_type"] = "url",
+                ["index"] = "0",
+                ["parameters"] = new JsonArray { new JsonObject { ["type"] = "text", ["text"] = suffix } },
+            });
+        }
+
+        if (request.QuickReplyPayload is { } payload)
+        {
+            components.Add(new JsonObject
+            {
+                ["type"] = "button",
+                ["sub_type"] = "quick_reply",
+                ["index"] = "1",
+                ["parameters"] = new JsonArray { new JsonObject { ["type"] = "payload", ["payload"] = payload } },
+            });
+        }
+
+        if (components.Count > 0)
+        {
+            result["components"] = components;
         }
 
         return result;

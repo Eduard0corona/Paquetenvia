@@ -13,8 +13,8 @@ role model. Their mandatory hashes and order are declared in
 `database/migrations/v0.6-baseline.json`:
 
 ```text
-AI-06 3a491699ee7462ffd6071bcf2a1092d66654916ed2502bf474b9e4fac78b6754
-AI-18 ef05f7ce5e11a5b1fc8fb71d3ae0bb9d3f10074d7eb8e438c3a72c9493435580
+AI-06 b83ed5283e4fd03a4cf6afc958345fe45556fb42b2a79fc13c0fd973f8eed32f
+AI-18 9c9fd48b8c95457b9b9b26600c0db6fa75976060e904206414a721070fd281e4
 ```
 
 ## Migrator and commands
@@ -104,6 +104,12 @@ It accepts SCRAM-SHA-256 verifiers only, in `PAQUETERIA_API_LOGIN_VERIFIER`,
 plaintext password. On failure it
 reports only the stage and SQLSTATE (exit code 7). See
 `docs/operations/env-001-pilot/README.md`.
+
+TEN-003-PLATFORM-BOOTSTRAP-2026-10-19 adds `platform-bootstrap --connection-env NAME --identity-subject SUB
+--legal-name TEXT --display-name TEXT`. The owner runs it once, before the first sign-in, to create the PLATFORM
+organization and its PLATFORM_ADMIN through the TEN-003 provisioner. It writes as `paqueteria_migrator` under FORCE
+RLS, and refuses (exit 11, nothing written) once any PLATFORM organization or PLATFORM_ADMIN exists. See
+`docs/development/ten-003-platform-bootstrap.md`.
 
 AI-18 roles are NOLOGIN. Runtime cannot assume migrator, bootstrap, executor or
 maintenance, does not own objects, and cannot create in `public`. Bootstrap

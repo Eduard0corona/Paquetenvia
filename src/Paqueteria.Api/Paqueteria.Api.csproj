@@ -40,5 +40,7 @@
     <ProjectReference Include="..\Modules\Finance\Finance.Infrastructure\Finance.Infrastructure.csproj" />
     <ProjectReference Include="..\Modules\Routing\Routing.Endpoints\Routing.Endpoints.csproj" />
     <ProjectReference Include="..\Modules\Routing\Routing.Infrastructure\Routing.Infrastructure.csproj" />
+    <ProjectReference Include="..\Modules\Notifications\Notifications.Endpoints\Notifications.Endpoints.csproj" />
+    <ProjectReference Include="..\Modules\Notifications\Notifications.Infrastructure\Notifications.Infrastructure.csproj" />
   </ItemGroup>
 </Project>

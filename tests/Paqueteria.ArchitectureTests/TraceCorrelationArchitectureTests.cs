@@ -30,6 +30,10 @@ public sealed partial class TraceCorrelationArchitectureTests
                 "ProtectKeysWithAzureKeyVault through the resolver overload with DataProtectionKeyEncryptionKeyResolver",
             ["src/BuildingBlocks/Paqueteria.Infrastructure/Security/Pii/AzureKeyVaultPiiKeyWrapClient.cs"] =
                 "the key and cryptography clients, built with options through Configure, which ends in WithoutDistributedTracing",
+            ["src/BuildingBlocks/Paqueteria.Infrastructure/Security/Pii/RecipientNoticeKey.cs"] =
+                "the recipient-notice key client (NTF-002), a key client only, built with options through WithoutDistributedTracing",
+            ["src/BuildingBlocks/Paqueteria.Infrastructure/Security/Pii/RecipientNoticeKeyOpener.cs"] =
+                "the Worker's unwrap-only recipient-notice cryptography client (NTF-005), built with options through Configure, which ends in WithoutDistributedTracing",
             ["src/Modules/Custody/Custody.Infrastructure/ProofStorage/AzureBlobProofGateway.cs"] =
                 "the Blob service client, built with CreateClientOptions, which ends in WithoutDistributedTracing",
             ["src/Modules/Custody/Custody.Infrastructure/ProofStorage/AzureBlobProofObjectStorage.cs"] =
@@ -51,6 +55,9 @@ public sealed partial class TraceCorrelationArchitectureTests
             ["src/Modules/Custody/Custody.Infrastructure/Proofs/ProofValidationWorker.cs"] = "TraceCorrelation.StartPollCycle(",
             ["src/Modules/Notifications/Notifications.Infrastructure/Dispatching/NotificationsOutboxDispatcher.cs"] =
                 "TraceCorrelation.StartOutboxDispatchCycle(",
+            // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: the automatic-reply store is a poll, not an outbox lane.
+            ["src/Modules/Notifications/Notifications.Infrastructure/RecipientNotices/RecipientAutoReplies.cs"] =
+                "TraceCorrelation.StartPollCycle(",
             ["src/Modules/Dispatch/Dispatch.Infrastructure/Lifecycle/AssignmentLifecycleProcessor.cs"] =
                 "TraceCorrelation.StartOutboxDispatchCycle(",
             ["src/Modules/Realtime/Realtime.Infrastructure/Dispatching/RealtimeOutboxDispatchers.cs"] =

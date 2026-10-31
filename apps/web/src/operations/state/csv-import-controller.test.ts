@@ -136,6 +136,32 @@ describe("CSV import flow", () => {
     expect(commit.mock.calls[0][2]).not.toBe(commit.mock.calls[1][2]);
   });
 
+  it("passes the file's WhatsApp consent box to the commit, unticked by default (NTF-RECIPIENT-NOTICES-2026-10-20)", async () => {
+    const { controller, api } = await previewed({ [orgA]: "DISPATCHER" });
+    await controller.commit(true, true);
+    expect(vi.mocked(api.commit).mock.calls[0][4]).toBe(true);
+    const unticked = await previewed({ [orgA]: "DISPATCHER" });
+    await unticked.controller.commit(true);
+    expect(vi.mocked(unticked.api.commit).mock.calls[0][4]).toBe(false);
+  });
+
+  it("keeps the batch key for a retry with the same box and uses another key for the other answer", async () => {
+    const commit = vi
+      .fn<CsvImportApi["commit"]>()
+      .mockRejectedValueOnce(new TenantApiError("network"))
+      .mockRejectedValueOnce(new TenantApiError("network"))
+      .mockResolvedValueOnce({ kind: "committed", commit: parseCsvImportCommit(commitResponse()) });
+    const { controller } = await previewed({ [orgA]: "DISPATCHER" }, { commit });
+    await controller.commit(true, true);
+    await controller.commit(true, true);
+    await controller.commit(true, false);
+    const keys = commit.mock.calls.map((call) => call[2]);
+    expect(keys[0]).toBe(keys[1]);
+    // The server binds the box to the batch fingerprint (N3 choice 3): the other answer is another batch.
+    expect(keys[2]).not.toBe(keys[0]);
+    expect(commit.mock.calls.map((call) => call[4])).toEqual([true, true, false]);
+  });
+
   it("explains a reused batch key", async () => {
     const { controller } = await previewed(
       { [orgA]: "DISPATCHER" },

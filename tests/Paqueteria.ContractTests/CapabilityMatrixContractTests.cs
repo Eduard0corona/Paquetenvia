@@ -496,6 +496,37 @@ public sealed class CapabilityMatrixContractTests
             TenantCapabilities.GetMyDispatchContact.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
     }
 
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P8) and NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (AI-08 NTF-007): the panel and
+    /// "Detener avisos" follow the tracking_link_operations rule - DISPATCHER without MFA and PLATFORM_ADMIN with MFA, of
+    /// the owner organization only - so the server grants them exactly the grants of issueTrackingLink.
+    /// </summary>
+    [Fact]
+    public void Recipient_notice_operations_take_the_tracking_link_rule()
+    {
+        var decision = Matrix.Scalar("recipient_notice_operations_decision");
+        Assert.StartsWith("NTF-RECIPIENT-NOTICES-2026-10-20", decision, StringComparison.Ordinal);
+        Assert.Contains("\"Las tres vías", decision, StringComparison.Ordinal);
+        Assert.Contains("NTF-RECIPIENT-NOTICE-PANEL-2026-10-30", decision, StringComparison.Ordinal);
+        Assert.Contains("the tracking_link_operations rule", decision, StringComparison.Ordinal);
+        Assert.Contains("DISPATCHER members without", decision, StringComparison.Ordinal);
+        Assert.Contains("PLATFORM_ADMIN members with a satisfied MFA challenge", decision, StringComparison.Ordinal);
+        Assert.Contains("an order the selected organization only operates is the uniform 404", decision, StringComparison.Ordinal);
+        Assert.Equal(
+            ["listOrderRecipientNotices", "stopOrderRecipientNotices"],
+            OperationIds(Matrix.Mapping("recipient_notice_operations")).Order(StringComparer.Ordinal));
+        foreach (var capability in new[]
+                 {
+                     TenantCapabilities.ListOrderRecipientNotices, TenantCapabilities.StopOrderRecipientNotices,
+                 })
+        {
+            Assert.Same(capability, TenantCapabilities.All[capability.OperationId]);
+            Assert.Equal(
+                TenantCapabilities.IssueTrackingLink.Grants.Select(grant => (grant.Role, grant.RequiresMfa)),
+                capability.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        }
+    }
+
     [Fact]
     public void Every_capability_names_an_AI05_tenant_operation_that_declares_the_Forbidden_response()
     {
@@ -583,7 +614,7 @@ public sealed class CapabilityMatrixContractTests
                      "operations", "finance_operations", "platform_operations", "membership_operations",
                      "tracking_link_operations", "incident_operations", "assignable_driver_operations",
                      "operations_queue_operations", "driver_list_operations", "voice_call_operations",
-                     "own_membership_operations", "dispatch_contact_operations",
+                     "own_membership_operations", "dispatch_contact_operations", "recipient_notice_operations",
                  })
         {
             foreach (var (key, value) in Matrix.Mapping(section).Children)

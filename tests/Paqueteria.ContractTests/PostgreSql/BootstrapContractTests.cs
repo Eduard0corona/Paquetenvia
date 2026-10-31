@@ -48,27 +48,30 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
         // organizations.pending_memberships and MDM-001's platform.master_data_deployment_gate) plus the
         // INC-001 incident evidence table, the SCL-001 key ring and their migration history lanes, the
         // SET-001 Finance history lane, the platform evolution history lane of the 2026-09-27 pilot
-        // contract deltas, the Pricing lane's MDM-001 operator reference table and the Drivers lane's VOICE-001
-        // recipient call requests.
-        Assert.Equal(59, await ScalarAsync<int>("""
+        // contract deltas, the Pricing lane's MDM-001 operator reference table, the Drivers lane's VOICE-001
+        // recipient call requests, the Notifications lane's NTF-RECIPIENT-NOTICES-2026-10-20 opt-out store and AI-08 NTF-006
+        // automatic-reply store, and the Orders lane's AI-08 NTF-004 WhatsApp consent record.
+        Assert.Equal(62, await ScalarAsync<int>("""
             SELECT count(*)::integer
             FROM pg_class c
             JOIN pg_namespace n ON n.oid=c.relnamespace
             WHERE n.nspname = ANY(@schemas) AND c.relkind IN ('r','p')
             """, new NpgsqlParameter<string[]>("schemas", ExpectedSchemas.Where(name => name != "extensions").ToArray())));
 
-        // 41 tenant tables with a policy (organizations.pending_memberships and VOICE-001's
-        // drivers.recipient_call_requests included), the two pre-tenant BFF tables forced without any policy, and
-        // MDM-001's deployment marker and operator reference table, each forced with one policy that admits only
-        // paqueteria_migrator.
-        Assert.Equal(45, await ScalarAsync<int>("""
+        // 42 tenant tables with a policy (organizations.pending_memberships, VOICE-001's
+        // drivers.recipient_call_requests and NTF-004's orders.recipient_notice_consents included), the two pre-tenant BFF
+        // tables, the platform-wide
+        // NTF-RECIPIENT-NOTICES-2026-10-20 opt-out store and the AI-08 NTF-006 automatic-reply store forced without any
+        // policy, and MDM-001's deployment marker and operator reference table, each forced with one policy that admits
+        // only paqueteria_migrator.
+        Assert.Equal(48, await ScalarAsync<int>("""
             SELECT count(*)::integer
             FROM pg_class c
             JOIN pg_namespace n ON n.oid=c.relnamespace
             WHERE n.nspname = ANY(@schemas) AND c.relkind IN ('r','p')
               AND c.relrowsecurity AND c.relforcerowsecurity
             """, new NpgsqlParameter<string[]>("schemas", ExpectedSchemas)));
-        Assert.Equal(43, await ScalarAsync<int>("SELECT count(*)::integer FROM pg_policy"));
+        Assert.Equal(44, await ScalarAsync<int>("SELECT count(*)::integer FROM pg_policy"));
 
         var lifecycle = await QueryStringsAsync(
             "SELECT proname FROM pg_proc JOIN pg_namespace n ON n.oid=pronamespace WHERE n.nspname='security' AND proname=ANY(@names) ORDER BY proname",
@@ -84,8 +87,10 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
                 "order_events_append_only", "order_acceptances_append_only", "proofs_append_only", "audit_logs_append_only",
                 "outbox_content_immutable", "location_outbox_content_immutable",
                 "data_protection_keys_append_only",
+                // AI-08 NTF-004 (NTF-RECIPIENT-NOTICES-2026-10-20): the WhatsApp consent record.
+                "recipient_notice_consents_append_only",
             ]));
-        Assert.Equal(7, appendOnlyTriggers.Count);
+        Assert.Equal(8, appendOnlyTriggers.Count);
     }
 
     [PostgreSqlContractFact]
@@ -226,7 +231,8 @@ public sealed class BootstrapContractTests(PostgreSqlContractFixture fixture)
             SELECT count(*)::integer FROM information_schema.role_table_grants
             WHERE grantee='paqueteria_maintenance'
             """));
-        Assert.Equal(12, await ScalarAsync<int>("""
+        // NTF-RECIPIENT-NOTICES-2026-10-20: the outbox executor reads the opt-out store (security.is_recipient_opted_out).
+        Assert.Equal(13, await ScalarAsync<int>("""
             SELECT count(*)::integer FROM information_schema.role_table_grants
             WHERE grantee='paqueteria_outbox_executor'
             """));

@@ -170,6 +170,7 @@ public sealed class RealtimeDispatcherRolePostgreSqlContractTests(PostgreSqlCont
                  {
                      "paqueteria_worker", "paqueteria_app", "paqueteria_migrator", "paqueteria_bootstrap",
                      "paqueteria_outbox_executor", "paqueteria_maintenance", "paqueteria_auto_close_executor",
+                     "paqueteria_notification_receipt_executor",
                  })
         {
             await using var transaction = await connection.BeginTransactionAsync();

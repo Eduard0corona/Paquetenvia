@@ -155,6 +155,7 @@ routes:
     - proofs
     - incidents
     - price_audit
+    - recipient_notices
     # UI-PHASE2-DRIVER-PICKER-2026-10-05 (project owner, 2026-10-05): the dispatcher assigns an OWN driver from a
     # list, never by typing an id; the backend and RLS remain the barrier and REST is the source of truth.
     assignment_picker:
@@ -245,6 +246,82 @@ routes:
       - no description, evidence identifier, incident identifier or personal data
       recovery: refetched with the order; a failed read says the reason could not be read and never blocks
         "Siguiente paso"
+    # NTF-RECIPIENT-NOTICES-2026-10-20 (project owner, E4 "Los 4 del plan (Recommended)" and E4-P8 "Las tres vías
+    # (Recommended)"): built by AI-08 NTF-007, with the texts and behaviour of NTF-RECIPIENT-NOTICE-PANEL-2026-10-30
+    # (project owner, round T, T1 to T6). REST is the source of truth and the backend and RLS remain the barrier.
+    recipient_notices:
+      decision: NTF-RECIPIENT-NOTICES-2026-10-20 and NTF-RECIPIENT-NOTICE-PANEL-2026-10-30
+      status: DECIDED, implemented (AI-08 NTF-007)
+      title: Avisos al destinatario
+      sources:
+        list: GET /orders/{orderId}/recipient-notices (listOrderRecipientNotices)
+        stop: POST /orders/{orderId}/recipient-notices/stop (stopOrderRecipientNotices)
+      roles: [DISPATCHER, PLATFORM_ADMIN with MFA]
+      shown_when: the selected organization owns the order; an operator organization sees no panel
+      display:
+      - one row per notice and channel - the notice by its owner name ("Enlace de seguimiento", "Va en camino", "No se
+        pudo entregar" or "Entregado"), the channel (WhatsApp or correo), its status and, when it did not go out, why,
+        each in es-MX from one helper; times in America/Mazatlan
+      - whether WhatsApp is allowed for the order (the consent box was ticked) and whether the recipient has an e-mail
+      - never the phone, the e-mail, the link, a template parameter, an identifier or an internal code
+      - no scheduled time (T2 "Sin hora, con nota (Recommended)") - a pending notice reads "Pendiente" and the panel
+        always shows the fixed line of texts.quiet_hours
+      - an empty list reads texts.empty; a list that cannot be read reads texts.read_failure and is read again with the
+        order; a PLATFORM_ADMIN without MFA is offered the step-up back to the order
+      off: T4 "Panel con una línea (Recommended)" - while recipient notices are off (until the change that closes
+        GATE-004 and GATE-007) the panel still shows, always with the line of texts.not_active_yet and the button
+        available; that gate-closing change removes the line
+      stop: the button "Detener avisos" (E4-P8, for a recipient who asks by phone) asks for confirmation (ConfirmDialog)
+        saying that the recipient stops receiving notices from every organization - the T1 dialog of texts below - then
+        calls stopOrderRecipientNotices with one Idempotency-Key reused for a retry of the same press; the list is
+        fetched again after the answer; it is offered even when the order has no notice and no consent box, because the
+        opt-out is global (T6 choice 13)
+      after_stop: T3 "Mensaje y botón siempre (Recommended)" - the answer shows texts.stopped in memory only and the
+        button stays available; pressing it again changes nothing for the recipient; after a reload, each notice the
+        Worker cancelled reads "El destinatario pidió no recibir avisos." (the panel cannot know later whether that
+        recipient opted out, and pending notices are cancelled when their send comes, not at once); a failed stop reads
+        texts.stop_failure
+      realtime: a NotificationStatusChanged v2 notice for this order reloads the panel, gathered like the other order
+        notices of this screen (T6 choice 9 - 250 ms, then at most one read every 3 seconds; the panel is also read with
+        each read of the order and after a stop, and pauses with the whole screen during the dashboard's 429 wait); the
+        dashboard and the inbox do not listen to it
+      # NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (project owner, T1 "Así, como I4 (Recommended)", recording I4, and T5
+      # "Aprobar estos textos (Recommended)"): every text below comes from one helper with a test that pins it.
+      texts:
+        decision: NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (T1 "Así, como I4 (Recommended)", T2 "Sin hora, con nota
+          (Recommended)", T4 "Panel con una línea (Recommended)", T5 "Aprobar estos textos (Recommended)")
+        helper: apps/web/src/operations/contracts/recipient-notices.ts
+        title: "Avisos al destinatario"
+        not_active_yet: "Los avisos al destinatario todavía no están activos."
+        quiet_hours: "Los avisos solo salen de 8:00 a 21:00, hora de Mazatlán"
+        notices: TRACKING_LINK "Enlace de seguimiento", IN_TRANSIT "Va en camino", DELIVERY_FAILED "No se pudo
+          entregar", DELIVERED "Entregado"
+        channels: WHATSAPP "WhatsApp", EMAIL "Correo"
+        statuses: PENDING "Pendiente", SENT "Enviado" (the service accepted it), DELIVERED "Recibido" (it reached the
+          phone or the mailbox), FAILED "No se pudo enviar", CANCELLED "No se envió"
+        row: '"{aviso} · {WhatsApp|Correo} — {estado}", the America/Mazatlan time of the last change, "Intentos: N" only
+          when there was more than one, and the reason below'
+        reasons: 'shown only for FAILED and CANCELLED - RECIPIENT_OPTED_OUT "El destinatario pidió no recibir avisos.",
+          NOTICE_SUPERSEDED "Ya no aplicaba cuando tocaba enviarlo.", NOTICE_STALE "Pasó demasiado tiempo para
+          enviarlo.", NOTICE_LIMIT_REACHED "Se alcanzó el límite de avisos.", MESSAGING_CHANNEL_DISABLED "Los avisos por
+          este medio están apagados.", MESSAGING_RECIPIENT_INVALID "No se pudo usar el teléfono." (WhatsApp) or "No se
+          pudo usar el correo." (e-mail), MESSAGING_RECIPIENT_UNDELIVERABLE "No llegó: el número no recibe WhatsApp."
+          (WhatsApp) or "No llegó: el correo rebotó." (e-mail), MESSAGING_POLICY_BLOCKED "El servicio de mensajes lo
+          bloqueó.", TRACKING_LINK_UNAVAILABLE "No había enlace de seguimiento vigente.", AMBIGUOUS_TIMEOUT "No se sabe si
+          llegó; no se reintenta para no duplicarlo.", MAX_ATTEMPTS_EXHAUSTED "Falló después de varios intentos.", and
+          every other code or none "Falla del servicio de mensajes."'
+        retrying: '"Reintentando", under a PENDING notice that already met a temporary failure'
+        consent: '"WhatsApp: permitido (se marcó la casilla)" or "WhatsApp: no permitido (no se marcó la casilla)"'
+        email: '"Correo del destinatario: registrado" or "Correo del destinatario: no registrado"'
+        empty: "Esta orden todavía no tiene avisos."
+        stopped: '"Listo. Se detuvieron los avisos por WhatsApp y correo." ("Listo. Se detuvieron los avisos por
+          WhatsApp." without an e-mail; "Listo. Se detuvieron los avisos por correo." when only the e-mail could be
+          used) and "Los avisos pendientes ya no se enviarán."'
+        stop_failure: "No pudimos detener los avisos. Intenta de nuevo."
+        read_failure: "No fue posible leer los avisos."
+        dialog: 'T1 - title "¿Detener avisos?", text "Orden {guía}. El destinatario dejará de recibir avisos de todas las
+          empresas. Durante el piloto no se puede deshacer.", buttons "Cancelar" and "Detener avisos", focus starting on
+          "Cancelar" (ConfirmDialog)'
     # SEC-004 (owner answers Q9, Q11, Q14; panel_rate_limit holds the common rules): the order detail refreshes itself.
     rate_limit:
       decision: SEC-004-PANEL-SCREENS-2026-10-13
@@ -319,6 +396,32 @@ routes:
     - public
     release: MVP-0
     data_minimization: true
+  # NTF-RECIPIENT-NOTICES-2026-10-20 (project owner, E4-P8 "Las tres vías (Recommended)", "un enlace en cada correo"):
+  # the page the unsubscribe link of a recipient e-mail opens. Built by AI-08 NTF-006; its texts are
+  # NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (project owner, O9 "Aprobar estos textos (Recommended)").
+  /avisos/baja/:token:
+    roles:
+    - public
+    release: MVP-1
+    status: DECIDED, implemented (AI-08 NTF-006)
+    data_minimization: true
+    rules:
+    - opens with the heading "Seguimiento de envío" and names no brand, like public_tracking.branding (GATE-001)
+    - opening the page changes nothing; one button sends unsubscribeRecipientNotices once with the token of the link,
+      so a link scanner never unsubscribes anyone
+    - it never reads or shows the e-mail, the order, the organization or anything else; success, an invalid link, a
+      wait (429) and a failure each show one es-MX message, the texts below
+    - no session, no PWA manifest, no browser storage, not indexed
+    texts:
+      decision: NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (O9 "Aprobar estos textos (Recommended)")
+      heading: "Seguimiento de envío"
+      button: "Dejar de recibir correos"
+      success: "Listo. Ya no recibirás correos de avisos en esta dirección."
+      invalid_link: "Este enlace no es válido o ya no está disponible."
+      wait: "Demasiadas solicitudes. Espera N segundos e intenta de nuevo."
+      wait_rule: the common SEC-004 wait notice - N counts down from the Retry-After of the 429 in whole seconds ("1
+        segundo" at one) and the button stays disabled until it ends
+      failure: "No pudimos procesar tu solicitud. Intenta más tarde."
   /business/orders:
     roles:
     - business_admin
@@ -927,6 +1030,22 @@ screen_contracts:
       rule: the common message counts down in step 3; "Calcular precio" is disabled (aria-disabled, like the other
         wizard buttons) and re-enables itself; the draft stays and nothing is sent by itself; pressed again with the
         same shipment it sends the same Idempotency-Key, and a changed shipment gets a new one
+    # NTF-RECIPIENT-NOTICES-2026-10-20 (project owner, E4 "Los 4 del plan (Recommended)": "se agrega como campo
+    # opcional en la nueva orden"; E4-P1 "Casilla en la orden (Recommended)"): AI-08 NTF-002 built the e-mail field;
+    # AI-08 NTF-004 built the consent box (NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23).
+    recipient_notices:
+      decision: NTF-RECIPIENT-NOTICES-2026-10-20
+      status: DECIDED; email implemented (AI-08 NTF-002), consent implemented (AI-08 NTF-004)
+      email: step "Dónde", destination only - an optional field "Correo del destinatario (opcional)"; trimmed and
+        checked like createQuote before "Siguiente", with one es-MX message next to the field that never repeats the
+        value; sent as destination.email only when typed; never on the origin; kept in memory only like the rest of the
+        draft, restated only by the wizard summary and never logged; no screen shows it once the order exists (the API
+        never returns it)
+      consent: step "Confirmar" - an optional checkbox "El destinatario aceptó recibir avisos de su envío por
+        WhatsApp", unticked by default and never required to confirm; ticked, createOrder carries recipient_notices with
+        whatsapp_consent_attested true and the consent version NTF-RECIPIENT-WHATSAPP-CONSENT-V1, a constant of the web
+        (NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23, N3 choice 1); unticked, nothing is sent and the order gets no WhatsApp
+        notice (e-mail still, when there is one)
   driver_stop:
     offline_cache:
     - assigned stop minimum data
@@ -953,6 +1072,35 @@ screen_contracts:
     - contact name only - the full name at a pickup or a return, the short name at a delivery
       (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11)
     completion: cannot complete without required POD unless supervisor override ID
+    # DRV-PROOF-PHOTO-REDUCE-2026-10-20 (project owner, 2026-10-20, G2 "Reducir y quitar metadatos (Recommended)": "JPEG
+    # de máximo 1600 px por lado y calidad 80 % (unos 300-500 KB), sin metadatos. La evidencia guardada es esa foto
+    # reducida (su huella se calcula después). Caben unas 50 fotos sin señal. Se ve menos detalle al hacer zoom."): every
+    # proof photo of the driver app - pickup, delivery and the "Foto del lugar" of failed_delivery - is reduced on the
+    # phone before it is hashed and queued.
+    proof_photo:
+      decision: DRV-PROOF-PHOTO-REDUCE-2026-10-20
+      input: exactly one JPEG or PNG of at most 10 MiB from the camera input (capture="environment"), checked before it
+        is read
+      reduction: the phone decodes the photo in its visual orientation (createImageBitmap with imageOrientation
+        "from-image", or an <img> element where that option is missing) and re-encodes it through a canvas
+        (OffscreenCanvas or <canvas>) as image/jpeg at quality 0.8 with its longest side at most 1600 px - never
+        enlarged, aspect ratio kept, a transparent area white
+      metadata: none - the reduced JPEG keeps only the JFIF header, its tables, frame and scan; every APP1 to APP15
+        segment (EXIF with GPS, device and capture time, XMP, ICC profiles, Photoshop/IPTC), every comment and anything
+        after EOI are left out, also those the browser's own encoder writes (Chromium adds an ICC profile)
+      evidence: the reduced JPEG is the stored evidence - "Vista previa de la foto" shows it, and its exact bytes are
+        the ones hashed (SHA-256), queued, declared (content_type image/jpeg), uploaded, validated by the server (magic
+        bytes and the SHA-256 of those bytes) and kept; the file the driver picked is never kept, shown, hashed or sent
+      preparing: the step says "Preparando la foto…" until the preview opens
+      failure: when the phone cannot decode or re-encode the photo (format, damaged file, memory) the step shows "No se
+        pudo procesar la foto en el teléfono. Tómala de nuevo." as its alert, keeps nothing and waits for a new photo;
+        it never falls back to the picked file
+      limits: unchanged - 10 MiB per photo, 25 MiB of photos and 100 operations per partition; a reduced photo of a
+        12 MP camera is about 300-500 KB (the owner's estimate), so about 50 photos fit the queue without signal
+      server: unchanged - Custody accepts image/jpeg for PICKUP_PHOTO, DELIVERY_PHOTO and RETURN_PHOTO (SIGNATURE stays
+        image/png only), and the API still receives no photo bytes
+      queued_before: a photo an earlier version of the app already queued is sent as it was stored, with the SHA-256
+        it was queued with
     # UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11 (project owner, 2026-10-11, "Sí, como el diseño (Recommended)": "Solo
     # de sus paradas asignadas. Se borra del teléfono cuando la parada deja de estar asignada o al cerrar sesión. Con
     # datos de prueba hasta cerrar GATE-007."): what the driver sees of each assigned stop and how long the phone
@@ -1155,9 +1303,10 @@ screen_contracts:
       - '"Otro…" reveals ACCESS_RESTRICTED "Acceso restringido", PACKAGE_DAMAGED "Paquete dañado" and SECURITY_RISK
         "Riesgo de seguridad"'
       free_text: none; the server builds the description from the reason and derives the severity from it
-      photo: '"Foto del lugar (obligatoria)": exactly one JPEG or PNG of at most 10 MiB, shown in "Vista previa de la
-        foto" with "Repetir" and "Usar esta foto" like the delivery photo; the object URL is revoked on "Repetir", on
-        "Usar esta foto" and when the step closes; nothing is stored before "Enviar reporte"'
+      photo: '"Foto del lugar (obligatoria)": exactly one JPEG or PNG of at most 10 MiB, reduced on the phone like the
+        delivery photo (proof_photo, DRV-PROOF-PHOTO-REDUCE-2026-10-20) and shown in "Vista previa de la foto" with
+        "Repetir" and "Usar esta foto" like it; the object URL is revoked on "Repetir", on "Usar esta foto" and when the
+        step closes; nothing is stored before "Enviar reporte"'
       submit: '"Enviar reporte" stays disabled until a reason and the photo are chosen; it asks no confirmation, like
         "Confirmar entrega"'
       requests:
@@ -1422,6 +1571,18 @@ screen_contracts:
       rule: the common message counts down; "Previsualizar" and "Confirmar" are both disabled and re-enable
         themselves; the file, the report and the prohibited-goods tick stay and nothing is sent by itself; a commit
         pressed again sends the same batch Idempotency-Key (the 429 came before the handler)
+    # NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P1 "Casilla en la orden (Recommended)"): built by AI-08 NTF-004
+    # (NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23).
+    recipient_notices:
+      decision: NTF-RECIPIENT-NOTICES-2026-10-20
+      status: DECIDED, implemented (AI-08 NTF-004)
+      consent: an optional checkbox before "Confirmar", unticked by default, that attests the approved consent text for
+        the recipient of every row of the file; ticked, the commit sends recipient_whatsapp_consent_attested true and the
+        consent version; unticked, nothing is sent and those orders get no WhatsApp notice; a new file clears it
+      wording: 'NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 (project owner, N2 "Mismo texto y una nota (Recommended)") - the
+        box reads exactly the AI-24 consent text "El destinatario aceptó recibir avisos de su envío por WhatsApp", version
+        NTF-RECIPIENT-WHATSAPP-CONSENT-V1, identical to "Nueva orden", with this fixed note below it: "Aplica a todas las
+        filas de este archivo. Márcala solo si cada destinatario lo aceptó."'
   incident_desk:
     release: MVP-1
     route: /ops/incidents

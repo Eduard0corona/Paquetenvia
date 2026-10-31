@@ -1,10 +1,11 @@
 // ENV-001 pilot (PILOT-REAL-PEOPLE), stage 5 of 5: OBS-002 alerts, action group and workbook, and the SCL-007
-// PostgreSQL connection alerts.
+// PostgreSQL connection and resource alerts.
 // The OBS-002 alerts and the workbook read the Container Apps console and system logs that platform.bicep already
 // sends to Log Analytics. The queries use only the OBS-002 structured events (fixed lane, job and outcome
 // names, status classes and counts; see docs/development/obs-002-pilot-observability.md), so no alert,
-// notification or workbook ever shows a payload, token, tenant or personal datum. The SCL-007 alerts read one
-// platform metric of the PostgreSQL server, a connection count.
+// notification or workbook ever shows a payload, token, tenant or personal datum. The SCL-007 alerts read five
+// platform metrics of the PostgreSQL server: the connection count, CPU, memory and storage percent, and the CPU credits
+// left.
 targetScope = 'resourceGroup'
 
 param location string = resourceGroup().location
@@ -31,6 +32,13 @@ param http5xxPercentThreshold int = 5
 @minValue(1)
 param readinessEventThreshold int = 3
 
+// OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20: the server the SCL-007 alerts watch. The workflow passes the postgresName
+// output of platform.bicep, so the alerts follow PILOT_POSTGRES_SERVER_NAME; the default is the same as platform.bicep's.
+@description('PostgreSQL flexible server the SCL-007 alerts watch (the postgresName output of platform.bicep).')
+@minLength(3)
+@maxLength(63)
+param postgresServerName string = 'pg-pv-pilot-${uniqueString(subscription().id, resourceGroup().id)}'
+
 var suffix = uniqueString(subscription().id, resourceGroup().id)
 var tags = {
   project: 'Paquetenvia'
@@ -44,8 +52,9 @@ var tags = {
 // 2026-09-28): PT15M 0.55, PT10M 1.10, PT5M 1.65 USD per month. Five rules, all at PT15M = 2.75 USD per
 // month (OBS-002-ALERTS-15MIN-COST-2026-10-02: readiness also every 15 minutes, window 15 minutes). The workbook is free and the first 1,000 alert e-mails per month are free.
 // Metric alerts are billed per monitored time series, whatever the frequency
-// (azure.microsoft.com/en-us/pricing/details/monitor): the two SCL-007 rules are 2 series, inside the 10 free,
-// otherwise about 0.10 USD per series per month (SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14).
+// (azure.microsoft.com/en-us/pricing/details/monitor): the six SCL-007 rules are 6 series, inside the 10 free per
+// resource, otherwise about 0.10 USD per series per month (SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14: the two
+// connection rules; SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20: the four resource rules).
 
 // Event ids in the queries: 4601 OutboxLaneSummary, 4602 ScheduledJobCycle, 4603 HttpStatusSummary
 // (Paqueteria.Infrastructure.Observability.TelemetryEvents) and 4004 OutboxRetentionLaneCompleted (OPS-004).
@@ -55,9 +64,9 @@ resource logAnalytics 'Microsoft.OperationalInsights/workspaces@2025-02-01' exis
   name: 'law-pv-pilot-${suffix}'
 }
 
-// platform.bicep (stage 2) creates the server; the SCL-007 connection alerts watch it.
+// platform.bicep (stage 2) creates or adopts the server; the SCL-007 connection and resource alerts watch it.
 resource postgres 'Microsoft.DBforPostgreSQL/flexibleServers@2024-08-01' existing = {
-  name: 'pg-pv-pilot-${suffix}'
+  name: postgresServerName
 }
 
 resource actionGroup 'Microsoft.Insights/actionGroups@2023-01-01' = {
@@ -309,6 +318,168 @@ resource postgresConnectionsCritical 'Microsoft.Insights/metricAlerts@2018-03-01
   }
 }
 
+// ---------------------------------------------------------------- SCL-007 PostgreSQL resources (metric alerts)
+// SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20 (owner: "CPU, memoria y disco (Recommended)", "Un nivel, de aviso
+// (Recommended)", "CPU 70, memoria 80, disco 70 (Recommended)", "Sí, agregarla (Recommended)" and "Menos de 72 (25 %)
+// (Recommended)"). Four rules with one level each, the warning (severity 2, as the connection warning), on the same
+// server, stateful and through the same action group as the connection alerts. Metrics of
+// Microsoft.DBforPostgreSQL/flexibleServers (learn.microsoft.com azure-monitor/reference/supported-metrics/
+// microsoft-dbforpostgresql-flexibleservers-metrics), each sampled every minute (PT1M), aggregations Average, Maximum
+// and Minimum:
+// - cpu_percent (Percent): the Average over 30 minutes at 70 or more, AI-15 db_cpu_utilization (warning 0.7, window
+//   30m; docs/normative/v0.6/specs/AI-15_SCALABILITY_CONTRACT.yaml);
+// - memory_percent (Percent): the Maximum over 5 minutes at 80 or more;
+// - storage_percent (Percent): the Maximum over 5 minutes at 70 or more, 22.4 of the 32 GiB set in platform.bicep, so it
+//   fires before autogrow doubles the disk at 80 % and before the server turns read-only at 95 % or under 5 GiB free;
+//   after an autogrow the same 70 % is of the larger disk;
+// - cpu_credits_remaining (Count, dimension LogicalServerName): the Minimum over 5 minutes at 72 or fewer, 25 % of the
+//   288 credits a B1ms banks at most (12 per hour; the Bv1-series VM page, to be confirmed on the real server).
+// Evaluated every minute. No dimension filter: each rule watches the one server, one time series. Thresholds are
+// literal on purpose (guard P21 pins them), so observability.parameters.json cannot change them.
+resource postgresCpuWarning 'Microsoft.Insights/metricAlerts@2018-03-01' = {
+  name: 'mar-pv-pilot-pg-cpu-warning'
+  location: 'global'
+  tags: tags
+  properties: {
+    description: 'SCL-007: the pilot PostgreSQL server averaged 70 % CPU or more over the last 30 minutes.'
+    severity: 2
+    enabled: true
+    scopes: [
+      postgres.id
+    ]
+    evaluationFrequency: 'PT1M'
+    windowSize: 'PT30M'
+    autoMitigate: true
+    criteria: {
+      'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
+      allOf: [
+        {
+          criterionType: 'StaticThresholdCriterion'
+          name: 'cpu-percent'
+          metricNamespace: 'Microsoft.DBforPostgreSQL/flexibleServers'
+          metricName: 'cpu_percent'
+          timeAggregation: 'Average'
+          operator: 'GreaterThanOrEqual'
+          threshold: 70
+        }
+      ]
+    }
+    actions: [
+      {
+        actionGroupId: actionGroup.id
+      }
+    ]
+  }
+}
+
+resource postgresMemoryWarning 'Microsoft.Insights/metricAlerts@2018-03-01' = {
+  name: 'mar-pv-pilot-pg-memory-warning'
+  location: 'global'
+  tags: tags
+  properties: {
+    description: 'SCL-007: the pilot PostgreSQL server reached 80 % memory in the last 5 minutes.'
+    severity: 2
+    enabled: true
+    scopes: [
+      postgres.id
+    ]
+    evaluationFrequency: 'PT1M'
+    windowSize: 'PT5M'
+    autoMitigate: true
+    criteria: {
+      'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
+      allOf: [
+        {
+          criterionType: 'StaticThresholdCriterion'
+          name: 'memory-percent'
+          metricNamespace: 'Microsoft.DBforPostgreSQL/flexibleServers'
+          metricName: 'memory_percent'
+          timeAggregation: 'Maximum'
+          operator: 'GreaterThanOrEqual'
+          threshold: 80
+        }
+      ]
+    }
+    actions: [
+      {
+        actionGroupId: actionGroup.id
+      }
+    ]
+  }
+}
+
+resource postgresStorageWarning 'Microsoft.Insights/metricAlerts@2018-03-01' = {
+  name: 'mar-pv-pilot-pg-storage-warning'
+  location: 'global'
+  tags: tags
+  properties: {
+    description: 'SCL-007: the pilot PostgreSQL server reached 70 % storage in the last 5 minutes (22.4 of 32 GiB; autogrow at 80 %, read-only at 95 %).'
+    severity: 2
+    enabled: true
+    scopes: [
+      postgres.id
+    ]
+    evaluationFrequency: 'PT1M'
+    windowSize: 'PT5M'
+    autoMitigate: true
+    criteria: {
+      'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
+      allOf: [
+        {
+          criterionType: 'StaticThresholdCriterion'
+          name: 'storage-percent'
+          metricNamespace: 'Microsoft.DBforPostgreSQL/flexibleServers'
+          metricName: 'storage_percent'
+          timeAggregation: 'Maximum'
+          operator: 'GreaterThanOrEqual'
+          threshold: 70
+        }
+      ]
+    }
+    actions: [
+      {
+        actionGroupId: actionGroup.id
+      }
+    ]
+  }
+}
+
+resource postgresCpuCreditsWarning 'Microsoft.Insights/metricAlerts@2018-03-01' = {
+  name: 'mar-pv-pilot-pg-cpu-credits-warning'
+  location: 'global'
+  tags: tags
+  properties: {
+    description: 'SCL-007: the pilot PostgreSQL server had 72 CPU credits or fewer in the last 5 minutes (25 % of the 288 a B1ms banks).'
+    severity: 2
+    enabled: true
+    scopes: [
+      postgres.id
+    ]
+    evaluationFrequency: 'PT1M'
+    windowSize: 'PT5M'
+    autoMitigate: true
+    criteria: {
+      'odata.type': 'Microsoft.Azure.Monitor.SingleResourceMultipleMetricCriteria'
+      allOf: [
+        {
+          criterionType: 'StaticThresholdCriterion'
+          name: 'cpu-credits-remaining'
+          metricNamespace: 'Microsoft.DBforPostgreSQL/flexibleServers'
+          metricName: 'cpu_credits_remaining'
+          timeAggregation: 'Minimum'
+          operator: 'LessThanOrEqual'
+          threshold: 72
+        }
+      ]
+    }
+    actions: [
+      {
+        actionGroupId: actionGroup.id
+      }
+    ]
+  }
+}
+
 // ---------------------------------------------------------------- workbook (free)
 var workbookQueries = {
   httpByStatusClass: '''
@@ -444,4 +615,10 @@ output workbookName string = workbook.name
 output connectionAlertNames array = [
   postgresConnectionsWarning.name
   postgresConnectionsCritical.name
+]
+output resourceAlertNames array = [
+  postgresCpuWarning.name
+  postgresMemoryWarning.name
+  postgresStorageWarning.name
+  postgresCpuCreditsWarning.name
 ]

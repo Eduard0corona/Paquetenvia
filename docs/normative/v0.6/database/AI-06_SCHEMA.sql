@@ -225,6 +225,29 @@ CREATE TABLE locations.locations (
 );
 CREATE INDEX locations_point_gix ON locations.locations USING gist(point);
 CREATE INDEX locations_owner_city_idx ON locations.locations(owner_org_id,city_id);
+-- NTF-RECIPIENT-NOTICES-2026-10-20 (project owner: E4 "Los 4 del plan (Recommended)"; E4-P2 "Llave propia para avisos
+-- (Recommended)"; E4-P17 "Dos copias, como el teléfono (Recommended)"; docs/adr/ADR-NTF-002-RECIPIENT-NOTICES.md; AI-24
+-- recipient_notices.contact). Installed by AI-08 NTF-002: the Locations lane step 20261020000100_AddRecipientNoticeContact
+-- runs this same DDL on installations whose baseline predates it and adopts it here (OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13
+-- precedent); the baseline assertions check the four columns and the two checks.
+--   email_ciphertext bytea: the optional delivery recipient e-mail, sealed with the ADP-001 envelope under the PII key
+--     and the row pii_key_version (purpose locations.email).
+--   notice_phone_ciphertext bytea, notice_email_ciphertext bytea and notice_key_version text: copies of the destination
+--     phone and e-mail sealed with the same envelope format under the dedicated recipient-notice key (purposes
+--     locations.notice_phone and locations.notice_email, bound to owner organization, row and purpose); the only
+--     contact values the Worker can open. The API only wraps with that key and never opens a copy.
+--   Checks: notice_key_version is present exactly when a notice copy is present; notice_email_ciphertext implies
+--     email_ciphertext. Only destination locations carry an e-mail or a notice copy; none is ever returned, logged,
+--     audited or published. Rows never change after the quote, so erasing a location erases every copy (GATE-007).
+ALTER TABLE locations.locations
+  ADD COLUMN email_ciphertext bytea,
+  ADD COLUMN notice_phone_ciphertext bytea,
+  ADD COLUMN notice_email_ciphertext bytea,
+  ADD COLUMN notice_key_version text,
+  ADD CONSTRAINT locations_notice_key_version_check
+    CHECK ((notice_key_version IS NULL) = (notice_phone_ciphertext IS NULL AND notice_email_ciphertext IS NULL)),
+  ADD CONSTRAINT locations_notice_email_check
+    CHECK (notice_email_ciphertext IS NULL OR email_ciphertext IS NOT NULL);
 
 -- Clients and allies ------------------------------------------------------------
 CREATE TABLE clients.client_accounts (
@@ -357,6 +380,15 @@ CREATE INDEX orders_city_status_idx ON orders.orders(city_id,status,created_at D
 CREATE INDEX orders_claim_window_idx ON orders.orders(claim_window_ends_at) WHERE status='CLOSED' AND finalized_at IS NULL;
 -- AI06-PILOT-INDEXES: recency scans by last change.
 CREATE INDEX orders_updated_at_idx ON orders.orders(updated_at);
+-- DP-INDEXES-ORDERS-DISPATCH-2026-10-20: the operations dashboard's price-review filter (an order that has not finished
+-- and is below its minimum snapshot or carries an authorized financial override), newest change first. The predicate
+-- repeats the reader's text exactly, so the planner can prove it; the index holds only those orders, never history.
+CREATE INDEX orders_price_review_idx ON orders.orders(updated_at DESC,id DESC) WHERE status NOT IN ('DELIVERED','RETURNED','CLAIM_RESOLVED','CLOSED','CANCELLED') AND (COALESCE(total_cents < minimum_total_cents_snapshot,false) OR COALESCE(financial_override ?& ARRAY['actor_id','reason','valid_until'],false));
+-- DP-INDEXES-ORDERS-DISPATCH-2026-10-20 (I1): the order list without an owner, public_id or COD-pending filter is read
+-- in two parts, newest first: the orders an organization of app.current_org_ids owns, and the ones it only operates
+-- (their owner is not in app.current_org_ids). Each part walks its index in list order; RLS still filters every row.
+CREATE INDEX orders_owner_created_idx ON orders.orders(owner_org_id,created_at DESC,id DESC);
+CREATE INDEX orders_operator_created_idx ON orders.orders(operator_org_id,created_at DESC,id DESC) WHERE operator_org_id IS NOT NULL;
 
 CREATE TABLE orders.package_items (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -388,6 +420,9 @@ CREATE TABLE orders.order_events (
 );
 CREATE INDEX order_events_tenant_order_time_idx ON orders.order_events(owner_org_id,order_id,occurred_at);
 CREATE INDEX order_events_operator_time_idx ON orders.order_events(operator_org_id,occurred_at) WHERE operator_org_id IS NOT NULL;
+-- DP-INDEXES-ORDERS-DISPATCH-2026-10-20: one actor's status changes in a time range (the driver's completed_today
+-- count reads one day of its own changes, not the tenant's history).
+CREATE INDEX order_events_actor_status_time_idx ON orders.order_events(actor_id,occurred_at) WHERE actor_id IS NOT NULL AND event_type='ORDER_STATUS_CHANGED';
 
 -- TRK-002-AUTO-LINK: a link is derived as HMAC-SHA256(key, "paquetenvia-trk-v1|key_version|order_id|generation")
 -- and only the SHA-256 of the token is stored. generation starts at 1 and a revoked generation is never derived
@@ -542,6 +577,10 @@ CREATE UNIQUE INDEX one_active_assignment_per_order ON dispatch.assignments(orde
 -- AI06-PILOT-INDEXES: driver workload and route membership lookups.
 CREATE INDEX assignments_driver_idx ON dispatch.assignments(driver_id);
 CREATE INDEX assignments_route_idx ON dispatch.assignments(route_id) WHERE route_id IS NOT NULL;
+-- DP-INDEXES-ORDERS-DISPATCH-2026-10-20: a driver's open assignments (stops, fleet list and assignment picker) without
+-- the driver's history, and one order's assignment to one driver in any status (completed_today).
+CREATE INDEX assignments_driver_open_idx ON dispatch.assignments(driver_id) WHERE status IN ('ACCEPTED','ACTIVE');
+CREATE INDEX assignments_order_driver_idx ON dispatch.assignments(order_id,driver_id);
 
 -- Custody and incidents ---------------------------------------------------------
 CREATE TABLE custody.proof_upload_sessions (
@@ -654,6 +693,118 @@ CREATE TABLE notifications.notifications (
   created_at timestamptz NOT NULL DEFAULT now(),
   sent_at timestamptz
 );
+-- NTF-RECIPIENT-NOTICES-2026-10-20 (AI-24 recipient_notices). This table, notifications.notification_templates and
+-- notifications.notification_status_events evolve in the Notifications lane (NTF-001 step
+-- 20260815000100_AddTenantSafeOutboxNotifications) and stay lane-owned. Installed by the Notifications lane step
+-- 20261020000100_AddRecipientNoticeLane of AI-08 NTF-003, which holds the DDL (Up, Down and Up again tested on PostgreSQL;
+-- its Down refuses while an ORDER_DESTINATION Notification, a DELIVERED or CANCELLED status, a provider reference, an
+-- opt-out, an active orders.recipient-notice-requested row or an active v2 status-changed row exists, and otherwise
+-- restores the published shape):
+--   notification_templates: notification_templates_channel_check is channel IN_APP, WHATSAPP or EMAIL; body is nullable
+--     and notification_templates_catalog_check closes the catalog per template key - orders.created.operations on IN_APP
+--     with its body and the variables occurred_at, order_public_id and order_status; recipient.tracking-link,
+--     recipient.in-transit, recipient.delivery-failed and recipient.delivered on WHATSAPP or EMAIL with no body (WhatsApp
+--     text lives in WhatsApp Manager, e-mail text in configuration) and order_public_id as the only variable; one
+--     immutable row per organization, key, version 1 and channel, provisioned by notifications.provision_default_templates
+--     like orders.created.operations (the step adds them for every organization that holds that template).
+--   notifications: recipient_kind text NOT NULL DEFAULT 'OWNER_ORG_USER' (notifications_recipient_kind_check:
+--     OWNER_ORG_USER or ORDER_DESTINATION); order_event_id uuid; delivered_at timestamptz; recipient_user_id nullable.
+--     notifications_recipient_shape_check: an OWNER_ORG_USER row is IN_APP with its recipient_user_id and no
+--     order_event_id; an ORDER_DESTINATION row is WHATSAPP or EMAIL with order_id and order_event_id, no recipient_user_id
+--     and recipient_ciphertext and pii_key_version NULL (the recipient is the destination location of order_id, read when
+--     the notice is sent). notifications_owner_user_status_check keeps IN_APP at PENDING, SENT or FAILED;
+--     notifications_delivered_at_check ties delivered_at to DELIVERED; notifications_provider_reference_check admits a
+--     provider reference (1 to 256 of A-Z a-z 0-9 . _ : = + / -) only on a recipient notice. Unique indexes
+--     notifications_order_destination_uq (owner_org_id, order_event_id, channel, template_key WHERE recipient_kind is
+--     ORDER_DESTINATION) and notifications_provider_reference_uq (channel, provider_reference WHERE it is present). The
+--     CHECKs above already admit WHATSAPP, EMAIL, DELIVERED and CANCELLED.
+--   notification_status_events: notification_status_events_status_check is PENDING, SENT, DELIVERED, FAILED or
+--     CANCELLED.
+--   notifications.recipient_opt_outs: one platform-wide, append-only store of keyed hashes (trigger
+--     recipient_opt_outs_append_only) with ENABLE and FORCE ROW LEVEL SECURITY and no policy, reached only through the
+--     SECURITY DEFINER functions AI-18 declares (no privilege for paqueteria_app or paqueteria_worker; SELECT for
+--     paqueteria_outbox_executor); columns contact_hash bytea of exactly 32 bytes (HMAC-SHA256 under the contact lookup
+--     key over paquetenvia-contact-v1, the channel and the normalized phone or e-mail), channel WHATSAPP or EMAIL,
+--     key_version integer 1 to 32767 (as EmailLookup:Keys), source RECIPIENT_REPLY (WhatsApp only), EMAIL_LINK (e-mail
+--     only) or DISPATCHER, recorded_at; primary key (contact_hash, channel); never a number, an address, a message body
+--     or an organization. Its writer is security.record_recipient_opt_out (AI-08 NTF-006, recipient notices step 3 of
+--     AI-18): a contact already opted out on the channel under any configured key version is not recorded again.
+-- NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (project owner: O7 "Aprobar lo propuesto (Recommended)" and O11 "Aprobarlas
+-- todas (Recommended)", choice 10; AI-24 recipient_notices.auto_reply). Installed by the Notifications lane step
+-- 20261029000100_AddRecipientNoticeReceipts of AI-08 NTF-006, which holds the DDL (Up, Down and Up again tested on
+-- PostgreSQL; its Down refuses while any request exists and otherwise drops only the store and the step's functions).
+--   automatic replies (AI-08 NTF-006, E4-P9 and E4-P15): a platform-wide store with the same row security and
+--     definer-only access as the opt-out store (AI-18 recipient notices step 3), holding per request only its kind
+--     (automatic reply or opt-out confirmation), the sender contact hash and its contact lookup key version, the sender
+--     number sealed under the recipient-notice key with its key version, bound to a fixed platform identifier and the
+--     request id (never an organization), until the one reply attempt (then erased, whatever the outcome),
+--     received_at, the reply status, its lease (lease_token, lease_expires_at, available_at), attempts, its code and
+--     settled_at; never a number in clear, a message body or an organization. At most one automatic reply per contact
+--     hash in 24 hours, and one opt-out confirmation only for the message that records the WhatsApp opt-out of its
+--     hash, outside that limit. A request older than 23 hours is dropped. Settled rows are purged later by a
+--     maintenance function (not in this step).
+--   CREATE TABLE notifications.recipient_auto_replies (
+--     id uuid NOT NULL,
+--     kind text NOT NULL,
+--     contact_hash bytea NOT NULL,
+--     contact_key_version integer NOT NULL,
+--     sealed_number bytea,
+--     number_key_version text,
+--     received_at timestamptz NOT NULL,
+--     status text NOT NULL,
+--     attempts integer NOT NULL,
+--     available_at timestamptz NOT NULL,
+--     lease_token uuid,
+--     lease_expires_at timestamptz,
+--     last_code text,
+--     settled_at timestamptz,
+--     CONSTRAINT recipient_auto_replies_pkey PRIMARY KEY (id),
+--     CONSTRAINT recipient_auto_replies_kind_check CHECK (kind IN ('AUTO_REPLY','OPT_OUT_CONFIRMATION')),
+--     CONSTRAINT recipient_auto_replies_hash_check CHECK (octet_length(contact_hash)=32),
+--     CONSTRAINT recipient_auto_replies_key_version_check CHECK (contact_key_version BETWEEN 1 AND 32767),
+--     CONSTRAINT recipient_auto_replies_status_check CHECK (status IN ('PENDING','PROCESSING','SENT','FAILED','DROPPED')),
+--     CONSTRAINT recipient_auto_replies_number_check CHECK ((status IN ('PENDING','PROCESSING'))=(sealed_number IS NOT NULL) AND (sealed_number IS NULL)=(number_key_version IS NULL)),
+--     CONSTRAINT recipient_auto_replies_lease_check CHECK ((status='PROCESSING')=(lease_token IS NOT NULL) AND (lease_token IS NULL)=(lease_expires_at IS NULL)),
+--     CONSTRAINT recipient_auto_replies_settled_check CHECK ((status IN ('SENT','FAILED','DROPPED'))=(settled_at IS NOT NULL)),
+--     CONSTRAINT recipient_auto_replies_attempts_check CHECK (attempts BETWEEN 0 AND 1)
+--   );
+--   CREATE UNIQUE INDEX recipient_auto_replies_confirmation_uq ON notifications.recipient_auto_replies(contact_hash) WHERE kind='OPT_OUT_CONFIRMATION';
+--   CREATE INDEX recipient_auto_replies_contact_idx ON notifications.recipient_auto_replies(contact_hash,received_at) WHERE kind='AUTO_REPLY';
+--   CREATE INDEX recipient_auto_replies_pending_idx ON notifications.recipient_auto_replies(available_at) WHERE status='PENDING';
+--   ALTER TABLE notifications.recipient_auto_replies ENABLE ROW LEVEL SECURITY;
+--   ALTER TABLE notifications.recipient_auto_replies FORCE ROW LEVEL SECURITY;
+--   REVOKE ALL ON notifications.recipient_auto_replies FROM PUBLIC,paqueteria_app,paqueteria_worker;
+-- NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 (project owner: L1 "Función de conteo (Recommended)" and L2 "Toda la plataforma
+-- (Recommended)"; AI-24 recipient_notices.caps). Installed by the Notifications lane step
+-- 20261023000100_AddRecipientNoticeCounts of AI-08 NTF-005, which holds the DDL (Up, Down and Up again tested on
+-- PostgreSQL; its Down drops only what it adds). Two partial indexes on recipient notices serve the read-only count
+-- function security.read_recipient_notice_counts that AI-18 declares (per order and channel, and per channel and
+-- America/Mazatlan day of the last attempt for the whole platform); no table, column or constraint changes:
+--   CREATE INDEX notifications_recipient_order_channel_idx ON notifications.notifications(owner_org_id,order_id,channel) WHERE recipient_kind='ORDER_DESTINATION';
+--   CREATE INDEX notifications_recipient_attempt_day_idx ON notifications.notifications(channel,last_attempt_at) WHERE recipient_kind='ORDER_DESTINATION' AND attempts>0;
+-- The WhatsApp consent record (E4-P1, AI-08 NTF-004) belongs to the Orders lane: orders.recipient_notice_consents,
+-- append-only, row security by owner_org_id, with order_id, owner_org_id, channel WHATSAPP, consent_version,
+-- attested_by and attested_at; at most one row per order and channel, written in the transaction that creates the order.
+-- NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 (project owner: N3 "Aprobarlas todas (Recommended)", choice 2; AI-24
+-- recipient_notices.consent.record). Installed by the Orders lane step 20261023000200_AddRecipientNoticeConsents of AI-08
+-- NTF-004, which holds the DDL (Up, Down and Up again tested on PostgreSQL; its Down refuses while any consent exists and
+-- otherwise drops only the table): channel WHATSAPP only, consent version NTF-RECIPIENT-WHATSAPP-CONSENT-V1 only,
+-- attested_by the creating actor and attested_at the server time; no phone, e-mail or name. AI-18 recipient notices step 2
+-- declares its privileges.
+--   CREATE TABLE orders.recipient_notice_consents (
+--     order_id uuid NOT NULL REFERENCES orders.orders(id),
+--     owner_org_id uuid NOT NULL REFERENCES organizations.organizations(id),
+--     channel text NOT NULL CONSTRAINT recipient_notice_consents_channel_check CHECK (channel='WHATSAPP'),
+--     consent_version text NOT NULL CONSTRAINT recipient_notice_consents_version_check CHECK (consent_version='NTF-RECIPIENT-WHATSAPP-CONSENT-V1'),
+--     attested_by uuid NOT NULL REFERENCES identity.users(id),
+--     attested_at timestamptz NOT NULL,
+--     CONSTRAINT recipient_notice_consents_pkey PRIMARY KEY (order_id,channel)
+--   );
+--   ALTER TABLE orders.recipient_notice_consents ENABLE ROW LEVEL SECURITY;
+--   ALTER TABLE orders.recipient_notice_consents FORCE ROW LEVEL SECURITY;
+--   CREATE POLICY recipient_notice_consents_tenant ON orders.recipient_notice_consents USING (security.app_allowed_org(owner_org_id)) WITH CHECK (security.app_allowed_org(owner_org_id));
+--   CREATE TRIGGER recipient_notice_consents_append_only BEFORE UPDATE OR DELETE ON orders.recipient_notice_consents
+--     FOR EACH ROW EXECUTE FUNCTION platform.reject_runtime_mutation();
 
 CREATE TABLE reporting.report_exports (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),

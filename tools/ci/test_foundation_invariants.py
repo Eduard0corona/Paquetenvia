@@ -112,6 +112,7 @@ class FoundationInvariantTests(unittest.TestCase):
         self.assertIn("Validate canonical contracts", names)
         self.assertIn("Build and lint Bicep templates (AZR-001 §28.1, offline)", names)
         self.assertIn("Run AZR-001 §28 static guards", names)
+        self.assertIn("Build and smoke-test the deploy images (no push)", names)
         self.assertTrue(any(name.startswith("Secret scan (AZR-001 §29") for name in names))
 
     def test_ci_tooling_tests_run_inside_normative(self):

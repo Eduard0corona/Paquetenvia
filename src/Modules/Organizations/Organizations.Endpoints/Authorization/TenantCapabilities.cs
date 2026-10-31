@@ -47,6 +47,14 @@ public static class TenantCapabilities
     public static readonly TenantCapability IssueTrackingLink =
         Create("issueTrackingLink", Dispatcher, PlatformAdminMfa);
 
+    // x-capability-matrix recipient_notice_operations (NTF-RECIPIENT-NOTICES-2026-10-20, E4-P8; AI-08 NTF-007): the
+    // tracking_link_operations rule - DISPATCHER without MFA and PLATFORM_ADMIN with a satisfied MFA challenge, of the
+    // organization that owns the order only (the services answer the uniform 404 for any other order).
+    public static readonly TenantCapability ListOrderRecipientNotices =
+        Create("listOrderRecipientNotices", Dispatcher, PlatformAdminMfa);
+    public static readonly TenantCapability StopOrderRecipientNotices =
+        Create("stopOrderRecipientNotices", Dispatcher, PlatformAdminMfa);
+
     // D5-CAPABILITY-MATRIX: a DRIVER (OWN or EXTERNAL) sees only its own stops and offers.
     public static readonly TenantCapability ListMyStops = Create("listMyStops", Driver);
     public static readonly TenantCapability ListMyEligibleExternalOffers =

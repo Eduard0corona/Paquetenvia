@@ -68,15 +68,26 @@ internal abstract class SyntheticMessagingProvider : IMessagingChannelProvider
     public ValueTask<MessagingResult> SendAsync(MessagingRequest request, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        var (configured, parameterCount) = ReadTemplate(request.TemplateKey);
-        if (!configured)
+        if (request.FreeFormText is not null)
         {
-            return Result(MessagingOutcome.PermanentFailure, MessagingResultCodes.TemplateNotConfigured);
+            // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: a fixed free-form answer needs no configured template.
+            if (!MessagingHttp.IsFreeFormTextValid(request) || !MessagingHttp.AreExtrasValid(request))
+            {
+                return Result(MessagingOutcome.PermanentFailure, MessagingResultCodes.TemplateParametersInvalid);
+            }
         }
-
-        if (!MessagingHttp.AreParametersValid(request.Parameters, parameterCount))
+        else
         {
-            return Result(MessagingOutcome.PermanentFailure, MessagingResultCodes.TemplateParametersInvalid);
+            var (configured, parameterCount) = ReadTemplate(request.TemplateKey);
+            if (!configured)
+            {
+                return Result(MessagingOutcome.PermanentFailure, MessagingResultCodes.TemplateNotConfigured);
+            }
+
+            if (!MessagingHttp.AreParametersValid(request.Parameters, parameterCount) || !MessagingHttp.AreExtrasValid(request))
+            {
+                return Result(MessagingOutcome.PermanentFailure, MessagingResultCodes.TemplateParametersInvalid);
+            }
         }
 
         var recipientValid = Channel == MessagingChannel.WhatsApp

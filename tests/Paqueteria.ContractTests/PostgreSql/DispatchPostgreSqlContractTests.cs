@@ -274,7 +274,8 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
                         snapshot.DriverId,
                         scenario.CityId,
                         area,
-                        new Drivers.Application.Eligibility.DriverCapacityRequirement(1, 500, 500, 100, 80, 60),
+                        new Drivers.Application.Eligibility.DriverCapacityRequirement(
+                            1, 500, 500, [new Drivers.Application.Eligibility.PackageSides(100, 80, 60)]),
                         OccurredAt);
                     var single = await reader.ReadAsync(
                         tenant.Connection, tenant.Transaction, command, default);
@@ -497,7 +498,8 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
                 P("order", scenario.OrderId));
 
             var reader = new PostgreSqlDispatchDriverEligibilityReader();
-            var capacity = new Drivers.Application.Eligibility.DriverCapacityRequirement(1, 500, 500, 100, 80, 60);
+            var capacity = new Drivers.Application.Eligibility.DriverCapacityRequirement(
+                1, 500, 500, [new Drivers.Application.Eligibility.PackageSides(100, 80, 60)]);
             await using (var tenant = await TenantTransaction.BeginAsync(
                 fixture.AppDataSource, "paqueteria_app", scenario.DispatcherUserId, [operatorId]))
             {
@@ -572,7 +574,8 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
                 driverId,
                 scenario.CityId,
                 null,
-                new Drivers.Application.Eligibility.DriverCapacityRequirement(1, 500, 500, 100, 80, 60),
+                new Drivers.Application.Eligibility.DriverCapacityRequirement(
+                    1, 500, 500, [new Drivers.Application.Eligibility.PackageSides(100, 80, 60)]),
                 OccurredAt),
             default);
         var batch = await reader.ReadExternalCandidatesAsync(
@@ -594,7 +597,8 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
                 driverId,
                 scenario.CityId,
                 null,
-                new Drivers.Application.Eligibility.DriverCapacityRequirement(1, 500, 500, 100, 80, 60),
+                new Drivers.Application.Eligibility.DriverCapacityRequirement(
+                    1, 500, 500, [new Drivers.Application.Eligibility.PackageSides(100, 80, 60)]),
                 OccurredAt),
             single,
             EligibilityOptions().ToPolicy());
@@ -1158,10 +1162,10 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
         await using var reader = await security.ExecuteReaderAsync();
         Assert.True(await reader.ReadAsync());
         // DSP-OPERATOR-OWNER-OUTBOX-DEFINER-2026-10-03: the adoption is followed by the operator outbox executor lane,
-        // then by the OBS-003-OUTBOX-TRACE-CONTEXT step.
+        // then by the OBS-003-OUTBOX-TRACE-CONTEXT step and the DP-INDEXES-ORDERS-DISPATCH-2026-10-20 read indexes.
         Assert.Equal(
             "20260723_AdoptCanonicalDispatchAssignmentsBaseline," + AddOperatorOwnerOutboxExecutor.MigrationId + "," +
-            AddOutboxTraceContext.MigrationId,
+            AddOutboxTraceContext.MigrationId + "," + AddAssignmentReadIndexes.MigrationId,
             reader.GetString(0));
         Assert.Equal("paqueteria_migrator", reader.GetString(1));
         Assert.True(reader.GetBoolean(2));

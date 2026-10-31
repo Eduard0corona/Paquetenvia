@@ -23,6 +23,7 @@ public sealed class PostgreSqlLocationService(
     TenantTransactionContext<LocationsDbContext> transactionContext,
     IGeocodingProvider geocodingProvider,
     ILocationPiiProtector piiProtector,
+    ILocationNoticeContactSealer noticeContactSealer,
     IAppendOnlyAuditWriter auditWriter,
     IClock clock) : ILocationService, IServiceabilityEvaluator, IQuoteLocationResolver
 {
@@ -171,14 +172,29 @@ public sealed class PostgreSqlLocationService(
 
         // ADP-001: the quote path uses the same server-selected key version as location creation
         // (it previously pinned a synthetic label) and protects before the transaction opens.
+        // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002): only a destination carries the optional e-mail, sealed
+        // under the PII key with the other values of the row.
         var protectedPii = await ProtectBeforeTransactionAsync(
             new LocationPiiValues(
                 command.OrganizationId,
                 locationId,
                 LocationAddressText.Compose(command.AddressText, command.References),
                 command.ContactName,
-                command.Phone),
+                command.Phone,
+                command.Email),
             cancellationToken);
+
+        // E4-P2 ("Llave propia para avisos"): a destination also gets copies of its phone and e-mail under the
+        // recipient-notice key, sealed before the transaction opens like the PII. An origin never gets one.
+        var noticeContact = command.Role == QuoteLocationRole.Destination
+            ? await SealNoticeContactBeforeTransactionAsync(
+                new LocationNoticeContactValues(
+                    command.OrganizationId,
+                    locationId,
+                    MexicanPhonePolicy.TryNormalize(command.Phone, out var noticePhone) ? noticePhone : command.Phone,
+                    command.Email),
+                cancellationToken)
+            : null;
 
         try
         {
@@ -246,13 +262,18 @@ public sealed class PostgreSqlLocationService(
                         protectedPii.ContactNameCiphertext,
                         protectedPii.PhoneCiphertext,
                         protectedPii.KeyVersion,
-                        clock.UtcNow);
+                        clock.UtcNow,
+                        protectedPii.EmailCiphertext,
+                        noticeContact?.PhoneCiphertext,
+                        noticeContact?.EmailCiphertext,
+                        noticeContact?.KeyVersion);
 
                     dbContext.Locations.Add(entity);
                     await dbContext.SaveChangesAsync(token);
 
                     var connection = (NpgsqlConnection)dbContext.Database.GetDbConnection();
                     var transaction = (NpgsqlTransaction)dbContext.Database.CurrentTransaction!.GetDbTransaction();
+                    // The audit entry names the row only: never the e-mail, a notice copy or whether either exists.
                     await auditWriter.WriteAsync(
                         connection,
                         transaction,
@@ -590,12 +611,53 @@ public sealed class PostgreSqlLocationService(
         }
 
         if (protectedPii is not { AddressTextCiphertext.Length: > 0 } ||
-            string.IsNullOrWhiteSpace(protectedPii.KeyVersion))
+            string.IsNullOrWhiteSpace(protectedPii.KeyVersion) ||
+            (values.Email is null) != (protectedPii.EmailCiphertext is null) ||
+            protectedPii.EmailCiphertext is { Length: 0 })
         {
             throw new LocationPiiProtectionUnavailableException();
         }
 
         return protectedPii;
+    }
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20 (E4-P2): the notice copies of a destination, or <see langword="null"/> when no
+    /// recipient-notice key is configured. A configured sealer that fails, or returns a partial result, ends in 503 with
+    /// nothing written, exactly like the PII protector.
+    /// </summary>
+    private async Task<SealedLocationNoticeContact?> SealNoticeContactBeforeTransactionAsync(
+        LocationNoticeContactValues values,
+        CancellationToken cancellationToken)
+    {
+        SealedLocationNoticeContact? sealedContact;
+        try
+        {
+            sealedContact = await noticeContactSealer.SealAsync(values, cancellationToken);
+        }
+        catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+        {
+            throw;
+        }
+        catch (LocationPiiProtectionUnavailableException)
+        {
+            throw;
+        }
+        catch (Exception exception)
+        {
+            throw new LocationPiiProtectionUnavailableException(exception);
+        }
+
+        if (sealedContact is not null &&
+            (string.IsNullOrWhiteSpace(sealedContact.KeyVersion) ||
+             sealedContact.PhoneCiphertext is not { Length: > 0 } ||
+             (values.Email is null) != (sealedContact.EmailCiphertext is null) ||
+             sealedContact.EmailCiphertext is { Length: 0 }))
+        {
+            throw new LocationPiiProtectionUnavailableException();
+        }
+
+        return sealedContact;
     }
 
     private static LocationResult ToResult(DomainLocation location) => new(
@@ -648,6 +710,9 @@ public sealed class PostgreSqlLocationService(
             string.IsNullOrWhiteSpace(command.ContactName) ||
             !MexicanPhonePolicy.IsValid(command.Phone) ||
             command.References?.Length > 500 ||
+            // NTF-RECIPIENT-NOTICES-2026-10-20: only a destination accepts an e-mail, and only a normalized one.
+            (command.Email is not null &&
+             (command.Role != QuoteLocationRole.Destination || !RecipientEmailPolicy.IsNormalized(command.Email))) ||
             command.Lat is < -90 or > 90 || command.Lng is < -180 or > 180 ||
             double.IsNaN(command.Lat) || double.IsNaN(command.Lng) ||
             double.IsInfinity(command.Lat) || double.IsInfinity(command.Lng))

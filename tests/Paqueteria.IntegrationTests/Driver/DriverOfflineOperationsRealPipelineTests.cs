@@ -21,19 +21,15 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
     PostgreSqlSecurityWebApplicationFactory database,
     CorsCapableS3Fixture storage)
 {
-    private static readonly byte[] SyntheticPng =
-        [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a];
-    private static readonly byte[] SyntheticJpeg =
-        [0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46];
-
     [Fact]
     [Trait("Category", "DriverOfflineOperationsPwa")]
     public async Task Real_postgres_s3_api_worker_and_browser_complete_the_offline_chain()
     {
         var assignment = await database.CreateDriverAudienceOutboxScenarioAsync(
             available: false);
-        var nextPort = DriverStopsNextServer.ReservePort();
-        var nextOrigin = $"http://127.0.0.1:{nextPort}";
+        // The API and the bucket allow the web origin before next starts; the lease keeps its port until the test ends.
+        using var nextPort = LoopbackPortLease.Acquire();
+        var nextOrigin = $"http://127.0.0.1:{nextPort.Port}";
         // The deployable artifact requires an HTTPS API origin and HTTPS signed
         // upload URLs. The API listens on loopback TLS; the storage container
         // speaks plain HTTP, so browser uploads are presigned for a loopback
@@ -134,12 +130,13 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
                         AriaRole.Button,
                         new() { Name = "Llegué al destino" })
                     .ClickAsync();
+                // DRV-PROOF-PHOTO-REDUCE-2026-10-20: the synthetic EXIF GPS camera JPEG; the pickup is a PNG.
                 await EnqueueProofAsync(
                     page,
                     "Confirmar entrega",
                     "delivery-real-synthetic.jpg",
                     "image/jpeg",
-                    SyntheticJpeg);
+                    ProofPhotoEvidence.ExifGpsJpeg());
                 await WaitForOperationCountAsync(page, 5);
                 await WaitForProofCountAsync(page, 2);
                 var beforeReload = await ReadOperationIdentityAsync(page);
@@ -202,6 +199,31 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
             Assert.All(
                 evidence.ClientCaptureTimes,
                 timestamp => Assert.Equal(TimeSpan.Zero, timestamp.Offset));
+
+            // DRV-PROOF-PHOTO-REDUCE-2026-10-20: the Worker accepted both photos as image/jpeg (magic bytes and the
+            // SHA-256 of the exact bytes) and the kept objects are the reduced JPEGs without metadata, byte for byte
+            // what custody.proofs describes: the PNG pickup as a 1x1 JPEG, the EXIF GPS delivery as 800x1600.
+            Assert.Equal(["PICKUP_PHOTO", "DELIVERY_PHOTO"], evidence.ProofTypes);
+            Assert.Equal(["image/jpeg", "image/jpeg"], evidence.ContentTypes);
+            using var objects = storage.CreateClient();
+            var shapes = new List<(int Width, int Height)>();
+            for (var index = 0; index < evidence.ObjectKeys.Count; index++)
+            {
+                using var stored = await objects.GetObjectAsync(
+                    new GetObjectRequest
+                    {
+                        BucketName = CorsCapableS3Fixture.Bucket,
+                        Key = evidence.ObjectKeys[index],
+                    });
+                using var content = new MemoryStream();
+                await stored.ResponseStream.CopyToAsync(content);
+                var bytes = content.ToArray();
+                Assert.Equal(evidence.SizeBytes[index], bytes.LongLength);
+                Assert.Equal(evidence.Sha256[index], System.Security.Cryptography.SHA256.HashData(bytes));
+                var header = ProofPhotoEvidence.AssertReducedJpeg(bytes);
+                shapes.Add((header.Width, header.Height));
+            }
+            Assert.Equal([(1, 1), (800, 1600)], shapes);
 
             var apiOrigin = apiAddress.GetLeftPart(UriPartial.Authority);
             var successfulPreflights = responses
@@ -292,7 +314,12 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
                 SELECT p.captured_at
                 FROM custody.proofs p
                 WHERE p.order_id=o.id
-                ORDER BY p.captured_at)
+                ORDER BY p.captured_at),
+              ARRAY(SELECT p.proof_type FROM custody.proofs p WHERE p.order_id=o.id ORDER BY p.captured_at),
+              ARRAY(SELECT p.content_type FROM custody.proofs p WHERE p.order_id=o.id ORDER BY p.captured_at),
+              ARRAY(SELECT p.object_key FROM custody.proofs p WHERE p.order_id=o.id ORDER BY p.captured_at),
+              ARRAY(SELECT p.size_bytes FROM custody.proofs p WHERE p.order_id=o.id ORDER BY p.captured_at),
+              ARRAY(SELECT p.sha256 FROM custody.proofs p WHERE p.order_id=o.id ORDER BY p.captured_at)
             FROM orders.orders o
             WHERE o.id=@order_id
             """,
@@ -309,7 +336,12 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
             reader.GetInt32(4),
             reader.GetInt32(5),
             reader.GetFieldValue<string[]>(6),
-            reader.GetFieldValue<DateTimeOffset[]>(7));
+            reader.GetFieldValue<DateTimeOffset[]>(7),
+            reader.GetFieldValue<string[]>(8),
+            reader.GetFieldValue<string[]>(9),
+            reader.GetFieldValue<string[]>(10),
+            reader.GetFieldValue<long[]>(11),
+            reader.GetFieldValue<byte[][]>(12));
     }
 
     private static async Task ProcessProofsUntilCancelledAsync(
@@ -378,7 +410,7 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
             {
                 Name = fileName,
                 MimeType = mimeType,
-                Buffer = bytes ?? SyntheticPng,
+                Buffer = bytes ?? ProofPhotoEvidence.TealPixelPng,
             });
         await page.GetByRole(
                 AriaRole.Heading,
@@ -682,7 +714,12 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
         int IdempotencyRows,
         int DuplicateIdempotencyRows,
         IReadOnlyList<string> TargetStatuses,
-        IReadOnlyList<DateTimeOffset> ClientCaptureTimes);
+        IReadOnlyList<DateTimeOffset> ClientCaptureTimes,
+        IReadOnlyList<string> ProofTypes,
+        IReadOnlyList<string> ContentTypes,
+        IReadOnlyList<string> ObjectKeys,
+        IReadOnlyList<long> SizeBytes,
+        IReadOnlyList<byte[]> Sha256);
 
     private sealed record BrowserRequestObservation(
         string Method,

@@ -19,6 +19,7 @@ import { orderDetailRateLimit, useOperationsOrderDetail } from "../state/use-ope
 import { OperationsDriverAssignment } from "./operations-driver-assignment";
 import { OperationsFailedAttempt } from "./operations-failed-attempt";
 import { OperationsNextStep } from "./operations-next-step";
+import { OperationsRecipientNotices } from "./operations-recipient-notices";
 import { OperationsTrackingLink } from "./operations-tracking-link";
 
 export function OperationsOrderDetailShell({
@@ -172,6 +173,15 @@ export function OperationsOrderDetailShell({
       <OperationsTrackingLink
         orderId={order.id}
         ownerOrganizationId={order.owner_org_id}
+      />
+
+      <OperationsRecipientNotices
+        orderId={order.id}
+        publicId={order.public_id}
+        ownerOrganizationId={order.owner_org_id}
+        revision={state.noticesRevision}
+        paused={waiting}
+        onStopped={state.reloadNotices}
       />
 
       <section aria-labelledby="actions-title">

@@ -32,6 +32,8 @@ Convenciones:
 | SHA no certificado 13/13 por Foundation CI en `main`, o workflow no lanzado desde `main` | `azr001_static_guards.py deploy-gate` | Antes de tocar Azure | 7 |
 | Variables del environment faltantes o con formato inválido | Paso "Validate inputs and environment variables" (job `deploy`) | Antes del login en Azure | 3 |
 | `PILOT_GATE_007_DECISION` / `PILOT_GATE_012_DECISION` sin una fila válida en `decision-log.md` | `env001_pilot_guards.py gate-decision` | Antes del login en Azure | 0.1 y 3 |
+| `PILOT_POSTGRES_SERVER_NAME` con un nombre inválido | `env001_pilot_guards.py postgres-server-name` | Antes del login en Azure | 3 y 7.7 |
+| `PILOT_POSTGRES_SERVER_NAME` con un servidor que no existe o que la plantilla no puede tomar | Paso "Check the PostgreSQL server to adopt" | Tras el login, antes de tocar nada | 7.7 |
 | Grupo de recursos inexistente o fuera de `mexicocentral` | Paso "Verify subscription, resource group and region" | Tras el login | 1 |
 | Rol custom `Paquetenvia Pilot Blob Tag Reader` inexistente | Paso "Prepare platform parameters" | Tras Stage 1 | 2.4 |
 | Faltan en Key Vault `authcenter-paquetenvia-client-secret`, `google-maps-api-key`, `public-tracking-link-key` o `paquetenvia-telemetry-pseudonym-key-1` | Paso de secretos de la ventana 2 | Tras Stage 2 (la bóveda ya existe) | 5 |
@@ -67,26 +69,58 @@ empresa, iniciando con `piloto-2026-10-v1`), quitó `Dispatch__AssignmentPolicyV
 `Drivers__Eligibility__PolicyVersion` del archivo, las versiones viven en cada organización y el guard
 rechaza esos nombres si reaparecen.
 
-**Lo que sí tienes que hacer aquí antes del primer deploy: las reglas de elegibilidad de repartidores.** La
-API corre con `Drivers__Provider=PostgreSql` y `Routing__Provider=PostgreSql` y no arranca sin ellas. Hoy el
-archivo solo tiene `Finance__OperationalTimeZone`, así que `settings-check` se detiene con
-`STOP_FOR_OWNER_DECISION: driver eligibility rules for vehicle type <TIPO> are missing: ...` y nombra cada
-valor que falta. Para cada tipo de vehículo (`MOTORCYCLE`, `CAR`, `VAN`, `BICYCLE`, `WALKER`) agrega:
+**Reglas de elegibilidad de repartidores: ya están en el archivo** (tu decisión del 20 de octubre: G4 "Sí,
+propónmelos (Recommended)", H2 "Aprobar la tabla (Recommended)" y H3 "Aprobar la lista (Recommended)";
+`GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20`). La API corre con `Drivers__Provider=PostgreSql` y
+`Routing__Provider=PostgreSql` y no arranca sin ellas; con el archivo actual arranca y `settings-check` imprime
+`ENV001_SETTINGS=PASS`. Los límites son por pedido:
+
+| Tipo | Paquetes | Peso total | Paquete más pesado | Largo × ancho × alto | Medidas obligatorias | Documentos |
+|---|---|---|---|---|---|---|
+| `MOTORCYCLE` (moto) | 5 | 20 kg | 10 kg | 40 × 40 × 35 cm | no | INE (`IDENTITY`), licencia, tarjeta de circulación y seguro |
+| `CAR` (auto) | 10 | 100 kg | 20 kg | 90 × 80 × 60 cm | no | INE, licencia, tarjeta de circulación y seguro |
+| `VAN` (van) | 20 | 400 kg | 20 kg | 200 × 120 × 120 cm | no | INE, licencia, tarjeta de circulación y seguro |
+| `BICYCLE` (bici) | 3 | 10 kg | 10 kg | 45 × 40 × 30 cm | no | INE |
+| `WALKER` (a pie) | 2 | 5 kg | 5 kg | 45 × 40 × 30 cm | no | INE |
+
+- **La API arranca, pero todavía no se puede asignar a ningún repartidor real.** Hoy nada registra ni valida
+  documentos de repartidor (el API los define en `/driver/me/documents`, pero no está implementado; solo los datos
+  sintéticos tienen). Hasta que lleguen la tarea DRV-DOC-001 de AI-08 (registro de documentos y validación por
+  despacho, tu decisión H1) y GATE-007, cada repartidor recibe `REQUIRED_DOCUMENT_MISSING`.
+- **Pickup cuenta como `VAN` y bici de carga como `BICYCLE`** (H2); no hay otros tipos de vehículo.
+- **Para operación: los límites se aplican a cada pedido.** Cada pedido se compara solo, con todos sus paquetes;
+  nadie suma los pedidos que ya lleva un repartidor ni los de una ruta. Despacho decide cuántos pedidos lleva cada
+  quien. La cotización no revisa ningún vehículo: un pedido más grande que la fila `VAN` se crea, pero nadie lo puede
+  tomar.
+- Todos los documentos llevan fecha de vencimiento (no hay `NonExpiringDocumentTypes`); a una licencia permanente de
+  Sinaloa se le pone una fecha de revisión que tú definas. Sin antecedentes penales (`BACKGROUND_CHECK`) por ahora
+  (se decide con GATE-007 y GATE-008).
+- Los números de paquetes de moto, auto, bici y a pie, y el peso y tamaño a pie, son supuestos sin fuente; se ajustan
+  después con la operación real. El seguro es política tuya (GATE-009 sigue abierto); si contratas una póliza de
+  flotilla se quita.
+- GATE-010 sigue abierto (zonas, horarios, artículos prohibidos, SLA); esto solo cubre las reglas por vehículo.
+
+Si después cambias un valor, es otra decisión y un PR al mismo archivo. El guard sigue deteniendo el deploy si
+falta alguna regla, con `STOP_FOR_OWNER_DECISION: driver eligibility rules for vehicle type <TIPO> are missing: ...`
+y el nombre de cada valor que falta. El formato, para cada tipo de vehículo (`MOTORCYCLE`, `CAR`, `VAN`, `BICYCLE`,
+`WALKER`):
 
 - **Documentos:** `Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TIPO>__0`, `__1`, …: al menos
   uno, cada uno de `IDENTITY`, `DRIVER_LICENSE`, `VEHICLE_CARD`, `INSURANCE`, `BACKGROUND_CHECK` u `OTHER`.
 - **Capacidad:** `Drivers__Eligibility__VehicleCapacity__<TIPO>__MaximumPackageCount`,
   `__MaximumTotalWeightGrams`, `__MaximumSinglePackageWeightGrams` (no mayor que el total),
   `__MaximumLengthMillimeters`, `__MaximumWidthMillimeters` y `__MaximumHeightMillimeters`: enteros mayores
-  que cero, solo dígitos.
+  que cero, solo dígitos. El orden de largo, ancho y alto no importa: antes de comparar, el sistema ordena de
+  mayor a menor los tres límites y las tres medidas de cada paquete, así que despacho puede capturarlas en
+  cualquier orden.
 - **Opcionales:** `Drivers__Eligibility__VehicleCapacity__<TIPO>__RequireDimensions` (`true` rechaza paquetes
   sin medidas; `false` si no lo pones) y `Drivers__Eligibility__NonExpiringDocumentTypes__<n>` (documentos que
   no vencen; los demás necesitan una fecha de vencimiento vigente).
 
 No hay valores por defecto: son reglas de negocio tuyas y el repo no las inventa. Van por PR → `development`
-→ `main` como cualquier cambio del archivo (README §4, "Driver eligibility rules"). Sin este alto, el primer
-deploy fallaría solo en el smoke test (`/auth/session is not served by the API`), y en los siguientes la
-revisión anterior seguiría sirviendo.
+→ `main` como cualquier cambio del archivo (README §4, "Driver eligibility rules"). Sin este alto, un deploy
+fallaría solo después de Stage 4, en la comprobación de revisiones (la revisión nueva de la API nunca queda lista,
+README §6.1 paso 5), con la revisión anterior, si la hay, todavía sirviendo.
 
 > **Versiones de términos y aviso de privacidad (bloquea el deploy):** `PAQUETERIA_TERMS_VERSION` y
 > `PAQUETERIA_PRIVACY_VERSION` del contenedor web ya están cableados en `apps.bicep`. Sus valores van en
@@ -268,9 +302,12 @@ En la misma pantalla del environment → *Environment variables → Add variable
 | `PILOT_TRACKING_SUPPORT_URL` | No | URL `https://` de soporte en el tracking público. **Déjala vacía mientras siga abierto GATE-001** (por defecto no hay enlace y la compilación rechaza un enlace con la marca) | `^https://[A-Za-z0-9./_-]+$` |
 | `PILOT_GATE_012_DECISION` | Sí | `GATE-012-PILOT-SCOPE` | fila válida en `decision-log.md` |
 | `PILOT_GATE_007_DECISION` | Sí | `<ID_FILA_GATE-007>` (ver 0.1; hoy no existe) | fila válida en `decision-log.md`; `GATE-007-PRIVACY-DRAFT` se rechaza |
+| `PILOT_POSTGRES_SERVER_NAME` | No | **No la crees ahora.** Vacía (o sin crear) significa el primer servidor de la base. Solo se llena después de una restauración real, con el nombre que imprime el comando (paso 7.7) | vacía, o el nombre del primer servidor seguido de partes `-` en minúsculas y números (máximo 63 caracteres), y el servidor debe existir |
 
 Nota: `PILOT_TRACKING_SUPPORT_URL` se compila dentro de la imagen web como
-`NEXT_PUBLIC_TRACKING_SUPPORT_URL` (build-arg del workflow). Cambiarla requiere un nuevo run.
+`NEXT_PUBLIC_TRACKING_SUPPORT_URL` (build-arg del workflow). Cambiarla requiere un commit nuevo: un run de un commit
+cuya imagen web ya está en el registro la reutiliza, con el enlace con el que se compiló
+(ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21, README §6.2).
 
 ### 3.3 Alternativa con GitHub CLI (bootstrap.md §6)
 
@@ -579,11 +616,55 @@ python3 tools/azr-001/env001_pilot_guards.py web-check --file deploy/azure/pilot
 Para cambiar una versión más adelante (nuevo aviso o nuevos términos): otro PR a este archivo y un redeploy.
 Las órdenes nuevas guardan la versión nueva; las anteriores conservan la que aceptaron.
 
+### 6.2 Alertas de la base de datos que llegan a ese correo (SCL-007)
+
+Fuente: README §10.2 y §10.3; decisiones `SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14` y
+`SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20`.
+
+Además de las 5 alertas de OBS-002, al mismo correo llegan 6 alertas de la base de datos del piloto (el servidor que
+nombra `PILOT_POSTGRES_SERVER_NAME`; mientras esté vacía, `pg-pv-pilot-<suffix>`; después de una restauración real las
+alertas se pasan solas al servidor restaurado, paso 7.7). Cada una manda un correo cuando se dispara y otro cuando se
+resuelve. Las 2 de
+conexiones (aviso en 28 y crítico en 33) se atienden con README §10.2. Las otras 4 tienen un solo nivel, de
+aviso, y Azure las revisa cada minuto. No las cambias en `observability.parameters.json`: están fijas en la
+plantilla y la guarda P21 las revisa.
+
+- **CPU** (`mar-pv-pilot-pg-cpu-warning`): la base usó en promedio 70 % de CPU o más durante media hora. Un pico
+  corto no la dispara. **Primero:** busca qué la está cargando. En el portal: el servidor → *Metrics* → *CPU
+  percent*, junto con *CPU Credits Remaining* y *Active Connections*. Revisa si en ese momento corría el workflow
+  del piloto, un job `job-pv-pilot-*` o el simulacro de restauración, y busca consultas lentas o sesiones largas con
+  la consulta de README §10.3. Si es el uso real del piloto, toca pensar en un servidor más grande (B2s, unos 41 USD
+  más al mes, fuera del presupuesto); eso lo decides tú.
+- **Créditos de CPU** (`mar-pv-pilot-pg-cpu-credits-warning`): le quedan 72 créditos o menos. El servidor del piloto
+  es de tipo económico (Burstable B1ms): guarda hasta 288 créditos y gana hasta 12 por hora mientras trabaja poco;
+  cuando trabaja mucho, los gasta. Con la CPU llena, 72 créditos duran cerca de hora y media. Sin créditos se frena al
+  20 % de su CPU, y entonces llegan la lentitud y los tiempos de espera. **Primero:** lo mismo que con la CPU (qué la
+  está cargando). No reinicies ni cambies el tamaño del servidor mientras tenga casi 0 créditos (Microsoft lo
+  desaconseja). Si pasa seguido, toca un tamaño mayor; también es decisión tuya. Es normal que llegue justo después
+  del primer despliegue: según la página de Microsoft, un B1ms arranca con 30 créditos, menos de 72, y la alerta se
+  resuelve sola cuando junta más de 72 (unas 3 horas y media con poca carga). Puede pasar igual después de apagar y
+  encender el servidor; anota lo que veas en el primer despliegue.
+- **Memoria** (`mar-pv-pilot-pg-memory-warning`): en algún minuto de los últimos 5 la base usó 80 % o más de sus
+  2 GB de memoria. **Primero:** en *Metrics*, mira *Memory percent* con máximo y con promedio, para saber si fue un
+  pico o si se queda alta, junto con *Active Connections* (cada conexión ocupa memoria). Si se queda alta con la carga
+  normal, toca un tamaño mayor (decisión tuya).
+- **Disco** (`mar-pv-pilot-pg-storage-warning`): el disco está al 70 % o más, unos 22 de sus 32 GB. Avisa antes de
+  dos cosas. Al 80 %, Azure duplica el disco solo (a 64 GB); eso duplica su costo (de unos 4 a unos 8 USD al mes) y
+  después no se puede reducir. Y con menos de 5 GB libres (84 %) o al 95 %, la base se pone en solo lectura y la
+  aplicación ya no puede guardar nada. El crecimiento automático suele llegar antes, salvo cuando lo que llena el
+  disco es el registro de transacciones de PostgreSQL. **Primero:** mira qué está creciendo (*Storage percent*,
+  *Storage used* y *Transaction Log Storage Used* de los últimos días) y que la limpieza automática (la retención
+  de OPS-004) esté corriendo; si falla, también llega la alerta `sqr-pv-pilot-job-failure`. Después decides si
+  limpiar antes o dejar que el disco crezca.
+
+Costo: con las 2 de conexiones son 6 series, dentro de las 10 gratis por recurso; si no, unos 0.10 USD por serie
+al mes (README §5).
+
 ---
 
 ## 7. Primer despliegue y verificación
 
-Fuente: README §6.1 pasos 4–10; `deploy-azure-pilot.yml`.
+Fuente: README §6.1 pasos 4–11; `deploy-azure-pilot.yml`.
 
 ### 7.1 Certificar el SHA en `main`
 
@@ -626,16 +707,101 @@ Del *Summary* del run copia la IP estática y el `asuid` (paso 4).
 ### 7.4 Run 2 (`none`) y Run 3 (`bind`)
 
 - **Run 2:** mismos inputs, `custom_domain_phase=none`. Debe terminar en verde: imágenes por digest,
-  jobs `job-pv-pilot-migrate`, `-logins` y `-verify`, apps, Stage 5 (alertas OBS-002) y el smoke test
-  sobre el FQDN de la ruta (`/` → 200, `/auth/session` → JSON, `/auth/backchannel-logout` →
-  `invalid_request`).
+  jobs `job-pv-pilot-migrate`, `-logins` y `-verify`, apps, Stage 5 (alertas OBS-002), la comprobación de que la
+  revisión nueva de la API, el Worker y la Web está lista, activa, `Healthy` y corre el digest de este run, y el smoke
+  test sobre el FQDN de la ruta (`/` → 200, `/auth/session` → JSON, `/auth/backchannel-logout` →
+  `invalid_request`). El *Summary* del run lista los cuatro digests que despliega, si cada uno se construyó en ese
+  run o se reutilizó, y la revisión que sirve cada app.
 - **Run 3:** cuando el DNS ya resuelva, mismos inputs con `custom_domain_phase=bind`. Desde aquí, **usa
-  siempre `bind`**: con `none` se desvincula el apex (README §6.2).
+  siempre `bind`**: con `none` se desvincula el apex (README §6.2). Como es el mismo commit, el *Summary* dice
+  `reused` en las cuatro imágenes: el despliegue reutiliza las del Run 2 en vez de reconstruirlas, y un rollback a un
+  commit ya desplegado vuelve a sus mismos bytes (README §6.2 y §6.3).
 
   Si el DNS ya propagó antes del Run 2, puedes hacer el Run 2 directamente con `bind`. El repo describe
   la secuencia none → bind.
 
-### 7.5 Verificación
+### 7.5 Tu organización de plataforma y tu cuenta de administrador (una sola vez, antes de entrar)
+
+Fuente: README §6.1 paso 10; decisión `TEN-003-PLATFORM-BOOTSTRAP-2026-10-19` en `decision-log.md`.
+
+Sin este paso nadie puede crear una orden: el registro abierto solo crea negocios y aliados, y solo un
+PLATFORM_ADMIN de la organización de plataforma da los roles de despacho y finanzas, aprueba aliados y registra la
+marca de datos maestros (README §6.8). Hazlo **después del Run 3 y antes de tu primer inicio de sesión** en
+`https://paquetenvia.com`. El comando corre una sola vez y deja registro en auditoría.
+
+1. **Tu `sub` de AuthCenter.** Entra a `https://authcenter.info/admin-v2/users`, busca tu usuario y ábrelo
+   (*Administrar* o *Consultar*). La dirección termina en `/admin-v2/users/<sub>`: ese UUID en minúsculas es tu id
+   de usuario de AuthCenter, el mismo que AuthCenter pone en el claim `sub`. Copia solo ese UUID, tal cual: el
+   comando rechaza un correo, la dirección completa o mayúsculas. No es secreto, pero no lo pegues en issues ni
+   chats.
+2. **Corre el comando** en Cloud Shell (bash). Usa el job de migración con su misma imagen, identidad y conexión;
+   solo cambian los argumentos de esta ejecución, así que el siguiente despliegue sigue corriendo `apply`. Cambia
+   la razón social y, si quieres, el nombre visible (máximo 200 y 80 caracteres, sin espacios al inicio ni al
+   final):
+
+   ```bash
+   RG=rg-pv-pilot
+   JOB=job-pv-pilot-migrate
+   read -r -p 'AuthCenter sub: ' SUB
+   LEGAL_NAME='<razón social de la organización de plataforma>'
+   DISPLAY_NAME='Paquetenvia'
+   az containerapp job show -g "$RG" -n "$JOB" --query properties.template -o json > pv-bootstrap.json
+   python3 - "$SUB" "$LEGAL_NAME" "$DISPLAY_NAME" <<'EOF'
+   import json, sys
+   template = json.load(open("pv-bootstrap.json"))
+   container = template["containers"][0]
+   container["args"] = ["platform-bootstrap", "--connection-env", "PAQUETERIA_MIGRATION_CONNECTION",
+                        "--identity-subject", sys.argv[1], "--legal-name", sys.argv[2], "--display-name", sys.argv[3]]
+   json.dump({"containers": [container]}, open("pv-bootstrap.json", "w"))
+   EOF
+   execution="$(az containerapp job start -g "$RG" -n "$JOB" --yaml pv-bootstrap.json --query name -o tsv)"
+   rm -f pv-bootstrap.json
+   az containerapp job execution show -g "$RG" -n "$JOB" --job-execution-name "$execution" --query properties.status -o tsv
+   ```
+
+3. **Lee el resultado.** Repite la última línea hasta que ya no diga `Running` y busca en Log Analytics:
+   `ContainerAppConsoleLogs_CL | where ContainerJobName_s == "job-pv-pilot-migrate" | where Log_s has "TEN003_PLATFORM_BOOTSTRAP" | order by TimeGenerated desc`.
+   - `TEN003_PLATFORM_BOOTSTRAP_OK organization_type=PLATFORM status=ACTIVE role=PLATFORM_ADMIN (audited)`: listo.
+     Se crearon la organización de plataforma, tu usuario y tu rol de administrador, con una fila de auditoría.
+   - `TEN003_PLATFORM_BOOTSTRAP_ALREADY_DONE` (código 11): ya existe una organización de plataforma o un
+     administrador. No se escribió nada y no hay nada más que hacer.
+   - `TEN003_PLATFORM_BOOTSTRAP_SUBJECT_ALREADY_SIGNED_IN` (código 11): esa cuenta ya entró a Paquetenvia. No se
+     escribió nada. No corras SQL a mano: sigue el recuadro *Si ya iniciaste sesión antes de correr el comando*, abajo.
+   - Código 2: el `sub` no es un UUID en minúsculas o un nombre no cumple las reglas. El valor no se muestra.
+   - Código 5 que nombra una migración o una verificación: la base no está migrada; repite el despliegue.
+4. **Después de entrar** (paso 7.6): `https://paquetenvia.com/api/v1/me/organization-contexts` muestra el
+   `organization_id` de la organización de plataforma, que pide `master-data-gate` (README §6.8). Las operaciones
+   de administrador de plataforma te piden la verificación MFA de AuthCenter.
+
+> **Si ya iniciaste sesión antes de correr el comando** (decisión E1b, "Restaurar y repetir")
+>
+> El comando nunca toma un usuario que ya existe, y eso no cambia. La salida es regresar la base a un momento antes de
+> ese inicio de sesión y correr el comando otra vez. Solo sirve mientras nadie haya usado el piloto: se pierde todo lo
+> escrito después de ese momento, que a estas alturas, si solo entraste tú, es solo tu usuario y tu sesión.
+>
+> 1. **Cómo lo sabes.** En el paso 3 aparece `TEN003_PLATFORM_BOOTSTRAP_SUBJECT_ALREADY_SIGNED_IN` y la ejecución
+>    termina con código 11. No se escribió nada.
+> 2. **No vuelvas a entrar** a `https://paquetenvia.com` hasta el final de esta lista.
+> 3. **Busca la hora de tu primer inicio de sesión.** En el historial de tu navegador, busca tu primera visita a
+>    `https://paquetenvia.com`: abrir el sitio no inicia sesión, así que entraste en ese momento o después. Elige un
+>    momento antes de esa visita y después de que terminó tu último run de *Deploy Azure PILOT* anterior a ella (la
+>    hora de fin sale en GitHub Actions), para que la base restaurada ya tenga todas sus migraciones. Si dudas, usa
+>    uno o dos minutos después de que terminó ese run. Tiene que estar dentro de los últimos 14 días (README §6.4).
+>    Escríbelo en UTC con `Z` al final, por ejemplo `2026-10-05T13:10:00Z` (GitHub y tu navegador te muestran tu hora
+>    local).
+> 4. **Restaura la base a ese momento** con los pasos 1 a 5 de la sección 7.7 (*Restaurar la base del piloto*). Del
+>    paso 6 de 7.7 haz solo la parte del resumen del run: **todavía no inicies sesión**. Al terminar, el piloto ya usa
+>    el servidor restaurado y el anterior sigue intacto.
+> 5. **Corre otra vez el comando** (pasos 2 y 3 de esta sección). Ahora debe decir `TEN003_PLATFORM_BOOTSTRAP_OK`.
+> 6. **Solo entonces inicia sesión** (paso 7.6).
+> 7. **Más tarde, borra el servidor anterior** (sección 7.7, paso 7). Solo guarda tu primer inicio de sesión, pero
+>    mientras exista cuesta lo mismo que el del piloto.
+
+> Los argumentos de esta ejecución (tu `sub` y los dos nombres) quedan en el historial del job, visibles para quien
+> pueda leer el grupo de recursos. Ninguno es secreto. La salida del comando no muestra tu `sub`, los nombres ni
+> ningún id.
+
+### 7.6 Verificación
 
 ```bash
 # Certificado administrado emitido
@@ -648,12 +814,22 @@ az resource list -g rg-pv-pilot -o table
 az consumption budget list --resource-group rg-pv-pilot -o table      # budget-pv-pilot, 100 USD
 ```
 
-Pruebas manuales en el navegador sobre `https://paquetenvia.com` (README §6.1 pasos 9 y 10):
-- Login por AuthCenter (requiere las URIs del paso 5.1 registradas).
+Pruebas manuales en el navegador sobre `https://paquetenvia.com` (README §6.1 pasos 9 y 11):
+- Login por AuthCenter con la cuenta del paso 7.5 (requiere las URIs del paso 5.1 registradas).
 - `/ops/orders/new` permite confirmar una orden (versiones de términos y aviso del paso 6.1 cargadas).
 - DevTools → Network → WS: `/hubs/...` responde `101 Switching Protocols`.
 - Subir una foto de prueba y comprobar que el blob tiene el index tag del escaneo de Defender.
 - `http://paquetenvia.com` redirige a HTTPS o se rechaza (no verificado aún, README §9).
+
+Alertas de la base de datos (README §10.3), en el primer despliegue:
+- Las cifras de créditos de CPU del B1ms (máximo 288, 12 por hora) vienen de la página de las máquinas virtuales B
+  de Microsoft; la de PostgreSQL no las repite. Confírmalas en el servidor real: después de un día tranquilo,
+  *Metrics* → *CPU Credits Remaining* (máximo) debería acercarse a 288. Anota el valor. Si es otro, 72 ya no es el
+  25 % y hay que decidir de nuevo el umbral. Anota también si la alerta de créditos llegó al desplegar y cuánto tardó
+  en resolverse.
+- Los porcentajes del disco suponen 32 GB. Comprueba el tamaño real
+  (`az postgres flexible-server show -n <SERVIDOR> -g rg-pv-pilot --query storage`). Si el disco ya creció solo
+  (a 64 GB), el 70 % ya no son 22 GB sino 45 GB, y el umbral se revisa.
 
 Después (fuera de la Sección A): restore drill (README §6.4) y guardar su línea `EVIDENCE`.
 
@@ -662,10 +838,92 @@ Si algo falla: README §6.7 (logs en Log Analytics:
 
 > **Riesgo conocido (README §9):** varias piezas nunca se han probado contra Azure real: propiedades ARM
 > de Defender `2025-01-01`, `customDomains` con `bindingType: Auto` en la ruta, PostgreSQL 18 con acceso
-> privado en `mexicocentral`, `SSL Mode=VerifyFull` y la aceptación ARM de las alertas OBS-002. Un fallo
+> privado en `mexicocentral`, `SSL Mode=VerifyFull` y la aceptación ARM de las alertas OBS-002 y de las 6 alertas
+> de métrica de la base. Un fallo
 > en el primer run puede deberse a eso y no a tu configuración. Los adaptadores ADP-001
 > (`AzureKeyVaultPiiKeyWrapClient`, `AzureBlobProofObjectStorage`, `DefenderForStorageThreatScanner`) ya
 > están fusionados, pero nunca se han ejecutado contra Azure real (README §9).
+
+
+### 7.7 Restaurar la base del piloto (restauración real)
+
+Fuente: README §6.4 *Real restore*; decisión `OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20` ("Que el despliegue lo siga").
+
+Úsala si se perdieron o se dañaron datos y quieres regresar la base a un momento de los últimos 14 días, o en el caso
+del recuadro *Si ya iniciaste sesión antes de correr el comando* (7.5). Lo que hay que saber antes:
+
+- Azure **nunca** sobrescribe el servidor al restaurar: siempre crea un servidor nuevo, con otro nombre.
+- El piloto pasa al servidor nuevo con una sola variable, `PILOT_POSTGRES_SERVER_NAME`. Cambias ese valor y corres
+  otra vez el despliegue; las migraciones, la API, el Worker, las alertas y los ensayos pasan al servidor restaurado.
+- El servidor anterior queda intacto, con sus 14 días de respaldos, hasta que tú lo borres.
+- Todo lo que se escribió después del momento que elijas no está en el servidor restaurado.
+
+Hazlo en Cloud Shell (bash), desde una copia del repo:
+
+1. **Detén la API y el Worker** para que nadie escriba en el servidor anterior mientras tanto:
+
+   ```bash
+   RG=rg-pv-pilot
+   for app in ca-pv-pilot-api ca-pv-pilot-worker; do
+     revision="$(az containerapp show -n "$app" -g "$RG" --query properties.latestRevisionName -o tsv)"
+     az containerapp revision set-mode -n "$app" -g "$RG" --mode multiple
+     az containerapp revision deactivate -n "$app" -g "$RG" --revision "$revision"
+   done
+   ```
+
+   Cada app pasa al modo de varias revisiones (así Azure deja apagar la revisión que corre) y se apaga. La página
+   sigue abriendo, pero nadie puede entrar ni hacer nada hasta el paso 5, que las vuelve a encender y las regresa al
+   modo de una revisión.
+2. **Restaura a un servidor nuevo.** Escribe el momento en UTC con `Z` al final, por ejemplo `2026-10-05T13:10:00Z`:
+
+   ```bash
+   ./deploy/azure/pilot/restore-drill.sh --resource-group "$RG" --restore-time <momento en UTC> --real
+   ```
+
+   El comando restaura el servidor que usa el piloto en uno nuevo que se llama como el primero más `-r` y la fecha y
+   hora en que lo corres (UTC), en la misma red privada. Después lo revisa (solo lee) y al final imprime
+   `restored_server_kept=<nombre>`. Si algo falla, borra el servidor nuevo y no toca el anterior; puedes repetirlo
+   (si lo repites dentro del mismo minuto, te pide esperar un minuto).
+3. **Revisa el resultado.** La línea `EVIDENCE ...` debe decir `verify_status=Succeeded`. Guárdala.
+4. **Cambia la variable.** En GitHub → *Settings → Environments → azure-pilot → Environment variables*, crea o edita
+   `PILOT_POSTGRES_SERVER_NAME` con el nombre exacto del paso 2. O con el GitHub CLI:
+
+   ```bash
+   gh variable set PILOT_POSTGRES_SERVER_NAME --env azure-pilot --repo Eduard0corona/Paquetenvia --body <nombre>
+   ```
+
+   Va en la variable y no en el formulario del run para que todos los despliegues siguientes sigan usando el
+   servidor restaurado.
+5. **Corre otra vez *Deploy Azure PILOT*** con tu `<HEAD_SHA>` y `<FOUNDATION_RUN_ID>` certificados y
+   `custom_domain_phase=bind` (paso 7.4). Antes de cambiar nada, el run revisa que el servidor exista y que la
+   plantilla pueda tomarlo tal como está; si escribiste mal el nombre, se detiene y no crea otro servidor. Después
+   vuelve a poner los ajustes del servidor (la restauración no los copia), crea credenciales nuevas para la API y el
+   Worker en el servidor restaurado, corre las migraciones y la verificación, vuelve a encender la API y el Worker y
+   pasa las 6 alertas de la base al servidor nuevo.
+6. **Comprueba.** El resumen del run dice `PostgreSQL server: <nombre del paso 2>`. Entra a `https://paquetenvia.com`
+   y revisa que estén los datos que esperabas.
+7. **Más tarde, borra el servidor anterior, cuando estés seguro.** Mientras exista, sus respaldos son la única forma
+   de regresar a un momento antes del que restauraste. Pero cuesta unos 17.70 USD al mes (lo mismo que el del
+   piloto, README §5), encima de un piloto que ya está en el límite de los 100 USD. Al borrarlo se borran también
+   todos sus respaldos y ya no se pueden recuperar:
+
+   ```bash
+   az postgres flexible-server delete -g "$RG" -n <nombre del servidor anterior> --yes
+   ```
+
+   Nunca borres el servidor que dice `PILOT_POSTGRES_SERVER_NAME`. Si antes de borrarlo quieres regresar al anterior,
+   vacía la variable (o pon el nombre anterior) y corre otra vez el despliegue; lo escrito en el restaurado se queda
+   ahí.
+
+**Servidores de ensayo que sobran.** Un ensayo (`restore-drill.sh` sin `--real`) borra su servidor al terminar,
+salvo con `--keep`. Si el borrado falla, imprime `WARNING drill_server_not_deleted=<nombre>`. Cada uno es una copia
+completa de los datos del piloto y cuesta lo mismo que el servidor del piloto. Revisa la lista y borra los que tengan
+`-drill-` en el nombre y ya no necesites:
+
+```bash
+az postgres flexible-server list -g "$RG" --query "[].name" -o tsv
+az postgres flexible-server delete -g "$RG" -n <nombre con -drill-> --yes
+```
 
 ---
 
@@ -725,9 +983,10 @@ Después mándame los dos nombres (no son secretos) para el cambio que conecte e
 1. **GATE-007 (bloqueante):** no hay ninguna fila `GATE-007-*` con Type `Gate resolution`/`Gate scoping`
    en `decision-log.md`. Sin ella el deploy no inicia sesión en Azure. ¿Qué se registra y con qué ID?
    Implica tocar `docs/normative/**` con checksums y manifest sincronizados.
-2. **apps.settings.json (bloqueante):** las versiones de política quedaron resueltas por el PR #174 (versión
-   por empresa, `piloto-2026-10-v1`), pero faltan las reglas de elegibilidad de repartidores (documentos y
-   capacidad por tipo de vehículo, paso 0.2). Sin ellas `settings-check` detiene el deploy.
+2. ~~apps.settings.json~~: resuelto. Las versiones de política quedaron resueltas por el PR #174 (versión por
+   empresa, `piloto-2026-10-v1`) y las reglas de elegibilidad de repartidores que aprobaste (G4, H2 y H3,
+   `GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20`) ya están en el archivo (paso 0.2). Queda: ningún repartidor
+   real se puede asignar hasta DRV-DOC-001 y GATE-007 (punto 1).
 3. **Términos y privacidad web** (`PAQUETERIA_TERMS_VERSION`/`PAQUETERIA_PRIVACY_VERSION`): ya están
    cableados (`web.parameters.json`, paso 6.1). **Bloquean el deploy** hasta que definas ambas versiones,
    que dependen del aviso de privacidad aprobado (GATE-007).
@@ -736,7 +995,7 @@ Después mándame los dos nombres (no son secretos) para el cambio que conecte e
    por API más cuota?
 6. **Transferencia de direcciones a Google** depende de GATE-007.
 7. ~~Orden de AuthCenter~~: corregido; README §6.1 ahora registra las URIs de `paquetenvia-web-prod`
-   (paso 9) antes de la prueba de login (paso 10).
+   (paso 9) antes de la prueba de login (paso 11).
 8. ~~README §6.1 paso 6~~: corregido; ahora nombra los cuatro secretos del owner
    (`authcenter-paquetenvia-client-secret`, `google-maps-api-key`, `public-tracking-link-key`,
    `paquetenvia-telemetry-pseudonym-key-1`).

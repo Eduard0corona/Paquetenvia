@@ -24,6 +24,13 @@ public static class NotificationOutboxTopics
     /// <summary>D8-OUTBOX-LANE-DISPATCH: consumed by the Dispatch assignment-lifecycle lane.</summary>
     public const string DispatchReactionRequested = "dispatch.order-status-reaction-requested";
 
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-24 <c>recipient_notices.producer</c>): routed to this lane by the AI-08 NTF-003
+    /// lane step and consumed from AI-08 NTF-005, which merges before the AI-08 NTF-004 producer: while recipient notices
+    /// are off each row ends PROCESSED with <c>RECIPIENT_NOTICES_DISABLED</c>.
+    /// </summary>
+    public const string RecipientNoticeRequested = "orders.recipient-notice-requested";
+
     private static readonly HashSet<string> RealtimeTopics =
     [
         "orders.status-changed",
@@ -35,7 +42,7 @@ public static class NotificationOutboxTopics
 
     public static OutboxConsumer Resolve(string topic) => topic switch
     {
-        OrdersCreated or SendRequested => OutboxConsumer.Notifications,
+        OrdersCreated or SendRequested or RecipientNoticeRequested => OutboxConsumer.Notifications,
         DispatchReactionRequested => OutboxConsumer.Dispatch,
         _ when RealtimeTopics.Contains(topic) => OutboxConsumer.Realtime,
         _ => OutboxConsumer.Unrouted,

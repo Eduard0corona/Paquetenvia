@@ -92,6 +92,22 @@ namespace Locations.Infrastructure.Persistence.Migrations
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("created_at");
 
+                    b.Property<byte[]>("EmailCiphertext")
+                        .HasColumnType("bytea")
+                        .HasColumnName("email_ciphertext");
+
+                    b.Property<byte[]>("NoticeEmailCiphertext")
+                        .HasColumnType("bytea")
+                        .HasColumnName("notice_email_ciphertext");
+
+                    b.Property<string>("NoticeKeyVersion")
+                        .HasColumnType("text")
+                        .HasColumnName("notice_key_version");
+
+                    b.Property<byte[]>("NoticePhoneCiphertext")
+                        .HasColumnType("bytea")
+                        .HasColumnName("notice_phone_ciphertext");
+
                     b.Property<Guid?>("OperatingZoneId")
                         .HasColumnType("uuid")
                         .HasColumnName("operating_zone_id");

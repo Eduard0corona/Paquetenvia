@@ -8,7 +8,9 @@ import {
   lowPriceAuthorizationReasonMaximum,
   maximumPackages,
   maximumPhoneInputLength,
+  maximumRecipientEmailLength,
   payerTypes,
+  recipientWhatsAppConsentText,
   serviceTypes,
   vatIncludedLabel,
   type AddressDraft,
@@ -302,6 +304,28 @@ function AddressFieldset({
           />
         )}
       </Field>
+      {side === "destination" && (
+        // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-07 create_order.recipient_notices.email): destination only, optional.
+        <Field
+          id={id("email")}
+          label="Correo del destinatario (opcional)"
+          hint="Solo si quien recibe lo dio. No se muestra en ninguna pantalla después de crear la orden."
+          error={error("email")}
+        >
+          {(control) => (
+            <input
+              {...control}
+              type="text"
+              inputMode="email"
+              autoCapitalize="off"
+              spellCheck={false}
+              maxLength={maximumRecipientEmailLength}
+              value={address.email ?? ""}
+              onChange={(event) => onChange({ email: event.currentTarget.value })}
+            />
+          )}
+        </Field>
+      )}
       {coordinates && (
         <div className="opsWizardPair">
           <Field id={id("coordinates")} label="Latitud" hint="Por ejemplo 24.8091." error={error("coordinates")}>
@@ -715,6 +739,18 @@ function ConfirmStep({
           La aceptación queda registrada como asistida por ti, con las versiones vigentes de los términos y del aviso de
           privacidad.
         </p>
+      </fieldset>
+      <fieldset>
+        <legend>Avisos al destinatario</legend>
+        {/* NTF-RECIPIENT-NOTICES-2026-10-20 (AI-07 create_order.recipient_notices.consent): optional and unticked by
+            default; it never blocks "Confirmar". */}
+        <CheckboxField
+          id={fieldControlId("recipientWhatsAppConsent")}
+          checked={draft.recipientWhatsAppConsent}
+          onChange={(checked) => controller.updateDraft({ recipientWhatsAppConsent: checked })}
+        >
+          {recipientWhatsAppConsentText}
+        </CheckboxField>
       </fieldset>
       {!versionsConfigured && (
         <p id={fieldControlId("acceptanceVersions")} className="notice noticeWarn" role="alert" tabIndex={-1}>

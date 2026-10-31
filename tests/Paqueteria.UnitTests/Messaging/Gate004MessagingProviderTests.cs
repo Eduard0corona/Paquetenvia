@@ -205,6 +205,89 @@ public sealed class Gate004MessagingProviderTests
         Assert.DoesNotContain(ParameterText, WhatsAppRequest().ToString(), StringComparison.Ordinal);
     }
 
+    // ------------------------------------------------------------------ Recipient notices (AI-08 NTF-005)
+
+    /// <summary>A synthetic Base64URL tracking token (43 characters); not derived from any key.</summary>
+    private const string SyntheticToken = "AQIDBAUGBwgJCgsMDQ4PEBESExQVFhcYGRobHB0eHyA";
+
+    [Fact]
+    public async Task WhatsApp_recipient_notice_sends_the_url_button_suffix_first_and_the_quick_reply_second()
+    {
+        // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-24 recipient_notices.templates.whatsapp) and NTF-RECIPIENT-NOTICE-CAPS-2026-10-23
+        // L4 choice 9: button 1 is the URL button "Ver seguimiento" (index 0, the token as its dynamic suffix) and button 2
+        // the quick reply "No recibir avisos" (index 1, a fixed payload). This is the Meta button JSON, byte for byte.
+        var handler = new FakeHandler(_ => Json(HttpStatusCode.OK, """{"messages":[{"id":"wamid.SYNTHETIC=="}]}"""));
+        var provider = WhatsApp(handler, out var logs);
+
+        var result = await provider.SendAsync(
+            WhatsAppRequest() with { UrlButtonSuffix = SyntheticToken, QuickReplyPayload = "RECIPIENT_NOTICE_OPT_OUT" },
+            default);
+
+        Assert.Equal(MessagingOutcome.Accepted, result.Outcome);
+        Assert.Equal(
+            "{\"messaging_product\":\"whatsapp\",\"recipient_type\":\"individual\",\"to\":\"5215512345678\",\"type\":\"template\"," +
+            "\"template\":{\"name\":\"owner_tracking_link\",\"language\":{\"code\":\"es_MX\"},\"components\":[" +
+            "{\"type\":\"body\",\"parameters\":[{\"type\":\"text\",\"text\":\"Nombre Sintetico\"},{\"type\":\"text\",\"text\":\"ORD_1234567890123456789012\"}]}," +
+            "{\"type\":\"button\",\"sub_type\":\"url\",\"index\":\"0\",\"parameters\":[{\"type\":\"text\",\"text\":\"" + SyntheticToken + "\"}]}," +
+            "{\"type\":\"button\",\"sub_type\":\"quick_reply\",\"index\":\"1\",\"parameters\":[{\"type\":\"payload\",\"payload\":\"RECIPIENT_NOTICE_OPT_OUT\"}]}]}}",
+            Assert.Single(handler.Requests).Body);
+        // The token is never logged and never printed by the request.
+        Assert.DoesNotContain(SyntheticToken, string.Join('\n', logs.Entries), StringComparison.Ordinal);
+        Assert.DoesNotContain(SyntheticToken, (WhatsAppRequest() with { UrlButtonSuffix = SyntheticToken }).ToString(), StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task Email_recipient_notice_carries_the_one_click_list_unsubscribe_headers()
+    {
+        // AI-24 recipient_notices.templates.email.headers (RFC 8058): List-Unsubscribe with the one-click URL of the
+        // notification and List-Unsubscribe-Post List-Unsubscribe=One-Click.
+        const string unsubscribe = "https://paquetenvia.test/api/v1/recipient-notices/unsubscribe/synthetic-token";
+        var handler = new FakeHandler(_ => Json(HttpStatusCode.Accepted, """{"id":"acs-operation-1","status":"Running"}"""));
+        var provider = Email(handler, new FakeCredential(), out var logs);
+
+        var result = await provider.SendAsync(EmailRequest() with { OneClickUnsubscribeUrl = unsubscribe }, default);
+
+        Assert.Equal(MessagingOutcome.Accepted, result.Outcome);
+        var body = JsonNode.Parse(Assert.Single(handler.Requests).Body)!;
+        Assert.Equal("<" + unsubscribe + ">", (string?)body["headers"]!["List-Unsubscribe"]);
+        Assert.Equal("List-Unsubscribe=One-Click", (string?)body["headers"]!["List-Unsubscribe-Post"]);
+        Assert.Equal(2, body["headers"]!.AsObject().Count);
+        Assert.DoesNotContain("synthetic-token", string.Join('\n', logs.Entries), StringComparison.Ordinal);
+        Assert.DoesNotContain("synthetic-token", (EmailRequest() with { OneClickUnsubscribeUrl = unsubscribe }).ToString(), StringComparison.Ordinal);
+
+        // Without the URL there is no header at all (the published NTF-001 shape).
+        handler.Requests.Clear();
+        await provider.SendAsync(EmailRequest(), default);
+        Assert.Null(JsonNode.Parse(Assert.Single(handler.Requests).Body)!["headers"]);
+    }
+
+    [Theory]
+    [InlineData("whatsapp-unsubscribe")]
+    [InlineData("whatsapp-suffix-space")]
+    [InlineData("whatsapp-payload-lower")]
+    [InlineData("email-suffix")]
+    [InlineData("email-http-url")]
+    [InlineData("email-url-angle")]
+    public async Task Extras_that_do_not_belong_to_the_channel_are_refused_permanently_without_a_provider_call(string variant)
+    {
+        var handler = new FakeHandler(_ => throw new InvalidOperationException("must not be called"));
+        var whatsapp = WhatsApp(handler, out _);
+        var email = Email(handler, new FakeCredential(), out _);
+
+        var result = variant switch
+        {
+            "whatsapp-unsubscribe" => await whatsapp.SendAsync(WhatsAppRequest() with { OneClickUnsubscribeUrl = "https://paquetenvia.test/u" }, default),
+            "whatsapp-suffix-space" => await whatsapp.SendAsync(WhatsAppRequest() with { UrlButtonSuffix = "abc def" }, default),
+            "whatsapp-payload-lower" => await whatsapp.SendAsync(WhatsAppRequest() with { QuickReplyPayload = "opt_out" }, default),
+            "email-suffix" => await email.SendAsync(EmailRequest() with { UrlButtonSuffix = SyntheticToken }, default),
+            "email-http-url" => await email.SendAsync(EmailRequest() with { OneClickUnsubscribeUrl = "http://paquetenvia.test/u" }, default),
+            _ => await email.SendAsync(EmailRequest() with { OneClickUnsubscribeUrl = "https://paquetenvia.test/u>" }, default),
+        };
+
+        Assert.Equal(new MessagingResult(MessagingOutcome.PermanentFailure, MessagingResultCodes.TemplateParametersInvalid), result);
+        Assert.Empty(handler.Requests);
+    }
+
     // ------------------------------------------------------------------ Email (ACS)
 
     [Fact]

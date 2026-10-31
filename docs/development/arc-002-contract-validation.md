@@ -26,8 +26,8 @@ Current verified hashes (they must match `docs/normative/v0.6/MANIFEST.json`
 and `CHECKSUMS_SHA256.txt`):
 
 ```text
-AI-06  3a491699ee7462ffd6071bcf2a1092d66654916ed2502bf474b9e4fac78b6754
-AI-18  ef05f7ce5e11a5b1fc8fb71d3ae0bb9d3f10074d7eb8e438c3a72c9493435580
+AI-06  b83ed5283e4fd03a4cf6afc958345fe45556fb42b2a79fc13c0fd973f8eed32f
+AI-18  9c9fd48b8c95457b9b9b26600c0db6fa75976060e904206414a721070fd281e4
 ```
 
 The original ARC-002 run validated the earlier revisions (AI-06 `c7681336…`,

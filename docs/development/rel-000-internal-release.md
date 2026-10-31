@@ -379,6 +379,123 @@ override incompatible, versión vulnerable duplicada o smoke test ausente o
 fallido. La suite focal deriva su conteo de los tests descubiertos y exige que
 todos los casos descubiertos sean ejecutados y aprobados, sin fallos ni skips.
 
+### Audit que falla (fail closed)
+
+`pnpm audit --json` sale con código 1 tanto si encuentra advisories como si el propio audit
+falla. En el segundo caso (timeout, registry inalcanzable o endpoint inexistente) sólo escribe
+`{"error": {"code": ..., "message": ...}}`; con pnpm 11.15.1 se observaron `23` ("The operation
+was aborted due to timeout"), `pnpm` ("fetch failed") y `ERR_PNPM_AUDIT_ENDPOINT_NOT_EXISTS`.
+Antes, `sanitize-audit` leía eso como un audit limpio: con base y rama fallidas, el modo normal
+pasaba sin reportar siquiera el aviso conocido de braces. Ahora `sanitize-audit` falla, el paso
+`Capture and sanitize real base and branch audits` termina en rojo y no escribe el audit
+sanitizado, así que la evaluación ni siquiera corre:
+
+| `reason_code` | Cuándo |
+| --- | --- |
+| `AUDIT_COMMAND_FAILED` | El JSON de pnpm trae `error`, o un JSON de `dotnet package list --vulnerable` trae un `problems` de nivel `error` (por ejemplo, una fuente HTTP rechazada). El mismo código ya marcaba un código de salida distinto de 0 y 1. |
+| `AUDIT_REPORT_UNRECOGNIZED` | El JSON de pnpm no trae `advisories` ni `vulnerabilities` como objeto. El reporte limpio de pnpm 11.15.1 es `{"advisories": {}, "metadata": {...}}` con código 0. |
+| `AUDIT_EXIT_CODE_INCONSISTENT` | pnpm salió con 1 pero su reporte no lista ningún advisory. Los hallazgos NuGet no cuentan: el código de salida es sólo de pnpm. |
+
+El error se imprime en el log como una línea JSON
+`REL000_TECHNICAL_VALIDATION_FAILED` que nombra el archivo (`rel000-base-audit-raw.json`,
+`rel000-branch-audit-raw.json` o el JSON NuGet) y lleva `tool_error_code` y
+`tool_error_summary` de la herramienta. El resumen se limpia antes de publicarse: se reemplazan
+URLs (con ruta, query o credenciales, también `//host/:_authToken=`), valores con forma de token
+o secreto, emails e identificadores, y se corta a 240 caracteres.
+
+Para distinguir un audit fallido de un advisory: un audit fallido rompe el paso de captura con
+uno de los tres códigos de arriba; un advisory pasa la captura y, si no está registrado, rompe
+después el paso `Validate and generate redacted REL-000 evidence` con un código de evaluación
+como `UNTRACKED_DEPENDENCY_ADVISORY`, `NEW_DEPENDENCY_ADVISORY` o `BRANCH_ADVISORY_SET_CHANGED`
+junto con los GHSA involucrados.
+
+No hay reintentos: un audit fallido deja el job en rojo y se relanza el job. En los 30 jobs
+REL-000 más recientes de PR Validation y Foundation CI (2026-10-20 a 2026-10-22) no se observó
+ningún audit pnpm fallido: 26 publicaron el aviso conocido de braces y 4 fallaron por avisos
+reales de vite que el audit de la base sí reportó.
+
+Para NuGet, `dotnet package list` sale con 1 cuando no alcanza el feed (escribe texto
+`error: Unable to load the service index ...` en lugar de JSON) y el paso, que corre con
+`set -euo pipefail`, ya fallaba ahí; `sanitize-audit` además rechaza ese texto
+(`JSON_INPUT_INVALID`). Queda un caso que no se puede distinguir: si el feed responde 404 a la
+metadata de un paquete, la herramienta sale con 0 y escribe el proyecto sin `frameworks`,
+exactamente igual que un reporte limpio.
+
+### Aviso conocido aceptado de minimatch (SEC-2026-16)
+
+`SEC-2026-16-MINIMATCH-GLOBPARTS-TRACKED` (Issue #324, rama `fix/security-2026-16-minimatch-tracked`,
+base `ece1c3e`) acepta `GHSA-g3hv-75wg-m249` (CVE-2026-118764, moderado, publicado el
+2026-10-30T23:09:55Z): `minimatch` `<11.0.1` puede gastar mucha CPU y memoria con un patrón glob hecho
+a propósito (`firstPhasePreProcess()` con `optimizationLevel >= 2`). Desde que se publicó, REL-000
+fallaba con `UNTRACKED_DEPENDENCY_ADVISORY` en todo PR a `development` (#323) y también en `main`.
+
+- **Alcance.** `apps/web/pnpm-lock.yaml` (`f944eecd…`) resuelve `minimatch` 3.1.5 por `eslint` 9.39.5,
+  `@eslint/config-array` 0.21.2, `@eslint/eslintrc` 3.3.6, `eslint-plugin-import` 2.32.0,
+  `eslint-plugin-jsx-a11y` 6.10.2 y `eslint-plugin-react` 7.37.5 (85 rutas), y 10.2.5 por
+  `@typescript-eslint/typescript-estree` 8.64.0 (11 rutas). Las 96 rutas empiezan en `eslint` o
+  `eslint-config-next`, ambas `devDependencies`; `minimatch` no está en el grafo de producción y
+  `pnpm audit --prod` no reporta nada. El código vulnerable no existe en 3.1.5, y en 10.2.5 ninguna
+  herramienta pasa `optimizationLevel`.
+- **Por qué no se remedia.** No hay 3.x ni 10.x corregido y ningún dependiente acepta `minimatch` 11, que
+  quita la exportación CommonJS llamable y `makeRe` que usan `eslint-plugin-import`, `jsx-a11y` y
+  `react`.
+- **Decisión.** El owner eligió "Aceptarlo como conocido" (X1, 2026-10-31, fila
+  `SEC-2026-16-MINIMATCH-KNOWN-ADVISORY-2026-10-31` del decision-log), como braces: un solo PR a
+  `development` con su fila y su entrada del CHANGELOG; `main` lo recibe en la próxima promoción. Si
+  fuera primero a `main`, el back-sync chocaría, porque la aceptación queda activa.
+- **Política.** La autorización activa sigue la forma de la de braces: modo `SECURITY_REMEDIATION`,
+  Issue #324, un aviso moderado en la base y en la rama, `apps/web/pnpm-lock.yaml` como único archivo de
+  dependencias permitido y ninguno requerido, el smoke de Sharp (0.35.5) y la lista exacta de archivos
+  que no son de dependencias. Esa lista suma esta nota, la fila del decision-log, el CHANGELOG, la
+  integridad normativa y los pins de las pruebas de arquitectura. Como el paquete tiene dos versiones con
+  varios padres, el aviso aceptado no declara una `lock_path` lineal sino `lock_parents`, los padres
+  exactos de cada versión. `rel000.py` exige la autorización campo por campo, sin campos de más y con el
+  aviso aceptado igual a `MINIMATCH_KNOWN_ADVISORY`. Sólo braces (retirada, con exactamente su aviso
+  aceptado) o SEC-2026-16 pueden declarar un aviso aceptado.
+- **Grafo.** `validate_known_advisory_dev_graph` corre sobre el lockfile de la base y el de la rama
+  (`validate_known_advisory_lock_graph` lo elige cuando el aviso declara `lock_parents`; braces sigue con
+  su validador de ruta lineal) y exige:
+  - un solo importer, sin `minimatch` entre sus dependencias directas;
+  - exactamente las versiones 3.1.5 y 10.2.5, en los paquetes y en las instantáneas;
+  - exactamente los padres declarados de cada versión;
+  - `minimatch` fuera del grafo de producción, calculado con `production_graph` de
+    `tools/ci/web_image_dependencies.py`, el mismo módulo que usa el smoke de las imágenes web;
+  - que toda instantánea que llega a `minimatch` cuelgue de una raíz del importer, que esas raíces sean
+    sólo `devDependencies` y que las rutas sean exactamente 96 (el recorrido reproduce las 96 rutas del
+    audit);
+  - como braces, el SHA-256 fijado del lockfile (`KNOWN_ADVISORY_LOCK_GRAPH_CHANGED`).
+
+  Cualquier otra forma falla con `KNOWN_ADVISORY_LOCK_PATH_INVALID`.
+- **Audit e Issue.** Cada audit que reporta el aviso debe reproducir exactamente
+  `KNOWN_ADVISORY_AUDIT_FIELDS`: paquete, severidad, `installed_versions` `["10.2.5", "3.1.5"]`, rangos,
+  transitivo y 96 rutas (si no, `KNOWN_ADVISORY_SCOPE_INVALID`). El Issue #324 se consulta una sola vez,
+  abierto, con su título exacto y sólo este GHSA (`KNOWN_ADVISORY_TRACKING_INVALID` o
+  `KNOWN_ADVISORY_ISSUE_STATE_INVALID`). Cualquier otro aviso o paquete sigue fallando cerrado.
+- **Diff.** `validate_minimatch_known_advisory_diff`, como el de braces: no cambia ningún archivo de
+  dependencias ni ningún archivo fuera de la lista exacta.
+- **Modos.** En su propio PR, REL-000 corre en `SECURITY_REMEDIATION` dentro de PR Validation hacia
+  `development`. La base autorizada debe ser el primer padre del merge probado: si `development` avanza
+  antes de la fusión, se mezcla y se fija la nueva base. El resultado esperado es
+  `REL000_SECURITY_REMEDIATION_READY_FOR_MERGE` con `REMEDIATED_PENDING_MERGE`. Después de la fusión,
+  todo PR que no toca las dependencias web corre en modo normal y queda `PASSED`, con el aviso visible en
+  `accepted_known_advisories` y en `known_security_issues` como `Issue #324`.
+- **Flujos y fixture.** La línea `REL000_REMEDIATION_ID` de ambos flujos (siguen idénticas) nombra la rama
+  y `tests/fixtures/rel-000/security-tracking.json` vincula el ID con el Issue #324 en
+  `remediation_issues` y en `known_advisory_issues`.
+- **Revinculación.** `rel000.py` fija el hash, los padres y el conteo de rutas, no sólo la política. Todo
+  cambio posterior de `apps/web/pnpm-lock.yaml` mueve el hash, y a menudo las rutas o los padres, así que
+  debe revincular la aceptación en `rel000.py` y en la política, o retirarla, como pasó tres veces con
+  braces. Como la política de la base probada también se valida, esa revinculación debe dejar que sólo
+  una base anterior conserve el grafo previo, como hicieron SEC-2026-11 y SEC-2026-14 con braces. Una
+  revisión del aviso que cambie sus campos de audit falla cerrado hasta revincularla o retirarla.
+- **Salida.** Si sale un 3.x o 10.x corregido, o los dependientes aceptan `minimatch>=11.0.1`, se remedia
+  como SEC-2026-15; si GitHub retira o acota el aviso, se retira como braces. Entonces se verifica el
+  audit en cero, se retira la aceptación y se cierra el Issue #324.
+- **Exposición residual.** El código vulnerable de 10.2.5 queda en las herramientas de lint (máquinas
+  locales y CI), alcanzable sólo con un patrón hostil y `optimizationLevel >= 2`. Las imágenes web de
+  `development` sólo llevan dependencias de producción (#311); una imagen construida desde `main` aún
+  lleva el `node_modules` de desarrollo hasta la próxima promoción, y `next start` nunca lo carga.
+
 ### Remediación pnpm de vite, vitest y Next.js (SEC-2026-14)
 
 `SEC-2026-14-VITE` (Issue #304, rama `fix/security-2026-14-vite`, base `c84ef92`) remedia nueve
@@ -462,7 +579,8 @@ Historia de la remediación:
 
 - **Fusión.** Entró a `main` con #305 (merge `059e2e9`), después de Foundation CI 13/13 en su
   cabeza `325f2bb`; el árbol de ambos commits es el mismo.
-- **Retiro en `main`.** Un PR pequeño a `main` la movió a `historical_remediations` con `status`
+- **Retiro en `main`.** Un PR pequeño a `main` (#306, merge `9e55771`) la movió a
+  `historical_remediations` con `status`
   `MERGED`, `tracked_pull_request` 305 y `validated_target_sha` `059e2e9`. También devolvió la
   línea `REL000_REMEDIATION_ID` de ambos flujos y el fixture a su forma de `c84ef92`. No tocó
   archivos normativos. Las pruebas de SEC-2026-14 reproducen ese commit como la autorización
@@ -472,9 +590,22 @@ Historia de la remediación:
   cambio que no toca las dependencias web es `CLEAN`, braces queda aceptado sobre el grafo
   revinculado y volver a mover `vite`, `vitest` o `next` falla cerrado
   (`DEPENDENCY_FILES_CHANGED`). El back-sync `main` → `development` entra sin conflictos.
+- **Back-sync.** Llegó a `development` con #307 (merge `11f35da`). Su PR Validation tuvo el plan
+  `MAIN_BACKSYNC:CERTIFIED_MAIN_HEAD`; REL-000 no era requerido. El primer intento falló en dos pruebas
+  Playwright ajenas al diff, con el mismo código en `main` y en `development`: la carrera de puertos de
+  `DriverStopsNextServer.ReservePort()` y la prueba BFF de ida y vuelta sin conexión. La única
+  re-ejecución pasó.
+- **Registro.** La fila `SEC-2026-14-PNPM-REMEDIATION-2026-10-21` del decision-log entró después, en un
+  PR normal a `development`.
 
-Las imágenes web instalan las dependencias de desarrollo antes de `NODE_ENV=production` y copian
-`node_modules`, así que incluyen `vite` y `vitest`; `next start` en Linux nunca los carga.
+Las imágenes web ya no incluyen `vite`, `vitest` ni otra herramienta de desarrollo. La etapa de
+build sigue instalando todo (`next build` necesita TypeScript y los tipos), pero la etapa final
+copia `node_modules` de una etapa `prod-deps` que sólo ve `package.json`, `pnpm-lock.yaml` y
+`pnpm-workspace.yaml` y corre `pnpm install --prod --frozen-lockfile`. El smoke de imágenes de CI
+(`docs/development/branching-and-ci.md`) lee el almacén de pnpm de cada imagen web contra el lockfile
+y falla si tiene un paquete fuera del grafo de producción. La única `devDependency` que queda es
+`@types/node` 26.1.1 (sólo declaraciones de tipos, con su `undici-types`): `sharp` 0.35.5 la declara
+como peer opcional y el lockfile la resuelve a la versión de desarrollo. `next start` no la carga.
 
 ### Remediación pnpm de zod (SEC-2026-15)
 
@@ -545,8 +676,9 @@ Historia de la remediación:
 
 - **Fusión.** Entró a `main` con #316 (merge `2f39bcc`), después de Foundation CI 13/13 en su
   cabeza `da7bfa1`; el árbol de ambos commits es el mismo.
-- **Retiro en `main`.** Un PR pequeño a `main` la movió a `historical_remediations`, justo después
-  de SEC-2026-14, con `status` `MERGED`, `tracked_pull_request` 316 y `validated_target_sha`
+- **Retiro en `main`.** Un PR pequeño a `main` (#317, merge `11bb7f2`) la movió a
+  `historical_remediations`, justo después de SEC-2026-14, con `status` `MERGED`,
+  `tracked_pull_request` 316 y `validated_target_sha`
   `da7bfa1`, la cabeza que validó Foundation CI. También devolvió la línea `REL000_REMEDIATION_ID`
   de ambos flujos y el fixture a su forma de `9e55771`. No tocó archivos normativos. Las pruebas de
   SEC-2026-15 reproducen ese commit como la autorización activa que fue. La entrada retirada sigue
@@ -556,10 +688,62 @@ Historia de la remediación:
   cambio que no toca las dependencias web es `CLEAN`, braces se aceptaría sobre el grafo
   revinculado si volviera a reportarse, y devolver `zod` a 4.4.3 o quitar su override falla
   cerrado (`DEPENDENCY_FILES_CHANGED`). El back-sync `main` → `development` entra sin conflictos.
+- **Back-sync.** Llegó a `development` con #318 (merge `9387e1c`). Su PR Validation tuvo el plan
+  `MAIN_BACKSYNC:CERTIFIED_MAIN_HEAD`, certificado por el push de Foundation 13/13 sobre `11bb7f2`;
+  REL-000 no era requerido y quedó omitido. Los demás trabajos pasaron al primer intento.
+- **Registro.** La fila `SEC-2026-15-PNPM-REMEDIATION-2026-10-24` del decision-log entró después, en un
+  PR normal a `development`.
 
 En `development` las imágenes web ya sólo llevan dependencias de producción (#311), así que no
 incluyen `zod`. En `main` (`9e55771`) ese cambio aún no llegó: una imagen construida desde `main`
 incluye `zod` en `node_modules` y `next start` nunca lo carga.
+
+### Retiro del aviso conocido de braces (SEC-2026-10)
+
+`SEC-2026-10-BRACES-DOS-TRACKED` (Issue #180, rama `fix/security-2026-10-braces-dos-tracked`, base
+`8100c87`) aceptaba `GHSA-vfj7-8cjw-p6xm` (`braces` 3.0.3, alto, sólo de desarrollo por
+`eslint-config-next` → `@next/eslint-plugin-next` → `fast-glob` → `micromatch` → `braces`), porque
+ninguna versión de `braces` lo corregía. Entró a `main` con #181 (merge `1799568`, el 2026-10-03; su
+cabeza `b66d83c` pasó sus 15 checks, REL-000 incluido, y tiene el mismo árbol). SEC-2026-11, SEC-2026-14
+y SEC-2026-15 revincularon después su ruta y su hash al lockfile que cada una generó.
+
+GitHub retiró el aviso el 2026-10-23T12:53:02Z; desde entonces ni el audit de npm ni osv.dev lo
+reportan. Su condición de salida (publicar `braces>=3.0.4`) nunca ocurrió y no hace falta mover
+ninguna dependencia: `apps/web/pnpm-lock.yaml` sigue con `braces` 3.0.3. El owner decidió retirar la
+autorización con un PR pequeño a `development`, como #292, sin back-sync, y registrarla como las
+retiradas recientes (fila `SEC-2026-10-BRACES-RETIREMENT-2026-10-29` del decision-log).
+
+- **Política.** La entrada pasó de `active_remediations` al final de `historical_remediations` con
+  `status` `MERGED`, `tracked_pull_request` 181 y `validated_target_sha` `b66d83c`, como SEC-2026-12 a
+  SEC-2026-15. Aquí `MERGED` registra que se fusionó el PR que aceptó el aviso (#181); el motivo del
+  retiro fue el retiro del aviso en GitHub, no una remediación. Ningún otro valor registrado cambia: el
+  aviso aceptado sigue declarando la ruta 16.4.1, el `expected_lockfile_sha256` `f944eecd…` y la
+  condición de salida original. Es la primera autorización de aviso conocido que se retira; la política
+  no tenía forma para ello y el owner eligió esta (P2).
+- **Flujos y fixture.** La línea `REL000_REMEDIATION_ID` de ambos flujos ya no nombra la rama de braces
+  (siguen idénticas) y `tests/fixtures/rel-000/security-tracking.json` deja `remediation_issues` y
+  `known_advisory_issues` vacíos, así que REL-000 no consulta ningún Issue de aviso conocido. El paso
+  que los consulta sigue en los flujos y funciona con la lista vacía.
+- **Si braces vuelve a aparecer.** `rel000.py` no cambia: sólo una autorización activa acepta un aviso
+  conocido, así que un audit que vuelva a reportar braces falla cerrado en modo normal:
+  `UNTRACKED_DEPENDENCY_ADVISORY` si está en ambos audits y `NEW_DEPENDENCY_ADVISORY` si sólo está en la
+  rama, aunque el Issue #180 siga abierto y se consulte. La rama de braces ya no activa el modo de
+  remediación (`REMEDIATION_ID_NOT_ACTIVE`). Volver a aceptarlo exigiría otra decisión del owner.
+- **Modo normal.** Un cambio que no toca las dependencias web sigue siendo `CLEAN` sobre el lockfile
+  actual, con audit cero y sin avisos aceptados.
+- **Réplicas.** Las pruebas reproducen braces como la autorización activa que fue, justo después de
+  SEC-2026-08, y cada réplica lo lee tal como lo declaraba su propio `validated_target_sha`:
+  - #181, sobre el grafo 16.3.6 (lockfile `a85a581a…`), con los archivos de `b66d83c`;
+  - SEC-2026-11, SEC-2026-12 y SEC-2026-13, sobre el grafo 16.3.8 (`336b1c82…`). Las de SEC-2026-12 y
+    SEC-2026-13 leían el lockfile del checkout; ahora leen el de su `validated_target_sha`, porque
+    nadie volverá a revincular braces;
+  - SEC-2026-14, sobre el grafo 16.4.1 (`3f5834c3…`), y SEC-2026-15, sobre `f944eecd…`.
+
+  La entrada retirada, sin los tres campos del retiro, es exactamente la autorización que acepta la
+  validación exacta de braces, y, salvo la ruta y el hash revinculados, la que validó #181.
+- **Ruta.** El PR va sólo a `development`. `main` conserva la autorización hasta la próxima promoción,
+  sin efecto porque el aviso ya no se reporta. El owner cierra el Issue #180 con la nota del retiro
+  después de la fusión.
 
 ## Admisión explícita de dependencias (GOV-DEPENDENCY-ADMISSION-001)
 
@@ -801,9 +985,10 @@ base `13765fb`) remedia `GHSA-7pxr-59rr-hqj2` (CVE-2026-72923, alta): denegació
 expansión de alias YAML en `Microsoft.OpenApi.YamlReader` `>=2.0.0-preview.11 <2.12.0`. Sólo
 ContractTests usa ese paquete, para leer el AI-05 del propio repositorio. `Microsoft.OpenApi`
 (núcleo) no tiene aviso, pero YamlReader 2.12.0 exige `Microsoft.OpenApi` 2.12.0. El owner
-decidió "Remediar con la tabla" (2026-10-19), por la misma ruta que SEC-2026-12. La fila del
-decision-log y su entrada del CHANGELOG entran con el PR de retiro hacia `development`. El cambio
-es exactamente la tabla del owner:
+decidió "Remediar con la tabla" (2026-10-19), por la misma ruta que SEC-2026-12. La fila
+`SEC-2026-13-NUGET-REMEDIATION-2026-10-19` del decision-log y su entrada del CHANGELOG entraron con el
+PR de retiro hacia `development`, como en SEC-2026-12. Así el PR de remediación a `main` no tocó
+`docs/normative/**` y el back-sync no tuvo conflictos. El cambio es exactamente la tabla del owner:
 
 - `Microsoft.OpenApi` pasa de 2.7.5 a 2.12.0 en los locks de la API y de ContractTests (`Direct`) y en
   los de ArchitectureTests e IntegrationTests (`CentralTransitive`), sin cambiar de tipo;
@@ -834,6 +1019,27 @@ permanente (`test_k`) deshace ambos; sin el de SEC-2026-13 el checkout falla con
 
 El documento OpenAPI que genera la API (`/openapi/v1.json`, sólo en `Development`) es idéntico byte
 a byte con 2.7.5 y con 2.12.0.
+
+Historia de la remediación:
+
+- **Fusión.** Entró a `main` con #282 (merge `b949dd8`). La corrida de Foundation por `push` en `main`
+  sobre `b949dd8` pasó 13/13.
+- **Back-sync.** Llegó a `development` con #286 (merge `be6e84c`). Su PR Validation pasó en el primer
+  intento, con el plan certificado por esa corrida de Foundation; REL-000 no era requerido.
+- **Retiro.** La autorización quedó en `historical_remediations` con:
+  - `status` `MERGED`;
+  - `tracked_pull_request` 282;
+  - `validated_target_sha` `39252f4`, la cabeza que Foundation CI validó 13/13 (como en SEC-2026-12); su
+    árbol es idéntico al de `b949dd8`.
+
+  Las pruebas de SEC-2026-13 reproducen ese commit. El grafo permanente sigue leyendo la entrada retirada,
+  después de la de SEC-2026-12.
+- **Después del retiro.** Un PR hacia `development` en modo normal se juzga contra una base que ya tiene
+  esos nodos:
+  - los locks que no cambia no se juzgan;
+  - un cambio legítimo de uno de los cuatro locks (sólo nodos `Project`, o un paquete admitido) pasa;
+  - volver a mover `Microsoft.OpenApi` o `Microsoft.OpenApi.YamlReader` (por ejemplo, de regreso a 2.7.5 o
+    a 2.12.2), o mover `SharpYaml`, falla cerrado.
 
 ## Rollback REL-000
 

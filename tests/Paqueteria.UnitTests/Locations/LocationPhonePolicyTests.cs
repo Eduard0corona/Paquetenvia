@@ -26,7 +26,7 @@ public sealed class LocationPhonePolicyTests
     {
         var geocoding = new CountingGeocodingProvider();
         var protector = new CapturingPiiProtector();
-        var service = new PostgreSqlLocationService(null!, geocoding, protector, null!, null!);
+        var service = new PostgreSqlLocationService(null!, geocoding, protector, new DisabledLocationNoticeContactSealer(), null!, null!);
 
         await Assert.ThrowsAsync<ArgumentException>(() =>
             service.CreateAsync(Command(phone), CancellationToken.None));
@@ -45,7 +45,7 @@ public sealed class LocationPhonePolicyTests
     public async Task A_valid_phone_reaches_the_protector_as_the_ten_national_digits(string phone)
     {
         var protector = new CapturingPiiProtector();
-        var service = new PostgreSqlLocationService(null!, new CountingGeocodingProvider(), protector, null!, null!);
+        var service = new PostgreSqlLocationService(null!, new CountingGeocodingProvider(), protector, new DisabledLocationNoticeContactSealer(), null!, null!);
 
         await Assert.ThrowsAsync<LocationPiiProtectionUnavailableException>(() =>
             service.CreateAsync(Command(phone), CancellationToken.None));
@@ -58,7 +58,7 @@ public sealed class LocationPhonePolicyTests
     public async Task A_location_without_phone_stays_valid()
     {
         var protector = new CapturingPiiProtector();
-        var service = new PostgreSqlLocationService(null!, new CountingGeocodingProvider(), protector, null!, null!);
+        var service = new PostgreSqlLocationService(null!, new CountingGeocodingProvider(), protector, new DisabledLocationNoticeContactSealer(), null!, null!);
 
         await Assert.ThrowsAsync<LocationPiiProtectionUnavailableException>(() =>
             service.CreateAsync(Command(null), CancellationToken.None));

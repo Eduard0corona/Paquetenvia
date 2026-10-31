@@ -29,7 +29,7 @@ owner, literales:
 
 Es un cambio MAJOR (AI-01 §7): cambia la experiencia del repartidor, agrega un encargado externo de datos personales
 (Twilio) y un costo mensual. Restricciones: los teléfonos son datos personales (ADP-001: sobre cifrado con Key Vault);
-nunca en logs, snapshots, outbox, eventos ni auditoría; RLS forzado; solo los cinco flujos atómicos de AI-13 §4; AI-06
+nunca en logs, snapshots, outbox, eventos ni auditoría; RLS forzado; solo los flujos atómicos de AI-13 §4; AI-06
 y AI-18 no cambian sin necesidad estricta.
 
 Precios verificados el 2026-10-10/11 ("as of August 2026"): número local US$6.25/mes, móvil US$15/mes, toll-free
@@ -106,7 +106,7 @@ US$30/mes; saliente a móviles de México US$0.0473/min, a fijos US$0.016/min; e
    `RECIPIENT_NOT_CONFIRMED`); ningún número. FORCE RLS por `org_id`, sin privilegios del Worker, sin `DELETE` en
    runtime, sin llave foránea hacia Orders o Dispatch. AI-06 y AI-18 no cambian (objetos propios del carril, como
    NTF-001). El rollback se niega mientras haya solicitudes o teléfonos guardados.
-8. **Sin sexto flujo atómico.** Cada transacción escribe solo filas de Drivers más idempotencia y auditoría
+8. **Sin flujo atómico nuevo.** Cada transacción escribe solo filas de Drivers más idempotencia y auditoría
    compartidas; Dispatch, Orders y Locations se leen bajo RLS y nunca se escriben.
 
 ## Alternativas descartadas

@@ -100,6 +100,11 @@ public enum QuoteLocationResolutionStatus
     AmbiguousCoverage,
 }
 
+/// <summary>
+/// One location of a quote. NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002): <see cref="Email"/> is the optional,
+/// already normalized recipient e-mail and is accepted only for <see cref="QuoteLocationRole.Destination"/>.
+/// <see cref="ToString"/> never prints a personal value.
+/// </summary>
 public sealed record ResolveQuoteLocationCommand(
     Guid ActorId,
     Guid OrganizationId,
@@ -111,7 +116,12 @@ public sealed record ResolveQuoteLocationCommand(
     string? References,
     double Lat,
     double Lng,
-    string? RequestId);
+    string? RequestId,
+    string? Email = null)
+{
+    public override string ToString() =>
+        $"ResolveQuoteLocationCommand {{ OrganizationId = {OrganizationId:D}, Role = {Role}, [personal values redacted] }}";
+}
 
 public sealed record QuoteLocationResult(
     Guid LocationId,

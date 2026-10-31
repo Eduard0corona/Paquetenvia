@@ -1541,6 +1541,202 @@
       "require_sharp_runtime_smoke": false,
       "prohibited_prereleases": true,
       "manual_lockfile_edits_allowed": false
+    },
+    {
+      "id": "SEC-2026-13-OPENAPI-YAMLREADER",
+      "mode": "SECURITY_REMEDIATION",
+      "status": "MERGED",
+      "authorized_base_sha": "13765fbb252ee9d0b9fb13a9a5a8527efda4e79c",
+      "authorized_source_branch": "fix/security-2026-13-openapi-yamlreader",
+      "validated_target_sha": "39252f466e7e7f352faa0c12c03ba74a3d541400",
+      "tracked_pull_request": 282,
+      "tracked_issue": 280,
+      "tracked_issue_title": "SEC-2026-13: remediate Microsoft.OpenApi.YamlReader advisory GHSA-7pxr-59rr-hqj2 (CVE-2026-72923)",
+      "issue_advisories": {
+        "280": [
+          "GHSA-7pxr-59rr-hqj2"
+        ]
+      },
+      "expected_base_advisories": [
+        "GHSA-7pxr-59rr-hqj2",
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "expected_base_packages": {
+        "GHSA-7pxr-59rr-hqj2": "Microsoft.OpenApi.YamlReader",
+        "GHSA-vfj7-8cjw-p6xm": "braces"
+      },
+      "expected_base_severities": {
+        "GHSA-7pxr-59rr-hqj2": "high",
+        "GHSA-vfj7-8cjw-p6xm": "high"
+      },
+      "expected_base_totals": {
+        "total": 2,
+        "critical": 0,
+        "high": 2,
+        "moderate": 0,
+        "low": 0
+      },
+      "expected_branch_totals": {
+        "total": 1,
+        "critical": 0,
+        "high": 1,
+        "moderate": 0,
+        "low": 0
+      },
+      "expected_cves": {
+        "GHSA-7pxr-59rr-hqj2": "CVE-2026-72923"
+      },
+      "nuget_affected_range": ">=2.0.0-preview.11 <2.12.0",
+      "nuget_first_patched_version": "2.12.0",
+      "allowed_direct_packages": [
+        "Microsoft.OpenApi",
+        "Microsoft.OpenApi.YamlReader"
+      ],
+      "allowed_dependency_files": [
+        "Directory.Packages.props",
+        "src/Paqueteria.Api/packages.lock.json",
+        "tests/Paqueteria.ArchitectureTests/packages.lock.json",
+        "tests/Paqueteria.ContractTests/packages.lock.json",
+        "tests/Paqueteria.IntegrationTests/packages.lock.json"
+      ],
+      "required_dependency_files": [
+        "Directory.Packages.props",
+        "src/Paqueteria.Api/packages.lock.json",
+        "tests/Paqueteria.ArchitectureTests/packages.lock.json",
+        "tests/Paqueteria.ContractTests/packages.lock.json",
+        "tests/Paqueteria.IntegrationTests/packages.lock.json"
+      ],
+      "allowed_non_dependency_files": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/pr-validation.yml",
+        "docs/development/rel-000-internal-release.md",
+        "tests/fixtures/rel-000/security-tracking.json",
+        "tools/rel-000/rel000.py",
+        "tools/rel-000/security-remediation-policy.json",
+        "tools/rel-000/test_rel000.py"
+      ],
+      "expected_central_version_changes": {
+        "Microsoft.OpenApi": {
+          "from": "2.7.5",
+          "to": "2.12.0"
+        },
+        "Microsoft.OpenApi.YamlReader": {
+          "from": "2.7.5",
+          "to": "2.12.0"
+        }
+      },
+      "expected_central_version_additions": [],
+      "central_package_transitive_pinning_required": false,
+      "expected_nuget_package_moves": {
+        "Microsoft.OpenApi": {
+          "from_version": "2.7.5",
+          "from_content_hash": "0FA67RSnRM4tcBKqiqVu/HPdZ9+QOKbmeRjxRUGTCjPU4C0bmUhd97Dso7Yild5P7nOV6GxJ2xrK0Kv/O9xp0w==",
+          "to_version": "2.12.0",
+          "to_content_hash": "0xB/be+f6qYOhvQPUrVsLrau+fkowYv6gt9RIkajMhwT7sZnqtcA797yW3bS5kgSje+AQW4xZgyLnW641YFioQ==",
+          "pinned_centrally": false,
+          "lock_files": [
+            "src/Paqueteria.Api/packages.lock.json",
+            "tests/Paqueteria.ArchitectureTests/packages.lock.json",
+            "tests/Paqueteria.ContractTests/packages.lock.json",
+            "tests/Paqueteria.IntegrationTests/packages.lock.json"
+          ]
+        },
+        "Microsoft.OpenApi.YamlReader": {
+          "from_version": "2.7.5",
+          "from_content_hash": "IDzNlclDyWci87dNyrAvmbSdcbnPUYc11HCDSh/Otsb+d7KyHGnBaCS5NhTySg/v1j3wB+jPhAfz2+X+n8iMAg==",
+          "to_version": "2.12.0",
+          "to_content_hash": "PMpQU9qh4Ni9F+vCuYVJ4w+GMPflmPuY16iS4ZoNq2biSNJmmY6V2nHRMN9KXJSdpD+heMnKEsczU+fTNXmi4A==",
+          "pinned_centrally": false,
+          "lock_files": [
+            "tests/Paqueteria.ContractTests/packages.lock.json"
+          ]
+        }
+      },
+      "expected_lockfile_sha256": {
+        "src/Paqueteria.Api/packages.lock.json": "0297c6befd6c4baceb3b2d9e96410ff8cf0603c9ca0a1356e91d1263d7f4a6d3",
+        "tests/Paqueteria.ArchitectureTests/packages.lock.json": "f358099863697c00b6f44d461ece78e067eb3066712929de7de03782de23ed1f",
+        "tests/Paqueteria.ContractTests/packages.lock.json": "77ffe94f308bc2103d14892064e1c71cb7897a550d1f4c33f4b16e1f7355b67f",
+        "tests/Paqueteria.IntegrationTests/packages.lock.json": "c60895219c4fc31a6fbfdbe5b8c1bdb02eb9c870af7e3f154a34c347b9d6e1af"
+      },
+      "require_sharp_runtime_smoke": false,
+      "prohibited_prereleases": true,
+      "manual_lockfile_edits_allowed": false
+    },
+    {
+      "id": "SEC-2026-10-BRACES-DOS-TRACKED",
+      "mode": "SECURITY_REMEDIATION",
+      "status": "MERGED",
+      "authorized_base_sha": "8100c87e154203a24f43714a2082fe279f1094c7",
+      "authorized_source_branch": "fix/security-2026-10-braces-dos-tracked",
+      "validated_target_sha": "b66d83c43ceee6498268a16bcd3a98fab45b67c9",
+      "tracked_pull_request": 181,
+      "tracked_issue": 180,
+      "tracked_issue_title": "SEC-2026-10: track braces stack-exhaustion advisory until a patched release ships",
+      "issue_advisories": {
+        "180": [
+          "GHSA-vfj7-8cjw-p6xm"
+        ]
+      },
+      "expected_base_advisories": [
+        "GHSA-vfj7-8cjw-p6xm"
+      ],
+      "expected_base_packages": {
+        "GHSA-vfj7-8cjw-p6xm": "braces"
+      },
+      "expected_base_totals": {
+        "total": 1,
+        "critical": 0,
+        "high": 1,
+        "moderate": 0,
+        "low": 0
+      },
+      "expected_branch_totals": {
+        "total": 1,
+        "critical": 0,
+        "high": 1,
+        "moderate": 0,
+        "low": 0
+      },
+      "allowed_direct_packages": [],
+      "allowed_dependency_files": [
+        "apps/web/pnpm-lock.yaml"
+      ],
+      "required_dependency_files": [],
+      "allowed_non_dependency_files": [
+        ".github/workflows/ci.yml",
+        ".github/workflows/pr-validation.yml",
+        "tests/fixtures/rel-000/security-tracking.json",
+        "tools/rel-000/rel000.py",
+        "tools/rel-000/security-remediation-policy.json",
+        "tools/rel-000/test_rel000.py"
+      ],
+      "accepted_known_advisory": {
+        "advisory_id": "GHSA-vfj7-8cjw-p6xm",
+        "package": "braces",
+        "severity": "high",
+        "installed_versions": ["3.0.3"],
+        "affected_range": "<=3.0.3",
+        "patched_range": ">=3.0.4",
+        "direct_or_transitive": "transitive",
+        "dependency_path_count": 1,
+        "dependency_scope": "dev",
+        "lock_path": [
+          "eslint-config-next@16.4.1",
+          "@next/eslint-plugin-next@16.4.1",
+          "fast-glob@3.3.1",
+          "micromatch@4.0.8",
+          "braces@3.0.3"
+        ],
+        "lockfile": "apps/web/pnpm-lock.yaml",
+        "expected_lockfile_sha256": "f944eecd2b6dd09f39fbe06677be038e6e38bdbcaca901da330353f02f0b5aa4",
+        "tracked_issue": 180,
+        "tracked_issue_title": "SEC-2026-10: track braces stack-exhaustion advisory until a patched release ships",
+        "exit_condition": "When braces>=3.0.4 is published on npm: add the override \"braces@<3.0.4\": 3.0.4 in apps/web/pnpm-workspace.yaml, regenerate apps/web/pnpm-lock.yaml with pnpm 11.15.1, verify a zero audit, retire this accepted known advisory and close Issue #180."
+      },
+      "target_sharp_version": "0.35.4",
+      "require_sharp_runtime_smoke": true,
+      "prohibited_prereleases": true,
+      "manual_lockfile_edits_allowed": false
     }
   ],
   "active_remediations": [
@@ -1662,35 +1858,35 @@
       }
     },
     {
-      "id": "SEC-2026-10-BRACES-DOS-TRACKED",
+      "id": "SEC-2026-16-MINIMATCH-GLOBPARTS-TRACKED",
       "mode": "SECURITY_REMEDIATION",
-      "authorized_base_sha": "8100c87e154203a24f43714a2082fe279f1094c7",
-      "authorized_source_branch": "fix/security-2026-10-braces-dos-tracked",
-      "tracked_issue": 180,
-      "tracked_issue_title": "SEC-2026-10: track braces stack-exhaustion advisory until a patched release ships",
+      "authorized_base_sha": "ece1c3e7ccb035fe74ce5b044711da24be4813b3",
+      "authorized_source_branch": "fix/security-2026-16-minimatch-tracked",
+      "tracked_issue": 324,
+      "tracked_issue_title": "SEC-2026-16: track minimatch globparts advisory until a compatible patched release ships",
       "issue_advisories": {
-        "180": [
-          "GHSA-vfj7-8cjw-p6xm"
+        "324": [
+          "GHSA-g3hv-75wg-m249"
         ]
       },
       "expected_base_advisories": [
-        "GHSA-vfj7-8cjw-p6xm"
+        "GHSA-g3hv-75wg-m249"
       ],
       "expected_base_packages": {
-        "GHSA-vfj7-8cjw-p6xm": "braces"
+        "GHSA-g3hv-75wg-m249": "minimatch"
       },
       "expected_base_totals": {
         "total": 1,
         "critical": 0,
-        "high": 1,
-        "moderate": 0,
+        "high": 0,
+        "moderate": 1,
         "low": 0
       },
       "expected_branch_totals": {
         "total": 1,
         "critical": 0,
-        "high": 1,
-        "moderate": 0,
+        "high": 0,
+        "moderate": 1,
         "low": 0
       },
       "allowed_direct_packages": [],
@@ -1701,153 +1897,48 @@
       "allowed_non_dependency_files": [
         ".github/workflows/ci.yml",
         ".github/workflows/pr-validation.yml",
+        "docs/development/rel-000-internal-release.md",
+        "docs/normative/v0.6/CHANGELOG.md",
+        "docs/normative/v0.6/CHECKSUMS_SHA256.txt",
+        "docs/normative/v0.6/MANIFEST.json",
+        "docs/normative/v0.6/decision-log.md",
+        "tests/Paqueteria.ArchitectureTests/SyntheticEnvironmentArchitectureTests.cs",
         "tests/fixtures/rel-000/security-tracking.json",
         "tools/rel-000/rel000.py",
         "tools/rel-000/security-remediation-policy.json",
         "tools/rel-000/test_rel000.py"
       ],
       "accepted_known_advisory": {
-        "advisory_id": "GHSA-vfj7-8cjw-p6xm",
-        "package": "braces",
-        "severity": "high",
-        "installed_versions": ["3.0.3"],
-        "affected_range": "<=3.0.3",
-        "patched_range": ">=3.0.4",
+        "advisory_id": "GHSA-g3hv-75wg-m249",
+        "package": "minimatch",
+        "severity": "moderate",
+        "installed_versions": ["10.2.5", "3.1.5"],
+        "affected_range": "<11.0.1",
+        "patched_range": ">=11.0.1",
         "direct_or_transitive": "transitive",
-        "dependency_path_count": 1,
+        "dependency_path_count": 96,
         "dependency_scope": "dev",
-        "lock_path": [
-          "eslint-config-next@16.4.1",
-          "@next/eslint-plugin-next@16.4.1",
-          "fast-glob@3.3.1",
-          "micromatch@4.0.8",
-          "braces@3.0.3"
-        ],
+        "lock_parents": {
+          "10.2.5": [
+            "@typescript-eslint/typescript-estree@8.64.0"
+          ],
+          "3.1.5": [
+            "@eslint/config-array@0.21.2",
+            "@eslint/eslintrc@3.3.6",
+            "eslint-plugin-import@2.32.0",
+            "eslint-plugin-jsx-a11y@6.10.2",
+            "eslint-plugin-react@7.37.5",
+            "eslint@9.39.5"
+          ]
+        },
         "lockfile": "apps/web/pnpm-lock.yaml",
         "expected_lockfile_sha256": "f944eecd2b6dd09f39fbe06677be038e6e38bdbcaca901da330353f02f0b5aa4",
-        "tracked_issue": 180,
-        "tracked_issue_title": "SEC-2026-10: track braces stack-exhaustion advisory until a patched release ships",
-        "exit_condition": "When braces>=3.0.4 is published on npm: add the override \"braces@<3.0.4\": 3.0.4 in apps/web/pnpm-workspace.yaml, regenerate apps/web/pnpm-lock.yaml with pnpm 11.15.1, verify a zero audit, retire this accepted known advisory and close Issue #180."
+        "tracked_issue": 324,
+        "tracked_issue_title": "SEC-2026-16: track minimatch globparts advisory until a compatible patched release ships",
+        "exit_condition": "When a patched minimatch 3.x or 10.x is published on npm, or the dependents (eslint, @eslint/config-array, @eslint/eslintrc, eslint-plugin-import, eslint-plugin-jsx-a11y, eslint-plugin-react and @typescript-eslint/typescript-estree) accept minimatch>=11.0.1: remediate it through the SEC-2026-15 (zod) route. When GitHub withdraws or narrows GHSA-g3hv-75wg-m249: retire this acceptance as SEC-2026-10 (braces) was retired. Then verify a zero audit, retire this accepted known advisory and close Issue #324."
       },
-      "target_sharp_version": "0.35.4",
+      "target_sharp_version": "0.35.5",
       "require_sharp_runtime_smoke": true,
-      "prohibited_prereleases": true,
-      "manual_lockfile_edits_allowed": false
-    },
-    {
-      "id": "SEC-2026-13-OPENAPI-YAMLREADER",
-      "mode": "SECURITY_REMEDIATION",
-      "authorized_base_sha": "13765fbb252ee9d0b9fb13a9a5a8527efda4e79c",
-      "authorized_source_branch": "fix/security-2026-13-openapi-yamlreader",
-      "tracked_issue": 280,
-      "tracked_issue_title": "SEC-2026-13: remediate Microsoft.OpenApi.YamlReader advisory GHSA-7pxr-59rr-hqj2 (CVE-2026-72923)",
-      "issue_advisories": {
-        "280": [
-          "GHSA-7pxr-59rr-hqj2"
-        ]
-      },
-      "expected_base_advisories": [
-        "GHSA-7pxr-59rr-hqj2",
-        "GHSA-vfj7-8cjw-p6xm"
-      ],
-      "expected_base_packages": {
-        "GHSA-7pxr-59rr-hqj2": "Microsoft.OpenApi.YamlReader",
-        "GHSA-vfj7-8cjw-p6xm": "braces"
-      },
-      "expected_base_severities": {
-        "GHSA-7pxr-59rr-hqj2": "high",
-        "GHSA-vfj7-8cjw-p6xm": "high"
-      },
-      "expected_base_totals": {
-        "total": 2,
-        "critical": 0,
-        "high": 2,
-        "moderate": 0,
-        "low": 0
-      },
-      "expected_branch_totals": {
-        "total": 1,
-        "critical": 0,
-        "high": 1,
-        "moderate": 0,
-        "low": 0
-      },
-      "expected_cves": {
-        "GHSA-7pxr-59rr-hqj2": "CVE-2026-72923"
-      },
-      "nuget_affected_range": ">=2.0.0-preview.11 <2.12.0",
-      "nuget_first_patched_version": "2.12.0",
-      "allowed_direct_packages": [
-        "Microsoft.OpenApi",
-        "Microsoft.OpenApi.YamlReader"
-      ],
-      "allowed_dependency_files": [
-        "Directory.Packages.props",
-        "src/Paqueteria.Api/packages.lock.json",
-        "tests/Paqueteria.ArchitectureTests/packages.lock.json",
-        "tests/Paqueteria.ContractTests/packages.lock.json",
-        "tests/Paqueteria.IntegrationTests/packages.lock.json"
-      ],
-      "required_dependency_files": [
-        "Directory.Packages.props",
-        "src/Paqueteria.Api/packages.lock.json",
-        "tests/Paqueteria.ArchitectureTests/packages.lock.json",
-        "tests/Paqueteria.ContractTests/packages.lock.json",
-        "tests/Paqueteria.IntegrationTests/packages.lock.json"
-      ],
-      "allowed_non_dependency_files": [
-        ".github/workflows/ci.yml",
-        ".github/workflows/pr-validation.yml",
-        "docs/development/rel-000-internal-release.md",
-        "tests/fixtures/rel-000/security-tracking.json",
-        "tools/rel-000/rel000.py",
-        "tools/rel-000/security-remediation-policy.json",
-        "tools/rel-000/test_rel000.py"
-      ],
-      "expected_central_version_changes": {
-        "Microsoft.OpenApi": {
-          "from": "2.7.5",
-          "to": "2.12.0"
-        },
-        "Microsoft.OpenApi.YamlReader": {
-          "from": "2.7.5",
-          "to": "2.12.0"
-        }
-      },
-      "expected_central_version_additions": [],
-      "central_package_transitive_pinning_required": false,
-      "expected_nuget_package_moves": {
-        "Microsoft.OpenApi": {
-          "from_version": "2.7.5",
-          "from_content_hash": "0FA67RSnRM4tcBKqiqVu/HPdZ9+QOKbmeRjxRUGTCjPU4C0bmUhd97Dso7Yild5P7nOV6GxJ2xrK0Kv/O9xp0w==",
-          "to_version": "2.12.0",
-          "to_content_hash": "0xB/be+f6qYOhvQPUrVsLrau+fkowYv6gt9RIkajMhwT7sZnqtcA797yW3bS5kgSje+AQW4xZgyLnW641YFioQ==",
-          "pinned_centrally": false,
-          "lock_files": [
-            "src/Paqueteria.Api/packages.lock.json",
-            "tests/Paqueteria.ArchitectureTests/packages.lock.json",
-            "tests/Paqueteria.ContractTests/packages.lock.json",
-            "tests/Paqueteria.IntegrationTests/packages.lock.json"
-          ]
-        },
-        "Microsoft.OpenApi.YamlReader": {
-          "from_version": "2.7.5",
-          "from_content_hash": "IDzNlclDyWci87dNyrAvmbSdcbnPUYc11HCDSh/Otsb+d7KyHGnBaCS5NhTySg/v1j3wB+jPhAfz2+X+n8iMAg==",
-          "to_version": "2.12.0",
-          "to_content_hash": "PMpQU9qh4Ni9F+vCuYVJ4w+GMPflmPuY16iS4ZoNq2biSNJmmY6V2nHRMN9KXJSdpD+heMnKEsczU+fTNXmi4A==",
-          "pinned_centrally": false,
-          "lock_files": [
-            "tests/Paqueteria.ContractTests/packages.lock.json"
-          ]
-        }
-      },
-      "expected_lockfile_sha256": {
-        "src/Paqueteria.Api/packages.lock.json": "0297c6befd6c4baceb3b2d9e96410ff8cf0603c9ca0a1356e91d1263d7f4a6d3",
-        "tests/Paqueteria.ArchitectureTests/packages.lock.json": "f358099863697c00b6f44d461ece78e067eb3066712929de7de03782de23ed1f",
-        "tests/Paqueteria.ContractTests/packages.lock.json": "77ffe94f308bc2103d14892064e1c71cb7897a550d1f4c33f4b16e1f7355b67f",
-        "tests/Paqueteria.IntegrationTests/packages.lock.json": "c60895219c4fc31a6fbfdbe5b8c1bdb02eb9c870af7e3f154a34c347b9d6e1af"
-      },
-      "require_sharp_runtime_smoke": false,
       "prohibited_prereleases": true,
       "manual_lockfile_edits_allowed": false
     }

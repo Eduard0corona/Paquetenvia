@@ -22,6 +22,28 @@ public static class E002NotificationStateReader
     /// </summary>
     public const string RealtimeDispatcherRoleMigrationId = "20261012000100_AddRealtimeDispatcherRole";
 
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-003): the recipient notice lane step. It replaces the published
+    /// 8-argument <c>security.apply_notification_outcome</c> with v2 and adds <c>expand_recipient_notice_request</c>,
+    /// <c>cancel_notification</c> and <c>is_recipient_opted_out</c>, all owned by <c>paqueteria_outbox_executor</c> and
+    /// executable only by <c>paqueteria_worker</c>.
+    /// </summary>
+    public const string RecipientNoticeLaneMigrationId = "20261020000100_AddRecipientNoticeLane";
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-CAPS-2026-10-23 (AI-08 NTF-005): adds <c>security.read_recipient_notice_counts</c>, owned by
+    /// <c>paqueteria_outbox_executor</c> and executable only by <c>paqueteria_worker</c>, and two partial indexes.
+    /// </summary>
+    public const string RecipientNoticeCountsMigrationId = "20261023000100_AddRecipientNoticeCounts";
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006): grants the receipt executor its exact column privileges and
+    /// EXECUTE on <c>security.emit_notification_status_changed</c>, creates the automatic-reply store and installs five
+    /// functions owned by <c>paqueteria_notification_receipt_executor</c> (three executable only by <c>paqueteria_app</c>,
+    /// two only by <c>paqueteria_worker</c>).
+    /// </summary>
+    public const string RecipientNoticeReceiptsMigrationId = "20261029000100_AddRecipientNoticeReceipts";
+
     private static readonly string[] ExpectedHistory =
     [
         Ntf001MigrationId,
@@ -36,6 +58,9 @@ public static class E002NotificationStateReader
         // OBS-003-OUTBOX-TRACE-CONTEXT-2026-10-13: replaces only the emit_notification_status_changed and
         // expand_order_created_notifications bodies.
         "20261013000200_CarryOutboxTraceContext",
+        RecipientNoticeLaneMigrationId,
+        RecipientNoticeCountsMigrationId,
+        RecipientNoticeReceiptsMigrationId,
     ];
 
     public static async Task<E002NotificationState> ReadAsync(
@@ -121,6 +146,59 @@ public static class E002NotificationStateReader
             "SELECT EXISTS (SELECT 1 FROM platform.__ef_migrations_history_notifications WHERE \"MigrationId\"=@id)",
             connection, transaction);
         command.Parameters.AddWithValue("id", RealtimeDispatcherRoleMigrationId);
+        return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
+    }
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20: whether the recipient notice lane step is recorded. Recorded history, not the
+    /// catalog, decides, so a recorded step whose routines are missing fails the map.
+    /// </summary>
+    public static Task<bool> IsRecipientNoticeLaneAppliedAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction = null,
+        CancellationToken cancellationToken = default) =>
+        IsRecordedAsync(connection, transaction, RecipientNoticeLaneMigrationId, cancellationToken);
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-CAPS-2026-10-23: whether the recipient notice count step is recorded. Recorded history, not the
+    /// catalog, decides, so a recorded step whose routine is missing fails the map.
+    /// </summary>
+    public static Task<bool> IsRecipientNoticeCountsAppliedAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction = null,
+        CancellationToken cancellationToken = default) =>
+        IsRecordedAsync(connection, transaction, RecipientNoticeCountsMigrationId, cancellationToken);
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: whether the receipts step is recorded. Recorded history, not the catalog,
+    /// decides, so a recorded step whose routine is missing fails the map.
+    /// </summary>
+    public static Task<bool> IsRecipientNoticeReceiptsAppliedAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction = null,
+        CancellationToken cancellationToken = default) =>
+        IsRecordedAsync(connection, transaction, RecipientNoticeReceiptsMigrationId, cancellationToken);
+
+    private static async Task<bool> IsRecordedAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction? transaction,
+        string migrationId,
+        CancellationToken cancellationToken)
+    {
+        await using (var exists = new NpgsqlCommand(
+            "SELECT to_regclass('platform.__ef_migrations_history_notifications') IS NOT NULL",
+            connection, transaction))
+        {
+            if (await exists.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is not true)
+            {
+                return false;
+            }
+        }
+
+        await using var command = new NpgsqlCommand(
+            "SELECT EXISTS (SELECT 1 FROM platform.__ef_migrations_history_notifications WHERE \"MigrationId\"=@id)",
+            connection, transaction);
+        command.Parameters.AddWithValue("id", migrationId);
         return await command.ExecuteScalarAsync(cancellationToken).ConfigureAwait(false) is true;
     }
 

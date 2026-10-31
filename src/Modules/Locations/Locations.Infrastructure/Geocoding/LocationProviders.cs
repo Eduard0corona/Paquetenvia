@@ -87,7 +87,8 @@ public sealed class DeterministicMockLocationPiiProtector : ILocationPiiProtecto
             KeyVersion,
             Protect(values.AddressText, KeyVersion),
             string.IsNullOrWhiteSpace(values.ContactName) ? null : Protect(values.ContactName, KeyVersion),
-            string.IsNullOrWhiteSpace(values.Phone) ? null : Protect(values.Phone, KeyVersion)));
+            string.IsNullOrWhiteSpace(values.Phone) ? null : Protect(values.Phone, KeyVersion),
+            string.IsNullOrWhiteSpace(values.Email) ? null : Protect(values.Email, KeyVersion)));
     }
 }
 
@@ -102,6 +103,9 @@ public sealed class AzureKeyVaultLocationPiiProtector(IPiiEnvelopeProtector enve
     public const string ContactNamePurpose = "locations.contact_name";
     public const string PhonePurpose = "locations.phone";
 
+    /// <summary>NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002): the optional delivery recipient e-mail.</summary>
+    public const string EmailPurpose = "locations.email";
+
     public async Task<ProtectedLocationPii> ProtectAsync(LocationPiiValues values, CancellationToken cancellationToken)
     {
         ArgumentNullException.ThrowIfNull(values);
@@ -109,6 +113,7 @@ public sealed class AzureKeyVaultLocationPiiProtector(IPiiEnvelopeProtector enve
         var inputs = new List<PiiPlaintext> { new(AddressTextPurpose, values.AddressText) };
         var hasContactName = !string.IsNullOrWhiteSpace(values.ContactName);
         var hasPhone = !string.IsNullOrWhiteSpace(values.Phone);
+        var hasEmail = !string.IsNullOrWhiteSpace(values.Email);
         if (hasContactName)
         {
             inputs.Add(new PiiPlaintext(ContactNamePurpose, values.ContactName!));
@@ -117,6 +122,11 @@ public sealed class AzureKeyVaultLocationPiiProtector(IPiiEnvelopeProtector enve
         if (hasPhone)
         {
             inputs.Add(new PiiPlaintext(PhonePurpose, values.Phone!));
+        }
+
+        if (hasEmail)
+        {
+            inputs.Add(new PiiPlaintext(EmailPurpose, values.Email!));
         }
 
         PiiProtectedBatch batch;
@@ -147,6 +157,7 @@ public sealed class AzureKeyVaultLocationPiiProtector(IPiiEnvelopeProtector enve
             batch.KeyVersion,
             batch.Ciphertexts[0],
             hasContactName ? batch.Ciphertexts[index++] : null,
-            hasPhone ? batch.Ciphertexts[index] : null);
+            hasPhone ? batch.Ciphertexts[index++] : null,
+            hasEmail ? batch.Ciphertexts[index] : null);
     }
 }

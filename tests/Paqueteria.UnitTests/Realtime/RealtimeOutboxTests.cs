@@ -222,6 +222,177 @@ public sealed class RealtimeOutboxTests
         Assert.Equal(new NotificationStatusChangedPayload(notificationId, "IN_APP", "SENT", 1, OccurredAt), envelope.Payload);
     }
 
+    [Theory]
+    [InlineData("WHATSAPP", "FAILED")]
+    [InlineData("EMAIL", "PENDING")]
+    [InlineData("IN_APP", "FAILED")]
+    public void Notification_status_v1_of_every_channel_reaches_operations_instead_of_ending_dead(
+        string channel,
+        string status)
+    {
+        // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-12 decided amendment): before the amendment a WhatsApp or e-mail v1 row was
+        // INVALID_PAYLOAD (DEAD), which dropped the dispatcher alert of NTF-WHATSAPP-AMBIGUOUS-FAILS-2026-10-02.
+        var notificationId = Guid.Parse("00000000-0000-0000-0000-000000000809");
+        var parsed = Assert.IsType<ParsedNotificationStatusChanged>(RealtimeOutboxParser.Parse(Notification(
+            notificationId,
+            new Dictionary<string, object>
+            {
+                ["schema_version"] = "notification-status-changed-v1",
+                ["notification_id"] = notificationId,
+                ["channel"] = channel,
+                ["status"] = status,
+                ["attempts"] = 1,
+                ["occurred_at"] = OccurredAt,
+            })));
+        var envelope = RealtimeOutboxEnvelopeFactory.Notification(parsed);
+
+        Assert.Equal(RealtimeEventTypes.NotificationStatusChanged, envelope.EventType);
+        Assert.Equal(new NotificationStatusChangedPayload(notificationId, channel, status, 1, OccurredAt), envelope.Payload);
+        Assert.Equal(
+            ["attempts", "channel", "notification_id", "occurred_at", "status"],
+            PayloadPropertyNames(envelope.Payload));
+    }
+
+    [Theory]
+    [InlineData("WHATSAPP", "SENT", "TRACKING_LINK")]
+    [InlineData("WHATSAPP", "CANCELLED", "IN_TRANSIT")]
+    [InlineData("EMAIL", "DELIVERED", "DELIVERED")]
+    [InlineData("EMAIL", "FAILED", "DELIVERY_FAILED")]
+    [InlineData("WHATSAPP", "PENDING", "DELIVERED")]
+    public void Notification_status_v2_of_a_recipient_notice_carries_its_order_and_notice_only(
+        string channel,
+        string status,
+        string notice)
+    {
+        var notificationId = Guid.Parse("00000000-0000-0000-0000-00000000080a");
+        var parsed = Assert.IsType<ParsedNotificationStatusChanged>(RealtimeOutboxParser.Parse(Notification(
+            notificationId,
+            new Dictionary<string, object>
+            {
+                ["schema_version"] = "notification-status-changed-v2",
+                ["notification_id"] = notificationId,
+                ["channel"] = channel,
+                ["status"] = status,
+                ["attempts"] = 0,
+                ["occurred_at"] = OccurredAt,
+                ["order_id"] = OrderId,
+                ["notice"] = notice,
+            })));
+        var envelope = RealtimeOutboxEnvelopeFactory.Notification(parsed);
+
+        Assert.Equal(RealtimeEventTypes.NotificationStatusChangedV2, envelope.EventType);
+        Assert.Equal(notificationId, envelope.AggregateId);
+        Assert.Equal(
+            new NotificationStatusChangedPayload(notificationId, channel, status, 0, OccurredAt, OrderId, notice),
+            envelope.Payload);
+        Assert.Equal(
+            ["attempts", "channel", "notice", "notification_id", "occurred_at", "order_id", "status"],
+            PayloadPropertyNames(envelope.Payload));
+    }
+
+    [Fact]
+    public void Notification_status_v2_of_an_in_app_notification_carries_neither_order_nor_notice()
+    {
+        var notificationId = Guid.Parse("00000000-0000-0000-0000-00000000080b");
+        var parsed = Assert.IsType<ParsedNotificationStatusChanged>(RealtimeOutboxParser.Parse(Notification(
+            notificationId,
+            new Dictionary<string, object>
+            {
+                ["schema_version"] = "notification-status-changed-v2",
+                ["notification_id"] = notificationId,
+                ["channel"] = "IN_APP",
+                ["status"] = "SENT",
+                ["attempts"] = 1,
+                ["occurred_at"] = OccurredAt,
+            })));
+        var envelope = RealtimeOutboxEnvelopeFactory.Notification(parsed);
+
+        Assert.Equal(RealtimeEventTypes.NotificationStatusChangedV2, envelope.EventType);
+        Assert.Equal(new NotificationStatusChangedPayload(notificationId, "IN_APP", "SENT", 1, OccurredAt), envelope.Payload);
+        Assert.Equal(
+            ["attempts", "channel", "notification_id", "occurred_at", "status"],
+            PayloadPropertyNames(envelope.Payload));
+    }
+
+    public static TheoryData<string, string> InvalidNotificationStatusPayloads() => new()
+    {
+        // v1 never had DELIVERED or CANCELLED, nor an order or a notice.
+        { "notification-status-changed-v1", """{"channel":"WHATSAPP","status":"DELIVERED"}""" },
+        { "notification-status-changed-v1", """{"channel":"EMAIL","status":"CANCELLED"}""" },
+        { "notification-status-changed-v1", """{"channel":"WHATSAPP","status":"SENT","order_id":"00000000-0000-0000-0000-000000000803","notice":"DELIVERED"}""" },
+        // A v2 recipient notice needs both its order and its notice, and only those.
+        { "notification-status-changed-v2", """{"channel":"WHATSAPP","status":"SENT"}""" },
+        { "notification-status-changed-v2", """{"channel":"EMAIL","status":"SENT","order_id":"00000000-0000-0000-0000-000000000803"}""" },
+        { "notification-status-changed-v2", """{"channel":"EMAIL","status":"SENT","order_id":"00000000-0000-0000-0000-000000000803","notice":"DELIVERED","phone":"x"}""" },
+        { "notification-status-changed-v2", """{"channel":"WHATSAPP","status":"SENT","order_id":"00000000-0000-0000-0000-000000000803","notice":"RETURNED"}""" },
+        { "notification-status-changed-v2", """{"channel":"WHATSAPP","status":"SENT","order_id":"not-a-uuid","notice":"DELIVERED"}""" },
+        { "notification-status-changed-v2", """{"channel":"WHATSAPP","status":"READ","order_id":"00000000-0000-0000-0000-000000000803","notice":"DELIVERED"}""" },
+        // An IN_APP notification has neither, and is never DELIVERED or CANCELLED.
+        { "notification-status-changed-v2", """{"channel":"IN_APP","status":"SENT","order_id":"00000000-0000-0000-0000-000000000803","notice":"DELIVERED"}""" },
+        { "notification-status-changed-v2", """{"channel":"IN_APP","status":"CANCELLED"}""" },
+        { "notification-status-changed-v2", """{"channel":"IN_APP","status":"DELIVERED"}""" },
+        // Channels outside the contract.
+        { "notification-status-changed-v2", """{"channel":"SMS","status":"SENT"}""" },
+        { "notification-status-changed-v1", """{"channel":"PUSH","status":"SENT"}""" },
+    };
+
+    [Theory]
+    [MemberData(nameof(InvalidNotificationStatusPayloads))]
+    public void Notification_status_outside_the_v1_and_v2_contracts_is_an_invalid_payload(string schema, string fields)
+    {
+        var notificationId = Guid.Parse("00000000-0000-0000-0000-00000000080c");
+        var payload = new Dictionary<string, object>
+        {
+            ["schema_version"] = schema,
+            ["notification_id"] = notificationId,
+            ["attempts"] = 1,
+            ["occurred_at"] = OccurredAt,
+        };
+        foreach (var property in JsonDocument.Parse(fields).RootElement.EnumerateObject())
+        {
+            payload[property.Name] = property.Value.GetString()!;
+        }
+
+        var exception = Assert.Throws<OutboxMessageException>(() =>
+            RealtimeOutboxParser.Parse(Notification(notificationId, payload)));
+        Assert.Equal(RealtimeOutboxErrorCodes.InvalidPayload, exception.ErrorCode);
+    }
+
+    [Fact]
+    public void Notification_status_of_an_unknown_schema_is_an_invalid_schema()
+    {
+        var notificationId = Guid.Parse("00000000-0000-0000-0000-00000000080d");
+        var exception = Assert.Throws<OutboxMessageException>(() => RealtimeOutboxParser.Parse(Notification(
+            notificationId,
+            new Dictionary<string, object>
+            {
+                ["schema_version"] = "notification-status-changed-v3",
+                ["notification_id"] = notificationId,
+                ["channel"] = "IN_APP",
+                ["status"] = "SENT",
+                ["attempts"] = 1,
+                ["occurred_at"] = OccurredAt,
+            })));
+        Assert.Equal(RealtimeOutboxErrorCodes.InvalidSchema, exception.ErrorCode);
+    }
+
+    private static ClaimedBusinessOutboxMessage Notification(Guid notificationId, IDictionary<string, object> payload) =>
+        Business(RealtimeOutboxTopics.NotificationStatusChanged, JsonSerializer.Serialize(payload)) with
+        {
+            AggregateType = "Notification",
+            AggregateId = notificationId,
+            AggregateVersion = 2,
+        };
+
+    /// <summary>The SignalR wire names of a payload (snake case, nulls omitted, as the hub protocol is configured).</summary>
+    private static string[] PayloadPropertyNames(NotificationStatusChangedPayload payload) =>
+        JsonDocument.Parse(JsonSerializer.Serialize(payload, new JsonSerializerOptions
+            {
+                PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
+                DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+            }))
+            .RootElement.EnumerateObject().Select(static property => property.Name).Order(StringComparer.Ordinal).ToArray();
+
     [Fact]
     public void Parsers_and_envelopes_canonicalize_all_shared_timestamps_to_microseconds()
     {

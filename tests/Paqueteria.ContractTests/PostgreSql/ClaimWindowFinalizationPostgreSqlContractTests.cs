@@ -423,9 +423,11 @@ public sealed class ClaimWindowFinalizationPostgreSqlContractTests(PostgreSqlCon
                 $"""
                 DROP OWNED BY {Executor};
                 DROP ROLE {Executor};
+                DROP TABLE orders.recipient_notice_consents;
                 DELETE FROM platform."__ef_migrations_history_orders" WHERE "MigrationId" IN (
                   '{AddOrderLifecycleFinalizationExecutor.MigrationId}','{AddTrackingLinkGenerations.MigrationId}',
-                  '{AddOrderServiceWindow.MigrationId}','{AddOrderAutoCloseDiscovery.MigrationId}');
+                  '{AddOrderServiceWindow.MigrationId}','{AddOrderAutoCloseDiscovery.MigrationId}',
+                  '{AddOrderReadIndexes.MigrationId}','{AddRecipientNoticeConsents.MigrationId}');
                 """);
             await using (var connection = await fixture.AdminDataSource.OpenConnectionAsync())
             {

@@ -8,14 +8,14 @@ files (`deploy/azure/*.bicep`, `deploy-core.ps1`, `deploy-azure-dev.yml`) or gua
 | Piece | Location |
 |---|---|
 | Templates | `deploy/azure/pilot/{security,platform,jobs,apps,observability}.bicep` |
-| Pilot-only images | `deploy/azure/pilot/Dockerfile.db-ops` (migrator only), `deploy/azure/pilot/Dockerfile.web` (AUTH-001 BFF build) |
+| Pilot-only images | `deploy/azure/pilot/Dockerfile.db-ops` (migrator only, plus the repository files it reads before every command: `Paqueteria.sln`, the baseline manifest, AI-06, AI-18, `src/Modules` and the two migration directories under `src/BuildingBlocks/Paqueteria.Infrastructure`), `deploy/azure/pilot/Dockerfile.web` (AUTH-001 BFF build) |
 | API and Worker images | `deploy/azure/Dockerfile.api`, `deploy/azure/Dockerfile.worker` (shared; run as the non-root `app` user, `USER $APP_UID`) |
 | Business settings reviewed by the owner | `deploy/azure/pilot/apps.settings.json` |
 | OBS-002 alert e-mail (owner) | `deploy/azure/pilot/observability.parameters.json` |
 | Accepted terms and privacy versions for the web (owner, UI-001) | `deploy/azure/pilot/web.parameters.json` |
 | Deployment workflow | `.github/workflows/deploy-azure-pilot.yml` (`workflow_dispatch`, GitHub Environment `azure-pilot`) |
-| Static guards | `tools/azr-001/env001_pilot_guards.py` (25 guards) and `test_env001_pilot_guards.py` |
-| Restore drill | `deploy/azure/pilot/restore-drill.sh` |
+| Static guards | `tools/azr-001/env001_pilot_guards.py` (28 guards) and `test_env001_pilot_guards.py` |
+| Restore drill and real restore | `deploy/azure/pilot/restore-drill.sh` (§6.4) |
 | One-time bootstrap (owner) | [`bootstrap.md`](bootstrap.md) |
 
 Nothing in this directory has been deployed yet. There was no Azure access while writing it. Section 9
@@ -33,6 +33,9 @@ lists what could only be checked statically.
 | PILOT-SAME-ORIGIN-ROUTING | Container Apps rule-based routing (§3) |
 | ADP-001-POD-BLOB-DEFENDER | Storage account (Entra-only, no anonymous or shared-key access), private container `proofs`, Defender for Storage on-upload malware scanning, RBAC from the ADP-001 table |
 | ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20 | Blob and container soft delete 30 days on the proof storage, versioning off: a deleted or overwritten photo can be recovered for 30 days (§6.4, guard P12) |
+| OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20 | The PostgreSQL server is one setting, the `azure-pilot` variable `PILOT_POSTGRES_SERVER_NAME` (empty = the first server). After a real restore the owner sets it to the restored server and re-runs the workflow; migrations, API, Worker, alerts and drills follow it, and the original server stays untouched with its backups until the owner deletes it (§6.4, guard P25) |
+| ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21 | An image is built once per commit: when `paquetenvia-<image>:<tested_git_sha>` is already in the registry, the run reuses its digest and builds and pushes nothing, so a rollback deploys the same bytes. The tag is locked after its first push, so the registry refuses a push over it. The bases (.NET, Node) stay unpinned: a new commit gets a new build with their patches (§6.2, §6.3, guard P27) |
+| GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20 | The driver eligibility rules per vehicle type (per-order capacity and required documents) in `apps.settings.json` (§4 "Driver eligibility rules"); GATE-010 stays open |
 | ADP-001-PII-KEYVAULT-ENVELOPE | Key Vault RSA-3072 `pii-kek` (wrap/unwrap only). The API alone has *Key Vault Crypto Service Encryption User* on it. |
 | SCL-001 / ENV-001 Data Protection KEK | Key Vault RSA-3072 `dataprotection-kek`. API and Worker have *Crypto Service Encryption User*, and the workloads get `DataProtection__KeyEncryption__*`. |
 | GATE-013 | API and Worker run with `minReplicas = maxReplicas = 1`, SignalR `InProcess`, no Redis and no Azure SignalR Service (guard P08) |
@@ -82,11 +85,12 @@ Otherwise the deploy job stops before logging in to Azure.
 | Log Analytics | `law-pv-pilot-<suffix>`: 30 days, 0.3 GB/day cap |
 | Registry | `pvpilot<suffix>`: Basic, admin disabled, pulls by managed identity only |
 | Storage | `stpvpilot<suffix13>` / container `proofs`: Standard LRS, versioning off, blob and container soft delete 30 days (§6.4) |
-| PostgreSQL | `pg-pv-pilot-<suffix>`: 18, Burstable B1ms, 32 GB with auto-grow, 14-day PITR backups, `require_secure_transport=ON`, `azure.extensions=POSTGIS,PGCRYPTO`, `password_encryption=SCRAM-SHA-256` |
+| PostgreSQL | the server named by `PILOT_POSTGRES_SERVER_NAME`, by default `pg-pv-pilot-<suffix>` (§6.4): 18, Burstable B1ms, 32 GB with auto-grow, 14-day PITR backups, `require_secure_transport=ON`, `azure.extensions=POSTGIS,PGCRYPTO`, `password_encryption=SCRAM-SHA-256` |
 | Container Apps environment | `cae-pv-pilot-<suffix>` |
 | Apps / jobs | `ca-pv-pilot-{api,worker,web}`, `job-pv-pilot-{migrate,logins,verify}` |
 | Alerts (OBS-002, §10) | `sqr-pv-pilot-{outbox-lag,outbox-dead,job-failure,readiness,api-5xx}`, action group `ag-pv-pilot-ops` (e-mail only), workbook *Paquetenvia pilot operations (OBS-002)* |
-| PostgreSQL connection alerts (SCL-007, §10.2) | `mar-pv-pilot-pg-connections-{warning,critical}` (metric alerts on `pg-pv-pilot-<suffix>`, same action group) |
+| PostgreSQL connection alerts (SCL-007, §10.2) | `mar-pv-pilot-pg-connections-{warning,critical}` (metric alerts on the server named by `PILOT_POSTGRES_SERVER_NAME`, by default `pg-pv-pilot-<suffix>`, same action group) |
+| PostgreSQL resource alerts (SCL-007, §10.3) | `mar-pv-pilot-pg-{cpu,memory,storage,cpu-credits}-warning` (metric alerts on the same server, `PILOT_POSTGRES_SERVER_NAME`, same action group) |
 
 ### Database roles
 
@@ -112,6 +116,23 @@ Otherwise the deploy job stops before logging in to Azure.
   before that check. The role is never granted to the API, the Worker or an operator login. The Worker runs the job
   with `Orders__AutoClose__Enabled=true` (`apps.bicep`); its `orders_auto_close` readiness check fails until the lane
   has installed the discovery function.
+- NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006): AI-18 declares `paqueteria_notification_receipt_executor
+  NOLOGIN BYPASSRLS`, and the Notifications lane `20261029000100_AddRecipientNoticeReceipts` creates its five functions
+  as that role. Like the auto-close executor, an Azure administrator creates it with SET for the deployment role before
+  the migration runs. The Notifications E-002 bridge runs only while the lane is Pending: it then checks that SET first
+  and, without it, stops with
+  `E002_EFFECTIVE_ROLE_CAPABILITY_MISSING roles=paqueteria_notification_receipt_executor; STOP_FOR_CONTRACT_REVIEW`
+  before writing anything. A database whose Notifications lane is already applied stops in that bridge with
+  `E002_ROUTINE_MAP_STATE_UNRESOLVED`, as before this change (the pilot database has not been deployed). The role is
+  never granted to the API, the Worker, the realtime login or an operator login. Its webhooks stay off (uniform 404)
+  until the gate-closing change.
+- NTF-006 configuration (key names only; values come from Key Vault or the environment, never from this guide):
+  `Messaging:WhatsApp:Webhook` (`Enabled`, `NumberSealer`, `AppSecret`, `PreviousAppSecret`, `VerifyToken`,
+  `PreviousVerifyToken`, `PhoneNumberId`), `Messaging:Email:Events` (`Enabled`, `SourceResourceId`, `Secret`,
+  `PreviousSecret`), the SEC-004 budgets `RateLimits:WhatsAppWebhookVerify`, `RateLimits:WhatsAppWebhook`,
+  `RateLimits:EmailEvents` and `RateLimits:RecipientUnsubscribe`. The API also uses
+  `PiiProtection:RecipientNoticeKey` (wrap only, to seal the automatic-reply number) and `ContactLookup:Keys` (the
+  opt-out hashes and the unsubscribe lookup).
 - `job-pv-pilot-logins` runs the new migrator command `runtime-logins`. It creates or re-keys
   `pv_pilot_api` → `paqueteria_app`, `pv_pilot_worker` → `paqueteria_worker` and `pv_pilot_realtime` →
   `paqueteria_realtime` as `LOGIN NOINHERIT NOBYPASSRLS` with exactly one membership. It receives
@@ -128,6 +149,12 @@ Otherwise the deploy job stops before logging in to Azure.
   `realtime_outbox_dispatcher` is unhealthy if its login could assume `paqueteria_worker` or `paqueteria_app`.
 - `job-pv-pilot-verify` runs the read-only `assert` after every deployment. The restore drill also
   uses it.
+- TEN-003-PLATFORM-BOOTSTRAP-2026-10-19: the owner runs the migrator command `platform-bootstrap` once, in an
+  execution of `job-pv-pilot-migrate` with its own arguments (§6.1 step 10), on the migration connection. It reads
+  every tenant as the deployment login (BYPASSRLS, E-002) only to refuse a second run, then writes as
+  `paqueteria_migrator` (NOBYPASSRLS) under FORCE RLS with the new UUIDs pre-authorized only in its transaction.
+  The deployment login holds no SET on `paqueteria_app`, so the API's tenant transaction cannot run there. No role,
+  grant or function is added (`docs/development/ten-003-platform-bootstrap.md`).
 
 ## 3. Same-origin routing (PILOT-SAME-ORIGIN-ROUTING)
 
@@ -153,7 +180,7 @@ public.
 
 - **WebSockets (`/hubs`):** API and Web ingresses use `transport: auto`, which supports the HTTP/1.1
   upgrade. SignalR still falls back to SSE or long-polling if an upgrade fails. The WebSocket check
-  after the first deploy is manual (§6.1 step 9).
+  after the first deploy is manual (§6.1 step 11).
 - **Back-channel logout:** the environment ingress does not inspect `Origin`, and the API accepts
   `POST /auth/backchannel-logout` without it (auth-001 §14.2). The workflow smoke test sends such a
   POST through the route and requires the API's `{"error":"invalid_request"}`.
@@ -164,7 +191,7 @@ public.
   hop: Web reaches the API through the API's internal ingress, which adds Web's address. With
   `ForwardLimit=1` every sign-in would then share one bucket, so the fallback needs
   `Http__ForwardedHeaders__ForwardLimit=2`. The middleware stops at the first address outside
-  `KnownNetworks`, so a client still cannot pass a forged address. §6.1 step 10 checks the result.
+  `KnownNetworks`, so a client still cannot pass a forged address. §6.1 step 11 checks the result.
 
 ## 4. Configuration, identities and secrets
 
@@ -204,13 +231,14 @@ it. There are two windows:
 - the database connection secrets.
 
 Every redeploy of `security.bicep` also resets `ipRules` to empty. A secret rotation takes effect when
-the app restarts or starts a new revision; the workflow restarts the API and Worker after a rotation.
+the app restarts or starts a new revision; the workflow restarts the API and Worker after a rotation, and after a
+new PostgreSQL server (OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20), and starts either one if its revision is stopped.
 
 | Key Vault secret | Written by | Read by |
 |---|---|---|
 | `pg-admin-password` | workflow (generated once, never printed) | workflow only |
-| `pg-migrate-connection` | workflow (every run, derived from the admin password) | migrate, logins and verify jobs |
-| `pg-api-runtime-connection` / `pg-worker-runtime-connection` / `pg-realtime-runtime-connection` | workflow (generated once, 64 hex chars) | API / Worker / API realtime dispatchers |
+| `pg-migrate-connection` | workflow (every run, derived from the admin password and the server in service, `postgresHost`) | migrate, logins and verify jobs |
+| `pg-api-runtime-connection` / `pg-worker-runtime-connection` / `pg-realtime-runtime-connection` | workflow (generated once, 64 hex chars; again with `rotate_runtime_logins` or when its host is not the server in service) | API / Worker / API realtime dispatchers |
 | `pg-api-login-verifier` / `pg-worker-login-verifier` / `pg-realtime-login-verifier` | workflow (SCRAM of the above) | logins job (its own identity) |
 | `paquetenvia-email-lookup-key-1` | workflow (generated once: 32 random bytes, base64) | API (`EmailLookup__Keys__1`) |
 | `authcenter-paquetenvia-client-secret` | **owner** (AuthCenter hands it over once) | API (`AuthCenter__ClientSecret`) |
@@ -283,8 +311,8 @@ App settings wired by `apps.bicep`:
 API and Worker settings. It cannot override any platform-managed prefix, and it cannot carry a
 mock/synthetic value or a secret-looking name (guard P17). The workflow refuses to deploy while any
 value is still `OWNER_DECISION_REQUIRED` or while the driver eligibility rules are missing (below). Today the
-file only carries `Finance__OperationalTimeZone=America/Mazatlan`, so the owner still has to supply the driver
-eligibility rules before the first deploy.
+file carries `Finance__OperationalTimeZone=America/Mazatlan` and the driver eligibility rules the owner approved
+(GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20, below), so it no longer blocks the first deploy.
 
 There is no assignment or driver eligibility policy version setting (POLICY-VERSIONS-PER-ORG-2026-10-02,
 owner 2026-10-02: "Por empresa, piloto-2026-10-v1"). Each organization carries its own versions in
@@ -301,8 +329,8 @@ organization versions its own pricing policy in `pricing.tariff_rules.policy_ver
 tariffs (MDM-001), and every quote freezes the version of the rule it selected. The API refuses to
 start if `Pricing__PricingPolicyVersion` is still set.
 
-**Driver eligibility rules (owner decision pending, blocks the deploy).** The API runs with
-`Drivers__Provider=PostgreSql` and `Routing__Provider=PostgreSql`, so it refuses to start until the same file gives
+**Driver eligibility rules (GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20).** The API runs with
+`Drivers__Provider=PostgreSql` and `Routing__Provider=PostgreSql`, so it refuses to start unless the same file gives
 every vehicle type (`MOTORCYCLE`, `CAR`, `VAN`, `BICYCLE`, `WALKER`) its rules:
 
 - `Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TYPE>__<n>`, numbered from `0`: the documents a driver
@@ -310,19 +338,56 @@ every vehicle type (`MOTORCYCLE`, `CAR`, `VAN`, `BICYCLE`, `WALKER`) its rules:
   `BACKGROUND_CHECK` or `OTHER`;
 - `Drivers__Eligibility__VehicleCapacity__<TYPE>__MaximumPackageCount`, `__MaximumTotalWeightGrams`,
   `__MaximumSinglePackageWeightGrams` (not above the total), `__MaximumLengthMillimeters`, `__MaximumWidthMillimeters`
-  and `__MaximumHeightMillimeters`: whole numbers above zero, in plain digits;
+  and `__MaximumHeightMillimeters`: whole numbers above zero, in plain digits. The order of the three size limits does
+  not matter, nor the order in which dispatch types a package's length, width and height: the API sorts the limits
+  and each package's sides from largest to smallest before comparing them
+  (DRV-ELIGIBILITY-SORTED-DIMENSIONS-2026-10-20);
 - optionally `Drivers__Eligibility__VehicleCapacity__<TYPE>__RequireDimensions` (`true` refuses a package without
   dimensions; `false` when absent) and `Drivers__Eligibility__NonExpiringDocumentTypes__<n>` (document types that need
   no expiry date; every other required document needs one that has not passed).
 
-The file has none today and there is no default: they are business rules the owner chooses.
-`env001_pilot_guards.py settings-check` (provenance job and Stage 4) stops with
+There is no default: they are business rules the owner chooses. The file carries the ones the owner approved on
+2026-10-20 (G4 "Sí, propónmelos (Recommended)", H2 "Aprobar la tabla (Recommended)", H3 "Aprobar la lista
+(Recommended)"), as they were proposed. Capacity is per order:
+
+| Type | Packages | Total weight (g) | Heaviest package (g) | Length × width × height (mm) | `RequireDimensions` | Required documents |
+|---|---|---|---|---|---|---|
+| `MOTORCYCLE` | 5 | 20000 | 10000 | 400 × 400 × 350 | `false` | `IDENTITY`, `DRIVER_LICENSE`, `VEHICLE_CARD`, `INSURANCE` |
+| `CAR` | 10 | 100000 | 20000 | 900 × 800 × 600 | `false` | `IDENTITY`, `DRIVER_LICENSE`, `VEHICLE_CARD`, `INSURANCE` |
+| `VAN` | 20 | 400000 | 20000 | 2000 × 1200 × 1200 | `false` | `IDENTITY`, `DRIVER_LICENSE`, `VEHICLE_CARD`, `INSURANCE` |
+| `BICYCLE` | 3 | 10000 | 10000 | 450 × 400 × 300 | `false` | `IDENTITY` |
+| `WALKER` | 2 | 5000 | 5000 | 450 × 400 × 300 | `false` | `IDENTITY` |
+
+- There is no `NonExpiringDocumentTypes` entry: every required document needs an expiry date that has not passed, and
+  a permanent Sinaloa driver license gets a review date the owner defines. There is no `BACKGROUND_CHECK` for now; it
+  is decided with GATE-007 and GATE-008 (H3).
+- The package counts of `MOTORCYCLE`, `CAR`, `BICYCLE` and `WALKER`, and the weights and size of `WALKER`, are
+  assumptions without a source, to be adjusted with the real operation (H2). `INSURANCE` is the owner's policy while
+  GATE-009 is open; it is removed if the company contracts a fleet policy (H3).
+- **Pickups count as `VAN` and cargo bikes as `BICYCLE`** (H2); there is no other vehicle type.
+- **For operations: the limits apply per order.** Each order is compared on its own, with all its packages (total
+  weight, heaviest package, the largest length, width and height captured); nobody adds up the orders a driver already
+  carries or a route holds. Dispatch decides how many orders each driver carries. A quote does not check any vehicle,
+  so an order larger than the `VAN` row can be created but no driver can take it.
+- **The API starts, but no real driver can be assigned yet.** Nothing registers or validates driver documents: AI-05
+  `/driver/me/documents` is not implemented and only the synthetic DevSeed writes `drivers.driver_documents`. Until the
+  AI-08 task DRV-DOC-001 (driver document registration and dispatch validation, owner decision H1) and GATE-007 land,
+  every driver is refused with `REQUIRED_DOCUMENT_MISSING`.
+- GATE-010 stays open (zones, hours, prohibited items, SLA): this decision covers only these vehicle rules. Changing a
+  value is a new owner decision and a PR to this file; an organization's `driver_eligibility_policy_version` (above) is
+  not raised automatically, so evaluations under different rules would share one version label until it is.
+
+`env001_pilot_guards.py settings-check` (provenance job and Stage 4) prints `ENV001_SETTINGS=PASS` on the file. If
+any rule goes missing it stops with
 `STOP_FOR_OWNER_DECISION: driver eligibility rules for vehicle type <TYPE> are missing: ...`, naming each missing
-setting, so **the pilot deploy stops before touching Azure** until all five vehicle types are complete. It applies the
-API's rules to every entry present and accepts only the exact names above. Guard P17 (`check`) refuses an invalid entry
-but not a missing one. Without this stop, a first deploy would fail only at the smoke test (`/auth/session is not
-served by the API`), and a later one would leave the earlier revision serving. `PilotApiStartupConfigurationTests`
-pins the two start failures (`OwnerPendingStartFailures`) until the owner supplies the rules.
+setting, so **the pilot deploy stops before touching Azure** until all five vehicle types are complete again. It
+applies the API's rules to every entry present and accepts only the exact names above. Guard P17 (`check`) refuses an
+invalid entry but not a missing one. Without this stop, a deploy would fail only after stage 4, at the revision check
+(the new API revision never becomes ready, §6.1 step 5), with the earlier revision, if any, still serving.
+`PilotApiStartupConfigurationTests` starts the pilot API
+with the file as it is, checks that Drivers, Routing, Dispatch and Orders bind exactly its entries, and pins the two
+start failures without them (`MissingEligibilityStartFailures`); `test_env001_pilot_guards.py` pins the approved
+values.
 
 **Dispatch number for the driver app (DRV-DISPATCH-CONTACT-2026-10-12, owner 2026-10-12: "Sí, configurable
 (Recommended)").** The driver app shows "Llamar a despacho" (a `tel:` link) next to its texts that ask the driver to
@@ -402,7 +467,7 @@ hours a month. Sized for 50–100 real deliveries.
 | VNet, route, managed certificate, budget | free | 0.00 |
 | **Subtotal before OBS-002** | | **≈ 98 typical, ≈ 108 if the log cap is hit every day** |
 | Log search alerts (OBS-002, §10) | 5 rules at 15 min (0.55 each), Retail Prices API 2026-09-28; e-mails and workbook free; the extra ~0.3–0.45 GB/month of logs fits the 5 GB free tier | 2.75 |
-| PostgreSQL connection metric alerts (SCL-007, §10.2) | 2 time series, inside the 10 free per resource, otherwise about 0.10 USD per series per month, whatever the frequency ([pricing](https://azure.microsoft.com/en-us/pricing/details/monitor/)) | 0 – 0.20 |
+| PostgreSQL metric alerts (SCL-007, §10.2 and §10.3) | 6 time series on the server (2 connection alerts and 4 resource alerts), inside the 10 free per resource, otherwise about 0.10 USD per series per month, whatever the frequency ([pricing](https://azure.microsoft.com/en-us/pricing/details/monitor/)) | 0 – 0.60 |
 | Application Insights (OBS-003, §10) | workspace-based on the same workspace and inside the same 0.3 GB/day cap; component free; with the export on, about 1–2 GB/month of traces (10 %) and metrics; 0 while `TelemetryExport__Enabled='false'` | 0 – 5 (inside the Log Analytics row's worst case) |
 | **Total** | | **≈ 101 typical, ≈ 111 if the log cap is hit every day** |
 
@@ -410,9 +475,11 @@ hours a month. Sized for 50–100 real deliveries.
 sizing (PILOT-BUDGET-ACCEPT-98-108, 2026-09-28) without applying any lever. OBS-002 adds about
 2.75 USD per month on top of that accepted range, with every alert evaluated every 15 minutes; the
 owner accepted it on 2026-10-02 (OBS-002-ALERTS-15MIN-COST-2026-10-02, literal "Sí, revisar cada 15
-min"). The two SCL-007 PostgreSQL connection alerts add at most 0.20 USD per month and usually nothing
-(SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14, literal "Sí, 80 % y 95 % (Recommended)"), so the totals stay the
-same. The largest item is the
+min"). The six SCL-007 PostgreSQL metric alerts are 6 of the 10 time series free per resource, so they usually add
+nothing and at most 0.60 USD per month: the two connection alerts (SCL-007-POSTGRES-CONNECTION-ALERT-2026-10-14,
+literal "Sí, 80 % y 95 % (Recommended)") and the four resource alerts (SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20,
+literal "CPU, memoria y disco (Recommended)" and "Sí, agregarla (Recommended)"; the D2 option counted "5 de las 10"
+for three rules, and the fourth, for CPU credits, is still free). The totals stay the same. The largest item is the
 always-on API at 0.5 vCPU. For the record, the levers in order of impact:
 
 1. API at 0.25 vCPU / 0.5 GiB saves about 21 USD, at the risk of memory pressure in a 15-module .NET
@@ -440,9 +507,9 @@ Two further caveats:
    `PILOT_GATE_012_DECISION=GATE-012-PILOT-SCOPE` is already approved (owner, 2026-09-28).
 3. The owner replaces every `OWNER_DECISION_REQUIRED` and supplies the missing owner values (PR → `development` →
    `main`):
-   - `deploy/azure/pilot/apps.settings.json`: no placeholder remains since POLICY-VERSIONS-PER-ORG-2026-10-02, but
-     the driver eligibility rules (documents and capacity per vehicle type, §4 "Driver eligibility rules") are
-     missing;
+   - `deploy/azure/pilot/apps.settings.json`: nothing left to supply. No placeholder remains since
+     POLICY-VERSIONS-PER-ORG-2026-10-02, and the driver eligibility rules (documents and capacity per vehicle type)
+     are in the file since GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20 (§4 "Driver eligibility rules");
    - the alert e-mail in `deploy/azure/pilot/observability.parameters.json`;
    - `webTermsVersion` and `webPrivacyVersion` in `deploy/azure/pilot/web.parameters.json`, the accepted
      terms and privacy notice versions that come with the approved notice (§4).
@@ -453,6 +520,26 @@ Two further caveats:
    and head SHA.
 5. Actions → *Deploy Azure PILOT* → Run workflow on `main`: `tested_git_sha=<head SHA>`,
    `foundation_run_id=<run id>`, `custom_domain_phase=none`.
+
+   A green run proves more than "the templates deployed" (ENV-001 F-05, F-06):
+   - The images it builds come from the same Dockerfiles that CI builds and smoke-tests on every PR that touches
+     them (`docs/development/branching-and-ci.md`, *Deploy image build smoke*). An image of this commit that an
+     earlier run already pushed is reused instead (§6.2).
+   - The web image carries the production dependencies of `apps/web` only. `deploy/azure/pilot/Dockerfile.web` builds
+     with every dependency, then copies `node_modules` from a stage that runs `pnpm install --prod --frozen-lockfile`
+     on the manifest, the lockfile and `pnpm-workspace.yaml` alone, so `vite`, `vitest`, ESLint and TypeScript are not
+     in it. The CI smoke fails if the image's pnpm store holds a package outside the lockfile's production graph, and
+     it runs `next start` in the image without a network and requires `GET /` to answer 200. The one devDependency left
+     is `@types/node` (type declarations), which `sharp` links as an optional peer.
+   - After stage 4, the step *Check that the new API, Worker and Web revisions serve this run's images* waits, for
+     each app, until its latest revision is ready, runs this run's digest and is active and `Healthy` (at
+     most about 10 minutes for the three apps). A ready revision on another image counts as not ready yet, because
+     right after stage 4 Container Apps can still report the previous revision as the latest one. Container Apps keeps
+     the previous revision serving while a new one never becomes ready, so without this step a run could stay green
+     on old code. If it fails, the error names the app and the revision and gives the
+     `az containerapp logs show ... --type system` command (§6.7).
+   - The run summary lists the four digests it deploys (API, Worker, Web, DB ops), whether each was built by this run
+     or reused, and the revision that serves each app.
 6. The first run creates the vault, then stops with *"lacks authcenter-paquetenvia-client-secret"*. The
    workflow requires four owner secrets and reports the first one missing. Write all four straight into
    the vault (§6.6) and run again:
@@ -472,9 +559,63 @@ Two further caveats:
    `az containerapp env certificate list -g <rg> -n <env> --managed-certificates-only -o table`
    (status `Succeeded`), then `curl -I https://paquetenvia.com/`.
 9. Register the production AuthCenter client URIs (auth-001 §10.1, all on `https://paquetenvia.com`).
-   The login test in the next step needs them.
-10. Check by hand, in a browser on `https://paquetenvia.com`:
-    - Log in through AuthCenter.
+   The login test in step 11 needs them.
+10. **Once, before your first sign-in: create the PLATFORM organization and make your AuthCenter account its
+    PLATFORM_ADMIN** (TEN-003-PLATFORM-BOOTSTRAP-2026-10-19, owner decision E1). Self-service onboarding creates
+    only BUSINESS and ALLY organizations, and only a PLATFORM_ADMIN of a PLATFORM organization can grant DISPATCHER
+    and FINANCE, approve allies and record the master-data gate (§6.8), so without this step nobody can create an
+    order. Spanish walkthrough: [`guia-owner-seccion-a.md`](guia-owner-seccion-a.md) §7.5.
+    - Your AuthCenter `sub`: in `https://authcenter.info/admin-v2/users` open your own user (*Administrar* or
+      *Consultar*). The address ends in `/admin-v2/users/<sub>`: that lowercase UUID is your AuthCenter user id,
+      which AuthCenter puts in the `sub` claim. Copy it exactly; the command refuses anything else (an e-mail, the
+      whole address, upper case).
+    - From Cloud Shell, run the migrator's `platform-bootstrap` once in an execution of the migrate job (same image,
+      identity and migration connection; only this execution's arguments change, so the next deployment still runs
+      `apply`):
+
+      ```bash
+      RG=rg-pv-pilot
+      JOB=job-pv-pilot-migrate
+      read -r -p 'AuthCenter sub: ' SUB
+      LEGAL_NAME='<legal name of the platform organization>'
+      DISPLAY_NAME='Paquetenvia'
+      az containerapp job show -g "$RG" -n "$JOB" --query properties.template -o json > pv-bootstrap.json
+      python3 - "$SUB" "$LEGAL_NAME" "$DISPLAY_NAME" <<'EOF'
+      import json, sys
+      template = json.load(open("pv-bootstrap.json"))
+      container = template["containers"][0]
+      container["args"] = ["platform-bootstrap", "--connection-env", "PAQUETERIA_MIGRATION_CONNECTION",
+                           "--identity-subject", sys.argv[1], "--legal-name", sys.argv[2], "--display-name", sys.argv[3]]
+      json.dump({"containers": [container]}, open("pv-bootstrap.json", "w"))
+      EOF
+      execution="$(az containerapp job start -g "$RG" -n "$JOB" --yaml pv-bootstrap.json --query name -o tsv)"
+      rm -f pv-bootstrap.json
+      az containerapp job execution show -g "$RG" -n "$JOB" --job-execution-name "$execution" --query properties.status -o tsv
+      ```
+
+      Repeat the last line until it no longer says `Running`, then read the result in Log Analytics:
+      `ContainerAppConsoleLogs_CL | where ContainerJobName_s == "job-pv-pilot-migrate" | where Log_s has "TEN003_PLATFORM_BOOTSTRAP" | order by TimeGenerated desc`.
+    - `TEN003_PLATFORM_BOOTSTRAP_OK organization_type=PLATFORM status=ACTIVE role=PLATFORM_ADMIN (audited)`: done.
+      In one transaction the command created the ACTIVE PLATFORM organization, the user of your `sub` and its
+      ACTIVE default PLATFORM_ADMIN membership, and one `INITIAL_ORGANIZATION_PROVISIONED` audit row in that
+      organization (request id `ten-003-platform-bootstrap`). Its output names no subject, name or id.
+    - Exit 11, `TEN003_PLATFORM_BOOTSTRAP_ALREADY_DONE`: a PLATFORM organization or a PLATFORM_ADMIN already exists.
+      Nothing was written and nothing is left to do; the command runs only once.
+    - Exit 11, `TEN003_PLATFORM_BOOTSTRAP_SUBJECT_ALREADY_SIGNED_IN`: that account already signed in to Paquetenvia.
+      Nothing was written. The command never takes over an existing user, and you must not write SQL by hand.
+      Restore the database to a point before that sign-in (§6.4) and run the command again, as the box *Si ya
+      iniciaste sesión antes de correr el comando* in the guide §7.5 explains step by step (decision E1b).
+    - Exit 2: the `sub` is not a lowercase UUID, or a name is empty, has leading or trailing spaces or control
+      characters, or is longer than 200 (legal) or 80 (display) characters. The value is never echoed.
+    - Exit 5 naming a migration or an assertion: the database is not fully migrated; run the deployment again
+      first. Exit 12 (`TEN003_PLATFORM_BOOTSTRAP_DATABASE_ERROR SQLSTATE=...`): nothing was written; see §6.7.
+    - The execution keeps its arguments (your `sub` and the two names) in the job's execution history, readable by
+      whoever can read the resource group. None of them is a secret.
+    - After you sign in (step 11), `https://paquetenvia.com/api/v1/me/organization-contexts` lists the PLATFORM
+      organization with its `organization_id`, which `master-data-gate --platform-organization-id` (§6.8) needs.
+      PLATFORM_ADMIN operations ask for the AuthCenter MFA step-up (auth-001 §14.3).
+11. Check by hand, in a browser on `https://paquetenvia.com`:
+    - Log in through AuthCenter with the account of step 10.
     - In DevTools → Network → WS, `/hubs/...` shows `101 Switching Protocols`.
     - Upload a proof photo, then check that the blob has the Defender scan-result index tag.
     - `/ops/orders/new` allows confirming an order (the terms and privacy versions are set).
@@ -487,25 +628,26 @@ Two further caveats:
       twenty redirects, then `429`. Within the same minute, from the second network, one such request
       must still redirect. A `429` there means every client shares one bucket: check `ForwardLimit` and
       `KnownNetworks`. Repeat after any routing change, and after switching to the Next.js fallback.
-11. Run the restore drill (§6.4) and keep its `EVIDENCE` line. The ENV-001 criterion "restore drill
+12. Run the restore drill (§6.4) and keep its `EVIDENCE` line. The ENV-001 criterion "restore drill
     evidence is current before pilot start" requires it.
 
 **Owner actions for RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12:** none by hand. The workflow generates
 `pg-realtime-runtime-connection` and `pg-realtime-login-verifier` (also on a vault populated by an earlier run:
 they are created the first time they are missing), the logins job creates `pv_pilot_realtime`, the migrate job
-grants the role and `apps.bicep` gives the API identity *Key Vault Secrets User* on that one secret. After step 10,
+grants the role and `apps.bicep` gives the API identity *Key Vault Secrets User* on that one secret. After step 11,
 the owner can confirm in Log Analytics that `ca-pv-pilot-api` logs `realtime_outbox_dispatcher_started` with
 `provider=postgresql` and no `realtime_outbox_message_failed`.
 
 **Driver eligibility rules (step 3, found by `PilotApiStartupConfigurationTests`):** with
-`Drivers__Provider=PostgreSql` and `Routing__Provider=PostgreSql` the API refuses to start until
+`Drivers__Provider=PostgreSql` and `Routing__Provider=PostgreSql` the API refuses to start unless
 `apps.settings.json` carries the driver eligibility rules for every vehicle type (MOTORCYCLE, CAR, VAN, BICYCLE,
 WALKER): `Drivers__Eligibility__RequiredDocumentTypesByVehicleType__<TYPE>__<n>` and
 `Drivers__Eligibility__VehicleCapacity__<TYPE>__{MaximumPackageCount,MaximumTotalWeightGrams,MaximumSinglePackageWeightGrams,MaximumLengthMillimeters,MaximumWidthMillimeters,MaximumHeightMillimeters}`
 (optionally `Drivers__Eligibility__NonExpiringDocumentTypes__<n>` and
-`Drivers__Eligibility__VehicleCapacity__<TYPE>__RequireDimensions`; §4 "Driver eligibility rules"). The file has
-none today; the values are business rules the owner must choose. `settings-check` stops the deploy before touching
-Azure while any is missing.
+`Drivers__Eligibility__VehicleCapacity__<TYPE>__RequireDimensions`; §4 "Driver eligibility rules"). The file carries
+the rules the owner approved (GATE-010-VEHICLE-ELIGIBILITY-PILOT-2026-10-20), so the API starts and `settings-check`
+passes; it stops the deploy before touching Azure if any goes missing. After the deploy no real driver can be assigned
+until DRV-DOC-001 and GATE-007 land: every driver gets `REQUIRED_DOCUMENT_MISSING` (§4).
 
 ### 6.2 Redeploy
 
@@ -513,16 +655,53 @@ Promote, wait for 13/13 on `main`, then dispatch with the new SHA and run id. Ke
 `custom_domain_phase=bind` once the domain is bound: `none` would unbind the apex. On every run the
 workflow:
 
-- redeploys the five templates idempotently (stage 5 is the OBS-002 alerts, §10);
-- keeps every generated secret;
-- rebuilds the images from `tested_git_sha` and deploys them by digest;
+- redeploys the five templates idempotently (stage 5 is the OBS-002 alerts, §10) on the PostgreSQL server named by
+  `PILOT_POSTGRES_SERVER_NAME` (empty: the first server);
+- keeps every generated secret (a runtime credential only while its host is that server);
+- reuses each image of `tested_git_sha` that is already in the registry, and builds and pushes only the missing ones
+  (ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21, below); deploys them by digest and lists the four digests, and whether
+  each was built or reused, in the run summary;
 - runs pending migrations, re-applies the runtime logins and runs `assert`;
+- checks that the new API, Worker and Web revisions are ready, active, `Healthy` and on those digests (§6.1 step 5),
+  and fails otherwise, even while the previous revision still answers;
 - smoke-tests the route.
+
+The run summary is where to read what each run deployed. A digest there is `<registry>/paquetenvia-<image>@sha256:...`.
+
+**One image per commit (ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21).** The tag `paquetenvia-<image>:<tested_git_sha>`
+names the commit. For each of the four images the images step looks for that tag in the pilot registry
+(`az acr repository list`, `show-tags`, `show`):
+
+- **The tag exists** (an earlier run of this commit pushed it): the run logs `reusing <registry>/paquetenvia-<image>@<digest>`
+  and deploys that digest. It builds and pushes nothing, so every run of a commit deploys the same bytes.
+- **The tag does not exist:** the run logs `building <registry>/paquetenvia-<image>:<tested_git_sha>`, builds it with
+  `docker build --pull` on the current bases and pushes it.
+
+Either way the run then locks the tag (`az acr repository update --image paquetenvia-<image>:<tested_git_sha>
+--write-enabled false`) and reads it back: it must name the digest the run deploys and have `writeEnabled` false.
+From then on the registry refuses any push over that tag, and its deletion, until someone deliberately unlocks it
+(Microsoft Learn, *Lock a container image*). A registry read or a lock that fails stops the run; it never leads to a
+build over an existing tag. Every later step still uses the digest, never the tag.
+
+Consequences:
+
+- The bases (`mcr.microsoft.com/dotnet/sdk:10.0.101`, `mcr.microsoft.com/dotnet/aspnet:10.0` and
+  `node:24-bookworm-slim`) stay unpinned by digest, so every new build gets their patches. A patch reaches the pilot only through a build, that is, with a **new commit**: a run of a commit whose
+  images are already in the registry reuses them.
+- The same holds for what the web image compiles in: a changed `PILOT_TRACKING_SUPPORT_URL` takes effect with the next
+  commit, not on a re-run of the same commit.
+- To delete an old image (the Basic registry includes 10 GiB), unlock its tag first with
+  `az acr repository update --name <registry> --image paquetenvia-<image>:<sha> --write-enabled true --delete-enabled true`.
+  A later run of that commit then builds it again from the bases of the day.
 
 ### 6.3 Rollback
 
-- **Application:** dispatch again with an earlier certified SHA and its Foundation run id. Container
-  Apps run in single-revision mode, so the earlier digests replace the current ones.
+- **Application:** dispatch again with an earlier certified SHA and its Foundation run id. When that SHA was deployed
+  before, its images are still in the registry, so the run reuses them and returns to the same bytes: the summary
+  says `reused`, with the same digests as that earlier run's summary (§6.2). Only an image that is not there (a commit
+  never deployed, or an image someone unlocked and deleted) is built again, on the bases of the day. In single
+  revision mode the new revisions replace the current ones only once they are ready; if they never are, the revision
+  check fails the run and the current revisions keep serving. A base image patch needs a new commit (§6.2).
 - **Database:** migrations are forward-only in the pilot. An application rollback is only safe while
   the older code still works with the newer schema; every lane is additive, see each lane's rollback
   notes. For data loss or a bad migration, use a point-in-time restore (§6.4). The template tooling
@@ -534,27 +713,109 @@ workflow:
 
 The recovery target is any point in the last 14 days (PITR, locally redundant, no geo backup).
 
+What Microsoft documents ([backup and restore](https://learn.microsoft.com/en-us/azure/postgresql/backup-restore/concepts-backup-restore)),
+and why the pilot moves to the restored server instead of replacing the original
+(OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20, owner: "Que el despliegue lo siga (Recommended)"):
+
+- "A restore operation in your Azure Database for PostgreSQL flexible server instance always creates a new database
+  server with the name that you provide. It doesn't overwrite the existing database server."
+- It is created with the source's pricing tier, compute, storage size, backup retention period and backup redundancy.
+  "The values of all parameters on the original server aren't automatically applied to the new server", and firewall
+  rules, private endpoints and virtual network rules "aren't copied from the original server".
+- A private-access server can be restored into the same virtual network or another one, never to public access.
+  `restore-drill.sh` passes no `--vnet`, `--subnet` or `--private-dns-zone`, so the Azure CLI gives the new server the
+  source's delegated subnet and private DNS zone (`az postgres flexible-server restore`, Azure CLI source).
+- "If you delete a server, all backups that belong to the server are also deleted and can't be recovered."
+
+So the PostgreSQL server is one setting, the `azure-pilot` environment variable `PILOT_POSTGRES_SERVER_NAME`.
+Empty `PILOT_POSTGRES_SERVER_NAME` (the default) means the first server, `pg-pv-pilot-<suffix>` (its "base" name). Any
+other value must be the base name followed by `-` parts of lowercase letters and digits (at most 63 characters); the
+workflow refuses anything else before it touches Azure. Every consumer follows it: `platform.bicep` (parameter
+`postgresServerName`) and its `postgresName` and `postgresHost` outputs, `pg-migrate-connection`, the three runtime
+credentials and their logins, the migrate, logins and verify jobs, the SCL-007 alerts and `restore-drill.sh`.
+
 - **Drill:** does not touch the pilot database.
 
   ```bash
   ./deploy/azure/pilot/restore-drill.sh --resource-group <rg> --restore-time 2026-10-05T13:10:00Z
   ```
 
-  It restores into a new private server, re-points `job-pv-pilot-verify` to it, runs `assert`
-  (baseline plus every module lane) and puts the job back. It deletes the drill server unless you pass
-  `--keep`, and prints an `EVIDENCE ...` line. Keep that line for the pilot readiness report.
-- **Real restore:**
-  1. Stop the writers:
-     `az containerapp update -n ca-pv-pilot-api -g <rg> --min-replicas 0 --max-replicas 0`, and the
-     same for the Worker.
-  2. Run the drill with `--keep`, so the restored server stays after verification.
-  3. Put the restored server in place. There are two options.
-     - **Swap names (preferred):** delete the old server, then restore again under the original
-       name `pg-pv-pilot-<suffix>`. This keeps every connection secret valid.
-     - **Point secrets at the new host:** update the four connection secrets (`pg-migrate-connection`, `pg-api-runtime-connection`, `pg-worker-runtime-connection`, `pg-realtime-runtime-connection`) to the restored
-       host, then restart the API and Worker revisions.
-  4. Re-run the workflow for the current SHA. This restores the replica counts and re-applies the
-     runtime logins.
+  It restores the server in service (the `postgresName` output of the last deployment, which follows
+  `PILOT_POSTGRES_SERVER_NAME`) into a new private server `<base>-drill-<UTC minute>`, where `<base>` is the first
+  server's name, re-points `job-pv-pilot-verify` to it, runs `assert` (baseline plus every module lane) and puts the
+  job back. It deletes the drill server unless you pass `--keep`, and prints an `EVIDENCE ...` line. Keep that line
+  for the pilot readiness report.
+- **Real restore** (in Cloud Shell, bash, from a copy of the repository):
+  1. **Stop the writers.** Put the API and the Worker in multiple revision mode, where Microsoft documents that
+     revisions can be activated or deactivated ("Changing the revision mode doesn't create a new revision"), and
+     deactivate the running revision, which "stops all running replicas of a revision" (*Manage revisions* and
+     *Revisions* on Microsoft Learn). Scaling cannot stop them: the maximum replica count is at least 1.
+
+     ```bash
+     RG=rg-pv-pilot
+     for app in ca-pv-pilot-api ca-pv-pilot-worker; do
+       revision="$(az containerapp show -n "$app" -g "$RG" --query properties.latestRevisionName -o tsv)"
+       az containerapp revision set-mode -n "$app" -g "$RG" --mode multiple
+       az containerapp revision deactivate -n "$app" -g "$RG" --revision "$revision"
+     done
+     ```
+
+     The web keeps answering, but sign-in and every API call fail until step 5, whose run starts both revisions
+     again once the logins job has run and then puts the apps back in single revision mode (`apps.bicep`).
+  2. **Restore into a new server.**
+
+     ```bash
+     ./deploy/azure/pilot/restore-drill.sh --resource-group "$RG" --restore-time <YYYY-MM-DDTHH:MM:SSZ> --real
+     ```
+
+     `--real` restores the server in service into `<base>-r<UTC minute>` (for example `<base>-r202610201310`; the
+     minute is when the command starts), in the same subnet and private DNS zone, and runs the read-only `assert` on
+     it. It refuses to start if a server with that name already exists. It keeps the new server only if everything
+     succeeds (a failed run deletes it; the original is never touched) and then prints `restored_server_kept=<name>` and
+     `next_step=set the azure-pilot variable PILOT_POSTGRES_SERVER_NAME to <name> ...`.
+  3. **Check the restore.** The `EVIDENCE` line must say `verify_status=Succeeded`. Keep it.
+  4. **Set the variable.** GitHub → *Settings → Environments → azure-pilot → Environment variables*:
+     `PILOT_POSTGRES_SERVER_NAME` = the name of step 2 (or
+     `gh variable set PILOT_POSTGRES_SERVER_NAME --env azure-pilot --repo Eduard0corona/Paquetenvia --body <name>`).
+     Do not use a dispatch input for it: the variable persists, so every later run keeps the restored server.
+  5. **Re-run *Deploy Azure PILOT*** with the current certified SHA and its Foundation run id, and the same
+     `custom_domain_phase` as before (`bind` once the domain is bound). The run:
+     - checks that the named server exists and already has the values a server cannot change later
+       (`postgres-adoption-check`: Ready, standalone, same region, administrator login and PostgreSQL version, private
+       access in the template's subnet and private DNS zone, geo-redundant backup off, a disk no larger than the
+       template's), so a mistyped name stops the run instead of creating a second, empty server;
+     - lets `platform.bicep` update the restored server in place and set its server parameters again
+       (`require_secure_transport`, `azure.extensions`, `password_encryption`), which a restore does not copy;
+     - rewrites `pg-migrate-connection` for the new host, and writes new runtime credentials and verifiers for the API,
+       the Worker and the realtime dispatchers because the kept ones name the old host (as `rotate_runtime_logins`
+       does); the migrate, logins and verify jobs then run on the restored server and the logins job applies the new
+       verifiers there;
+     - after the logins job, starts the stopped API and Worker revisions, which read the new credentials as they
+       start; `apps.bicep` puts them back in single revision mode, and stage 5 moves the six SCL-007 alerts to the
+       restored server.
+  6. **Check.** The run summary shows `PostgreSQL server: <name>`. Sign in at `https://paquetenvia.com` and look at
+     the restored data. `az monitor metrics alert show -g "$RG" -n mar-pv-pilot-pg-connections-warning --query scopes`
+     names the restored server.
+  7. **Later, delete the old server, when you are sure.** Until then it is untouched, keeps running and keeps its own
+     14 days of backups, the only way back to a moment before the restore point. It also costs about 17.70 USD a month
+     (§5: B1ms compute 13.65 plus 32 GB of storage 4.05), on top of a pilot that already sits at the 100 USD budget.
+     Deleting it deletes all its backups for good:
+
+     ```bash
+     az postgres flexible-server delete -g "$RG" -n <old server> --yes
+     ```
+
+     Never delete the server named in `PILOT_POSTGRES_SERVER_NAME`. To go back to the old server before deleting it,
+     empty the variable (or set it to the old name) and re-run the workflow: everything follows it the same way, and
+     whatever was written on the restored server stays there.
+- **Extra drill servers.** A drill deletes its server unless `--keep`; if the delete fails it prints
+  `WARNING drill_server_not_deleted=<name>`. Each drill server is a full copy of the pilot data and costs the same as
+  the pilot server. List the servers and delete every `-drill-` one you no longer need, never the one in service:
+
+  ```bash
+  az postgres flexible-server list -g "$RG" --query "[].name" -o tsv
+  az postgres flexible-server delete -g "$RG" -n <base>-drill-<UTC minute> --yes
+  ```
 
 #### Proof photos (Blob Storage)
 
@@ -710,6 +971,25 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
 
 ### 6.7 Troubleshooting
 
+- **The revision check failed** (*Check that the new API, Worker and Web revisions serve this run's images*):
+  - *"latest revision ... is not ready ... after about 10 minutes"*: the new revision never passed its probes, and the
+    previous revision, if any, still serves. Read why with the command in the error,
+    `az containerapp logs show --name <app> --resource-group <rg> --type system`, then the app's console logs (below).
+    A setting or secret the app refuses to start without shows up there.
+  - *"... is ready but active=..., healthState=..."*: the revision started but is inactive or not `Healthy` after the
+    wait. `az containerapp revision list -n <app> -g <rg> -o table` shows every revision with its state.
+  - *"... is ready but runs '...', not this run's image (...) after about 10 minutes"*: for the whole wait the latest
+    ready revision ran another image (the error names the revision, the image it runs and this run's image), so stage
+    4 did not apply this run's image. Read the stage 4 output and run the workflow again.
+- **The images step failed:**
+  - *"tag paquetenvia-<image>:<sha> is not locked on sha256:..."*: after the push (or on reuse) the tag did not read
+    back on the digest this run deploys with `writeEnabled` false. Do not unlock anything; read the tag with
+    `az acr repository show --name <registry> --image paquetenvia-<image>:<sha>` and compare its digest with the run
+    log (§6.2).
+  - *`docker push` is refused (`denied: ...`)*: the tag already exists and is locked, so the registry refused to
+    replace it (it appeared after the step looked). Run the workflow again; it then reuses that tag.
+  - An `az acr repository` read that fails stops the step before any build: check the registry name and the
+    deployer's role (bootstrap step 5).
 - **Job console logs:** Log Analytics →
   `ContainerAppConsoleLogs_CL | where ContainerJobName_s startswith "job-pv-pilot" | order by TimeGenerated desc`.
 - **App logs:** `ContainerAppConsoleLogs_CL | where ContainerAppName_s == "ca-pv-pilot-api"`. The logs
@@ -731,6 +1011,8 @@ too, for example a temporary *Key Vault Secrets Officer* on the vault.
   `DatabasePools__*` on both apps, identically, or moving to B2s (+≈41 USD/month, over budget).
 - **A PostgreSQL connection alert fired** (`mar-pv-pilot-pg-connections-warning` at 28,
   `mar-pv-pilot-pg-connections-critical` at 33): follow §10.2.
+- **A PostgreSQL resource alert fired** (`mar-pv-pilot-pg-cpu-warning`, `-memory-warning`, `-storage-warning` or
+  `-cpu-credits-warning`): follow §10.3.
 - **Realtime dispatcher not ready:** `/health/ready` reports `realtime_outbox_dispatcher` unhealthy when
   `pg-realtime-runtime-connection` is missing or its login is not `pv_pilot_realtime` (member of
   `paqueteria_realtime` only), when the Notifications lane step `20261012000100_AddRealtimeDispatcherRole` has not
@@ -822,7 +1104,10 @@ Details, format and error codes: `docs/development/mdm-001-master-data-loader.md
     access, and the rule is always removed.
   - Guard P13 fails if the vault is not deny-by-default or if the workflow stops closing its rule.
 - **ACR:** public endpoint with Entra RBAC only. The GitHub-hosted runner pushes images, and ACR Basic
-  has no network rules.
+  has no network rules. It pushes an image only when its tag `paquetenvia-<image>:<sha>` does not exist yet, and
+  locks the tag right after (`--write-enabled false`), so no run can replace the bytes a commit's tag names
+  (ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21, §6.2). The deployer's *Contributor* already covers that lock: on a
+  registry in *RBAC Registry Permissions* mode it has full data plane access, the same access the push needs.
 - **Deployer:** *Contributor* plus *Role Based Access Control Administrator* on the resource group
   only, constrained by an ABAC condition to the seven roles the templates assign (see bootstrap).
   The templates never assign Owner, Contributor, User Access Administrator, Storage Blob Data Owner or
@@ -832,7 +1117,8 @@ Details, format and error codes: `docs/development/mdm-001-master-data-loader.md
 
 ## 8. Static guards (`tools/azr-001/env001_pilot_guards.py`)
 
-The 25 guards (P00–P24) run on the compiled ARM output, the workflow and the pilot Dockerfiles:
+The 28 guards (P00–P27) run on the compiled ARM output, the workflow, the pilot Dockerfiles and the restore drill
+script:
 
 - **Resources:** only authorized resource types and exactly six workloads. Redis, Azure SignalR,
   Front Door and PostgreSQL firewall rules are rejected.
@@ -870,16 +1156,24 @@ The 25 guards (P00–P24) run on the compiled ARM output, the workflow and the p
   - one action group, e-mail only, bound to a parameter without a default;
   - queries read only the Container Apps log tables and the allowlisted event properties;
   - the workflow checks the parameters file.
-- **PostgreSQL connection alerts (P01 and P21, SCL-007):**
-  - `Microsoft.Insights/metricAlerts` only in `observability.bicep` (P01), and there exactly
-    `mar-pv-pilot-pg-connections-warning` and `mar-pv-pilot-pg-connections-critical`, each one literal global
-    resource; any other metric alert is refused, one on Application Insights included;
-  - each watches only `pg-pv-pilot-<suffix>` (same suffix as `platform.bicep`): the Maximum of `active_connections`
+- **PostgreSQL connection and resource alerts (P01 and P21, SCL-007):**
+  - `Microsoft.Insights/metricAlerts` only in `observability.bicep` (P01), and there exactly six, each one literal
+    global resource: `mar-pv-pilot-pg-connections-warning`, `mar-pv-pilot-pg-connections-critical`,
+    `mar-pv-pilot-pg-cpu-warning`, `mar-pv-pilot-pg-memory-warning`, `mar-pv-pilot-pg-storage-warning` and
+    `mar-pv-pilot-pg-cpu-credits-warning`; any other metric alert is refused, a second level for a resource alert and
+    one on Application Insights included;
+  - each watches only the server in service, `[resourceId(..., parameters('postgresServerName'))]` (P25 pins the
+    parameter to `PILOT_POSTGRES_SERVER_NAME`): the Maximum of `active_connections`
     over 5 minutes (`PT5M`), every minute (`PT1M`), `GreaterThanOrEqual` 28 with severity 2 and 33 with severity 1,
     one static criterion with no dimension, enabled and stateful;
+  - the resource alerts watch the same server, every minute (`PT1M`), severity 2, one static criterion with no
+    dimension, enabled and stateful: `cpu_percent` Average over 30 minutes (`PT30M`) `GreaterThanOrEqual` 70,
+    `memory_percent` Maximum over 5 minutes `GreaterThanOrEqual` 80, `storage_percent` Maximum over 5 minutes
+    `GreaterThanOrEqual` 70 and `cpu_credits_remaining` Minimum over 5 minutes `LessThanOrEqual` 72;
   - the only action is the pilot action group, with no webhook, and the observability template contains no e-mail
     address;
-  - the server SKU stays `Standard_B1ms`, whose 35 user connections the thresholds belong to;
+  - the server SKU stays `Standard_B1ms`, whose 35 user connections and 288 CPU credits the thresholds belong to, and
+    its template disk stays 32 GiB (`storageSizeGB`), the base of the storage percentage;
   - each rule counts as one time series at 0.10 USD in the 5 USD alert bound.
 - **Application Insights (P21, OBS-003):**
   - exactly one `Microsoft.Insights/components`, in `platform.bicep`, in the pilot region, workspace-based on the
@@ -904,6 +1198,52 @@ The 25 guards (P00–P24) run on the compiled ARM output, the workflow and the p
   and the last `USER` of each final stage is non-root: `$APP_UID` (uid 1654, the `app` user) on an official
   `mcr.microsoft.com/dotnet/` base whose `APP_UID` no `ARG` or `ENV` redefines, or a literal user other than
   `root`/`0` (`node` for the web). A missing `USER`, a later `USER root` or an unresolvable variable fails.
+  This workflow does not build the AZR-001 DEV-SYNTHETIC images `deploy/azure/Dockerfile.web` (`USER node`) and
+  `deploy/azure/Dockerfile.db-ops` (`USER $APP_UID`), so P24 does not read them. They also run as non-root.
+  `DevSyntheticNonRootImageTests` in `tools/azr-001/test_azr001_static_guards.py` applies the same check to every
+  `deploy/azure/Dockerfile*`.
+- **PostgreSQL server setting (P25, OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20):**
+  - `platform.bicep` and `observability.bicep` take `postgresServerName` (3 to 63 characters) whose default is exactly
+    the first server's name; `platform.bicep` declares the only server with that name and outputs `postgresName` and
+    `postgresHost` from it; no template spells the name anywhere else;
+  - the deploy job reads `PILOT_POSTGRES_SERVER_NAME` once, validates it (`postgres-server-name`) before
+    `azure/login`, and before stage 2 refuses a named server that cannot be read or adopted (`az resource show` with
+    the template's API version, then `postgres-adoption-check`); it passes the value to `platform.bicep` and the
+    `postgresName` output to `observability.bicep`, and checks that `postgresHost` belongs to `postgresName`;
+  - the connections step keeps a runtime credential only while its host (`connection-host`) is the `postgresHost`
+    output and reports `runtime_logins_changed`; one step then starts a stopped API or Worker revision and restarts a
+    running one when that output is `true`;
+  - `restore-drill.sh` restores the `postgresName` output and checks it with the same name pattern.
+
+  The unit tests also run the connections step and the start-or-restart step with a stand-in `az`, and scan
+  `deploy/`, `.github/`, `tools/` and the operations and development docs: the name prefix appears only in the two
+  defaults, the guards' prefix constant and the drill script's check, and every docs line that names the server also
+  names `PILOT_POSTGRES_SERVER_NAME`.
+- **Revision check and image digests (P26, ENV-001 F-05/F-06):** after stage 4 and before the smoke test, one
+  unconditional step (`id: revisions`) reads this run's three images from `steps.images.outputs` and, for
+  `ca-pv-pilot-api`, `ca-pv-pilot-worker` and `ca-pv-pilot-web` in that order, polls `latestRevisionName` against
+  `latestReadyRevisionName` (`polls_left=40`, `sleep 15`), then requires the ready revision's
+  `template.containers[].image` to equal this run's digest and the revision to be `active` and `Healthy`. A ready
+  revision on another image is polled again within the same budget, never failed at once; every failure carries the
+  `az containerapp logs show ... --type system` hint. The always-run summary step reads the four image
+  outputs and the three serving revisions. The unit tests also run the step with a stand-in `az`: ready on the first
+  poll, ready after some polls, never ready, a first deploy never ready, one poll budget for the three apps, a ready
+  revision on another image that is then replaced by this run's (passes) or stays until the wait ends (fails, naming
+  the revision, the image it runs and this run's image), unhealthy or inactive, a revision the start step re-activated
+  after a real restore, the new revision that replaces it, and an image without a digest.
+- **One image per commit, locked tags (P27, ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21):** the unconditional images
+  step (`id: images`, `shopt -s inherit_errexit`, so a failure inside `build()` fails it) lists the registry's
+  repositories and the tags of `paquetenvia-<image>`; when the tag `<tested_git_sha>` exists it reuses that tag's
+  digest (`reusing ...`), otherwise (`building ...`) it runs the one `docker build --pull` and the one `docker push`.
+  Then it locks the tag with the workflow's one `az acr repository update ... --write-enabled false` and reads it back
+  (same digest, `writeEnabled` false), and reports each image right after its `build()` call, with
+  `<image>_source` = `reused` or `built`, which the always-run summary shows. Nothing in the workflow unlocks,
+  deletes, untags or imports an image. The unit tests run the step with a stand-in `az` and `docker` sharing one
+  registry: every tag present (locked or not) is reused with no build or push and ends locked; an empty registry
+  builds and pushes the four images, each locked and read back right after its push; only the missing images of the
+  commit are built; a push over an existing locked tag is refused and stops the step; a tag that does not read back
+  locked on the digest stops it; a failing registry read stops it before any build; a failed build stops it; a
+  checkout other than `tested_git_sha` stops it before the registry.
 
 The unit tests compile the real templates whenever the pinned Bicep CLI is present (the azr-static CI
 job installs it). They mutate the ARM output to prove that each guard fails closed.
@@ -916,15 +1256,28 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
 **Verified without Azure:**
 
 - `bicep build` and `bicep lint` pass with the pinned v0.47.16, with no warnings.
-- 25/25 pilot guards (P00–P24) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
+- 28/28 pilot guards (P00–P27) and 31/31 AZR-001 guards pass, along with the guard unit tests and the CI
   tooling tests. The gitleaks scan was not re-run for OBS-002.
-- The SCL-007 PostgreSQL connection alerts build and lint with no diagnostic, and P21 pins them.
+- The SCL-007 PostgreSQL connection and resource alerts build and lint with no diagnostic, and P21 pins them.
 - The OBS-002 alert and workbook queries parse and type-check offline (Kusto language service).
 - The migrator changes pass contract tests on real PostgreSQL 18/PostGIS 3.6.
 - The BFF web build and `next start` with the CSP connect source work.
 - The API and Worker images run as the non-root `app` user (uid 1654). With the final stage of each Dockerfile
   copied verbatim over a local `dotnet publish`, both listen on `0.0.0.0:8080` and answer `/health/live` with 200, with
   no permission error (Development configuration, so the PostgreSQL key ring and Key Vault were not exercised).
+- Both db-ops images run the migrator. Before 2026-10-20 they did not copy the three lane sources under
+  `src/BuildingBlocks/Paqueteria.Infrastructure` (the SCL-001 key-ring lane and the two PlatformEvolution
+  migrations). Every migrator command therefore exited 3 at start ("DataProtection adoption migration is missing"),
+  as uid 1654 and as root. Now both images, built locally with their final stage verbatim (only the sandbox proxy CA
+  was added to the build stage), pass `verify` with all 13 lanes `VERIFIED`. The pilot image also runs `apply` and then `assert` as uid 1654 against the pinned PostGIS 18/3.6
+  image. That run used a local `postgres` superuser, so it did not use `--azure-ownership-bridge`.
+  `DbOpsImageArchitectureTests` fails if a file the migrator reads is not copied into every
+  `deploy/**/Dockerfile.db-ops*`.
+- ENV-001 F-05: CI builds every Dockerfile under `deploy/azure` (the four pilot images and the two DEV-SYNTHETIC
+  ones) with the pilot workflow's build arguments, checks that none runs as uid 0 and that both db-ops images pass
+  `verify`, on every PR that touches a file those images are built from and on every Foundation run
+  (`docs/development/branching-and-ci.md`, *Deploy image build smoke*). Both web images must also ship only the
+  production dependencies of `apps/web` and answer `GET /` with 200 from `next start`, offline, as `node`.
 
 **Unverified until the first real deployment:**
 
@@ -946,8 +1299,50 @@ The AZR-001 guards only glob `deploy/azure/*` and never read `deploy/azure/pilot
 - SCL-007 PostgreSQL connection alerts:
   - ARM acceptance of the two metric alerts on the private server;
   - whether `active_connections` counts Azure's own `azure_superuser` connections (§10.2).
+- SCL-007 PostgreSQL resource alerts (§10.3, first-deploy checks):
+  - ARM acceptance of the four metric alerts, `cpu_credits_remaining` with its `LogicalServerName` dimension included;
+  - the B1ms CPU credit numbers (288 at most, 12 per hour) on the real server: they come from the Bv1-series VM page,
+    and the PostgreSQL pages do not restate them;
+  - the disk is still 32 GiB, the base of the storage percentages; after an autogrow the same 70 % is of the larger
+    disk.
+- TEN-003-PLATFORM-BOOTSTRAP-2026-10-19: `az containerapp job start --yaml` with the migrate job's own template and
+  new arguments (§6.1 step 10). The command itself passes contract tests on real PostgreSQL as a NOSUPERUSER
+  BYPASSRLS deployment login without `paqueteria_app`; the `az` override was checked only against the Azure CLI
+  source.
 - Proof photo soft delete (ADP-001-PHOTO-SOFT-DELETE-30D-2026-10-20): ARM acceptance of the 30-day blob and
   container retention and the restore steps of §6.4 were not run against real Azure.
+- OPS-002-RESTORE-FOLLOWS-SERVER-2026-10-20 (§6.4 real restore), checked against Microsoft Learn, the ARM reference
+  and the Azure CLI source, never against Azure:
+  - that ARM updates a point-in-time restored server in place when `platform.bicep` names it (every property the
+    template sets was compared with what an existing restored server accepts; `postgres-adoption-check` refuses the
+    cases that differ);
+  - the ARM GET shape `az resource show --api-version 2024-08-01` returns (location as a display name, `state`,
+    `storage.storageSizeGB`);
+  - moving the six SCL-007 metric alerts to another server by redeploying their scope (the ARM reference forbids a
+    scope change only for metric rules based on logs);
+  - `az containerapp revision set-mode`, `deactivate` and `activate` on the API and Worker, and `apps.bicep` putting
+    them back in single revision mode.
+- ENV-001 F-06 revision check, checked against Microsoft Learn (*Revisions*: in single revision mode "the existing
+  active revision isn't deactivated until the new revision is ready") and the ARM reference (`latestRevisionName`,
+  `latestReadyRevisionName`, revision `active`, `healthState` Healthy/Unhealthy/None, `template.containers[].image`),
+  never against Azure:
+  - that `latestRevisionName` names the new revision once stage 4's `az deployment group create` returns (the check
+    tolerates the previous revision still being reported as latest and ready: it waits within the same budget), and
+    that the revision's `template.containers[].image` is the exact `<registry>/paquetenvia-<image>@sha256:...` string
+    stage 4 passed;
+  - what `latestReadyRevisionName` and `healthState` show right after the start step re-activates a revision stopped
+    for a real restore (§6.4 step 5). The check tolerates a transient `None` or `Unhealthy` within its wait, so either
+    behaviour passes once the replicas are healthy;
+  - that the Web, which has no explicit probes, reports `Healthy` through the default probes Container Apps adds.
+- ENV-001-ROLLBACK-REUSES-IMAGE-2026-10-21 image reuse and tag lock, checked against Microsoft Learn (*Lock a
+  container image*: `az acr repository update --image <repo>:<tag> --write-enabled false` locks a tag "so that it
+  can't be deleted or updated", `az acr repository show --image <repo>:<tag>` shows its attributes; *Azure Container
+  Registry roles directory reference*: in *RBAC Registry Permissions* mode *Contributor* has the same full data plane
+  access as *Owner*, including "repository, image, digest, and tag locking") and the Azure CLI source (`show` of a tag
+  returns its `digest` and `changeableAttributes`), never against Azure:
+  - the exact text a refused push prints, and that the pilot registry is in *RBAC Registry Permissions* mode (in the
+    ABAC mode *Contributor* has no data plane access, and the existing push would already fail);
+  - the output of `az acr repository list` and `show-tags` on a registry with no repository yet.
 - OBS-003:
   - ARM acceptance of the workspace-based component;
   - that the exporter reaches the Mexico Central ingestion endpoint from inside the VNet, and the real volume
@@ -1064,3 +1459,77 @@ cada minuto (Recommended)"). Pools and budget: `docs/development/scl-007-pool-pe
     the difference.
   - The metric is sampled once a minute. A burst between two samples can be missed, and *Failed Connections* is
     where it would show.
+
+### 10.3 PostgreSQL resources (SCL-007)
+
+Decision SCL-007-POSTGRES-RESOURCE-ALERTS-2026-10-20 (owner: "CPU, memoria y disco (Recommended)", "Un nivel, de aviso
+(Recommended)", "CPU 70, memoria 80, disco 70 (Recommended)", "Sí, agregarla (Recommended)" and "Menos de 72 (25 %)
+(Recommended)").
+
+- **Rules:** four metric alerts in `observability.bicep`, deployed by stage 5 with the connection alerts (§10.2). Each
+  has one level, the warning (severity 2), is evaluated every minute and is stateful: one e-mail when it fires and one
+  when it resolves, to the same action group and address as OBS-002.
+
+  | Rule | Fires when | Over |
+  |---|---|---|
+  | `mar-pv-pilot-pg-cpu-warning` | `cpu_percent` Average ≥ 70 % | 30 minutes |
+  | `mar-pv-pilot-pg-memory-warning` | `memory_percent` Maximum ≥ 80 % | 5 minutes |
+  | `mar-pv-pilot-pg-storage-warning` | `storage_percent` Maximum ≥ 70 % (22.4 of the 32 GiB) | 5 minutes |
+  | `mar-pv-pilot-pg-cpu-credits-warning` | `cpu_credits_remaining` Minimum ≤ 72 (25 % of the 288 a B1ms banks) | 5 minutes |
+
+  CPU takes AI-15 `db_cpu_utilization` (warning 0.7, window 30m, `docs/normative/v0.6/specs/AI-15_SCALABILITY_CONTRACT.yaml`
+  lines 113-116), so a short peak does not fire it. The answer gives no window for the disk; it takes the Maximum over
+  5 minutes every minute, as the connection alerts. The credits option was labeled "Menos de 72" and its text reads
+  "Avisa con 72 créditos o menos", so the rule fires at 72 or fewer. The thresholds are literal in the template and guard
+  P21 pins them, so `observability.parameters.json` cannot change them.
+- **Metrics** of `Microsoft.DBforPostgreSQL/flexibleServers`, each sampled every minute with Average, Maximum and Minimum
+  ([supported metrics](https://learn.microsoft.com/en-us/azure/azure-monitor/reference/supported-metrics/microsoft-dbforpostgresql-flexibleservers-metrics)):
+  `cpu_percent`, `memory_percent` and `storage_percent` are percentages (dimension `ServerName`); `cpu_credits_remaining`
+  is a count, "Total number of credits available to burst" (dimension `LogicalServerName`). No rule filters a dimension:
+  one server, one time series per rule.
+- **Cost:** with the two connection alerts, 6 time series, inside the 10 free per resource, otherwise about 0.10 USD per
+  series per month (§5).
+- **What each one means and what to do first:**
+  - **CPU** (`mar-pv-pilot-pg-cpu-warning`): the server averaged 70 % CPU or more for half an hour. On a Burstable B1ms
+    that also spends CPU credits. First, find the load: the server → *Metrics* → *CPU percent* (Avg) next to *CPU
+    Credits Remaining* (Min) and *Active Connections* (Max); whether a pilot workflow run, a `job-pv-pilot-*` execution
+    or the restore drill was running; and the slow or long sessions, from an administration session:
+    `SELECT usename, state, wait_event_type, now() - query_start AS running_for FROM pg_stat_activity WHERE state <> 'idle' ORDER BY running_for DESC NULLS LAST`.
+    The workbook (§10) shows whether API traffic or the outbox lanes grew at the same time. If it is the pilot's real
+    load, a larger size needs an owner decision (B2s +≈41 USD/month, over the budget).
+  - **CPU credits** (`mar-pv-pilot-pg-cpu-credits-warning`): 72 credits or fewer are left. A B1ms banks at most 288 and
+    up to 12 per hour: it gains credits while its CPU stays below the 20 % baseline and spends them above it. At full
+    CPU it loses about 0.8 per minute, so 72 leave about an hour and a half. With none left the server is held at 20 %
+    CPU, and Microsoft warns of "severe performance degradation, connection timeouts, and delays or transient failures
+    in management operations until credits rebuild"
+    ([compute](https://learn.microsoft.com/en-us/azure/postgresql/compute-storage/concepts-compute)). First, the same
+    load check as for CPU. Microsoft advises not to restart or scale the server while credits are near zero; if they
+    run low often, a larger Burstable size or another tier needs an owner decision. Expect this alert right after the
+    first deploy: the Bv1-series page gives a B1ms 30 initial credits, under the 72 threshold, so it can fire at once and
+    resolves by itself once the server banks more than 72 (about 3.5 hours at 12 per hour under light load). It may
+    do the same after the server is stopped and started; note what happens at the first deploy (§9).
+  - **Memory** (`mar-pv-pilot-pg-memory-warning`): some minute of the last 5 reached 80 % of the 2 GiB. First, *Memory
+    percent* with Max and Avg, to tell a peak from a steady level, next to *Active Connections* (each connection takes
+    memory) and *CPU percent*, and the long sessions as for CPU. If it stays high under normal load, a larger size
+    needs an owner decision.
+  - **Storage** (`mar-pv-pilot-pg-storage-warning`): 70 % of the disk is used, 22.4 of the 32 GiB. Autogrow is on: when
+    less than 20 % is free (80 % used) Azure doubles the disk to 64 GiB, and "that doubling also doubles the storage
+    cost" (about 4.05 to 8.10 USD per month, §5); storage only scales up, never down. The server turns read-only "when
+    the storage usage reaches 95 percent, or when the available capacity is less than 5 GiB", about 84 % of 32 GiB, and
+    autogrow does not trigger when the space goes to write-ahead log
+    ([storage](https://learn.microsoft.com/en-us/azure/postgresql/compute-storage/concepts-storage),
+    [autogrow](https://learn.microsoft.com/en-us/azure/postgresql/scale/how-to-auto-grow-storage)). First, see what
+    grows: *Storage percent*, *Storage used* and *Transaction Log Storage Used* over the last days, and the database size
+    from an administration session (`SELECT pg_size_pretty(pg_database_size('paqueteria'))`); then check that the
+    OPS-004 retention runs (the workbook and `sqr-pv-pilot-job-failure`). Autogrow then happens on its own at 80 %;
+    whether to clean up first or accept the larger disk, which doubles its cost for good, is an owner decision.
+- **First-deploy checks:**
+  - The credit numbers (288 at most, 12 per hour, 20 % baseline) are those of the Bv1-series VM page
+    ([Bv1-series](https://learn.microsoft.com/en-us/azure/virtual-machines/sizes/general-purpose/bv1-series)); the
+    PostgreSQL pages do not restate them. On the real server, read *CPU Credits Remaining* (Max) after a quiet day, when
+    it should approach 288, and record the value. If it is different, 72 is no longer 25 % and the threshold needs a new
+    owner decision.
+  - The storage percentages assume the 32 GiB disk of `platform.bicep`; P21 refuses another `storageSizeGB` in the
+    template. Check the real size (`az postgres flexible-server show -n <server> -g <rg> --query storage`, where
+    `<server>` is `PILOT_POSTGRES_SERVER_NAME` or, while it is empty, `pg-pv-pilot-<suffix>`).
+    After an autogrow the disk is 64 GiB, so 70 % means 44.8 GiB; the threshold then needs a new owner decision.

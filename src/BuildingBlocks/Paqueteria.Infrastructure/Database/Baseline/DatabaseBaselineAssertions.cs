@@ -30,6 +30,8 @@ public sealed class DatabaseBaselineAssertions
         "paqueteria_operator_outbox_executor",
         // ORD-AUTO-CLOSE-2026-10-10: neither is the auto-close executor.
         "paqueteria_auto_close_executor",
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: nor the receipt executor (AI-18 recipient notices step 3).
+        "paqueteria_notification_receipt_executor",
     ];
 
     /// <summary>
@@ -118,6 +120,93 @@ public sealed class DatabaseBaselineAssertions
         "routes.routes.operator_org_id:SELECT",
         "routes.routes.updated_at:SELECT",
         "routes.routes.version:SELECT",
+    });
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-18 recipient notices step 3, amended by O5): the receipt executor.
+    /// </summary>
+    public const string ReceiptExecutor = "paqueteria_notification_receipt_executor";
+
+    /// <summary>NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: the three functions only <c>paqueteria_app</c> executes.</summary>
+    public static IReadOnlyList<string> ReceiptExecutorApiFunctions { get; } = Array.AsReadOnly(new[]
+    {
+        "security.record_messaging_receipt(text,text,text,text,timestamp with time zone)",
+        "security.record_recipient_opt_out(text,text,bytea,integer,bytea[])",
+        "security.request_recipient_auto_reply(uuid,text,bytea,integer,bytea[],bytea,text,timestamp with time zone)",
+    });
+
+    /// <summary>NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: the two functions only <c>paqueteria_worker</c> executes.</summary>
+    public static IReadOnlyList<string> ReceiptExecutorWorkerFunctions { get; } = Array.AsReadOnly(new[]
+    {
+        "security.claim_recipient_auto_replies(integer,interval)",
+        "security.settle_recipient_auto_reply(uuid,uuid,text,text,timestamp with time zone)",
+    });
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: the receipt executor's exact column grants (schema.table.column:privilege),
+    /// as AI-18 declares them and the Notifications lane step 20261029000100_AddRecipientNoticeReceipts grants them.
+    /// </summary>
+    public static IReadOnlyList<string> ReceiptExecutorColumnGrants { get; } = Array.AsReadOnly(new[]
+    {
+        "notifications.notification_status_events.attempts:INSERT",
+        "notifications.notification_status_events.id:INSERT",
+        "notifications.notification_status_events.notification_id:INSERT",
+        "notifications.notification_status_events.occurred_at:INSERT",
+        "notifications.notification_status_events.owner_org_id:INSERT",
+        "notifications.notification_status_events.provider_attempt_code:INSERT",
+        "notifications.notification_status_events.status:INSERT",
+        "notifications.notification_status_events.version:INSERT",
+        "notifications.notifications.attempts:SELECT",
+        "notifications.notifications.channel:SELECT",
+        "notifications.notifications.delivered_at:UPDATE",
+        "notifications.notifications.id:SELECT",
+        "notifications.notifications.last_provider_attempt_code:UPDATE",
+        "notifications.notifications.owner_org_id:SELECT",
+        "notifications.notifications.provider_reference:SELECT",
+        "notifications.notifications.status:SELECT",
+        "notifications.notifications.status:UPDATE",
+        "notifications.notifications.updated_at:UPDATE",
+        "notifications.notifications.version:SELECT",
+        "notifications.notifications.version:UPDATE",
+        "notifications.recipient_auto_replies.attempts:INSERT",
+        "notifications.recipient_auto_replies.attempts:SELECT",
+        "notifications.recipient_auto_replies.attempts:UPDATE",
+        "notifications.recipient_auto_replies.available_at:INSERT",
+        "notifications.recipient_auto_replies.available_at:SELECT",
+        "notifications.recipient_auto_replies.available_at:UPDATE",
+        "notifications.recipient_auto_replies.contact_hash:INSERT",
+        "notifications.recipient_auto_replies.contact_hash:SELECT",
+        "notifications.recipient_auto_replies.contact_key_version:INSERT",
+        "notifications.recipient_auto_replies.id:INSERT",
+        "notifications.recipient_auto_replies.id:SELECT",
+        "notifications.recipient_auto_replies.kind:INSERT",
+        "notifications.recipient_auto_replies.kind:SELECT",
+        "notifications.recipient_auto_replies.last_code:UPDATE",
+        "notifications.recipient_auto_replies.lease_expires_at:SELECT",
+        "notifications.recipient_auto_replies.lease_expires_at:UPDATE",
+        "notifications.recipient_auto_replies.lease_token:SELECT",
+        "notifications.recipient_auto_replies.lease_token:UPDATE",
+        "notifications.recipient_auto_replies.number_key_version:INSERT",
+        "notifications.recipient_auto_replies.number_key_version:SELECT",
+        "notifications.recipient_auto_replies.number_key_version:UPDATE",
+        "notifications.recipient_auto_replies.received_at:INSERT",
+        "notifications.recipient_auto_replies.received_at:SELECT",
+        "notifications.recipient_auto_replies.sealed_number:INSERT",
+        "notifications.recipient_auto_replies.sealed_number:SELECT",
+        "notifications.recipient_auto_replies.sealed_number:UPDATE",
+        "notifications.recipient_auto_replies.settled_at:UPDATE",
+        "notifications.recipient_auto_replies.status:INSERT",
+        "notifications.recipient_auto_replies.status:SELECT",
+        "notifications.recipient_auto_replies.status:UPDATE",
+        "notifications.recipient_opt_outs.channel:INSERT",
+        "notifications.recipient_opt_outs.channel:SELECT",
+        "notifications.recipient_opt_outs.contact_hash:INSERT",
+        "notifications.recipient_opt_outs.contact_hash:SELECT",
+        "notifications.recipient_opt_outs.key_version:INSERT",
+        "notifications.recipient_opt_outs.recorded_at:INSERT",
+        "notifications.recipient_opt_outs.recorded_at:SELECT",
+        "notifications.recipient_opt_outs.source:INSERT",
+        "notifications.recipient_opt_outs.source:SELECT",
     });
 
     /// <summary>ORD-AUTO-CLOSE-2026-10-10: the auto-close owner discovery function.</summary>
@@ -555,7 +644,13 @@ public sealed class DatabaseBaselineAssertions
                 -- dispatcher runtime role (its lane step installs no function, so its recorded history row decides).
                 realtime_dispatcher(name,bypass_rls) AS (
                   SELECT 'paqueteria_realtime',false
-                  WHERE pg_catalog.to_regrole('paqueteria_realtime') IS NOT NULL OR @realtime_applied)
+                  WHERE pg_catalog.to_regrole('paqueteria_realtime') IS NOT NULL OR @realtime_applied),
+                -- NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: the same rule for installations that predate the receipt
+                -- executor (AI-18 recipient notices step 3).
+                receipt_executor(name,bypass_rls) AS (
+                  SELECT 'paqueteria_notification_receipt_executor',true
+                  WHERE pg_catalog.to_regrole('paqueteria_notification_receipt_executor') IS NOT NULL
+                     OR pg_catalog.to_regprocedure('security.record_messaging_receipt(text,text,text,text,timestamp with time zone)') IS NOT NULL)
                 SELECT 'role ' || expected.name || ' flags differ from least-privilege NOLOGIN contract'
                 FROM (SELECT name,bypass_rls FROM expected UNION ALL SELECT name,bypass_rls FROM lifecycle
                       UNION ALL SELECT name,bypass_rls FROM cleanup
@@ -564,7 +659,8 @@ public sealed class DatabaseBaselineAssertions
                       UNION ALL SELECT name,bypass_rls FROM master_data
                       UNION ALL SELECT name,bypass_rls FROM operator_outbox
                       UNION ALL SELECT name,bypass_rls FROM auto_close
-                      UNION ALL SELECT name,bypass_rls FROM realtime_dispatcher) expected
+                      UNION ALL SELECT name,bypass_rls FROM realtime_dispatcher
+                      UNION ALL SELECT name,bypass_rls FROM receipt_executor) expected
                 LEFT JOIN pg_catalog.pg_roles r ON r.rolname=expected.name
                 WHERE r.oid IS NULL OR r.rolcanlogin OR r.rolsuper OR r.rolcreatedb OR r.rolcreaterole OR r.rolreplication
                   OR r.rolbypassrls IS DISTINCT FROM expected.bypass_rls
@@ -614,6 +710,9 @@ public sealed class DatabaseBaselineAssertions
             await AssertPilotIndexesAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 
+            await AssertRecipientNoticeContactAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
+            checks++;
+
             await AssertLifecycleExecutorBoundaryAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 
@@ -637,6 +736,16 @@ public sealed class DatabaseBaselineAssertions
 
             await AssertRealtimeDispatcherBoundaryAsync(
                 connection, activeTransaction, realtimeDispatcherApplied, violations, cancellationToken).ConfigureAwait(false);
+            checks++;
+
+            await AssertReceiptExecutorBoundaryAsync(
+                connection,
+                activeTransaction,
+                await E002NotificationStateReader
+                    .IsRecipientNoticeReceiptsAppliedAsync(connection, activeTransaction, cancellationToken)
+                    .ConfigureAwait(false),
+                violations,
+                cancellationToken).ConfigureAwait(false);
             checks++;
 
             await AssertDefaultAclCatalogAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
@@ -740,6 +849,73 @@ public sealed class DatabaseBaselineAssertions
                 violations.Add($"{unprotectedTables} tenant tables are missing ENABLE/FORCE RLS.");
             }
 
+            // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-06 and AI-18 declared contract): once the Notifications lane step
+            // installs the platform-wide opt-out store, it has no policy and no runtime role holds any privilege on it,
+            // so only the SECURITY DEFINER functions reach it.
+            await AddRowsAsync(
+                violations,
+                connection,
+                activeTransaction,
+                """
+                SELECT 'notifications.recipient_opt_outs has a row security policy'
+                WHERE pg_catalog.to_regclass('notifications.recipient_opt_outs') IS NOT NULL
+                  AND EXISTS (SELECT 1 FROM pg_catalog.pg_policy
+                              WHERE polrelid=pg_catalog.to_regclass('notifications.recipient_opt_outs'))
+                UNION ALL
+                SELECT 'runtime role ' || role.name || ' holds a privilege on notifications.recipient_opt_outs'
+                FROM unnest(ARRAY['paqueteria_app','paqueteria_worker','paqueteria_realtime','paqueteria_bootstrap']) role(name)
+                CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) privilege(name)
+                WHERE pg_catalog.to_regclass('notifications.recipient_opt_outs') IS NOT NULL
+                  AND pg_catalog.to_regrole(role.name) IS NOT NULL
+                  AND pg_catalog.has_table_privilege(role.name,'notifications.recipient_opt_outs',privilege.name)
+                """,
+                cancellationToken).ConfigureAwait(false);
+            checks++;
+
+            // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-004; AI-18 recipient notices step 2 and deployment assertion 40):
+            // once the Orders lane step installs the WhatsApp consent table, it keeps FORCE RLS, its one tenant policy and
+            // its append-only trigger, and the runtime roles hold exactly SELECT and INSERT (paqueteria_app) and SELECT
+            // (paqueteria_worker) on it.
+            await AddRowsAsync(
+                violations,
+                connection,
+                activeTransaction,
+                """
+                WITH consent AS (SELECT pg_catalog.to_regclass('orders.recipient_notice_consents') AS oid)
+                SELECT 'orders.recipient_notice_consents is missing ENABLE/FORCE RLS'
+                FROM consent JOIN pg_catalog.pg_class c ON c.oid=consent.oid
+                WHERE NOT c.relrowsecurity OR NOT c.relforcerowsecurity
+                UNION ALL
+                SELECT 'orders.recipient_notice_consents does not have exactly its tenant policy'
+                FROM consent
+                WHERE consent.oid IS NOT NULL
+                  AND ((SELECT count(*) FROM pg_catalog.pg_policy p
+                        WHERE p.polrelid=consent.oid AND p.polname='recipient_notice_consents_tenant' AND p.polcmd='*'
+                          AND pg_catalog.pg_get_expr(p.polqual,p.polrelid)='security.app_allowed_org(owner_org_id)'
+                          AND pg_catalog.pg_get_expr(p.polwithcheck,p.polrelid)='security.app_allowed_org(owner_org_id)') <> 1
+                       OR (SELECT count(*) FROM pg_catalog.pg_policy p WHERE p.polrelid=consent.oid) <> 1)
+                UNION ALL
+                SELECT 'append-only trigger missing or disabled: recipient_notice_consents_append_only'
+                FROM consent
+                WHERE consent.oid IS NOT NULL
+                  AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_trigger t
+                                  WHERE t.tgrelid=consent.oid AND t.tgname='recipient_notice_consents_append_only'
+                                    AND NOT t.tgisinternal AND t.tgenabled<>'D'
+                                    AND t.tgfoid='platform.reject_runtime_mutation()'::regprocedure)
+                UNION ALL
+                SELECT 'runtime role ' || role.name || ' privilege ' || privilege.name || ' on orders.recipient_notice_consents differs from AI-18'
+                FROM consent
+                CROSS JOIN unnest(ARRAY['paqueteria_app','paqueteria_worker','paqueteria_realtime','paqueteria_bootstrap']) role(name)
+                CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) privilege(name)
+                WHERE consent.oid IS NOT NULL
+                  AND pg_catalog.to_regrole(role.name) IS NOT NULL
+                  AND pg_catalog.has_table_privilege(role.name,consent.oid,privilege.name)
+                      IS DISTINCT FROM ((role.name='paqueteria_app' AND privilege.name IN ('SELECT','INSERT'))
+                                        OR (role.name='paqueteria_worker' AND privilege.name='SELECT'))
+                """,
+                cancellationToken).ConfigureAwait(false);
+            checks++;
+
             await ProbeDefaultPrivilegesAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 
@@ -804,9 +980,32 @@ public sealed class DatabaseBaselineAssertions
               ('security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,timestamp with time zone,timestamp with time zone)','paqueteria_outbox_executor',true),
               ('security.finalize_notification_max_attempts(uuid,uuid,uuid,integer,timestamp with time zone)','paqueteria_outbox_executor',true),
               ('notifications.provision_default_templates()','paqueteria_outbox_executor',true)),
+            -- NTF-RECIPIENT-NOTICES-2026-10-20: the Notifications lane step 20261020000100_AddRecipientNoticeLane drops the
+            -- published 8-argument settle and installs v2 with three more routines; any one of them marks the step, so a
+            -- partial installation is reported.
+            recipient_lane(installed) AS (
+              SELECT to_regprocedure('security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,text,timestamp with time zone,timestamp with time zone)') IS NOT NULL
+                OR to_regprocedure('security.expand_recipient_notice_request(uuid,uuid,boolean,interval,time without time zone,time without time zone,text,text[])') IS NOT NULL
+                OR to_regprocedure('security.cancel_notification(uuid,uuid,uuid,integer,text,timestamp with time zone)') IS NOT NULL
+                OR to_regprocedure('security.is_recipient_opted_out(text,bytea[])') IS NOT NULL),
             expected(signature,owner) AS (
               SELECT signature,owner FROM expected_all
-              WHERE NOT ntf OR to_regprocedure('security.resolve_outbox_consumer(text)') IS NOT NULL
+              WHERE (NOT ntf OR to_regprocedure('security.resolve_outbox_consumer(text)') IS NOT NULL)
+                AND NOT (signature='security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,timestamp with time zone,timestamp with time zone)'
+                  AND (SELECT installed FROM recipient_lane))
+              UNION ALL
+              SELECT signature,'paqueteria_outbox_executor'
+              FROM (VALUES
+                ('security.expand_recipient_notice_request(uuid,uuid,boolean,interval,time without time zone,time without time zone,text,text[])'),
+                ('security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,text,timestamp with time zone,timestamp with time zone)'),
+                ('security.cancel_notification(uuid,uuid,uuid,integer,text,timestamp with time zone)'),
+                ('security.is_recipient_opted_out(text,bytea[])')) recipient(signature)
+              WHERE (SELECT installed FROM recipient_lane)
+              UNION ALL
+              -- NTF-RECIPIENT-NOTICE-CAPS-2026-10-23: the Notifications lane step 20261023000100_AddRecipientNoticeCounts
+              -- installs the read-only count of the recipient notice caps after the recipient notice lane step.
+              SELECT 'security.read_recipient_notice_counts(uuid,uuid)','paqueteria_outbox_executor'
+              WHERE to_regprocedure('security.read_recipient_notice_counts(uuid,uuid)') IS NOT NULL
               UNION ALL
               -- ADR-034: installed by the Orders LIF-001 lane after the baseline.
               SELECT 'security.finalize_expired_orders(integer)','paqueteria_lifecycle_executor'
@@ -869,6 +1068,21 @@ public sealed class DatabaseBaselineAssertions
               -- ORD-AUTO-CLOSE-2026-10-10: installed by the Orders lane after the baseline.
               SELECT 'security.list_auto_close_owner_organizations(uuid,integer)','paqueteria_auto_close_executor'
               WHERE to_regprocedure('security.list_auto_close_owner_organizations(uuid,integer)') IS NOT NULL
+              UNION ALL
+              -- NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: installed by the Notifications lane after the recipient notice
+              -- count step; any one of them marks the step, so a partial installation is reported.
+              SELECT signature,'paqueteria_notification_receipt_executor'
+              FROM (VALUES
+                ('security.record_messaging_receipt(text,text,text,text,timestamp with time zone)'),
+                ('security.record_recipient_opt_out(text,text,bytea,integer,bytea[])'),
+                ('security.request_recipient_auto_reply(uuid,text,bytea,integer,bytea[],bytea,text,timestamp with time zone)'),
+                ('security.claim_recipient_auto_replies(integer,interval)'),
+                ('security.settle_recipient_auto_reply(uuid,uuid,text,text,timestamp with time zone)')) receipts(signature)
+              WHERE to_regprocedure('security.record_messaging_receipt(text,text,text,text,timestamp with time zone)') IS NOT NULL
+                 OR to_regprocedure('security.record_recipient_opt_out(text,text,bytea,integer,bytea[])') IS NOT NULL
+                 OR to_regprocedure('security.request_recipient_auto_reply(uuid,text,bytea,integer,bytea[],bytea,text,timestamp with time zone)') IS NOT NULL
+                 OR to_regprocedure('security.claim_recipient_auto_replies(integer,interval)') IS NOT NULL
+                 OR to_regprocedure('security.settle_recipient_auto_reply(uuid,uuid,text,text,timestamp with time zone)') IS NOT NULL
             )
             SELECT 'function owner mismatch for ' || expected.signature || ', expected ' || expected.owner
             FROM expected
@@ -883,7 +1097,8 @@ public sealed class DatabaseBaselineAssertions
             WHERE owner.rolname IN ('paqueteria_bootstrap','paqueteria_outbox_executor','paqueteria_maintenance',
                 'paqueteria_lifecycle_executor','paqueteria_cleanup_executor','paqueteria_registration_executor',
                 'paqueteria_session_executor','paqueteria_master_data_executor','paqueteria_master_data_loader',
-                'paqueteria_operator_outbox_executor','paqueteria_auto_close_executor','paqueteria_realtime')
+                'paqueteria_operator_outbox_executor','paqueteria_auto_close_executor','paqueteria_realtime',
+                'paqueteria_notification_receipt_executor')
               AND NOT EXISTS (SELECT 1 FROM expected WHERE pg_catalog.to_regprocedure(expected.signature)=p.oid AND expected.owner=owner.rolname)
             UNION ALL
             SELECT 'general function owner mismatch for ' || n.nspname || '.' || p.proname || ', actual ' || owner.rolname
@@ -936,6 +1151,111 @@ public sealed class DatabaseBaselineAssertions
                OR pg_catalog.pg_get_indexdef(i.indexrelid)<>e.definition
             """,
             cancellationToken).ConfigureAwait(false);
+    }
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002; AI-06 declared contract): the Locations lane step that adds the
+    /// recipient contact columns of <c>locations.locations</c>. AI-06 carries the same DDL on fresh installations.
+    /// </summary>
+    public const string RecipientNoticeContactMigrationId = "20261020000100_AddRecipientNoticeContact";
+
+    /// <summary>The four columns as <c>name:type:nullable:default</c>, ordered by name.</summary>
+    public static IReadOnlyList<string> RecipientNoticeContactColumns { get; } = Array.AsReadOnly(new[]
+    {
+        "email_ciphertext:bytea:YES:",
+        "notice_email_ciphertext:bytea:YES:",
+        "notice_key_version:text:YES:",
+        "notice_phone_ciphertext:bytea:YES:",
+    });
+
+    /// <summary>The two checks as <c>name:pg_get_constraintdef:validated</c>, ordered by name.</summary>
+    public static IReadOnlyList<string> RecipientNoticeContactChecks { get; } = Array.AsReadOnly(new[]
+    {
+        "locations_notice_email_check:CHECK (((notice_email_ciphertext IS NULL) OR (email_ciphertext IS NOT NULL))):true",
+        "locations_notice_key_version_check:CHECK (((notice_key_version IS NULL) = ((notice_phone_ciphertext IS NULL) AND (notice_email_ciphertext IS NULL)))):true",
+    });
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20: <c>locations.locations</c> carries <see cref="RecipientNoticeContactColumns"/>
+    /// and <see cref="RecipientNoticeContactChecks"/> exactly. Recorded history, not the catalog, decides: on a fresh
+    /// baseline (no Locations lane history yet) and once <see cref="RecipientNoticeContactMigrationId"/> is recorded
+    /// they must be present; while the Locations lane has not recorded that step (an installation upgraded before the
+    /// lane runs, or after the step's guarded rollback) they must be either exactly present or entirely absent, never
+    /// partial or different. The columns keep the table's FORCE RLS policy and runtime privileges, checked elsewhere.
+    /// </summary>
+    private static async Task AssertRecipientNoticeContactAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        ICollection<string> violations,
+        CancellationToken cancellationToken)
+    {
+        var required = await ScalarAsync<bool>(
+            connection,
+            transaction,
+            """
+            SELECT pg_catalog.to_regclass('platform.__ef_migrations_history_locations') IS NULL
+            """,
+            cancellationToken).ConfigureAwait(false);
+        if (!required)
+        {
+            required = await ScalarAsync<bool>(
+                connection,
+                transaction,
+                """
+                SELECT EXISTS (
+                  SELECT 1 FROM platform.__ef_migrations_history_locations WHERE "MigrationId"=@migration_id)
+                """,
+                cancellationToken,
+                new NpgsqlParameter<string>("migration_id", RecipientNoticeContactMigrationId)).ConfigureAwait(false);
+        }
+
+        var columns = await ListAsync(
+            connection,
+            transaction,
+            """
+            SELECT column_name || ':' || data_type || ':' || is_nullable || ':' || COALESCE(column_default,'')
+            FROM information_schema.columns
+            WHERE table_schema='locations' AND table_name='locations'
+              AND column_name IN ('email_ciphertext','notice_phone_ciphertext','notice_email_ciphertext','notice_key_version')
+            ORDER BY column_name
+            """,
+            cancellationToken).ConfigureAwait(false);
+        var checks = await ListAsync(
+            connection,
+            transaction,
+            """
+            SELECT conname || ':' || pg_catalog.pg_get_constraintdef(oid) || ':' || convalidated::text
+            FROM pg_catalog.pg_constraint
+            WHERE conrelid=pg_catalog.to_regclass('locations.locations') AND contype='c'
+              AND conname IN ('locations_notice_email_check','locations_notice_key_version_check')
+            ORDER BY conname
+            """,
+            cancellationToken).ConfigureAwait(false);
+        var exact = columns.SequenceEqual(RecipientNoticeContactColumns, StringComparer.Ordinal) &&
+            checks.SequenceEqual(RecipientNoticeContactChecks, StringComparer.Ordinal);
+        var absent = columns.Count == 0 && checks.Count == 0;
+        if (required ? !exact : !(exact || absent))
+        {
+            violations.Add(
+                "locations.locations recipient contact columns or checks differ from the NTF-RECIPIENT-NOTICES-2026-10-20 contract (AI-06).");
+        }
+    }
+
+    private static async Task<IReadOnlyList<string>> ListAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        string sql,
+        CancellationToken cancellationToken)
+    {
+        var values = new List<string>();
+        await using var command = new NpgsqlCommand(sql, connection, transaction);
+        await using var reader = await command.ExecuteReaderAsync(cancellationToken).ConfigureAwait(false);
+        while (await reader.ReadAsync(cancellationToken).ConfigureAwait(false))
+        {
+            values.Add(reader.GetString(0));
+        }
+
+        return values;
     }
 
     private static async Task AssertBootstrapContractsAsync(
@@ -1885,6 +2205,179 @@ public sealed class DatabaseBaselineAssertions
     }
 
     /// <summary>
+    /// NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-18 recipient notices step 3, amended by O5; deployment assertion 41):
+    /// once <c>paqueteria_notification_receipt_executor</c> exists it is NOLOGIN BYPASSRLS (checked with the other role
+    /// flags), inherits nothing, no runtime or bootstrap role reaches it, it owns no relation, schema or type and no
+    /// function but its five, has no default privilege, no table-wide grant, no direct privilege on either outbox table and
+    /// no CREATE anywhere. With its Notifications lane step recorded it holds exactly USAGE on notifications and security,
+    /// <see cref="ReceiptExecutorColumnGrants"/> (none grantable) and EXECUTE on
+    /// <c>security.emit_notification_status_changed</c> and no other function it does not own; its five functions are
+    /// SECURITY DEFINER with a pinned search_path, no dynamic SQL and no RETURNING, with EXECUTE for exactly their owner and
+    /// one runtime role; and <c>notifications.recipient_auto_replies</c> forces row security with no policy and grants no
+    /// runtime role anything. Without the step (fresh AI-18, or after the step is rolled back) it holds none of them.
+    /// </summary>
+    private static async Task AssertReceiptExecutorBoundaryAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        bool laneApplied,
+        ICollection<string> violations,
+        CancellationToken cancellationToken)
+    {
+        await AddRowsAsync(
+            violations,
+            connection,
+            transaction,
+            """
+            WITH executor AS (
+              SELECT oid FROM pg_catalog.pg_roles WHERE rolname='paqueteria_notification_receipt_executor'
+            ),
+            expected AS (
+              SELECT split_part(grant_text, '.', 1) AS table_schema,
+                     split_part(grant_text, '.', 2) AS table_name,
+                     split_part(split_part(grant_text, '.', 3), ':', 1) AS column_name,
+                     split_part(grant_text, ':', 2) AS privilege_type
+              FROM unnest(@grants::text[]) grant_text
+              WHERE @applied),
+            actual AS (
+              SELECT n.nspname::text AS table_schema, c.relname::text AS table_name, att.attname::text AS column_name,
+                     acl.privilege_type, acl.is_grantable
+              FROM pg_catalog.pg_attribute att
+              JOIN pg_catalog.pg_class c ON c.oid=att.attrelid
+              JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+              CROSS JOIN LATERAL pg_catalog.aclexplode(att.attacl) acl
+              WHERE att.attacl IS NOT NULL AND acl.grantee IN (SELECT oid FROM executor)),
+            functions AS (
+              SELECT signature, pg_catalog.to_regprocedure(signature)::oid AS oid, grantee
+              FROM (SELECT unnest(@api_functions::text[]) AS signature, 'paqueteria_app' AS grantee
+                    UNION ALL SELECT unnest(@worker_functions::text[]), 'paqueteria_worker') listed),
+            installed AS (
+              SELECT f.signature, f.grantee, p.oid, p.proowner, p.prosecdef, p.proconfig, p.prosrc,
+                     (SELECT string_agg(entry, ',' ORDER BY entry COLLATE "C")
+                      FROM (SELECT CASE WHEN acl.grantee=0 THEN 'PUBLIC' ELSE pg_catalog.pg_get_userbyid(acl.grantee) END
+                                     || ':' || acl.privilege_type || ':' || acl.is_grantable::text AS entry
+                            FROM pg_catalog.aclexplode(p.proacl) acl) entries) AS acl
+              FROM functions f JOIN pg_catalog.pg_proc p ON p.oid=f.oid),
+            store AS (SELECT pg_catalog.to_regclass('notifications.recipient_auto_replies') AS oid)
+            SELECT 'receipt executor role is missing while its lane step is recorded'
+            WHERE @applied AND NOT EXISTS (SELECT 1 FROM executor)
+            UNION ALL
+            SELECT 'missing receipt executor column grant: ' || e.table_schema || '.' || e.table_name || '.' || e.column_name || ':' || e.privilege_type
+            FROM expected e CROSS JOIN executor
+            LEFT JOIN actual a USING(table_schema,table_name,column_name,privilege_type)
+            WHERE a.column_name IS NULL
+            UNION ALL
+            SELECT 'unexpected receipt executor column grant: ' || a.table_schema || '.' || a.table_name || '.' || a.column_name || ':' || a.privilege_type
+            FROM actual a LEFT JOIN expected e USING(table_schema,table_name,column_name,privilege_type)
+            WHERE e.column_name IS NULL
+            UNION ALL
+            SELECT 'receipt executor column grant is grantable: ' || a.table_schema || '.' || a.table_name || '.' || a.column_name
+            FROM actual a WHERE a.is_grantable
+            UNION ALL
+            SELECT 'unexpected receipt executor table grant: ' || n.nspname || '.' || c.relname || ':' || acl.privilege_type
+            FROM pg_catalog.pg_class c
+            JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+            CROSS JOIN LATERAL pg_catalog.aclexplode(c.relacl) acl
+            WHERE c.relacl IS NOT NULL AND acl.grantee IN (SELECT oid FROM executor)
+            UNION ALL
+            SELECT 'receipt executor has direct outbox access: ' || lane
+            FROM unnest(ARRAY['platform.outbox_events','platform.location_outbox_events']) lane CROSS JOIN executor
+            WHERE has_table_privilege(executor.oid, lane, 'SELECT,INSERT,UPDATE,DELETE,TRUNCATE')
+            UNION ALL
+            SELECT 'receipt executor has a default privilege'
+            FROM pg_catalog.pg_default_acl d CROSS JOIN LATERAL pg_catalog.aclexplode(d.defaclacl) acl
+            WHERE acl.grantee IN (SELECT oid FROM executor)
+            UNION ALL
+            SELECT 'receipt executor schema privilege differs: ' || n.nspname
+            FROM pg_catalog.pg_namespace n CROSS JOIN executor
+            WHERE n.nspname=ANY(@schemas::text[])
+              AND (has_schema_privilege(executor.oid,n.oid,'CREATE')
+                OR has_schema_privilege(executor.oid,n.oid,'USAGE') IS DISTINCT FROM
+                  (@applied AND n.nspname IN ('notifications','security')))
+            UNION ALL
+            SELECT 'receipt executor has CREATE on public'
+            FROM executor WHERE has_schema_privilege(executor.oid,'public','CREATE')
+            UNION ALL
+            SELECT 'receipt executor executes a function it does not own: ' || p.oid::regprocedure::text
+            FROM pg_catalog.pg_proc p CROSS JOIN LATERAL pg_catalog.aclexplode(p.proacl) acl
+            WHERE p.proacl IS NOT NULL AND acl.grantee IN (SELECT oid FROM executor)
+              AND p.proowner NOT IN (SELECT oid FROM executor)
+              AND NOT (@applied AND p.oid=pg_catalog.to_regprocedure(@emit))
+            UNION ALL
+            SELECT 'receipt executor is missing EXECUTE on the status-changed writer'
+            FROM executor
+            WHERE @applied AND NOT has_function_privilege(executor.oid, @emit, 'EXECUTE')
+            UNION ALL
+            SELECT 'receipt executor inherits role ' || pg_catalog.pg_get_userbyid(m.roleid)
+            FROM pg_catalog.pg_auth_members m WHERE m.member IN (SELECT oid FROM executor)
+            UNION ALL
+            SELECT 'receipt executor is reachable from ' || member.rolname
+            FROM pg_catalog.pg_auth_members m
+            JOIN pg_catalog.pg_roles member ON member.oid=m.member
+            WHERE m.roleid IN (SELECT oid FROM executor)
+              AND member.rolname IN ('paqueteria_app','paqueteria_worker','paqueteria_realtime','paqueteria_bootstrap')
+            UNION ALL
+            SELECT 'receipt executor owns a relation, schema or type'
+            FROM executor
+            WHERE EXISTS (SELECT 1 FROM pg_catalog.pg_class WHERE relowner=executor.oid)
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_namespace WHERE nspowner=executor.oid)
+               OR EXISTS (SELECT 1 FROM pg_catalog.pg_type WHERE typowner=executor.oid)
+            UNION ALL
+            SELECT 'receipt executor owns another function: ' || p.oid::regprocedure::text
+            FROM pg_catalog.pg_proc p
+            WHERE p.proowner IN (SELECT oid FROM executor)
+              AND NOT EXISTS (SELECT 1 FROM installed WHERE installed.oid=p.oid)
+            UNION ALL
+            SELECT 'receipt executor function is missing while its lane step is recorded: ' || f.signature
+            FROM functions f
+            WHERE @applied AND f.oid IS NULL
+            UNION ALL
+            SELECT 'receipt executor function is unsafe: ' || installed.signature
+            FROM installed
+            WHERE NOT installed.prosecdef
+               OR installed.proconfig IS NULL
+               OR installed.proconfig[1] NOT LIKE 'search_path=pg_catalog, %'
+               OR installed.proconfig[1] NOT LIKE '%, pg_temp'
+               OR installed.prosrc ~* '(^|[^a-z_])EXECUTE([^a-z_]|$)'
+               OR installed.prosrc ~* '(^|[^a-z_])RETURNING([^a-z_]|$)'
+               OR installed.proowner IS DISTINCT FROM (SELECT oid FROM executor)
+            UNION ALL
+            SELECT 'receipt executor function ACL differs: ' || installed.signature || ' ' || COALESCE(installed.acl, 'default')
+            FROM installed
+            WHERE installed.acl IS DISTINCT FROM (SELECT string_agg(entry, ',' ORDER BY entry COLLATE "C")
+              FROM unnest(ARRAY['paqueteria_notification_receipt_executor:EXECUTE:false',
+                                installed.grantee || ':EXECUTE:false']) entry)
+            UNION ALL
+            SELECT 'receipt executor function exists without the receipt executor role: ' || installed.signature
+            FROM installed WHERE NOT EXISTS (SELECT 1 FROM executor)
+            UNION ALL
+            SELECT 'notifications.recipient_auto_replies is missing ENABLE/FORCE RLS'
+            FROM store JOIN pg_catalog.pg_class c ON c.oid=store.oid
+            WHERE NOT c.relrowsecurity OR NOT c.relforcerowsecurity
+            UNION ALL
+            SELECT 'notifications.recipient_auto_replies has a row security policy'
+            FROM store WHERE store.oid IS NOT NULL AND EXISTS (SELECT 1 FROM pg_catalog.pg_policy WHERE polrelid=store.oid)
+            UNION ALL
+            SELECT 'runtime role ' || role.name || ' holds a privilege on notifications.recipient_auto_replies'
+            FROM store
+            CROSS JOIN unnest(ARRAY['paqueteria_app','paqueteria_worker','paqueteria_realtime','paqueteria_bootstrap']) role(name)
+            CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) privilege(name)
+            WHERE store.oid IS NOT NULL
+              AND pg_catalog.to_regrole(role.name) IS NOT NULL
+              AND pg_catalog.has_table_privilege(role.name,store.oid,privilege.name)
+            UNION ALL
+            SELECT 'notifications.recipient_auto_replies presence differs from the recorded lane step'
+            FROM store WHERE (store.oid IS NOT NULL) IS DISTINCT FROM @applied
+            """,
+            cancellationToken,
+            new NpgsqlParameter<string[]>("grants", ReceiptExecutorColumnGrants.ToArray()),
+            new NpgsqlParameter<bool>("applied", laneApplied),
+            new NpgsqlParameter<string[]>("api_functions", ReceiptExecutorApiFunctions.ToArray()),
+            new NpgsqlParameter<string[]>("worker_functions", ReceiptExecutorWorkerFunctions.ToArray()),
+            new NpgsqlParameter<string>("emit", "security.emit_notification_status_changed(uuid,uuid,integer,text,text,integer,timestamp with time zone)"),
+            new NpgsqlParameter<string[]>("schemas", DatabaseSchemaCatalog.ApplicationSchemas.ToArray())).ConfigureAwait(false);
+    }
+
+    /// <summary>
     /// RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12 lane contract: after the Notifications lane step the role must exist
     /// and hold exactly its lane grants.
     /// </summary>
@@ -2588,6 +3081,64 @@ public sealed class DatabaseBaselineAssertions
                 OR to_regprocedure('security.requeue_stale_dispatch_outbox(interval,integer,integer)') IS NOT NULL
             """,
             cancellationToken).ConfigureAwait(false);
+        var recipientLaneInstalled = ntfInstalled && await ScalarAsync<bool>(
+            connection,
+            transaction,
+            """
+            SELECT to_regprocedure('security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,text,timestamp with time zone,timestamp with time zone)') IS NOT NULL
+                OR to_regprocedure('security.expand_recipient_notice_request(uuid,uuid,boolean,interval,time without time zone,time without time zone,text,text[])') IS NOT NULL
+                OR to_regprocedure('security.cancel_notification(uuid,uuid,uuid,integer,text,timestamp with time zone)') IS NOT NULL
+                OR to_regprocedure('security.is_recipient_opted_out(text,bytea[])') IS NOT NULL
+            """,
+            cancellationToken).ConfigureAwait(false);
+        if (recipientLaneInstalled)
+        {
+            // NTF-RECIPIENT-NOTICES-2026-10-20: v2 replaces the published settle; EXECUTE for paqueteria_worker only.
+            workerFunctions =
+            [
+                .. workerFunctions.Where(signature => signature !=
+                    "security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,timestamp with time zone,timestamp with time zone)"),
+                "security.expand_recipient_notice_request(uuid,uuid,boolean,interval,time without time zone,time without time zone,text,text[])",
+                "security.apply_notification_outcome(uuid,uuid,uuid,integer,text,text,text,timestamp with time zone,timestamp with time zone)",
+                "security.cancel_notification(uuid,uuid,uuid,integer,text,timestamp with time zone)",
+                "security.is_recipient_opted_out(text,bytea[])",
+            ];
+        }
+
+        if (ntfInstalled && await ScalarAsync<bool>(
+                connection,
+                transaction,
+                "SELECT to_regprocedure('security.read_recipient_notice_counts(uuid,uuid)') IS NOT NULL",
+                cancellationToken).ConfigureAwait(false))
+        {
+            // NTF-RECIPIENT-NOTICE-CAPS-2026-10-23: the count of the caps; EXECUTE for paqueteria_worker only.
+            workerFunctions = [.. workerFunctions, "security.read_recipient_notice_counts(uuid,uuid)"];
+        }
+
+        var receiptsInstalled = ntfInstalled && await ScalarAsync<bool>(
+            connection,
+            transaction,
+            "SELECT to_regprocedure('security.record_messaging_receipt(text,text,text,text,timestamp with time zone)') IS NOT NULL",
+            cancellationToken).ConfigureAwait(false);
+        if (receiptsInstalled)
+        {
+            // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25: the automatic-reply claim and settle; EXECUTE for paqueteria_worker
+            // only. The receipt, opt-out and request writers are the reverse: EXECUTE for paqueteria_app only.
+            workerFunctions = [.. workerFunctions, .. ReceiptExecutorWorkerFunctions];
+            foreach (var signature in ReceiptExecutorApiFunctions)
+            {
+                if (!await HasFunctionPrivilegeAsync(connection, transaction, "paqueteria_app", signature, cancellationToken).ConfigureAwait(false))
+                {
+                    violations.Add($"paqueteria_app is missing EXECUTE on {signature}.");
+                }
+
+                if (await HasFunctionPrivilegeAsync(connection, transaction, "paqueteria_worker", signature, cancellationToken).ConfigureAwait(false))
+                {
+                    violations.Add($"paqueteria_worker has forbidden EXECUTE on {signature}.");
+                }
+            }
+        }
+
         if (dispatchLaneInstalled)
         {
             // D8-OUTBOX-LANE-DISPATCH: EXECUTE for paqueteria_worker only.

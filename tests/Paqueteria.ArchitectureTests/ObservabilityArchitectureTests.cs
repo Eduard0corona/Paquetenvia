@@ -21,6 +21,8 @@ public sealed partial class ObservabilityArchitectureTests
         "src/BuildingBlocks/Paqueteria.Infrastructure/Scheduling",
         "src/BuildingBlocks/Paqueteria.Infrastructure/Database/Outbox",
         "src/Modules/Notifications/Notifications.Infrastructure/Dispatching",
+        // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-005): the recipient notice consumer and sender.
+        "src/Modules/Notifications/Notifications.Infrastructure/RecipientNotices",
         "src/Modules/Dispatch/Dispatch.Infrastructure/Lifecycle",
         "src/Modules/Realtime/Realtime.Infrastructure/Dispatching",
         "src/Modules/Custody/Custody.Infrastructure/Cleanup",
@@ -36,6 +38,10 @@ public sealed partial class ObservabilityArchitectureTests
     {
         "Owner",
         "Channel",
+        // AI-24 recipient_notices.logging: one of the four fixed notice names (TRACKING_LINK, IN_TRANSIT, DELIVERY_FAILED,
+        // DELIVERED) or of the two fixed automatic replies (AUTO_REPLY, OPT_OUT_CONFIRMATION;
+        // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25), never a recipient, a link or a template parameter.
+        "Notice",
         "Code",
         "Provider",
         "ErrorClass",

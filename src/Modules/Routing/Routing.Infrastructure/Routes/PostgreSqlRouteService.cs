@@ -85,7 +85,7 @@ public sealed partial class PostgreSqlRouteService(
                     command.DriverId,
                     command.CityId,
                     command.ServiceAreaId,
-                    new DriverCapacityRequirement(1, 1, 1, 1, 1, 1),
+                    new DriverCapacityRequirement(1, 1, 1, [new PackageSides(1, 1, 1)]),
                     now,
                     token);
                 if (!eligible.IsEligible)

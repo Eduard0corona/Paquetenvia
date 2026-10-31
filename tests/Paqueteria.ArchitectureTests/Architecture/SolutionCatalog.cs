@@ -212,7 +212,10 @@ internal static class SolutionCatalog
         typeof(Notifications.Application.AssemblyReference).Assembly,
         "src/Modules/Notifications/Notifications.Application/Notifications.Application.csproj",
         "Notifications",
-        ["Notifications.Domain", "Identity.Application", "Organizations.Application", "Paqueteria.Application"]);
+        [
+            "Notifications.Domain", "Identity.Application", "Organizations.Application", "Orders.Application",
+            "Paqueteria.Application",
+        ]);
 
     internal static readonly ProjectComponent NotificationsInfrastructure = Component(
         "Notifications.Infrastructure",
@@ -222,8 +225,22 @@ internal static class SolutionCatalog
         "Notifications",
         [
             "Notifications.Application", "Notifications.Domain", "Identity.Application",
-            "Organizations.Application", "Paqueteria.Application", "Paqueteria.Infrastructure",
+            "Organizations.Application", "Orders.Application", "Paqueteria.Application", "Paqueteria.Infrastructure",
         ]);
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006): the provider webhooks and the e-mail unsubscribe, the
+    /// Notifications module's HTTP surface (AI-13 section 1). It reads only the Notifications application ports.
+    /// NTF-RECIPIENT-NOTICE-PANEL-2026-10-30 (AI-08 NTF-007) adds the dispatcher's tenant operations, which decide the
+    /// capability with the Organizations session and gate before any order is read, as the Custody endpoints do.
+    /// </summary>
+    internal static readonly ProjectComponent NotificationsEndpoints = Component(
+        "Notifications.Endpoints",
+        ProjectRole.ModuleEndpoints,
+        typeof(Notifications.Endpoints.AssemblyReference).Assembly,
+        "src/Modules/Notifications/Notifications.Endpoints/Notifications.Endpoints.csproj",
+        "Notifications",
+        ["Notifications.Application", "Organizations.Application", "Organizations.Endpoints", "Paqueteria.Application"]);
 
     internal static readonly IReadOnlyList<ModuleDefinition> Modules =
     [
@@ -268,6 +285,8 @@ internal static class SolutionCatalog
             "Routing.Infrastructure",
             "Finance.Endpoints",
             "Finance.Infrastructure",
+            "Notifications.Endpoints",
+            "Notifications.Infrastructure",
         ]);
 
     internal static readonly ProjectComponent Worker = Component(
@@ -285,6 +304,7 @@ internal static class SolutionCatalog
             "Organizations.Infrastructure",
             "Notifications.Infrastructure",
             "Dispatch.Infrastructure",
+            "Locations.Infrastructure",
         ]);
 
     internal static IReadOnlyList<ProjectComponent> All { get; } =
@@ -309,6 +329,7 @@ internal static class SolutionCatalog
         NotificationsDomain,
         NotificationsApplication,
         NotificationsInfrastructure,
+        NotificationsEndpoints,
         Api,
         Worker,
     ];

@@ -180,6 +180,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Incidents.Infrastructure", 
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Incidents.Endpoints", "src\Modules\Incidents\Incidents.Endpoints\Incidents.Endpoints.csproj", "{C3D9DC92-EF93-4F03-BFCE-2187187E3B4D}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Notifications.Endpoints", "src\Modules\Notifications\Notifications.Endpoints\Notifications.Endpoints.csproj", "{B708B806-F66B-46E8-9F5C-B67DBAFCF4CE}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -1030,6 +1032,18 @@ Global
 		{C3D9DC92-EF93-4F03-BFCE-2187187E3B4D}.Release|x64.Build.0 = Release|Any CPU
 		{C3D9DC92-EF93-4F03-BFCE-2187187E3B4D}.Release|x86.ActiveCfg = Release|Any CPU
 		{C3D9DC92-EF93-4F03-BFCE-2187187E3B4D}.Release|x86.Build.0 = Release|Any CPU
+		{B708B806-F66B-46E8-9F5C-B67DBAFCF4CE}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{B708B806-F66B-46E8-9F5C-B67DBAFCF4CE}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{B708B806-F66B-46E8-9F5C-B67DBAFCF4CE}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{B708B806-F66B-46E8-9F5C-B67DBAFCF4CE}.Debug|x64.Build.0 = Debug|Any CPU
+		{B708B806-F66B-46E8-9F5C-B67DBAFCF4CE}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{B708B806-F66B-46E8-9F5C-B67DBAFCF4CE}.Debug|x86.Build.0 = Debug|Any CPU
+		{B708B806-F66B-46E8-9F5C-B67DBAFCF4CE}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{B708B806-F66B-46E8-9F5C-B67DBAFCF4CE}.Release|Any CPU.Build.0 = Release|Any CPU
+		{B708B806-F66B-46E8-9F5C-B67DBAFCF4CE}.Release|x64.ActiveCfg = Release|Any CPU
+		{B708B806-F66B-46E8-9F5C-B67DBAFCF4CE}.Release|x64.Build.0 = Release|Any CPU
+		{B708B806-F66B-46E8-9F5C-B67DBAFCF4CE}.Release|x86.ActiveCfg = Release|Any CPU
+		{B708B806-F66B-46E8-9F5C-B67DBAFCF4CE}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE
@@ -1120,5 +1134,6 @@ Global
 		{F7C68C61-823E-4457-A386-E4D5C368315B} = {AD9A6629-4044-758D-6428-4EFEA5E979AA}
 		{0885A005-C5E1-49AE-9ECA-7ED4E862F2C5} = {AD9A6629-4044-758D-6428-4EFEA5E979AA}
 		{C3D9DC92-EF93-4F03-BFCE-2187187E3B4D} = {AD9A6629-4044-758D-6428-4EFEA5E979AA}
+		{B708B806-F66B-46E8-9F5C-B67DBAFCF4CE} = {DE9DAF8A-E684-0FD3-FFDC-40D3E3158533}
 	EndGlobalSection
 EndGlobal

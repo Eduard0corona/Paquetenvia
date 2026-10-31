@@ -81,7 +81,9 @@ propios `GET /me/organization-roles` (`ORG-MY-ROLES-2026-10-12`, ver "Quien tamb
   muestra un segundo grupo, "Otro motivo", con los tres motivos. Las etiquetas son las de
   `Incidents.Domain.IncidentDriverReportPolicy` (en la web, `incidentReasonLabels`).
 - "Foto del lugar (obligatoria)": exactamente una foto JPEG o PNG de hasta 10 MiB, con el mismo `DriverProofPreview`
-  de la entrega: "Vista previa de la foto", "Repetir" y "Usar esta foto". "Usar esta foto" solo deja la foto lista
+  de la entrega: el teléfono la reduce igual que la de entrega, a un JPEG de máximo 1600 px por lado y calidad 0.8 sin
+  metadatos, que es la evidencia guardada (DRV-PROOF-PHOTO-REDUCE-2026-10-20, `drv-002-offline-events-pod.md`); luego
+  "Vista previa de la foto", "Repetir" y "Usar esta foto". "Usar esta foto" solo deja la foto lista
   ("Foto lista para el reporte.") y "Repetir" la cambia. El object URL se revoca al repetir, al usarla y al cerrar el
   paso; nada se guarda antes de "Enviar reporte".
 - "Enviar reporte" está deshabilitado hasta tener motivo y foto, con la indicación "Elige qué pasó y toma la foto del
@@ -218,7 +220,7 @@ registrarla": dice que la incidencia quedó abierta y que despacho decide, y que
 ### Límites, privacidad, pausa y otra pestaña
 
 - Los de DRV-002: 100 operaciones y 25 MiB de fotos por partición, 10 MiB por foto, solo JPEG y PNG, estimación de
-  almacenamiento.
+  almacenamiento. Desde DRV-PROOF-PHOTO-REDUCE-2026-10-20 la foto guardada es el JPEG reducido sin metadatos.
 - La operación solo guarda códigos, ids, llaves, el SHA-256 y el tamaño de la foto. Nada de texto, nombre, dirección,
   token, URL firmada ni object key en IndexedDB, logs o consola. La respuesta de roles guardada solo tiene la llave de
   partición, el esquema y los códigos de rol (`organization_roles`).

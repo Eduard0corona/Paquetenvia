@@ -5,10 +5,19 @@ import { isBffAuthenticationEnabled } from "../auth-mode";
 import { bootstrapBffSession } from "../bff-session-installation";
 import { markSessionBootstrapSettled } from "../bootstrap-state";
 import { watchDriverSessionConfirmation } from "../driver-session-confirmation";
+import { isRecipientUnsubscribePath } from "../../security/security-headers";
 
 /** The driver PWA's pages, where the phone may open the driver it remembers (DRV-SESSION-EXPIRY-OFFLINE-2026-10-19). */
 export function isDriverPagePath(path: string): boolean {
   return path === "/driver" || path.startsWith("/driver/");
+}
+
+/**
+ * The pages that never touch the private session: /login runs its own bootstrap; public tracking and the e-mail
+ * unsubscribe page /avisos/baja/:token (AI-07: no session, no browser storage) are public.
+ */
+export function skipsBffSessionBootstrap(path: string): boolean {
+  return path === "/login" || path === "/track" || path.startsWith("/track/") || isRecipientUnsubscribePath(path);
 }
 
 /** Re-establishes the in-memory session objects from the BFF cookie on every full page load. */
@@ -18,8 +27,8 @@ export function BffSessionBootstrap() {
       return;
     }
     const path = window.location.pathname;
-    // /login runs its own bootstrap; public tracking never touches the private session.
-    if (path === "/login" || path === "/track" || path.startsWith("/track/")) {
+    // /login runs its own bootstrap; public tracking and the unsubscribe page never touch the private session.
+    if (skipsBffSessionBootstrap(path)) {
       return;
     }
     // DRV-SESSION-EXPIRY-OFFLINE-2026-10-19 (E3): on the driver pages a page load the server

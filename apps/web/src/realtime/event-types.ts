@@ -6,6 +6,8 @@ export const realtimeEventTypes = {
   incidentCreated: "IncidentCreated.v1",
   externalOfferChanged: "ExternalOfferChanged.v1",
   notificationStatusChanged: "NotificationStatusChanged.v1",
+  // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-12 decided amendment): a recipient notice carries order_id and notice.
+  notificationStatusChangedV2: "NotificationStatusChanged.v2",
   driverLocationUpdated: "DriverLocationUpdated.v1",
   publicOrderStatusChanged: "PublicOrderStatusChanged.v1",
   publicEtaChanged: "PublicEtaChanged.v1",

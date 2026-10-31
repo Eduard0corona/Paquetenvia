@@ -12,10 +12,14 @@ ARG SOURCE_SHA
 LABEL org.opencontainers.image.revision=${SOURCE_SHA}
 WORKDIR /app
 COPY --from=build /out/migrator /app/migrator
+# The migrator reads these repository files from /app before every command.
+# tests/Paqueteria.ArchitectureTests/DbOpsImageArchitectureTests.cs fails if one is not copied.
 COPY --from=build /src/Paqueteria.sln /app/Paqueteria.sln
 COPY --from=build /src/database/migrations/v0.6-baseline.json /app/database/migrations/v0.6-baseline.json
 COPY --from=build /src/docs/normative/v0.6/database/AI-06_SCHEMA.sql /app/docs/normative/v0.6/database/AI-06_SCHEMA.sql
 COPY --from=build /src/docs/normative/v0.6/database/AI-18_DATABASE_ROLE_MODEL.sql /app/docs/normative/v0.6/database/AI-18_DATABASE_ROLE_MODEL.sql
 COPY --from=build /src/src/Modules /app/src/Modules
+COPY --from=build /src/src/BuildingBlocks/Paqueteria.Infrastructure/DataProtection/Migrations /app/src/BuildingBlocks/Paqueteria.Infrastructure/DataProtection/Migrations
+COPY --from=build /src/src/BuildingBlocks/Paqueteria.Infrastructure/Database/Evolution/Migrations /app/src/BuildingBlocks/Paqueteria.Infrastructure/Database/Evolution/Migrations
 USER $APP_UID
 ENTRYPOINT ["dotnet", "/app/migrator/Paqueteria.DatabaseMigrator.dll"]

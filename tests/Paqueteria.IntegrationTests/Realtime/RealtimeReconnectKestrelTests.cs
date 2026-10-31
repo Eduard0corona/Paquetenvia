@@ -5,6 +5,7 @@ using Identity.Infrastructure.Mock;
 using Microsoft.AspNetCore.Http.Connections;
 using Microsoft.AspNetCore.SignalR.Client;
 using Microsoft.Extensions.DependencyInjection;
+using Paqueteria.IntegrationTests.Driver;
 using Paqueteria.IntegrationTests.Security;
 using Realtime.Application.Events;
 using Realtime.Application.Publishing;
@@ -152,9 +153,14 @@ public sealed class RealtimeReconnectKestrelTests(
         var postReconnectEvent = Completion<RealtimeEnvelope<OrderStatusChangedPayload>>();
         var crossTenantEvent = Completion<RealtimeEnvelope<OrderStatusChangedPayload>>();
 
+        // The host restarts on its port while the client reconnects: the lease keeps the port until the test ends, so
+        // nothing else takes it between the stop and the restart (LoopbackPortLease).
+        using var apiPort = LoopbackPortLease.Acquire();
         await using var initialHost = new RealtimeKestrelWebApplicationFactory(
             database.ApplicationConnectionString,
-            recorder);
+            recorder,
+            apiPort.Port);
+        apiPort.BeforeServerBinds();
         var baseAddress = initialHost.Start();
         await using var connection = CreateOperationsConnection(
             baseAddress,
@@ -217,7 +223,6 @@ public sealed class RealtimeReconnectKestrelTests(
             (await initialEvent.Task.WaitAsync(TimeSpan.FromSeconds(5))).AggregateVersion);
         Interlocked.Exchange(ref localVersion, 1);
 
-        var port = baseAddress.Port;
         await initialHost.DisposeAsync();
         await reconnecting.Task.WaitAsync(TimeSpan.FromSeconds(10));
         Assert.Equal(HubConnectionState.Reconnecting, connection.State);
@@ -226,7 +231,8 @@ public sealed class RealtimeReconnectKestrelTests(
         await using var restoredHost = new RealtimeKestrelWebApplicationFactory(
             database.ApplicationConnectionString,
             recorder,
-            port);
+            apiPort.Port);
+        apiPort.BeforeServerBinds();
         var restoredAddress = restoredHost.Start();
         Assert.Equal(baseAddress, restoredAddress);
 
@@ -264,9 +270,13 @@ public sealed class RealtimeReconnectKestrelTests(
         var closed = Completion<Exception?>();
         var tokenFactoryCount = 0;
 
+        // As in the operations reconnect: the lease keeps the port across the restart (LoopbackPortLease).
+        using var apiPort = LoopbackPortLease.Acquire();
         await using var initialHost = new RealtimeKestrelWebApplicationFactory(
             database.ApplicationConnectionString,
-            recorder);
+            recorder,
+            apiPort.Port);
+        apiPort.BeforeServerBinds();
         var baseAddress = initialHost.Start();
         await using var connection = CreateTrackingConnection(
             baseAddress,
@@ -307,7 +317,6 @@ public sealed class RealtimeReconnectKestrelTests(
         var initialAuthorizationCount = recorder.TrackingCount;
         Assert.True(initialAuthorizationCount >= 1);
 
-        var port = baseAddress.Port;
         await initialHost.DisposeAsync();
         await reconnecting.Task.WaitAsync(TimeSpan.FromSeconds(10));
         await database.RevokeValidTrackingTokenAsync();
@@ -317,7 +326,8 @@ public sealed class RealtimeReconnectKestrelTests(
             await using var restoredHost = new RealtimeKestrelWebApplicationFactory(
                 database.ApplicationConnectionString,
                 recorder,
-                port);
+                apiPort.Port);
+            apiPort.BeforeServerBinds();
             restoredHost.Start();
 
             await closed.Task.WaitAsync(TimeSpan.FromSeconds(15));

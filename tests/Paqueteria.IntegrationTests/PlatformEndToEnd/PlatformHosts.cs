@@ -95,6 +95,7 @@ internal sealed class PlatformHosts : IAsyncDisposable
         PlatformWorkerFactory? worker = null;
         try
         {
+            fixture.ApiPortLease.BeforeServerBinds();
             var address = api.Start();
             Assert.Equal(fixture.ApiOrigin, address.GetLeftPart(UriPartial.Authority));
             worker = new PlatformWorkerFactory(WorkerSettings(fixture));

@@ -1055,6 +1055,7 @@
         "dependencies": {
           "Identity.Application": "[1.0.0, )",
           "Notifications.Domain": "[1.0.0, )",
+          "Orders.Application": "[1.0.0, )",
           "Organizations.Application": "[1.0.0, )",
           "Paqueteria.Application": "[1.0.0, )"
         }
@@ -1065,6 +1066,15 @@
           "Paqueteria.Domain": "[1.0.0, )"
         }
       },
+      "notifications.endpoints": {
+        "type": "Project",
+        "dependencies": {
+          "Notifications.Application": "[1.0.0, )",
+          "Organizations.Application": "[1.0.0, )",
+          "Organizations.Endpoints": "[1.0.0, )",
+          "Paqueteria.Application": "[1.0.0, )"
+        }
+      },
       "notifications.infrastructure": {
         "type": "Project",
         "dependencies": {
@@ -1072,6 +1082,7 @@
           "Notifications.Application": "[1.0.0, )",
           "Notifications.Domain": "[1.0.0, )",
           "Npgsql.EntityFrameworkCore.PostgreSQL": "[10.0.3, )",
+          "Orders.Application": "[1.0.0, )",
           "Organizations.Application": "[1.0.0, )",
           "Paqueteria.Application": "[1.0.0, )",
           "Paqueteria.Infrastructure": "[1.0.0, )"
@@ -1166,6 +1177,8 @@
           "Locations.Infrastructure": "[1.0.0, )",
           "Microsoft.AspNetCore.OpenApi": "[10.0.10, )",
           "Microsoft.OpenApi": "[2.12.0, )",
+          "Notifications.Endpoints": "[1.0.0, )",
+          "Notifications.Infrastructure": "[1.0.0, )",
           "OpenTelemetry.Extensions.Hosting": "[1.19.1, )",
           "Orders.Endpoints": "[1.0.0, )",
           "Orders.Infrastructure": "[1.0.0, )",
@@ -1226,6 +1239,7 @@
           "Custody.Infrastructure": "[1.0.0, )",
           "Dispatch.Infrastructure": "[1.0.0, )",
           "Identity.Infrastructure": "[1.0.0, )",
+          "Locations.Infrastructure": "[1.0.0, )",
           "Notifications.Infrastructure": "[1.0.0, )",
           "OpenTelemetry.Extensions.Hosting": "[1.19.1, )",
           "Orders.Infrastructure": "[1.0.0, )",

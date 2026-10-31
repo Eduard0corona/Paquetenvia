@@ -26,6 +26,7 @@ public enum OrderTransitionStage
     EventInserted,
     OutboxInserted,
     TimelineOutboxInserted,
+    RecipientNoticeOutboxInserted,
     AuditInserted,
     BeforeIdempotencyCompletion,
 }
@@ -529,6 +530,19 @@ public sealed class PostgreSqlOrderTransitionService(
             target,
             newVersion,
             occurredAt,
+            cancellationToken);
+        await InsertRecipientNoticeOutboxAsync(
+            connection,
+            transaction,
+            eventId,
+            order,
+            source,
+            target,
+            newVersion,
+            occurredAt,
+            cancellationToken);
+        await failureInjector.OnStageAsync(
+            OrderTransitionStage.RecipientNoticeOutboxInserted,
             cancellationToken);
 
         var auditPayload = JsonSerializer.SerializeToElement(new
@@ -1104,6 +1118,73 @@ public sealed class PostgreSqlOrderTransitionService(
         RequireOne(
             await command.ExecuteNonQueryAsync(cancellationToken),
             "The Dispatch reaction outbox event was not inserted.");
+    }
+
+    /// <summary>
+    /// NTF-RECIPIENT-NOTICES-2026-10-20 (AI-24 <c>recipient_notices.producer</c>; AI-08 NTF-004): a transition that
+    /// <see cref="RecipientNoticeRequestPolicy"/> names writes one <c>orders.recipient-notice-requested</c> row in this
+    /// same transaction, next to the Dispatch reaction row and like it (D8-OUTBOX-LANE-DISPATCH): aggregate Order at the
+    /// new version, priority 50, the owner organization as the only tenant, every value supplied by the application
+    /// (generated id, trace context from <see cref="OutboxTraceContextColumn"/>) and no RETURNING. The payload
+    /// <c>recipient-notice-requested-v1</c> carries ids, the notice and the instant only: no personal data, public id,
+    /// token or link. It is written whatever the switches say; while recipient notices are off the Worker settles it at
+    /// once. A replayed transition returns its stored response before this point, so it never writes a second row.
+    /// </summary>
+    private async Task InsertRecipientNoticeOutboxAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        Guid orderEventId,
+        OrderRow order,
+        OrderStatus source,
+        OrderStatus target,
+        int newVersion,
+        DateTimeOffset occurredAt,
+        CancellationToken cancellationToken)
+    {
+        if (RecipientNoticeRequestPolicy.NoticeFor(source, target) is not { } notice)
+        {
+            return;
+        }
+
+        var tenantContext = JsonSerializer.Serialize(new
+        {
+            organization_ids = new[] { order.OwnerOrganizationId },
+        }, JsonOptions);
+        var payload = JsonSerializer.Serialize(new
+        {
+            schema_version = RecipientNoticeRequestPolicy.SchemaVersion,
+            order_event_id = orderEventId,
+            order_id = order.Id,
+            notice,
+            // The lane reads a UTC instant of at most microsecond precision ending in Z (AI-24 producer.payload).
+            occurred_at = occurredAt.UtcDateTime.ToString(
+                "yyyy-MM-dd'T'HH:mm:ss.ffffff'Z'",
+                System.Globalization.CultureInfo.InvariantCulture),
+        }, JsonOptions);
+        await using var command = CreateCommand(
+            connection,
+            transaction,
+            """
+            INSERT INTO platform.outbox_events(
+              id,owner_org_id,tenant_context,topic,aggregate_type,aggregate_id,aggregate_version,payload,
+              priority,status,attempts,available_at,locked_at,locked_by,lease_token,lease_expires_at,
+              last_error,created_at,processed_at,trace_parent)
+            VALUES (@id,@owner,@tenant,@topic,'Order',@order,@version,@payload,
+                    50,'PENDING',0,@available,NULL,NULL,NULL,NULL,NULL,@created,NULL,@trace_parent)
+            """);
+        command.Parameters.Add(P("id", NpgsqlDbType.Uuid, Guid.NewGuid()));
+        command.Parameters.Add(P("owner", NpgsqlDbType.Uuid, order.OwnerOrganizationId));
+        command.Parameters.Add(P("tenant", NpgsqlDbType.Jsonb, tenantContext));
+        command.Parameters.Add(P("topic", NpgsqlDbType.Text, RecipientNoticeRequestPolicy.Topic));
+        command.Parameters.Add(P("order", NpgsqlDbType.Uuid, order.Id));
+        command.Parameters.Add(P("version", NpgsqlDbType.Integer, newVersion));
+        command.Parameters.Add(P("payload", NpgsqlDbType.Jsonb, payload));
+        command.Parameters.Add(P("available", NpgsqlDbType.TimestampTz, occurredAt));
+        command.Parameters.Add(P("created", NpgsqlDbType.TimestampTz, occurredAt));
+        command.Parameters.Add(OutboxTraceContextColumn.Parameter());
+        RequireOne(
+            await command.ExecuteNonQueryAsync(cancellationToken),
+            "The recipient notice request outbox event was not inserted.");
     }
 
     private async Task<DriverAudienceCandidate?> ReadDriverAudienceCandidateAsync(

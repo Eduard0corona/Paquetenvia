@@ -108,6 +108,11 @@ export interface AddressDraft {
   readonly lat: string;
   readonly lng: string;
   readonly references: string;
+  /**
+   * NTF-RECIPIENT-NOTICES-2026-10-20 (AI-07 create_order.recipient_notices.email): "Correo del destinatario
+   * (opcional)". Only the destination is read; it is never sent for the origin.
+   */
+  readonly email?: string;
 }
 
 export interface PackageDraft {
@@ -154,6 +159,27 @@ export interface AcceptanceDraft {
    */
   readonly serviceWindowFrom?: string;
   readonly serviceWindowTo?: string;
+  /**
+   * NTF-RECIPIENT-NOTICES-2026-10-20 (AI-07 create_order.recipient_notices.consent): the optional box
+   * {@link recipientWhatsAppConsentText}, unticked by default and never required. Ticked, createOrder carries
+   * `recipient_notices`; unticked, nothing is sent and the order gets no WhatsApp notice.
+   */
+  readonly recipientWhatsAppConsent?: boolean;
+}
+
+/** AI-24 recipient_notices.consent.text: the approved box text, the same on "Nueva orden" and on the CSV commit. */
+export const recipientWhatsAppConsentText = "El destinatario aceptó recibir avisos de su envío por WhatsApp";
+
+/**
+ * AI-24 recipient_notices.consent.version. NTF-RECIPIENT-NOTICE-PRODUCER-2026-10-23 (N3 choice 1): a constant of the
+ * web, not a deployment setting; the API accepts this version only and answers 409 to any other.
+ */
+export const recipientWhatsAppConsentVersion = "NTF-RECIPIENT-WHATSAPP-CONSENT-V1";
+
+/** AI-05 CreateOrderRequest.recipient_notices, sent only when the box is ticked. */
+export interface RecipientNoticesBody {
+  whatsapp_consent_attested: true;
+  whatsapp_consent_version: typeof recipientWhatsAppConsentVersion;
 }
 
 interface AddressBody {
@@ -163,6 +189,11 @@ interface AddressBody {
   lat: number;
   lng: number;
   references?: string;
+}
+
+/** AI-05 DestinationAddressInput: AddressInput plus the optional recipient e-mail (NTF-002). */
+interface DestinationAddressBody extends AddressBody {
+  email?: string;
 }
 
 interface PackageBody {
@@ -177,7 +208,7 @@ interface PackageBody {
 export interface CreateQuoteBody {
   client_account_id?: string;
   origin: AddressBody;
-  destination: AddressBody;
+  destination: DestinationAddressBody;
   service_type: ServiceType;
   consolidated_route: boolean;
   packages: PackageBody[];
@@ -199,6 +230,8 @@ export interface CreateOrderBody {
   restricted_goods_acknowledged: true;
   /** ORD-SERVICE-WINDOW-OPTIONAL-2026-10-02: UTC instants, sent only when a window was typed. */
   service_window?: ServiceWindowBody;
+  /** NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-004): the WhatsApp consent box, sent only when ticked. */
+  recipient_notices?: RecipientNoticesBody;
 }
 
 export type DraftResult<T> =
@@ -209,7 +242,7 @@ export type DraftResult<T> =
  * A Spanish validation message and the draft field it is about, so a screen can show it next
  * to that field (UI-PHASE3-ORDER-WIZARD-2026-10-10). Fields: `clientAccountId`, `serviceType`,
  * `lowPriceReason`, `packages`, `origin.<field>` / `destination.<field>` (addressText,
- * contactName, phone, references, coordinates), `packages.<index>.<field>` (description,
+ * contactName, phone, references, coordinates; `destination.email` only), `packages.<index>.<field>` (description,
  * weightGrams, declaredValue, dimensions), `payerType`, `acceptanceVersions`, `accepted`,
  * `restrictedGoodsAcknowledged`, `acceptedAt`, `codAmount` and `serviceWindow`.
  */
@@ -301,8 +334,12 @@ function address(
   const lng = coordinate(draft.lng, 180);
   if (lat === null || lng === null)
     error("coordinates", `Captura latitud y longitud válidas de ${label}.`);
+  // NTF-RECIPIENT-NOTICES-2026-10-20: only the destination carries the optional e-mail; the origin's is never read.
+  const typedEmail = side === "destination" ? (draft.email ?? "") : "";
+  const email = typedEmail.trim() === "" ? null : normalizeRecipientEmail(typedEmail);
+  if (typedEmail.trim() !== "" && email === null) error("email", invalidRecipientEmailMessage);
   if (errors.length > before) return null;
-  const body: AddressBody = {
+  const body: DestinationAddressBody = {
     address_text: addressText,
     contact_name: contactName,
     phone: phone!,
@@ -310,7 +347,29 @@ function address(
     lng: lng!,
   };
   if (references !== "") body.references = references;
+  if (email !== null) body.email = email;
   return body;
+}
+
+/** AI-05 DestinationAddressInput.email maxLength, on the raw text. */
+export const maximumRecipientEmailLength = 254;
+
+/** One es-MX message next to the field; it never repeats the typed value (AI-07). */
+export const invalidRecipientEmailMessage =
+  "El correo del destinatario no es válido: revisa que tenga una sola @, un dominio con punto y ningún espacio.";
+
+/**
+ * NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002): the optional recipient e-mail as createQuote checks it
+ * (RecipientEmailPolicy): at most 254 characters as typed; ASCII whitespace trimmed from both ends; then printable
+ * ASCII without spaces, exactly one `@` after a non-empty local part, and a domain with a dot that has a character on
+ * each side. The domain is lower-cased; the local part is kept. `null` when not valid. Mirrors the server.
+ */
+export function normalizeRecipientEmail(text: string): string | null {
+  if (text.length === 0 || text.length > maximumRecipientEmailLength) return null;
+  const trimmed = text.replace(/^[\t-\r ]+|[\t-\r ]+$/g, "");
+  const match = /^([!-?A-~]+)@([!-?A-~]+\.[!-?A-~]+)$/.exec(trimmed);
+  if (match === null) return null;
+  return `${match[1]}@${match[2].toLowerCase()}`;
 }
 
 function coordinate(text: string, limit: number): number | null {
@@ -402,6 +461,12 @@ export function buildCreateOrderBody(
   if (codCents! > 0) body.cod_expected_cents = codCents!;
   // Both empty is "no window": the field is left out and the zone's schedule applies.
   if (serviceWindow.ok && serviceWindow.window !== null) body.service_window = serviceWindow.window;
+  // Unticked is "no consent": the field is left out, so the request is the one sent before the box existed.
+  if (draft.recipientWhatsAppConsent === true)
+    body.recipient_notices = {
+      whatsapp_consent_attested: true,
+      whatsapp_consent_version: recipientWhatsAppConsentVersion,
+    };
   return { ok: true, body };
 }
 
