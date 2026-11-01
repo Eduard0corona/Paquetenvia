@@ -504,7 +504,9 @@ public sealed partial class SettlementDeskPwaPlaywrightTests(DriverStopsNextServ
         await ExpectOptionsAsync(CreateForm(page).Locator("select[name=driver_id]"), "Elige un repartidor");
         releaseOrganizationB.TrySetResult();
 
-        // PLATFORM_ADMIN in B: its own settlement and payee, and the hint that every settlement operation needs MFA.
+        // PLATFORM_ADMIN in B, whose session has a satisfied MFA challenge (the API answers its reads; without MFA they are
+        // 403 MFA_REQUIRED, Platform_admin_without_MFA_gets_the_step_up_before_any_settlement_or_payee_is_shown): its own
+        // settlement and payee, and the hint that every settlement operation needs MFA.
         await ExpectRowsAsync(page, ["6–12 oct 2026", "Calculada · $50.00 MXN", "Repartidor DRV-77aa88bb · 1 línea(s)"]);
         await ExpectOptionsAsync(CreateForm(page).Locator("select[name=driver_id]"), "Elige un repartidor", "DRV-77aa88bb · Van");
         await ExpectNavigationAsync(page, "PLATFORM_ADMIN");
@@ -529,6 +531,70 @@ public sealed partial class SettlementDeskPwaPlaywrightTests(DriverStopsNextServ
         await page.Locator("main section.opsRouteDetail header strong")
             .GetByText("Total $74.35 MXN", new() { Exact = true }).WaitForAsync();
         Assert.DoesNotContain(api.AllCalls, call => call.Organization == OrganizationB && call.Method == "POST");
+
+        await AssertNoPayeeIdentifiersAsync(page);
+        await AssertNothingStoredAsync(page);
+        Assert.Empty(console);
+        AssertOnlyAi05Calls(calls, server.BaseAddress);
+        trace.Passed();
+    }
+
+    /// <summary>
+    /// AI-07 settlement_desk roles.operate "PLATFORM_ADMIN with MFA" (AI-05 listSettlements, getSettlement and
+    /// listSettlementPayees: PLATFORM_ADMIN members with a satisfied MFA challenge): without MFA the reads answer 403
+    /// MFA_REQUIRED, the screen offers the step-up and shows no settlement, payee or action; with the second factor
+    /// verified the same screen lists them and tells that every settlement operation needs MFA.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "OperationsDashboardPwa")]
+    public async Task Platform_admin_without_MFA_gets_the_step_up_before_any_settlement_or_payee_is_shown()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync(new BrowserNewContextOptions
+        {
+            ViewportSize = new ViewportSize { Width = 1280, Height = 900 },
+        });
+        await using var trace = await PlaywrightFailureTrace.StartAsync(context, job: PlaywrightFailureTrace.OperationsDashboardJob);
+        var page = await context.NewPageAsync();
+        page.SetDefaultTimeout(20_000);
+        var console = CaptureConsole(page);
+        var calls = RecordCalls(page);
+        var api = await InstallAsync(page, (OrganizationA, OrganizationAName, "PLATFORM_ADMIN"));
+        SeedOrganizationA(api);
+        api.ReadsNeedMfa = true;
+
+        await page.GotoAsync(new Uri(server.BaseAddress, "/finance/settlements").AbsoluteUri);
+        await ExpectMessageAsync(page, "Esta acción requiere verificar tu identidad (MFA).");
+        Assert.Equal(
+            "/login?mfa=required&return_url=%2Ffinance%2Fsettlements",
+            await page.Locator("main p.notice[role=status]")
+                .GetByRole(AriaRole.Link, new() { Name = "Verificar identidad", Exact = true })
+                .GetAttributeAsync("href"));
+        await ExpectNavigationAsync(page, "PLATFORM_ADMIN");
+        await WaitForAsync(
+            () => api.Calls(OrganizationA, "GET", "/api/v1/settlement-payees").Length == 1,
+            "the payee list was not requested");
+        Assert.Equal(0, await page.Locator("main ul.opsRouteList li").CountAsync());
+        await ExpectOptionsAsync(CreateForm(page).Locator("select[name=driver_id]"), "Elige un repartidor");
+        Assert.True(await CreateForm(page).GetByRole(AriaRole.Button, new() { Name = "Calcular", Exact = true }).IsDisabledAsync());
+        Assert.DoesNotContain("DRV-", await page.Locator("main").InnerTextAsync(), StringComparison.Ordinal);
+        Assert.DoesNotContain(api.AllCalls, call => call.Method == "POST");
+
+        // With the second factor verified, the same screen lists the settlements and the payees.
+        api.ReadsNeedMfa = false;
+        await page.GotoAsync(new Uri(server.BaseAddress, "/finance/settlements").AbsoluteUri);
+        await ExpectRowsAsync(page, OrganizationARows);
+        await ExpectOptionsAsync(
+            CreateForm(page).Locator("select[name=driver_id]"),
+            "Elige un repartidor", "DRV-1f2e3d4c · Automóvil", "DRV-9a8b7c6d · Motocicleta");
+        await SelectAsync(page, 0);
+        await page.Locator("main p.noticeInfo")
+            .GetByText("Operar liquidaciones requiere verificar tu identidad (MFA).", new() { Exact = true })
+            .WaitForAsync();
+        Assert.Equal(new[] { "Aprobar", "Exportar CSV", "Cerrar" }, await DetailButtonsAsync(page));
+        Assert.Equal(1, await AdjustmentForm(page).CountAsync());
+        Assert.Equal(1, await VoidForm(page).CountAsync());
 
         await AssertNoPayeeIdentifiersAsync(page);
         await AssertNothingStoredAsync(page);
@@ -1028,6 +1094,12 @@ public sealed partial class SettlementDeskPwaPlaywrightTests(DriverStopsNextServ
         /// <summary>The next payee list reads answered 503.</summary>
         internal int PayeeFailures { get; set; }
 
+        /// <summary>
+        /// Every read answers 403 MFA_REQUIRED, as for a PLATFORM_ADMIN whose session has no satisfied MFA challenge
+        /// (AI-05 listSettlements, getSettlement, listSettlementPayees).
+        /// </summary>
+        internal bool ReadsNeedMfa { get; set; }
+
         internal IReadOnlyList<SettlementCall> AllCalls
         {
             get
@@ -1085,6 +1157,12 @@ public sealed partial class SettlementDeskPwaPlaywrightTests(DriverStopsNextServ
             if (_holds.TryGetValue(organization, out var hold)) await hold.Task;
 
             var segments = uri.AbsolutePath.Split('/', StringSplitOptions.RemoveEmptyEntries);
+            if (ReadsNeedMfa && call.Method == "GET")
+            {
+                await ProblemAsync(route, 403, "MFA_REQUIRED");
+                return;
+            }
+
             switch (call.Method, segments)
             {
                 case ("GET", ["api", "v1", "settlement-payees"]):
