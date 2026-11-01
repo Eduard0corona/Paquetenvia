@@ -309,9 +309,17 @@ public sealed partial class CodControlPwaPlaywrightTests(DriverStopsNextServerFi
         trace.Passed();
     }
 
-    [Fact]
+    /// <summary>
+    /// AI-07 cod_control roles: FINANCE and PLATFORM_ADMIN read, list and reconcile only with MFA
+    /// (FINANCE-COD-MFA-2026-09-27, x-capability-matrix finance_operations). Without it the API answers 403
+    /// MFA_REQUIRED and the screen offers the step-up, back to the order it was reading; with it the order reopens by
+    /// itself, and only PLATFORM_ADMIN is offered "Registrar cobro".
+    /// </summary>
+    [Theory]
     [Trait("Category", "OperationsDashboardPwa")]
-    public async Task Finance_without_MFA_gets_the_step_up_on_the_list_and_on_the_order_and_returns_to_that_order()
+    [InlineData("FINANCE")]
+    [InlineData("PLATFORM_ADMIN")]
+    public async Task Without_MFA_the_list_and_the_order_offer_the_step_up_and_return_to_that_order(string role)
     {
         using var playwright = await Playwright.CreateAsync();
         await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
@@ -319,12 +327,15 @@ public sealed partial class CodControlPwaPlaywrightTests(DriverStopsNextServerFi
         {
             ViewportSize = new ViewportSize { Width = 1280, Height = 900 },
         });
-        await using var trace = await PlaywrightFailureTrace.StartAsync(context, job: PlaywrightFailureTrace.OperationsDashboardJob);
+        await using var trace = await PlaywrightFailureTrace.StartAsync(
+            context,
+            role,
+            PlaywrightFailureTrace.OperationsDashboardJob);
         var page = await context.NewPageAsync();
         page.SetDefaultTimeout(20_000);
         var console = CaptureConsole(page);
         var calls = RecordCalls(page);
-        var api = await InstallAsync(page, (OrganizationA, OrganizationAName, "FINANCE"));
+        var api = await InstallAsync(page, (OrganizationA, OrganizationAName, role));
         api.Add(OrganizationA, LookupOrder());
         api.Add(OrganizationA, PendingOrder());
         api.MfaRequired = true;
@@ -332,6 +343,8 @@ public sealed partial class CodControlPwaPlaywrightTests(DriverStopsNextServerFi
         await page.GotoAsync(new Uri(server.BaseAddress, "/finance/cod").AbsoluteUri);
         await ExpectMessageAsync(page, "Esta acción requiere verificar tu identidad (MFA).");
         Assert.Equal("/login?mfa=required&return_url=%2Ffinance%2Fcod", await StepUpHrefAsync(page));
+        await page.Locator("main p.noticeInfo").GetByText(MfaHint, new() { Exact = true }).WaitForAsync();
+        await ExpectNavigationAsync(page, role);
         Assert.Equal(0, await PendingRows(page).CountAsync());
         Assert.Equal(0, await page.GetByText("No hay cobros registrados pendientes de conciliar.").CountAsync());
 
@@ -351,7 +364,8 @@ public sealed partial class CodControlPwaPlaywrightTests(DriverStopsNextServerFi
         await page.GetByRole(AriaRole.Heading, new() { Name = $"Orden {LookupOrderId}", Exact = true }).WaitForAsync();
         Assert.Equal(LookupEconomics, await DescriptionAsync(page, 0));
         await PendingRows(page).Filter(new() { HasTextString = PendingGuide }).WaitForAsync();
-        Assert.Equal(0, await RecordForm(page).CountAsync());
+        Assert.Equal(role == "PLATFORM_ADMIN" ? 1 : 0, await RecordForm(page).CountAsync());
+        Assert.DoesNotContain(api.AllCalls, call => call.Method == "POST");
 
         await AssertNothingStoredAsync(page);
         Assert.Empty(console);
@@ -448,7 +462,9 @@ public sealed partial class CodControlPwaPlaywrightTests(DriverStopsNextServerFi
         Assert.Equal(0, await RecordForm(page).CountAsync());
         Assert.Equal(string.Empty, await page.GetByLabel("ID de la orden", new() { Exact = true }).InputValueAsync());
         releaseOrganizationB.TrySetResult();
-        // PLATFORM_ADMIN in B: the MFA hint, its own pending list, and A's order is the uniform not found.
+        // PLATFORM_ADMIN in B, whose session has a satisfied MFA challenge (the API answers its reads; without MFA they are
+        // 403 MFA_REQUIRED, Without_MFA_the_list_and_the_order_offer_the_step_up_and_return_to_that_order): the MFA hint,
+        // its own pending list, and A's order is the uniform not found.
         await page.Locator("main p.noticeInfo").GetByText(MfaHint, new() { Exact = true }).WaitForAsync();
         await PendingRows(page).Filter(new() { HasTextString = OtherOrganizationGuide }).WaitForAsync();
         Assert.Equal(1, await PendingRows(page).CountAsync());
