@@ -856,29 +856,68 @@ class WorkflowTests(unittest.TestCase):
         self.assertEqual({"tested_git_sha", "foundation_run_id", "restore_drill_evidence"},
                          set(triggers["workflow_dispatch"]["inputs"]))
 
-    def test_least_privilege_and_one_job(self):
+    def test_least_privilege_and_three_jobs(self):
         self.assertEqual({}, self.workflow["permissions"])
-        self.assertEqual(["report"], list(self.workflow["jobs"]))
-        job = self.workflow["jobs"]["report"]
-        self.assertEqual({"contents": "read", "actions": "read"}, job["permissions"])
-        self.assertEqual("ubuntu-24.04", job["runs-on"])
-        self.assertNotIn("environment", job)
+        jobs = self.workflow["jobs"]
+        self.assertEqual(["gate", "rehearsal", "report"], list(jobs))
+        self.assertEqual({"contents": "read", "actions": "read"}, jobs["gate"]["permissions"])
+        self.assertEqual({"contents": "read"}, jobs["rehearsal"]["permissions"])
+        self.assertEqual({"contents": "read", "actions": "read"}, jobs["report"]["permissions"])
+        for job in jobs.values():
+            self.assertEqual("ubuntu-24.04", job["runs-on"])
+            self.assertNotIn("environment", job)
         self.assertNotIn("secrets.", self.text)
         self.assertNotIn("azure/login", self.text)
         self.assertNotIn("id-token", self.text)
 
     def test_no_retry_sleep_or_input_interpolation_in_shells(self):
         self.assertNotRegex(self.text.lower(), r"\bretry\b|\bsleep\b")
-        for step in self.workflow["jobs"]["report"]["steps"]:
-            self.assertNotIn("${{", str(step.get("run", "")), step.get("name"))
+        for job_id, job in self.workflow["jobs"].items():
+            for step in job["steps"]:
+                self.assertNotIn("${{", str(step.get("run", "")), f"{job_id}: {step.get('name')}")
 
-    def test_the_provenance_gate_runs_before_the_tested_checkout_and_the_report(self):
-        names = [step["name"] for step in self.workflow["jobs"]["report"]["steps"]]
-        gate = names.index("Enforce the 13/13 provenance gate")
-        self.assertLess(gate, names.index("Check out tested_git_sha"))
-        self.assertLess(gate, names.index("Build the REL-001 entry report"))
-        run = self.workflow["jobs"]["report"]["steps"][gate]["run"]
-        self.assertIn("azr001_static_guards.py deploy-gate", run)
+    def test_the_provenance_gate_runs_before_the_rehearsal_the_tested_checkout_and_the_report(self):
+        jobs = self.workflow["jobs"]
+        self.assertEqual("gate", jobs["rehearsal"]["needs"])
+        self.assertEqual(["gate", "rehearsal"], jobs["report"]["needs"])
+        self.assertEqual("always() && needs.gate.result == 'success'", jobs["report"]["if"])
+        for job_id in ("gate", "report"):
+            names = [step["name"] for step in jobs[job_id]["steps"]]
+            gate = names.index("Enforce the 13/13 provenance gate")
+            self.assertIn("azr001_static_guards.py deploy-gate", jobs[job_id]["steps"][gate]["run"])
+            if job_id == "report":
+                self.assertLess(gate, names.index("Check out tested_git_sha"))
+                self.assertLess(gate, names.index("Build the REL-001 entry report"))
+
+    def test_the_rehearsal_runs_only_its_category_on_the_tested_commit_and_publishes_only_its_evidence(self):
+        job = self.workflow["jobs"]["rehearsal"]
+        checkout = job["steps"][0]
+        self.assertEqual("${{ inputs.tested_git_sha }}", checkout["with"]["ref"])
+        runs = [step.get("run", "") for step in job["steps"]]
+        tests = [run for run in runs if "dotnet test" in run]
+        self.assertEqual(1, len(tests))
+        self.assertIn('--filter "Category=PilotRehearsal"', tests[0])
+        upload = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/upload-artifact"))
+        self.assertEqual("rel001-rehearsal-evidence", upload["with"]["name"])
+        self.assertEqual("${{ runner.temp }}/rel001-rehearsal/rel001-rehearsal-evidence.json", upload["with"]["path"])
+        self.assertEqual("error", upload["with"]["if-no-files-found"])
+        report = self.workflow["jobs"]["report"]
+        download = next(step for step in report["steps"] if step.get("name") == "Download this run's rehearsal evidence")
+        self.assertEqual("needs.rehearsal.result == 'success'", download["if"])
+        self.assertNotIn("run-id", download["with"])
+
+    def test_no_other_workflow_runs_the_rehearsal(self):
+        # Z5 "Solo en el ensayo": every dotnet job excludes the category and nothing else selects it.
+        for path in sorted((REPO_ROOT / ".github/workflows").glob("*.yml")):
+            text = path.read_text(encoding="utf-8")
+            with self.subTest(workflow=path.name):
+                if path.name == WORKFLOW.name:
+                    continue
+                self.assertNotIn("Category=PilotRehearsal", text.replace("Category!=PilotRehearsal", ""))
+                workflow = yaml.safe_load(text)
+                if "dotnet" in workflow.get("jobs", {}):
+                    run = next(step["run"] for step in workflow["jobs"]["dotnet"]["steps"] if step.get("name") == "Test")
+                    self.assertIn("&Category!=PilotRehearsal", run)
 
     def test_only_the_allowlist_is_published(self):
         step = next(s for s in self.workflow["jobs"]["report"]["steps"] if s.get("uses", "").startswith("actions/upload-artifact"))

@@ -101,7 +101,7 @@ jobs:
           dotnet test
           --configuration Release
           --no-build
-          --filter "Category!=PostgreSqlContract&Category!=OutboxSignalRDelivery&Category!=SecureProofUpload&Category!=DriverStopsPwa&Category!=DriverOfflineOperationsPwa&Category!=PublicTrackingPostgreSql&Category!=PublicTrackingPwa&Category!=OperationsDashboardPostgreSql&Category!=OperationsDashboardPwa&Category!=OpsDeliverySimulation&Category!=PlatformEndToEnd"
+          --filter "Category!=PostgreSqlContract&Category!=OutboxSignalRDelivery&Category!=SecureProofUpload&Category!=DriverStopsPwa&Category!=DriverOfflineOperationsPwa&Category!=PublicTrackingPostgreSql&Category!=PublicTrackingPwa&Category!=OperationsDashboardPostgreSql&Category!=OperationsDashboardPwa&Category!=OpsDeliverySimulation&Category!=PlatformEndToEnd&Category!=PilotRehearsal"
           --logger "trx;LogFilePrefix=dotnet"
           --results-directory ./TestResults/dotnet
 
