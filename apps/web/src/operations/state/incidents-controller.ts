@@ -309,7 +309,7 @@ export class IncidentsController extends ExternalStore<IncidentsState> {
       // A response for another order or incident fails closed.
       if (!matches(incident)) throw new TenantApiError("invalid");
       this.update({
-        incidents: placeReturned(this.getSnapshot().incidents, incident, opened),
+        incidents: placeReturned(this.getSnapshot(), incident, opened),
         message: success,
         formKey: this.getSnapshot().formKey + 1,
         // The evidence picked for this opening is not offered again for the next one.
@@ -331,10 +331,28 @@ export class IncidentsController extends ExternalStore<IncidentsState> {
 /**
  * AI-07 incident_desk: an Incident returned by openIncident or resolveIncident replaces the listed one with the same
  * id where it is, so the list stays newest first; only a newly opened incident, not listed yet, goes first.
+ * Z14 ("Solo si coincide (Recommended)"): it joins the list only when it matches the status and order filters in
+ * effect; otherwise the list does not change (the screen still says "Incidencia abierta y registrada.").
  */
-function placeReturned(incidents: readonly Incident[], incident: Incident, opened: boolean): readonly Incident[] {
+function placeReturned(
+  state: Pick<IncidentsState, "incidents" | "statusFilter" | "orderFilter">,
+  incident: Incident,
+  opened: boolean,
+): readonly Incident[] {
+  const { incidents } = state;
   if (incidents.some((item) => item.id === incident.id)) {
     return incidents.map((item) => (item.id === incident.id ? incident : item));
   }
-  return opened ? [incident, ...incidents] : incidents;
+  return opened && matchesListFilters(state, incident) ? [incident, ...incidents] : incidents;
+}
+
+/** The incident would be listed by listIncidents with the filters in effect (null: every value). */
+function matchesListFilters(
+  filters: Pick<IncidentsState, "statusFilter" | "orderFilter">,
+  incident: Incident,
+): boolean {
+  return (
+    (filters.statusFilter === null || incident.status === filters.statusFilter) &&
+    (filters.orderFilter === null || incident.order_id === filters.orderFilter)
+  );
 }

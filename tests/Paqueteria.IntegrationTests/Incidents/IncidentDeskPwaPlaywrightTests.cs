@@ -338,6 +338,78 @@ public sealed partial class IncidentDeskPwaPlaywrightTests(DriverStopsNextServer
         trace.Passed();
     }
 
+    /// <summary>
+    /// Z14 "Solo si coincide (Recommended)" over AI-07 incident_desk.display ("filterable by status and order"): a newly
+    /// opened incident joins the list only when it matches the status and order filters in effect; otherwise the list
+    /// does not change, and "Incidencia abierta y registrada." is always said.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "OperationsDashboardPwa")]
+    public async Task A_newly_opened_incident_joins_the_list_only_when_it_matches_the_filters_in_effect()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync(new BrowserNewContextOptions
+        {
+            ViewportSize = new ViewportSize { Width = 1280, Height = 900 },
+        });
+        await using var trace = await PlaywrightFailureTrace.StartAsync(context, job: PlaywrightFailureTrace.OperationsDashboardJob);
+        var page = await context.NewPageAsync();
+        page.SetDefaultTimeout(20_000);
+        await page.Clock.SetFixedTimeAsync(FixedNow);
+        var console = CaptureConsole(page);
+        var calls = RecordCalls(page);
+        var api = await InstallAsync(page, (OrganizationA, OrganizationAName, "DISPATCHER"));
+        api.Seed(OrganizationA, OrganizationAIncidents);
+        api.SeedProofs(OrganizationA, OrderOne, OrderOneProofs);
+
+        await page.GotoAsync(new Uri(server.BaseAddress, "/ops/incidents").AbsoluteUri);
+        await ExpectRowsAsync(page, IncidentOne, IncidentTwo, IncidentThree, IncidentFour, IncidentFive);
+
+        // "Resuelta" in effect: an OPEN incident does not join the list.
+        await StatusFilter(page).SelectOptionAsync(new SelectOptionValue { Label = "Resuelta" });
+        await ExpectRowsAsync(page, IncidentThree);
+        await FillOpenFormAsync(page);
+        await OpenAsync(page, "2026-11-02T10:30");
+        await ExpectMessageAsync(page, "Incidencia abierta y registrada.");
+        var first = api.LastOpenedId;
+        await ExpectRowsAsync(page, IncidentThree);
+
+        // Another order in effect: an incident of the first order does not join the list.
+        await StatusFilter(page).SelectOptionAsync(new SelectOptionValue { Label = "Todos" });
+        await ExpectRowsAsync(page, first, IncidentOne, IncidentTwo, IncidentThree, IncidentFour, IncidentFive);
+        await OrderFilter(page).FillAsync(OrderTwo);
+        await OrderFilter(page).PressAsync("Enter");
+        await ExpectRowsAsync(page, IncidentTwo, IncidentFour, IncidentFive);
+        await FillOpenFormAsync(page);
+        await OpenAsync(page, "2026-11-02T10:35");
+        await ExpectMessageAsync(page, "Incidencia abierta y registrada.");
+        var second = api.LastOpenedId;
+        Assert.NotEqual(first, second);
+        await ExpectRowsAsync(page, IncidentTwo, IncidentFour, IncidentFive);
+
+        // Matching both filters, it goes first.
+        await OrderFilter(page).FillAsync(OrderOne);
+        await StatusFilter(page).SelectOptionAsync(new SelectOptionValue { Label = "Abierta" });
+        await ExpectRowsAsync(page, second, first, IncidentOne);
+        await FillOpenFormAsync(page);
+        await OpenAsync(page, "2026-11-02T10:40");
+        await ExpectMessageAsync(page, "Incidencia abierta y registrada.");
+        var third = api.LastOpenedId;
+        await ExpectRowsAsync(page, third, second, first, IncidentOne);
+
+        // The screen read the list only for the filter changes, never after an opening.
+        Assert.Equal(
+            new[] { string.Empty, "status=RESOLVED", string.Empty, $"order_id={OrderTwo}", $"status=OPEN&order_id={OrderOne}" },
+            api.ListQueries(OrganizationA));
+        Assert.Equal(3, api.Calls(OrganizationA, "POST", "/incidents").Length);
+
+        await AssertNothingStoredAsync(page);
+        Assert.Empty(console);
+        AssertOnlyAi05Calls(calls, server.BaseAddress);
+        trace.Passed();
+    }
+
     [Fact]
     [Trait("Category", "OperationsDashboardPwa")]
     public async Task Dispatcher_resolves_and_rejects_in_place_with_the_reason_as_typed_and_never_echoed()
