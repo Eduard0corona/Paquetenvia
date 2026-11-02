@@ -11,6 +11,7 @@ using Microsoft.AspNetCore.Cors.Infrastructure;
 using Microsoft.AspNetCore.Hosting.Server;
 using Microsoft.AspNetCore.Hosting.Server.Features;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
@@ -35,11 +36,16 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
     private readonly bool _enableDriverApiCors;
     private readonly IReadOnlyDictionary<string, string?> _configurationOverrides;
     private readonly string[] _corsExposedHeaders;
+    private readonly Action<IServiceCollection>? _configureTestServices;
 
     /// <param name="corsExposedHeaders">
     /// Response headers the test CORS policy of <paramref name="enableDriverApiCors"/> exposes to the browser. The
     /// pilot serves the web and the API on one origin, where a script reads every response header; a test that
     /// serves them on two origins names here the headers the web must read, such as <c>Retry-After</c>.
+    /// </param>
+    /// <param name="configureTestServices">
+    /// Service replacements applied after the application's registrations, such as the REL-001 rehearsal's clock that
+    /// runs ahead so a settlement period is closed; none by default.
     /// </param>
     internal RealtimeKestrelWebApplicationFactory(
         string connectionString,
@@ -53,8 +59,10 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
         bool enableDriverApiCors = false,
         IReadOnlyDictionary<string, string?>? configurationOverrides = null,
         bool useHttps = false,
-        IReadOnlyList<string>? corsExposedHeaders = null)
+        IReadOnlyList<string>? corsExposedHeaders = null,
+        Action<IServiceCollection>? configureTestServices = null)
     {
+        _configureTestServices = configureTestServices;
         _connectionString = connectionString;
         _realtimeConnectionString = realtimeConnectionString;
         _failureInjector = failureInjector;
@@ -251,6 +259,11 @@ internal sealed class RealtimeKestrelWebApplicationFactory : WebApplicationFacto
                     provider.GetRequiredService<PostgreSqlRealtimeConnectionAuthorizer>(),
                     provider.GetRequiredService<RealtimeAuthorizationRecorder>()));
         });
+        if (_configureTestServices is not null)
+        {
+            // After the application's own registrations, so a test replacement (such as a clock) wins.
+            builder.ConfigureTestServices(_configureTestServices);
+        }
     }
 }
 

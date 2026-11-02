@@ -31,7 +31,8 @@ namespace Paqueteria.IntegrationTests.PlatformEndToEnd;
 /// as the pilot gives both hosts its connection string with the export off (process environment variables set by
 /// <see cref="PlatformEndToEndFixture"/>, which both compositions read before they decide what to register);</item>
 /// <item>the ASP.NET Core hosting request lines at Information, so every request writes its log lines;</item>
-/// <item>whatever the test adds, such as a lower <c>RateLimits</c> permit limit (validated range 1 to 10000).</item>
+/// <item>whatever the test adds, such as a lower <c>RateLimits</c> permit limit (validated range 1 to 10000), and any
+/// API service replacement it passes (the REL-001 rehearsal's clock for its settlement).</item>
 /// </list>
 /// The harness's CORS policy for the web origin exposes <c>Retry-After</c>: the pilot serves the web and the API on
 /// one origin, where the browser reads every response header; here they are two origins.
@@ -71,7 +72,8 @@ internal sealed class PlatformHosts : IAsyncDisposable
 
     internal static PlatformHosts Start(
         PlatformEndToEndFixture fixture,
-        IReadOnlyDictionary<string, string?>? apiSettings = null)
+        IReadOnlyDictionary<string, string?>? apiSettings = null,
+        Action<IServiceCollection>? apiServices = null)
     {
         var logs = new JsonConsoleCapture();
         var settings = ApiSettings(fixture);
@@ -91,7 +93,8 @@ internal sealed class PlatformHosts : IAsyncDisposable
             enableDriverApiCors: true,
             configurationOverrides: settings,
             useHttps: true,
-            corsExposedHeaders: ["Retry-After"]);
+            corsExposedHeaders: ["Retry-After"],
+            configureTestServices: apiServices);
         PlatformWorkerFactory? worker = null;
         try
         {

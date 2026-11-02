@@ -13,11 +13,10 @@ quoted in `docs/normative/v0.6/decision-log.md`). Definitions and thresholds: AI
 
 The entry phase lands in three PRs:
 
-1. **PR-A (this change):** the AI-08 criterion, AI-24 `pilot_readiness`, the decision-log row, the tool, its closed
-   manifests and the workflow. The rehearsal and the drill row counts do not exist yet, so the report marks them
-   `MISSING` and can never pass.
-2. **PR-B:** the local/CI synthetic rehearsal with the cobro y fallas journey, which writes the rehearsal evidence the
-   tool already validates (Z4, Z5, Z6, Z7, Z8).
+1. **PR-A (#335):** the AI-08 criterion, AI-24 `pilot_readiness`, the decision-log row, the tool, its closed manifests
+   and the workflow.
+2. **PR-B (this change):** the local/CI synthetic rehearsal with the cobro y fallas journey, which writes the
+   rehearsal evidence the tool validates (Z4, Z5, Z6, Z7, Z8). See *Synthetic rehearsal* below.
 3. **PR-C:** `deploy/azure/pilot/restore-drill.sh` and the OPS-002 CI drill compare the row counts of organizations,
    orders, order events and proof photos, and the drill names the commit its `assert` ran (Z9).
 
@@ -26,8 +25,8 @@ The entry phase lands in three PRs:
 | Criterion | Source | Passes when | Today |
 | --- | --- | --- | --- |
 | `full_regression` | AI-08 required test | Foundation CI 13/13 push run on `main` whose head is `tested_git_sha`; REL-000 technical evidence `PASSED` in that run; no failed or skipped test in any execution artifact; every identity of the two closed manifests executed and passed in that run; no `GAP` | Fails: 6 screens and 3 AI-09 scenarios have no test |
-| `data_completeness` | AI-02, Z6 | The rehearsal has at least 50 delivered orders and `complete * 100 >= delivered * 98`, and the four journey steps passed | `MISSING` until PR-B |
-| `latency` | AI-02, Z7, Z8 | Each critical screen p95 < 2000 ms and order creation p95 < 3000 ms, at least 100 samples each, nearest-rank | `MISSING` until PR-B |
+| `data_completeness` | AI-02, Z6 | The rehearsal has at least 50 delivered orders and `complete * 100 >= delivered * 98`, and the four journey steps passed | Measured by the rehearsal of each dispatch; `MISSING` if it fails |
+| `latency` | AI-02, Z7, Z8 | Each critical screen p95 < 2000 ms and order creation p95 < 3000 ms, at least 100 samples each, nearest-rank | Measured by the rehearsal of each dispatch; `MISSING` if it fails |
 | `restore_vigente` | AI-08, Z9 | The pilot drill `Succeeded`, restore point inside the 14-day PITR window, verified 0 to 7 days before `period_start` (before the record exists: before the report time), row counts matched, `assert` ran `tested_git_sha`; the OPS-002 CI drill passed with the same counts | `MISSING` until PR-C |
 | `recipient_notices_line` | AI-08 NTF line | Every switch off, or GATE-004 and GATE-007 both resolved | Passes: all six switches off |
 | `release_gates` | AI-10 `release_gates.MVP-1_PILOT` | Each gate has a `Gate resolution` or `Gate scoping` row | Fails: GATE-003, 004, 007, 008, 009, 010 open |
@@ -68,13 +67,59 @@ artifact must show it passed. The tool's tests check that every .NET identity is
 renamed or removed test must update the map in the same PR. When a missing suite lands, its task turns the `GAP` into
 `COVERED`.
 
+## Synthetic rehearsal (Z4, Z5, Z6, Z7, Z8)
+
+`tests/Paqueteria.IntegrationTests/PilotRehearsal`, category `PilotRehearsal`, one test
+(`PilotRehearsalTests.Rehearsal_runs_the_cobro_y_fallas_journey_and_measures_completeness_and_latency`). It reuses the
+OPS-005 harness as it is: PostgreSQL 18/PostGIS with the baseline, the module lanes and one `NOBYPASSRLS` login per
+runtime role; the S3-compatible storage container behind its loopback TLS tunnel; the real API on Kestrel and the real
+Worker (proof validation with the `Synthetic` scanner, the assignment lifecycle, notifications); the production Next.js
+build; Chromium. No Azure (Z4). Synthetic data only: every address, contact and description says SINTETICO and every
+phone starts with 0000.
+
+**Only on demand (Z5).** Only the `rehearsal` job of `pilot-readiness.yml` selects the category, on `tested_git_sha`,
+after the 13/13 gate. Every `dotnet` job of Foundation CI, PR Validation and the development push smoke excludes it
+(`&Category!=PilotRehearsal`), and `tools/rel-001/test_rel001.py` fails if another workflow selects it. Its four pure
+tests (`RehearsalEvidenceTests`: percentiles, the evidence shape, the AI-24 screen list) have no category and run in the
+`dotnet` job, so the code cannot rot between dispatches.
+
+What it does, all through the API's own endpoints (the screens have their own suites, Z2):
+
+| Step | How |
+| --- | --- |
+| Regular deliveries (52) | Dispatcher: quote, order, CONFIRMED, READY_FOR_PICKUP, assignment of the own driver (45.00 MXN). Driver: AT_PICKUP, pickup photo, PICKED_UP, IN_TRANSIT, DELIVERING, delivery photo, DELIVERED. Four at a time |
+| Cobro (3) | The order declares 250.00 MXN of COD; the driver records exactly that amount before DELIVERED; the dispatcher reconciles it and closes the order |
+| Fallas (2) | At the destination the driver reports `RECIPIENT_ABSENT` with a delivery photo as evidence and moves the order to FAILED_ATTEMPT; dispatch decides to retry today (DELIVERING); the driver delivers with a new photo; dispatch resolves the incident (`resolveIncident`, RESOLVED), which the close and the settlement approval require |
+| CSV (3) | One file of three rows (each a fresh quote), previewed and committed with the prohibited-goods confirmation; each created order is then delivered |
+| Liquidación | Finance (MFA) calculates the driver's settlement for the rehearsal day, approves it, marks it paid and exports the CSV |
+| Photos | Each one: `createProofUploadSession` (timed), the signed PUT to storage, the Worker's validation, `finalizeProof` |
+
+The settlement runs on a second API whose clock is two days ahead (an `IClock` replacement through the new optional
+`configureTestServices` of the harness), because D7 settles only closed periods and the deliveries happened today.
+
+**Completeness** is read after the run with the administration connection, over the 60 orders that reached DELIVERED:
+`order_events` versions exactly 1 to the order version, one `ORDER_STATUS_CHANGED` audit row per status change, and a
+`PICKUP_PHOTO` and a `DELIVERY_PHOTO` proof. Each missing count is a number of orders.
+
+**Latency** is measured in Chromium against the production build, 100 samples each, nearest-rank, each sample a full
+navigation timed to the first authoritative render: the inbox row of an order waiting for assignment, the order
+heading on `/ops/orders/:id`, the driver's stop in `/driver/stops`, the order on `/driver/stops/:id`, and the status
+on the public tracking page (the link issued for an assigned order). Order creation is timed from "Crear y confirmar
+orden" to "Orden creada y confirmada" in the wizard, so the quote (and its geocoding, an external provider) is left out.
+The AI-15 metrics are reported only: the API's request p95 over the whole run (its hosting log lines), the p95 of the
+upload-session requests and the p95 from each DELIVERED request to its `OrderStatusChanged` at the operations hub.
+
+**Test-host settings**, as OPS-005 sets its own: Finance on PostgreSQL, the synthetic incident PII protector, and every
+SEC-004 permit at its maximum (10,000 per window; public tracking 1,000), so the 100-sample loops measure the screens,
+not the rate limiter's waits. Nothing else changes.
+
 ## Inputs and outputs
 
 | Input | Where it comes from |
 | --- | --- |
 | `tested_git_sha`, `foundation_run_id` | Dispatch inputs; the AZR-001 `deploy-gate` checks them first (13/13 push run on `main`, ancestry) |
 | REL-000 report and execution artifacts | Downloaded from that Foundation run. They expire after 7 days (14 for OPS-001/OPS-002), so dispatch over a recent run |
-| Rehearsal evidence | `rel001-rehearsal-evidence.json` (`paquetenvia-rel001-rehearsal-v1`) from the same readiness run (PR-B) |
+| Rehearsal evidence | `rel001-rehearsal-evidence.json` (`paquetenvia-rel001-rehearsal-v1`), the artifact `rel001-rehearsal-evidence` of the same readiness run's `rehearsal` job |
 | Restore drill | The optional `restore_drill_evidence` input: the `EVIDENCE ...` line of `restore-drill.sh`. The execution name is never published |
 | Decision record | `docs/releases/mvp-1-pilot-decision.json` on `main` (`paquetenvia-mvp1-pilot-decision-v1`), absent until the owner writes it |
 
@@ -134,6 +179,20 @@ The tests are offline and synthetic. Foundation's `normative` job and PR Validat
 the classifier maps `tools/rel-001/**`, `tests/fixtures/rel-001/**` and the workflow to `azr-static`
 (`REL001_READINESS`).
 
+The rehearsal needs Docker and the Chromium of the browser suites (OPS-005), like the platform end-to-end tests:
+
+```bash
+dotnet build tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj -c Release
+pnpm --dir apps/web install --frozen-lockfile
+REL001_REHEARSAL_OUTPUT="$PWD/rel001-rehearsal" dotnet test \
+  tests/Paqueteria.IntegrationTests/Paqueteria.IntegrationTests.csproj -c Release --no-build \
+  --filter "Category=PilotRehearsal"
+```
+
+It takes about seven minutes on a workstation and writes `rel001-rehearsal-evidence.json` to that directory (to a new
+temporary directory when the variable is empty). Outside the workflow the commit and run fields are placeholders
+(forty zeros and run `0`), so a local file never matches a dispatched report.
+
 ## Choices not fixed by Z1 to Z12
 
 These are recorded in the decision-log row:
@@ -149,3 +208,25 @@ These are recorded in the decision-log row:
 - The drill freshness counts from `period_start`, or from the report time before the record exists.
 - The legal reviewer roles, the decision statement and the scope flags of the record.
 - The artifact is kept 14 days.
+
+The rehearsal (PR-B) adds these, recorded here and in its PR:
+
+- 60 delivered orders: 52 regular, 3 with cash on delivery, 2 with a failed attempt and 3 from a CSV import, four
+  regular deliveries at a time.
+- The journey goes through the API's endpoints, as OPS-001 does. Only the latency samples use the browser, because the
+  screens have their own suites (Z2).
+- 250.00 MXN of cash on delivery, the own driver at 45.00 MXN per assignment, and the failed attempt retried the same
+  day with its incident resolved after the redelivery.
+- The settlement runs on a second API whose clock is two days ahead, through a new optional `configureTestServices` of
+  the harness.
+- On the test host every SEC-004 permit is at its maximum, and the public tracking lookup at 1,000.
+- A screen sample runs from the navigation start to the first authoritative render. Order creation runs from the click
+  to the confirmation, without the quote.
+- The AI-15 metrics come from the API's hosting log lines, from the upload-session requests and from the operations hub
+  client.
+- Completeness means contiguous event versions, one audit row per status change and both photos. It is read with the
+  administration connection over the delivered orders.
+- The evidence is written even in a local run, with placeholder commit and run fields. The workflow keeps it 14 days.
+- The rehearsal job checks out `tested_git_sha` with a 75-minute limit. The report still runs when the rehearsal fails
+  and then marks completeness and latency `MISSING`.
+- The four pure tests have no category, so they run in the `dotnet` job of every PR.
