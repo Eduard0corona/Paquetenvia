@@ -114,7 +114,9 @@ muestra datos de documentos y una forma de registrar documentos de personas real
    revocación.
 4. Registrar exige `Idempotency-Key` (24 h, ligada a organización, persona, repartidor y cuerpo); revocar no lleva llave
    (es idempotente por estado).
-5. Un REJECTED no lleva fecha ni base de vencimiento.
+5. Un REJECTED no lleva fecha ni base de vencimiento. Consecuencia: mientras un REJECTED sea el más reciente de su
+   tipo, el selector de repartidores muestra dos motivos, `DOCUMENT_STATUS_NOT_VALID` y `DOCUMENT_EXPIRY_MISSING`
+   («Un documento no tiene fecha de vencimiento»), por la regla vigente de DSP-001.
 6. Un VALID debe tener último día válido entre hoy y diez años adelante (409 `EXPIRY_DATE_OUT_OF_RANGE`); una fecha
    impresa ya pasada se rechaza con el motivo "Vencido".
 7. La fecha de revisión de la licencia permanente vale todo ese día, como una fecha impresa; 29 de febrero + 12 meses es
