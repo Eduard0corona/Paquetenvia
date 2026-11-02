@@ -253,6 +253,40 @@ describe("incident flows", () => {
     expect(controller.getSnapshot().incidents[1].severity).toBe("HIGH");
   });
 
+  it("adds a newly opened incident only when it matches the filters in effect (Z14)", async () => {
+    const listed = syntheticUuid(0x321);
+    const otherOrder = syntheticUuid(0x111);
+    const openedIds = [0x322, 0x323, 0x324, 0x325].map(syntheticUuid);
+    const open = vi.fn<IncidentsApi["open"]>();
+    for (const id of openedIds) open.mockResolvedValueOnce(parseIncident(incidentResponse({ id })));
+    const list = vi.fn<IncidentsApi["list"]>().mockResolvedValue({
+      items: [parseIncident(incidentResponse({ id: listed }))],
+      next_cursor: null,
+    });
+    const { controller } = setup({ [orgA]: "DISPATCHER" }, { list, open });
+    await controller.start();
+    const ids = () => controller.getSnapshot().incidents.map((incident) => incident.id);
+
+    // An OPEN incident does not match a RESOLVED filter, nor an order filter of another order: the list stays.
+    await controller.refresh("RESOLVED", null);
+    await controller.open(draft);
+    expect(ids()).toEqual([listed]);
+    expect(controller.getSnapshot().message).toBe("Incidencia abierta y registrada.");
+    await controller.refresh(null, otherOrder);
+    await controller.open({ ...draft, description: "Segunda apertura." });
+    expect(ids()).toEqual([listed]);
+    expect(controller.getSnapshot().message).toBe("Incidencia abierta y registrada.");
+
+    // Matching both filters, or with none in effect, it goes first.
+    await controller.refresh("OPEN", orderId);
+    await controller.open({ ...draft, description: "Tercera apertura." });
+    expect(ids()).toEqual([openedIds[2], listed]);
+    await controller.refresh(null, null);
+    await controller.open({ ...draft, description: "Cuarta apertura." });
+    expect(ids()).toEqual([openedIds[3], listed]);
+    expect(open).toHaveBeenCalledTimes(4);
+  });
+
   it("does not call the API for an invalid draft", async () => {
     const { controller, api } = setup({ [orgA]: "DISPATCHER" });
     await controller.start();
