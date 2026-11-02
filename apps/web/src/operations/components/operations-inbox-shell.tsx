@@ -270,6 +270,7 @@ export function OperationsInboxShell() {
                 publicId={target.publicId}
                 assignable={rows.some((row) => row.order_id === target.orderId && row.unassigned_alert)}
                 onOrderChanged={() => state.refresh("assignment")}
+                followSessionChanges={false}
               />
             </section>
           )}

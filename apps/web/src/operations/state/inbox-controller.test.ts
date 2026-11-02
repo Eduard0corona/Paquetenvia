@@ -373,6 +373,60 @@ function tooManyRequests(waits: RateLimitWaits, operation: "dashboard" | "queue_
   return Promise.reject(new OperationsApiError("rate_limited", seconds));
 }
 
+describe("work inbox organization switch (Z15)", () => {
+  const sessionC = { ...session, organizationId: "33333333-3333-4333-8333-333333333333" } as OperationsSession;
+
+  it("drops the previous organization's rows, counts and generation before its connection closes, reading nothing meanwhile", async () => {
+    let current: OperationsSession = session;
+    const apiB = new FakeApi({ "unassigned=true": () => Promise.resolve(page([row(30, "READY_FOR_PICKUP")])) });
+    const apiC = new FakeApi({ "unassigned=true": () => Promise.resolve(page([row(31, "RESCHEDULED")])) });
+    const controller = new InboxController(
+      {
+        readSession: () => current,
+        createApi: (installed) => (installed === sessionC ? apiC : apiB),
+        isHidden: () => false,
+      },
+      defaultInboxView,
+    );
+    await controller.restart(() => Promise.resolve());
+    await flush();
+    expect(controller.getSnapshot().rows).toHaveLength(1);
+    expect(controller.getSnapshot().counts).not.toBeNull();
+    const generation = controller.getSnapshot().sessionGeneration;
+
+    current = sessionC;
+    const closing = deferred<void>();
+    const restart = controller.restart(() => closing.promise);
+    // While the previous connection closes: nothing of B is shown, the generation moved and nothing is read.
+    expect(controller.getSnapshot()).toMatchObject({ rows: [], counts: null, loaded: false, phase: "loading" });
+    expect(controller.getSnapshot().sessionGeneration).toBe(generation + 1);
+    controller.notice();
+    await controller.refresh("polling");
+    await controller.refresh("manual");
+    expect(apiB.requests).toEqual(["unassigned=true"]);
+    expect(apiC.requests).toEqual([]);
+
+    closing.resolve();
+    expect(await restart).toMatchObject({ session: sessionC, phase: "ready" });
+    await flush();
+    expect(apiC.requests).toEqual(["unassigned=true"]);
+    expect(controller.getSnapshot().rows.map((item) => item.status)).toEqual(["RESCHEDULED"]);
+    expect(apiB.requests).toEqual(["unassigned=true"]);
+  });
+
+  it("gives up a restart that a newer change superseded while the previous connection closed", async () => {
+    const api = new FakeApi({ "unassigned=true": () => Promise.resolve(page([])) });
+    const controller = controllerFor(api);
+    const closing = deferred<void>();
+    let mine = true;
+    const restart = controller.restart(() => closing.promise, () => mine);
+    mine = false;
+    closing.resolve();
+    expect(await restart).toBeNull();
+    expect(api.requests).toEqual([]);
+  });
+});
+
 describe("work inbox under the SEC-004 limits (owner answers Q9, Q11, Q14, Q16)", () => {
   beforeEach(() => {
     vi.useFakeTimers();
