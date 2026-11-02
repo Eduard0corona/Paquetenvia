@@ -208,4 +208,16 @@ describe("incident desk read parsers (API-INC-LIST-PROOFS-2026-09-29)", () => {
     expect(() => incidentListSearch({ orderId: "not-a-uuid" })).toThrow(ContractViolationError);
     expect(() => incidentListSearch({}, "bad cursor")).toThrow(ContractViolationError);
   });
+
+  it("builds the order filter alone and with the next page's cursor (AI-07 incident_desk)", () => {
+    expect(incidentListSearch({ orderId }).toString()).toBe(`order_id=${orderId}`);
+    expect(incidentListSearch({ orderId }, "c2").toString()).toBe(`order_id=${orderId}&cursor=c2`);
+    expect(incidentListSearch({ status: "RESOLVED", orderId }, null).toString()).toBe(
+      `status=RESOLVED&order_id=${orderId}`,
+    );
+    const malformedOrders = [syntheticUuid(0xabc).toUpperCase(), "00000000-0000-0000-0000-000000000000", ` ${orderId}`, ""];
+    for (const malformed of malformedOrders) {
+      expect(() => incidentListSearch({ orderId: malformed })).toThrow(ContractViolationError);
+    }
+  });
 });
