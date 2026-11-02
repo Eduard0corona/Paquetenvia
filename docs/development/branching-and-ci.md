@@ -8,7 +8,7 @@ How changes move from a task branch to `main`, which workflow validates each ste
 |---|---|---|
 | `feature/*`, `fix/*` | One backlog task per branch/PR | Agents and developers (PRs in **draft**) |
 | `development` | Integration branch | Only merges of PRs validated by PR Validation |
-| `main` | Certified baseline; the only source for `deploy-azure-dev.yml` and `deploy-azure-pilot.yml` | Only promotion PRs from `development`, the dependency route and authorized security remediations |
+| `main` | Certified baseline; the only source for `deploy-azure-dev.yml`, `deploy-azure-pilot.yml` and `pilot-readiness.yml` | Only promotion PRs from `development`, the dependency route and authorized security remediations |
 
 Nobody pushes directly to `main` or `development`, and nobody rebases or force-pushes shared branches. Only the owner merges.
 
@@ -137,7 +137,16 @@ Anything unregistered still fails closed: an extra transitive package, another v
     deploy reuses an image its commit already pushed and locks every tag (guard P27). After stage 4 it checks that the
     new API, Worker and Web revisions are ready, active, `Healthy` and on this run's digests (guard P26). The run
     summary lists those digests and whether each was built or reused.
-- **Locally:** `python3 -m unittest discover -s tools/ci -p "test_*.py"`, `python3 -m unittest discover -s tools/azr-001 -p "test_*.py"`, `python3 docs/normative/v0.6/tools/validate_contracts.py`.
+- **Pilot readiness (`pilot-readiness.yml`, REL-001 entry phase):**
+  - Runs by `workflow_dispatch` from `main` only, with `tested_git_sha`, `foundation_run_id` and the optional
+    `restore_drill_evidence` line. The AZR-001 `deploy-gate` runs first (the same 13/13 gate as the deploys).
+  - One job with `contents: read` and `actions: read`; no Azure, no GitHub Environment, no secret. It downloads that
+    Foundation run's REL-000 and execution artifacts, runs `tools/rel-001/rel001.py report` and publishes only the
+    redacted report (`rel001-pilot-readiness-report`, 14 days). The run is red until the report is ready or approved.
+  - It is never part of PR Validation or Foundation CI. Its tool and manifests belong to the `REL001_READINESS` domain,
+    so `azr-static` runs their tests (`tools/rel-001/test_rel001.py`); Foundation's `normative` job runs the same step.
+  - Note: `docs/development/rel-001-pilot-readiness.md`.
+- **Locally:** `python3 -m unittest discover -s tools/ci -p "test_*.py"`, `python3 -m unittest discover -s tools/azr-001 -p "test_*.py"`, `python3 -m unittest discover -s tools/rel-001 -p "test_*.py"`, `python3 docs/normative/v0.6/tools/validate_contracts.py`.
 
 ## Workflow conventions
 

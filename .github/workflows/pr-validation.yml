@@ -331,6 +331,10 @@ jobs:
       - name: Test AZR-001 static guard tooling
         run: python -m unittest discover -s ./tools/azr-001 -p "test_*.py" -v
 
+      # REL-001 pilot readiness evidence tool (tools/rel-001); its on-demand workflow is pilot-readiness.yml.
+      - name: Test REL-001 pilot readiness tooling
+        run: python -m unittest discover -s ./tools/rel-001 -p "test_*.py" -v
+
       - name: Run AZR-001 §28 static guards
         run: python ./tools/azr-001/azr001_static_guards.py check --arm-dir "${RUNNER_TEMP}/azr001-arm"
 
