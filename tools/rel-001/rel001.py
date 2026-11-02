@@ -169,7 +169,8 @@ RESTORE_LINE = re.compile(
 # Output redaction: nothing shaped like a personal datum, a secret or an entity identifier may be published.
 REDACTION_PATTERNS = (
     ("EMAIL", re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}")),
-    ("PHONE", re.compile(r"\+[0-9]{8,15}")),
+    # A "+" and 8 to 15 digits, optionally grouped by spaces, dashes, dots or parentheses (+52 (667) 123-4567).
+    ("PHONE", re.compile(r"\+\(?[0-9](?:[ .()-]{0,2}[0-9]){7,14}")),
     ("UUID", re.compile(r"\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}\b")),
     ("SECRET", re.compile(r"(?i)(bearer\s+[a-z0-9._-]{8,}|sig=|token=|password=|secret=|accountkey=)")),
     ("URL", re.compile(r"https?://")),
@@ -216,11 +217,18 @@ REL000 = _load_module("rel001_rel000", TOOLS_ROOT / "rel-000" / "rel000.py")
 
 
 # ------------------------------------------------------------------------------------------------ small helpers
-def read_text(root: Path, relative: Path) -> str:
-    path = root / relative
+def read_regular_text(path: Path, label: str) -> str:
+    """The only file reader: a symlink, a directory or a missing file fails closed (INPUT_FILE_MISSING)."""
     if path.is_symlink() or not path.is_file():
-        fail("INPUT_FILE_MISSING", f"{relative.as_posix()} is missing or not a regular file")
-    return path.read_text(encoding="utf-8")
+        fail("INPUT_FILE_MISSING", f"{label} is missing or not a regular file")
+    try:
+        return path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        fail("INPUT_FILE_INVALID", f"{label} is not UTF-8 text")
+
+
+def read_text(root: Path, relative: Path) -> str:
+    return read_regular_text(root / relative, relative.as_posix())
 
 
 def read_yaml(root: Path, relative: Path) -> Any:
@@ -231,11 +239,10 @@ def read_yaml(root: Path, relative: Path) -> Any:
 
 
 def read_json_file(path: Path, label: str) -> Any:
-    if path.is_symlink() or not path.is_file():
-        fail("INPUT_FILE_MISSING", f"{label} is missing or not a regular file")
+    text = read_regular_text(path, label)
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except (UnicodeDecodeError, ValueError):
+        return json.loads(text)
+    except ValueError:
         fail("INPUT_JSON_INVALID", f"{label} is not valid JSON")
 
 
@@ -451,18 +458,20 @@ def recipient_notice_switches(tested_root: Path) -> list[dict[str, Any]]:
     settings: list[tuple[str, Any]] = []
     for host in APPSETTINGS_HOSTS:
         directory = tested_root / host
-        if not directory.is_dir():
-            fail("INPUT_FILE_MISSING", f"{host} is missing")
+        if directory.is_symlink() or not directory.is_dir():
+            fail("INPUT_FILE_MISSING", f"{host} is missing or not a regular directory")
         for path in sorted(directory.glob("appsettings*.json")):
             if path.name in NON_PILOT_APPSETTINGS:
                 continue
             settings.append((f"{host}/{path.name}", read_json_file(path, f"{host}/{path.name}")))
     templates: list[tuple[str, str]] = []
     pilot_dir = tested_root / PILOT_TEMPLATE_DIR
+    if pilot_dir.is_symlink() or not pilot_dir.is_dir():
+        fail("INPUT_FILE_MISSING", f"{PILOT_TEMPLATE_DIR.as_posix()} is missing or not a regular directory")
     for path in sorted([*pilot_dir.glob("*.bicep"), *pilot_dir.glob("*.json")]):
-        text = path.read_text(encoding="utf-8")
-        templates.append((f"{PILOT_TEMPLATE_DIR.as_posix()}/{path.name}",
-                          strip_bicep_comments(text) if path.suffix == ".bicep" else text))
+        name = f"{PILOT_TEMPLATE_DIR.as_posix()}/{path.name}"
+        text = read_regular_text(path, name)
+        templates.append((name, strip_bicep_comments(text) if path.suffix == ".bicep" else text))
     results = []
     for switch in RECIPIENT_NOTICE_SWITCHES:
         findings: list[str] = []
@@ -474,8 +483,7 @@ def recipient_notice_switches(tested_root: Path) -> list[dict[str, Any]]:
         for name, text in templates:
             if env_name in text.lower():
                 findings.append(f"SET_IN:{name}")
-        source = tested_root / switch["source"]
-        code = source.read_text(encoding="utf-8") if source.is_file() else ""
+        code = read_text(tested_root, Path(switch["source"]))
         if not re.search(switch["default"], code):
             findings.append(f"DEFAULT_NOT_OFF:{switch['source']}")
         results.append({"switch": switch["key"], "off": not findings, "findings": sorted(findings)})

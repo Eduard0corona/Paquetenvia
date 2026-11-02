@@ -443,6 +443,37 @@ class RecipientNoticeTests(unittest.TestCase):
         findings = {s["switch"]: s["findings"] for s in rel001.recipient_notice_switches(self.tree(default_on))}
         self.assertTrue(findings["Notifications:RecipientNotices:Enabled"][0].startswith("DEFAULT_NOT_OFF:"))
 
+    def test_a_symlinked_pilot_template_fails_closed(self):
+        def symlinked(root: Path) -> None:
+            path = root / "deploy/azure/pilot/apps.bicep"
+            outside = root / "outside-apps.bicep"
+            outside.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+            path.unlink()
+            path.symlink_to(outside)
+        tree = self.tree(symlinked)
+        with self.assertRaises(rel001.Rel001Error) as raised:
+            rel001.recipient_notice_switches(tree)
+        self.assertEqual("INPUT_FILE_MISSING", raised.exception.code)
+
+    def test_a_symlinked_option_default_source_fails_closed(self):
+        def symlinked(root: Path) -> None:
+            path = root / "src/Modules/Notifications/Notifications.Infrastructure/RecipientNotices/RecipientNoticesOptions.cs"
+            outside = root / "outside-options.cs"
+            outside.write_text(path.read_text(encoding="utf-8"), encoding="utf-8")
+            path.unlink()
+            path.symlink_to(outside)
+        tree = self.tree(symlinked)
+        with self.assertRaises(rel001.Rel001Error) as raised:
+            rel001.recipient_notice_switches(tree)
+        self.assertEqual("INPUT_FILE_MISSING", raised.exception.code)
+
+    def test_a_missing_option_default_source_fails_closed(self):
+        def missing(root: Path) -> None:
+            (root / "src/Modules/Notifications/Notifications.Infrastructure/RecipientNotices/RecipientNoticesOptions.cs").unlink()
+        with self.assertRaises(rel001.Rel001Error) as raised:
+            rel001.recipient_notice_switches(self.tree(missing))
+        self.assertEqual("INPUT_FILE_MISSING", raised.exception.code)
+
     def test_development_and_testing_settings_are_ignored(self):
         def dev(root: Path) -> None:
             (root / "src/Paqueteria.Api/appsettings.Development.json").write_text(
@@ -789,6 +820,28 @@ class RedactionTests(unittest.TestCase):
 
     def test_shas_and_run_ids_are_allowed(self):
         rel001.assert_redacted("file", json.dumps({"sha": "a" * 40, "run": "41186501080"}))
+
+    def test_formatted_phone_numbers_are_refused(self):
+        for text in ("+52 667 123 4567", "+52-667-123-4567", "+52.667.123.4567", "+52 (667) 123-4567",
+                     "+(52) 667 123 4567", "+1 (555) 010-0199", "tel: +52 1 667 123 4567"):
+            with self.subTest(text=text), self.assertRaises(rel001.Rel001Error) as raised:
+                rel001.assert_redacted("file", text)
+            self.assertEqual("OUTPUT_NOT_REDACTED", raised.exception.code)
+
+    def test_the_tools_own_values_are_never_phone_shaped(self):
+        legitimate = {
+            "tested_git_sha": "0123456789abcdef0123456789abcdef01234567",
+            "foundation_run_id": "41186501080",
+            "workflow_run_id": "19876543210",
+            "generated_at": "2026-11-02T10:15:00Z",
+            "period": ["2026-11-09", "2026-11-23"],
+            "offset": "2026-11-02T10:15:00+00:00",
+            "counts": {"COVERED": 12, "GAP": 6, "planned_real_deliveries": 100, "delta": "+12"},
+            "latency": {"samples": 100, "p95_ms": 1999, "ratio": 0.98},
+        }
+        rel001.assert_redacted("file", json.dumps(legitimate, indent=2))
+        rel001.assert_redacted("file.md", "SHA 0123456789abcdef0123456789abcdef01234567, corrida 41186501080, "
+                                          "12 cubiertas y 6 pendientes, 2026-11-02, p95 1999 ms (+12 ms)")
 
 
 class WorkflowTests(unittest.TestCase):
