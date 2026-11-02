@@ -187,6 +187,10 @@
         {
           "job": "operations-dashboard",
           "test": "Paqueteria.IntegrationTests.Operations.DriverRosterPwaPlaywrightTests"
+        },
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Operations.DriverDocumentsPwaPlaywrightTests"
         }
       ]
     },
