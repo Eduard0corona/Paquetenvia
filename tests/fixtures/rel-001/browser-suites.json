@@ -162,10 +162,13 @@
     },
     {
       "screen": "/ops/incidents",
-      "status": "GAP",
-      "suites": [],
-      "owner_task": "UI-001",
-      "reason": "No Playwright suite yet; UI-001 owns it (Z2)."
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Incidents.IncidentDeskPwaPlaywrightTests"
+        }
+      ]
     },
     {
       "screen": "/finance/cod",
