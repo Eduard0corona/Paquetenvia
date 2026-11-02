@@ -1154,6 +1154,7 @@ ul.notice {
 .opsFilters input,
 .opsFilters select,
 .opsOrderSearch input,
+.opsInlineField input,
 .opsInlineField select,
 .opsTrackingLink input {
   min-width: 0;
