@@ -109,6 +109,12 @@ orden" to "Orden creada y confirmada" in the wizard, so the quote (and its geoco
 The AI-15 metrics are reported only: the API's request p95 over the whole run (its hosting log lines), the p95 of the
 upload-session requests and the p95 from each DELIVERED request to its `OrderStatusChanged` at the operations hub.
 
+**Pool use** is reported only, in the test log and never in the evidence. The test listens to Npgsql's own meter in
+the test process, which hosts both the API and the Worker. Every 100 ms it records the peak connections in use, the
+peak requests waiting for a connection and the timeouts of the `paqueteria_app`, `paqueteria_realtime` and
+`paqueteria_worker` pools (SCL-007), and prints each pool only under its role, never its name. Since the POD-001
+per-object scope (#337), proof validation can hold up to `ProofStorage:MaximumConcurrency` Worker connections at once.
+
 **Test-host settings**, as OPS-005 sets its own: Finance on PostgreSQL, the synthetic incident PII protector, and every
 SEC-004 permit at its maximum (10,000 per window; public tracking 1,000), so the 100-sample loops measure the screens,
 not the rate limiter's waits. Nothing else changes.
@@ -230,3 +236,5 @@ The rehearsal (PR-B) adds these, recorded here and in its PR:
 - The rehearsal job checks out `tested_git_sha` with a 75-minute limit. The report still runs when the rehearsal fails
   and then marks completeness and latency `MISSING`.
 - The four pure tests have no category, so they run in the `dotnet` job of every PR.
+- The rehearsal step logs at `detailed` verbosity, so the passing test's lines (counts, percentiles, pool use) appear in
+  the job log. The pool sampler reads Npgsql's meter every 100 ms, so a wait shorter than one sample can be missed.

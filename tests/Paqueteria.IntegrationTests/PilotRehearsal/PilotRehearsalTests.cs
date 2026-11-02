@@ -65,6 +65,8 @@ public sealed class PilotRehearsalTests(PlatformEndToEndFixture fixture, ITestOu
 
         await using (var hosts = PlatformHosts.Start(fixture, Settings()))
         {
+            // Reported only (SCL-007): how close the API and Worker pools came to their size during the run.
+            await using var pools = new RehearsalPoolSampler(fixture);
             await using var hub = new OperationsHubClient(hosts.ApiAddress, PlatformEndToEndFixture.OrganizationId);
             await hub.StartAsync();
             using var api = new RehearsalApi(hosts.ApiAddress, PlatformEndToEndFixture.OrganizationId, runTag);
@@ -155,6 +157,11 @@ public sealed class PilotRehearsalTests(PlatformEndToEndFixture fixture, ITestOu
                 output.WriteLine($"order creation: {creation}");
                 latency = new RehearsalLatency(
                     screens, creation, await TechnicalAsync(hosts, api, hub, operations.DeliveryRequestedAt));
+            }
+
+            foreach (var line in await pools.StopAsync())
+            {
+                output.WriteLine(line);
             }
 
             completeness = await RehearsalCompletenessReader.ReadAsync(fixture.Database.AdminConnectionString, delivered.ToArray());

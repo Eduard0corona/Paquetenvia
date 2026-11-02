@@ -168,7 +168,7 @@ jobs:
             --configuration Release \
             --no-build \
             --filter "Category=PilotRehearsal" \
-            --logger "console;verbosity=normal"
+            --logger "console;verbosity=detailed"
 
       - name: Publish only the rehearsal evidence
         uses: actions/upload-artifact@v4
