@@ -247,6 +247,16 @@ pg_restore --exit-on-error --single-transaction \
     if ($assertionResult.StandardOutput.Trim() -notmatch 'OPS002_ASSERTIONS_OK') {
         throw "Restored database assertions failed."
     }
+    # REL-001 Z9: organizations, orders, order events and proof photos come back with the backup's counts.
+    $currentPhase = "row_count_comparison"
+    if ($null -eq $backupReport.row_counts) {
+        throw "The backup report has no row counts."
+    }
+    $restoredRowCounts = Get-Ops002RowCounts -Context $context -Database $RestoredDatabase `
+        -TimeoutSeconds $TimeoutSeconds
+    if (-not (Test-Ops002RowCountsEqual -Expected $backupReport.row_counts -Actual $restoredRowCounts)) {
+        throw "Restored row counts differ from the backup."
+    }
     $currentPhase = "append_only_validation"
     $appendOnlyBeforeRestart = Invoke-Ops002AppendOnlyAssertions `
         -Context $context `
@@ -388,6 +398,9 @@ redis-cli --no-auth-warning -a "$REDIS_PASSWORD" DBSIZE
         object_inventory_sha256 = $inventory.Digest
         proof_objects_expected = $restoredProofs.Count
         proof_objects_restored = $restoredProofs.Count
+        row_counts_source = $backupReport.row_counts
+        row_counts_restored = $restoredRowCounts
+        row_counts_matched = $true
         source_fingerprint_stable = $true
         source_destroyed_before_restore = [bool]$ConfirmSourceDestroyed
         target_was_clean = $targetWasClean

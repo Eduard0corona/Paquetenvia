@@ -1459,6 +1459,15 @@ SET session_replication_role=origin;
         object_count = ([int]$restoreReport.object_count -eq 3)
         proof_objects_expected = ([int]$restoreReport.proof_objects_expected -eq 2)
         proof_objects_restored = ([int]$restoreReport.proof_objects_restored -eq 2)
+        # REL-001 Z9: the seed's organizations, orders, order events and proof photos, counted before the backup and
+        # again in the restored database.
+        row_counts_matched = (
+            $restoreReport.row_counts_matched -eq $true -and
+            (Test-Ops002RowCountsEqual -Expected $restoreReport.row_counts_source `
+                -Actual $restoreReport.row_counts_restored) -and
+            (Test-Ops002RowCountsEqual -Expected ([ordered]@{
+                organizations = 2; orders = 2; order_events = 9; proof_photos = 2
+            }) -Actual $restoreReport.row_counts_restored))
         redis_restored = ($restoreReport.redis_restored -eq $false)
         mailpit_restored = ($restoreReport.mailpit_restored -eq $false)
         plaintext_residue_detected = ($restoreReport.plaintext_residue_detected -eq $false)
