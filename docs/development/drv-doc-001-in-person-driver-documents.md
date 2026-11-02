@@ -1,6 +1,6 @@
 # DRV-DOC-001: documentos del repartidor registrados en persona
 
-Decisión: `DRV-DOC-001-IN-PERSON-2026-11-02` (ronda Y, Y1 a Y12). ADR:
+Decisión: `DRV-DOC-001-IN-PERSON-2026-11-02` (ronda Y, Y1 a Y12, y Y13 para las subdecisiones del ADR). ADR:
 [`docs/adr/ADR-DRV-DOC-001-IN-PERSON-DRIVER-DOCUMENTS.md`](../adr/ADR-DRV-DOC-001-IN-PERSON-DRIVER-DOCUMENTS.md). Ítem
 de backlog: DRV-DOC-001 (AI-08), puerta GATE-007. **Apagado por defecto y apagado en el piloto** hasta que el owner
 registre GATE-007.

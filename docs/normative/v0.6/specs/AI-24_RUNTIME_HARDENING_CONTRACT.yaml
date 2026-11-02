@@ -341,7 +341,7 @@ driver_documents:
   decisions:
   - DRV-DOC-001-IN-PERSON-2026-11-02
   adr: docs/adr/ADR-DRV-DOC-001-IN-PERSON-DRIVER-DOCUMENTS.md
-  status: DECIDED by the project owner on 2026-11-01 (round Y, Y1 to Y12); implemented by AI-08 DRV-DOC-001 (API, panel
+  status: DECIDED by the project owner on 2026-11-01 (round Y, Y1 to Y12) and 2026-11-02 (Y13, the ADR sub-choices); implemented by AI-08 DRV-DOC-001 (API, panel
     and driver app PRs); off in the pilot until GATE-007 is registered
   method: in person (Y1) - the driver shows the original to a dispatcher of the driver organization, who records its
     type, the printed expiry or the permanent-license review date and the decision (VALID, or REJECTED with one of

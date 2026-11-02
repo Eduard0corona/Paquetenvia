@@ -1,7 +1,7 @@
 # ADR-DRV-DOC-001: documentos del repartidor registrados en persona por despacho
 
-- Estado: aceptado (DRV-DOC-001-IN-PERSON-2026-11-02; las subdecisiones técnicas de la sección "Subdecisiones" esperan
-  el visto bueno del owner antes de fusionar)
+- Estado: aceptado (DRV-DOC-001-IN-PERSON-2026-11-02; el owner aprobó todas las subdecisiones técnicas de la sección
+  "Subdecisiones" el 2026-11-02 en Y13)
 - Fecha: 2026-11-02
 - Alcance: módulo Drivers (columnas de `drivers.driver_documents`, servicio, endpoints y configuración
   `Drivers:Documents`), la regla de evidencia de DSP-001 y sus seis lectores, la columna "Documentos" de
@@ -104,7 +104,11 @@ muestra datos de documentos y una forma de registrar documentos de personas real
    documento (no existen para un registro en persona). La retención propuesta al abogado es la vigencia más un año
    (Y9); DRV-DOC-001 no agrega purga.
 
-## Subdecisiones técnicas (no están en Y1 a Y12; el owner las revisa antes de fusionar)
+## Subdecisiones técnicas (no están en Y1 a Y12; aprobadas por el owner en Y13)
+
+El owner las aprobó todas juntas el 2026-11-02 (ronda Y continuada, Y13, sobre el PR #332; la pregunta, la respuesta,
+la vista previa con las 18 líneas y la opción no elegida están citadas en la fila `DRV-DOC-001-IN-PERSON-2026-11-02` de
+`docs/normative/v0.6/decision-log.md`).
 
 1. Evidencia explícita `evidence_kind` en lugar de hash de atestación (punto 2).
 2. Registrar y revocar admiten también PLATFORM_ADMIN con MFA (la regla de `assignDriver`); AC3 nombra "a dispatcher of
