@@ -66,11 +66,11 @@ export function useOperationsInbox(view: InboxView): OperationsInboxState {
 
     const startSession = async () => {
       const mine = ++generation;
-      await stopRealtime();
-      if (mine !== generation) return;
       setConnection("Conectando");
-      const { session, phase } = await controller.start();
-      if (mine !== generation) return;
+      // Z15: the previous organization's rows, counts and panels go now; its connection is closed after.
+      const started = await controller.restart(stopRealtime, () => mine === generation);
+      if (started === null || mine !== generation) return;
+      const { session, phase } = started;
       if (session === null) {
         setConnection("Sin sesión");
         return;
