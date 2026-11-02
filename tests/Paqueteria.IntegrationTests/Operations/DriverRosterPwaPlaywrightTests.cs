@@ -27,11 +27,16 @@ public sealed partial class DriverRosterPwaPlaywrightTests(DriverStopsNextServer
     private const string OrganizationAName = "Logística Sintética";
     private const string OrganizationBName = "Mensajería Sintética Norte";
 
-    /// <summary>The roster's only data call and the shell's role read: every other API path is a failure.</summary>
+    /// <summary>
+    /// The roster's data calls and the shell's role read: every other API path is a failure. DRV-DOC-001-IN-PERSON-2026-11-02:
+    /// every read of the list also reads listDriverDocuments, which these cases answer off (documents_enabled false, the
+    /// pilot until GATE-007), so the screen keeps its five columns; DriverDocumentsPwaPlaywrightTests covers it on.
+    /// </summary>
     private static readonly string[] AllowedCalls =
     [
         "GET /api/v1/me/organization-contexts",
         "GET /api/v1/drivers",
+        "GET /api/v1/drivers/documents",
     ];
 
     // The API pages by driver_id; the screen orders by reference. No id shares a fragment with a reference.
@@ -710,6 +715,13 @@ public sealed partial class DriverRosterPwaPlaywrightTests(DriverStopsNextServer
         internal async Task HandleAsync(IRoute route)
         {
             var uri = new Uri(route.Request.Url);
+            if (uri.AbsolutePath == "/api/v1/drivers/documents" && route.Request.Method == "GET")
+            {
+                // Documents off: nothing is read, no column, button or dialog (Y2).
+                await FulfillAsync(route, new { documents_enabled = false, items = Array.Empty<object>(), next_cursor = (string?)null });
+                return;
+            }
+
             if (uri.AbsolutePath != "/api/v1/drivers" || route.Request.Method != "GET")
             {
                 await ProblemAsync(route, 404);

@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useSyncExternalStore } from "react";
+import { createDriverDocumentsApi } from "../api/driver-documents-api";
 import { createDriversApi } from "../api/drivers-api";
 import {
   readOperationsSession,
@@ -20,6 +21,8 @@ export function useDrivers(): { state: DriversState; controller: DriversControll
       new DriversController({
         readSession: readOperationsSession,
         createApi: (session) => createDriversApi(apiBaseUrl(), session),
+        // DRV-DOC-001-IN-PERSON-2026-11-02: the documents of the same drivers, read with every read of the list.
+        createDocumentsApi: (session) => createDriverDocumentsApi(apiBaseUrl(), session),
         loadRole: loadActiveRole,
         isHidden: () => document.hidden,
       }),

@@ -43,11 +43,19 @@ export function OperationsDriverAssignment({
   publicId,
   assignable,
   onOrderChanged,
+  followSessionChanges = true,
 }: {
   readonly orderId: string;
   readonly publicId: string;
   readonly assignable: boolean;
   readonly onOrderChanged: () => void;
+  /**
+   * The order detail (the default) restarts the picker for the new session itself. Z15 ("Ambos, panel fijo
+   * (Recommended)"): the inbox passes false, because its "Asignar" panel belongs to the organization it was opened in
+   * and the inbox drops it on a session or organization change, so it never reads drivers of that order under another
+   * organization.
+   */
+  readonly followSessionChanges?: boolean;
 }) {
   const apiBaseUrl = clientApiBaseUrl();
   const [allowed, setAllowed] = useState(false);
@@ -115,7 +123,7 @@ export function OperationsDriverAssignment({
     };
 
     const initial = window.setTimeout(() => void start(), 0);
-    const unsubscribe = subscribeToOperationsSession(() => void start());
+    const unsubscribe = followSessionChanges ? subscribeToOperationsSession(() => void start()) : () => undefined;
     return () => {
       cancelled = true;
       abort.abort();
@@ -124,7 +132,7 @@ export function OperationsDriverAssignment({
       controllerRef.current?.dispose();
       controllerRef.current = null;
     };
-  }, [apiBaseUrl, orderId, assignable]);
+  }, [apiBaseUrl, orderId, assignable, followSessionChanges]);
 
   if (!allowed)
     return done === null ? null : (

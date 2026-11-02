@@ -88,12 +88,25 @@ export const recipientNoticeOperationsMatrix = {
   stopOrderRecipientNotices: ["DISPATCHER", "PLATFORM_ADMIN"],
 } as const satisfies Readonly<Record<string, readonly string[]>>;
 
+/**
+ * AI-05 `x-capability-matrix.driver_document_operations` (DRV-DOC-001-IN-PERSON-2026-11-02, Y4): the dispatcher's
+ * document column and dialogs of "Repartidores" follow the roster's rule - DISPATCHER, and PLATFORM_ADMIN with MFA,
+ * for the drivers of the selected organization only; FINANCE and VIEWER see nothing. listMyDriverDocuments (DRIVER,
+ * its own) belongs to the driver app, not to these screens.
+ */
+export const driverDocumentOperationsMatrix = {
+  listDriverDocuments: ["DISPATCHER", "PLATFORM_ADMIN"],
+  recordDriverDocument: ["DISPATCHER", "PLATFORM_ADMIN"],
+  revokeDriverDocument: ["DISPATCHER", "PLATFORM_ADMIN"],
+} as const satisfies Readonly<Record<string, readonly string[]>>;
+
 const allOperations: Readonly<Record<string, readonly string[]>> = {
   ...capabilityMatrix,
   ...financeOperationsMatrix,
   ...screenOperationsMatrix,
   ...driverListOperationsMatrix,
   ...recipientNoticeOperationsMatrix,
+  ...driverDocumentOperationsMatrix,
 };
 
 export type CapabilityOperation =
@@ -101,7 +114,8 @@ export type CapabilityOperation =
   | keyof typeof financeOperationsMatrix
   | keyof typeof screenOperationsMatrix
   | keyof typeof driverListOperationsMatrix
-  | keyof typeof recipientNoticeOperationsMatrix;
+  | keyof typeof recipientNoticeOperationsMatrix
+  | keyof typeof driverDocumentOperationsMatrix;
 
 /**
  * Operations that need a satisfied MFA challenge for a given role. D7-SETTLEMENT-MFA:
@@ -140,6 +154,9 @@ const mfaOperations: Readonly<Partial<Record<string, readonly CapabilityOperatio
     "listSettlementPayees",
     "listOrderRecipientNotices",
     "stopOrderRecipientNotices",
+    "listDriverDocuments",
+    "recordDriverDocument",
+    "revokeDriverDocument",
   ],
 };
 

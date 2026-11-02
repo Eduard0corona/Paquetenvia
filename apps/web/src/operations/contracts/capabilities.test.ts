@@ -12,6 +12,7 @@ import {
   lowPriceAuthorizationRequiresMfa,
   canPerform,
   capabilityMatrix,
+  driverDocumentOperationsMatrix,
   driverListOperationsMatrix,
   financeOperationsMatrix,
   screenOperationsMatrix,
@@ -223,12 +224,41 @@ describe("D5-CAPABILITY-MATRIX client mirror", () => {
     );
   });
 
+  it("mirrors AI-05 driver_document_operations for the roster's documents (DRV-DOC-001-IN-PERSON-2026-11-02, Y4)", () => {
+    // Only the section's own rows, whatever section follows it.
+    const start = openApi.indexOf("\n  driver_document_operations:\n");
+    expect(start).toBeGreaterThan(openApi.indexOf("x-capability-matrix:"));
+    const rows: Record<string, string[]> = {};
+    for (const line of openApi.slice(start + 1).split("\n").slice(1)) {
+      const match = /^ {4}(\w+): \[([A-Z_, ]+)\]$/.exec(line);
+      if (match === null) break;
+      rows[match[1]] = match[2].split(",").map((role) => role.trim());
+    }
+    // listMyDriverDocuments is the driver app's, not these screens'.
+    const { listMyDriverDocuments, ...dispatch } = rows;
+    expect(listMyDriverDocuments).toEqual(["DRIVER"]);
+    expect(dispatch).toEqual(driverDocumentOperationsMatrix);
+    expect(driverDocumentOperationsMatrix.listDriverDocuments).toEqual(driverListOperationsMatrix.listOrganizationDrivers);
+
+    const capabilities = tenantCapabilities.replace(/\s+/g, " ");
+    for (const operation of ["listDriverDocuments", "recordDriverDocument", "revokeDriverDocument"] as const) {
+      expect(capabilities).toContain(`Create("${operation}", Dispatcher, PlatformAdminMfa)`);
+      expect(canPerform("DISPATCHER", operation), operation).toBe(true);
+      expect(canPerform("PLATFORM_ADMIN", operation), operation).toBe(true);
+      expect(requiresMfa("PLATFORM_ADMIN", operation), operation).toBe(true);
+      expect(requiresMfa("DISPATCHER", operation), operation).toBe(false);
+      for (const role of ["FINANCE", "VIEWER", "DRIVER", "BUSINESS_ADMIN", "ALLY_ADMIN", null])
+        expect(canPerform(role, operation), `${role} ${operation}`).toBe(false);
+    }
+  });
+
   it("each mirrored operation exists in AI-05", () => {
     for (const operation of [
       ...Object.keys(capabilityMatrix),
       ...Object.keys(financeOperationsMatrix),
       ...Object.keys(screenOperationsMatrix),
       ...Object.keys(driverListOperationsMatrix),
+      ...Object.keys(driverDocumentOperationsMatrix),
     ]) {
       expect(openApi).toContain(`operationId: ${operation}`);
     }
