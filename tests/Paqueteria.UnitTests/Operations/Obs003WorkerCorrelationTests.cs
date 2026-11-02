@@ -167,11 +167,15 @@ public sealed class Obs003WorkerCorrelationTests
                 .UseNpgsql("Host=127.0.0.1;Port=1;Database=obs003;Username=unused;Password=unused")
                 .Options,
             state);
+        // Each object's scope (POD-001: one DI scope per object) resolves these two; neither is reached here.
+        await using var objectScopes = new ServiceCollection()
+            .AddScoped(_ => new WorkerTenantTransactionContext<CustodyDbContext>(dbContext, state))
+            .AddScoped<IAppendOnlyAuditWriter, UnusedAuditWriter>()
+            .BuildServiceProvider(new ServiceProviderOptions { ValidateOnBuild = true, ValidateScopes = true });
         var processor = new ProofValidationProcessor(
-            new WorkerTenantTransactionContext<CustodyDbContext>(dbContext, state),
+            objectScopes.GetRequiredService<IServiceScopeFactory>(),
             new QuarantineListing([ValidObject(Owner), InvalidObject()]),
             new FailingScanner(),
-            new UnusedAuditWriter(),
             new AuditPayloadRedactor(),
             options,
             new SystemClock(),
