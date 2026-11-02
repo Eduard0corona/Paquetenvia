@@ -43,12 +43,20 @@ namespace Drivers.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("driver_id");
 
+                    b.Property<string>("EvidenceKind")
+                        .IsRequired()
+                        .HasColumnType("text")
+                        .HasColumnName("evidence_kind");
+
                     b.Property<DateTimeOffset?>("ExpiresAt")
                         .HasColumnType("timestamp with time zone")
                         .HasColumnName("expires_at");
 
+                    b.Property<string>("ExpiryBasis")
+                        .HasColumnType("text")
+                        .HasColumnName("expiry_basis");
+
                     b.Property<string>("ObjectKey")
-                        .IsRequired()
                         .HasColumnType("text")
                         .HasColumnName("object_key");
 
@@ -56,8 +64,27 @@ namespace Drivers.Infrastructure.Persistence.Migrations
                         .HasColumnType("uuid")
                         .HasColumnName("org_id");
 
+                    b.Property<string>("RejectionCode")
+                        .HasColumnType("text")
+                        .HasColumnName("rejection_code");
+
+                    b.Property<DateTimeOffset?>("ReviewedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("reviewed_at");
+
+                    b.Property<Guid?>("ReviewedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("reviewed_by");
+
+                    b.Property<DateTimeOffset?>("RevokedAt")
+                        .HasColumnType("timestamp with time zone")
+                        .HasColumnName("revoked_at");
+
+                    b.Property<Guid?>("RevokedBy")
+                        .HasColumnType("uuid")
+                        .HasColumnName("revoked_by");
+
                     b.Property<byte[]>("Sha256")
-                        .IsRequired()
                         .HasColumnType("bytea")
                         .HasColumnName("sha256");
 

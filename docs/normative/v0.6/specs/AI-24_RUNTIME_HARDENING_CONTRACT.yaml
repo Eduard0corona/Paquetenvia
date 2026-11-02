@@ -337,6 +337,52 @@ voice_bridge:
     erasure, offboarding) is a follow-up outside VOICE-001
   rollback: Voice:Provider=Disabled stops every call and every new phone; drivers can still remove their number; the
     Drivers lane rollback refuses while call requests or phones exist
+driver_documents:
+  decisions:
+  - DRV-DOC-001-IN-PERSON-2026-11-02
+  adr: docs/adr/ADR-DRV-DOC-001-IN-PERSON-DRIVER-DOCUMENTS.md
+  status: DECIDED by the project owner on 2026-11-01 (round Y, Y1 to Y12); implemented by AI-08 DRV-DOC-001 (API, panel
+    and driver app PRs); off in the pilot until GATE-007 is registered
+  method: in person (Y1) - the driver shows the original to a dispatcher of the driver organization, who records its
+    type, the printed expiry or the permanent-license review date and the decision (VALID, or REJECTED with one of
+    ILLEGIBLE, EXPIRED, WRONG_DOCUMENT, HOLDER_MISMATCH, INCOMPLETE, NOT_ACCEPTED, Y7); nobody takes or stores a photo, a
+    file or a document number (Y3); the row is evidence_kind IN_PERSON with NULL object_key and sha256, reviewed_by and
+    reviewed_at
+  switch: Drivers:Documents:Enabled, false by default; while false the dispatcher list and the driver list answer
+    documents_enabled false and read nothing, and recording or revoking answers 503 (Y2 "Ya, apagado"); the start
+    validation refuses Enabled without Drivers:Provider=PostgreSql, with a required document type outside IDENTITY,
+    DRIVER_LICENSE, VEHICLE_CARD and INSURANCE (Y11) or with a NonExpiringDocumentTypes entry
+  gate: enabling it outside Development, Testing and DEV_SYNTHETIC, and always under
+    PAQUETERIA_DEPLOYMENT_CLASS=PILOT_REAL_PEOPLE whatever the environment name, requires
+    Drivers:Documents:Gate007DecisionId matching ^GATE-007-[A-Z0-9][A-Z0-9-]{2,76}$ and naming the decision-log row
+    that resolves GATE-007 (the Voice:Twilio:Gate007DecisionId and Notifications:RecipientNotices:Gate007DecisionId
+    pattern; checked by format, a host without a known environment is treated as real); in the pilot Drivers__Documents__
+    is platform-managed (tools/azr-001/env001_pilot_guards.py), so the settings file cannot turn it on and enabling it
+    is a reviewed apps.bicep change
+  calendar: America/Mazatlan (Culiacán time); a printed date is valid through that whole local day, so expires_at is
+    00:00 of the next local day (Y12); a permanent Sinaloa driver license gets the review day plus 12 months (February
+    29 becomes February 28) and is labelled "Revisión" (Y5); an approval whose last valid day is before today or more
+    than ten years ahead is refused (EXPIRY_DATE_OUT_OF_RANGE); the conversion to an instant runs in PostgreSQL (AT TIME
+    ZONE), so the containers need no time zone data
+  eligibility: DSP-001 keeps the latest row per type (created_at DESC, id DESC) and its evidence guarantee per kind - a
+    FILE row needs a non-blank object key and a 32-byte SHA-256, an IN_PERSON row neither, any other shape is
+    DOCUMENT_HASH_INVALID; nothing is stored as EXPIRED (Y6) - an expired document blocks by itself at evaluation
+  revocation: only the latest VALID document of a type becomes REVOKED (revoked_by, revoked_at); the driver gets no new
+    orders and current stops continue - nothing outside drivers.driver_documents and platform.audit_logs is written
+    (Y10, no AI-13 flow)
+  writes: one tenant transaction per record or revoke - the driver profile locked FOR UPDATE (OWN, not INACTIVE, else
+    the uniform 404), the row, the audit row and (record) the idempotency answer (scope DRV-DOC-001:RECORD_DRIVER_DOCUMENT,
+    kept 24 hours, bound to the organization, the person, the driver and the body); created_at and reviewed_at are the
+    statement time after the lock, so one driver's documents are ordered by commit
+  audit: DRIVER_DOCUMENT_RECORDED (driver_id, document_id, document_type, evidence_kind, status, expiry_basis,
+    rejection_code) and DRIVER_DOCUMENT_REVOKED (driver_id, document_id, document_type, status) - types and codes only,
+    never a date, a number, a file, a key or a hash
+  logging: one line per record or revoke with the type and the status only; nothing about the document is in outbox
+    rows, events or realtime messages (none is produced)
+  retention: the owner proposes to the lawyer the validity plus 1 year after the relationship ends (Y9); DRV-DOC-001
+    adds no purge, which is a separate later task with driver offboarding
+  rollback: Drivers:Documents:Enabled=false stops every read and write; the Drivers lane rollback refuses while any
+    in-person record, review, reason or revocation exists (DRVDOC001_DOWNGRADE_BLOCKED_DATA_PRESENT)
 recipient_notices:
   decisions:
   - NTF-RECIPIENT-NOTICES-2026-10-20

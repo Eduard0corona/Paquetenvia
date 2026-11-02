@@ -59,7 +59,7 @@ AI-10 (`docs/normative/v0.6/specs/AI-10_DECISIONS_AND_GATES.yaml`), severidad `B
 | ARCO | Aviso integral, sección 7; reglas de retención, sección 5 | Procedimiento redactado; no existen herramientas técnicas |
 | Evidencia legal de aceptación | Aviso integral, sección 3.2; reglas de retención, secciones 3.2 y 4 | Descrita como existe (registro asistido, sin IP) |
 | Evidencia de entrega (fotos) | Aviso integral, secciones 3.1 y 3.6; reglas de retención, secciones 3.2 y 4 | Plazo propuesto; sin política de borrado |
-| Documentos del repartidor | Aviso integral, sección 3.4 | Hoy no se recaban; pendiente decidir si se piden |
+| Documentos del repartidor | Aviso integral, sección 3.4; aviso simplificado; reglas de retención, sección 3.3 | Método decidido (DRV-DOC-001-IN-PERSON-2026-11-02): despacho los revisa en persona y solo anota tipo, vencimiento, estado y quién lo revisó, sin fotos, copias ni números. Construido y apagado en el piloto hasta GATE-007; plazo propuesto vigencia + 1 año, pendiente del abogado |
 | Ubicación del repartidor | Aviso integral, sección 3.4; reglas de retención, sección 3.3 | La API existe y la app no la envía; pendiente decidir |
 | Borrado criptográfico y restricción de acceso | Reglas de retención, secciones 2 y 4 | Explica qué permite el sobre de cifrado actual y qué no |
 
@@ -86,7 +86,7 @@ Repartidores (ligado a GATE-008):
 
 9. Si se habilita la ubicación del repartidor: base legal, consentimiento, horario, quién la ve, plazo y si se trata
    como dato sensible.
-10. Si se piden documentos, cuáles, dónde se guardan y por cuánto tiempo.
+10. Documentos del repartidor: el owner ya decidió el método (DRV-DOC-001-IN-PERSON-2026-11-02): revisión en persona por despacho, sin fotos ni copias, solo los documentos que exige el vehículo (identificación, licencia, tarjeta de circulación y seguro; nunca antecedentes). Falta que el abogado confirme el texto del aviso y el plazo propuesto (vigencia del documento y 1 año después de terminar la relación).
 11. Si aplican las reglas de trabajo en plataformas digitales de la Ley Federal del Trabajo (portabilidad de datos,
     política de gestión algorítmica).
 

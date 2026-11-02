@@ -30,7 +30,8 @@ public sealed class DriversImplementationContractTests
         AssertColumns<DriverServiceArea>(model,
             "driver_id", "org_id", "service_area_id", "status");
         AssertColumns<DriverDocument>(model,
-            "created_at", "document_type", "driver_id", "expires_at", "id", "object_key", "org_id", "sha256", "status");
+            "created_at", "document_type", "driver_id", "evidence_kind", "expires_at", "expiry_basis", "id", "object_key",
+            "org_id", "rejection_code", "reviewed_at", "reviewed_by", "revoked_at", "revoked_by", "sha256", "status");
         var position = Assert.Single(model.GetEntityTypes(), entity =>
             string.Equals(entity.GetTableName(), "driver_positions", StringComparison.Ordinal));
         Assert.Equal(
@@ -100,9 +101,23 @@ public sealed class DriversImplementationContractTests
             implementation,
             StringComparison.Ordinal);
 
+        // DRV-DOC-001-IN-PERSON-2026-11-02: dispatch records, lists and revokes in-person documents; the driver reads its
+        // own. registerMyDriverDocument stays reserved and is not served.
+        Assert.Contains("public const string ListPath = \"/api/v1/drivers/documents\";", implementation, StringComparison.Ordinal);
+        Assert.Contains(
+            "public const string RecordPath = \"/api/v1/drivers/{driverId}/documents\";",
+            implementation,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "public const string RevokePath = \"/api/v1/drivers/{driverId}/documents/{documentId}/revoke\";",
+            implementation,
+            StringComparison.Ordinal);
+        Assert.Contains("public const string MinePath = \"/api/v1/driver/me/documents\";", implementation, StringComparison.Ordinal);
+        Assert.DoesNotContain("registerMyDriverDocument", implementation, StringComparison.Ordinal);
+
         // Exactly these routes and operation ids, nothing else.
-        Assert.Equal(3, Count(implementation, "endpoints.MapGet("));
-        Assert.Equal(7, Count(implementation, "endpoints.MapPost("));
+        Assert.Equal(5, Count(implementation, "endpoints.MapGet("));
+        Assert.Equal(9, Count(implementation, "endpoints.MapPost("));
         Assert.Equal(1, Count(implementation, "endpoints.MapPut("));
         Assert.Equal(1, Count(implementation, "endpoints.MapDelete("));
         Assert.DoesNotContain("MapPatch(", implementation, StringComparison.Ordinal);
@@ -116,11 +131,15 @@ public sealed class DriversImplementationContractTests
                 "getMyDispatchContact",
                 "getMyDriverPhone",
                 "getRecipientCallAvailability",
+                "listDriverDocuments",
+                "listMyDriverDocuments",
                 "publishDriverLocation",
                 "receiveTwilioCallStatus",
+                "recordDriverDocument",
                 "registerMyDriverPhone",
                 "removeMyDriverPhone",
                 "requestRecipientCall",
+                "revokeDriverDocument",
                 "screenTwilioRecipient",
             ],
             System.Text.RegularExpressions.Regex.Matches(implementation, "\\.WithName\\(\"([A-Za-z]+)\"\\)")

@@ -89,6 +89,18 @@ public static class TenantCapabilities
         Driver,
         Viewer);
 
+    // x-capability-matrix driver_document_operations (DRV-DOC-001-IN-PERSON-2026-11-02, Y4 "Él y despacho"): dispatch
+    // records, lists and revokes in-person documents with the rule of its other driver operations - DISPATCHER without
+    // MFA and PLATFORM_ADMIN with a satisfied MFA challenge, of the driver's organization (RLS and the service's uniform
+    // 404 for any other driver) - and a DRIVER reads only its own; FINANCE, VIEWER and every other role never.
+    public static readonly TenantCapability ListDriverDocuments =
+        Create("listDriverDocuments", Dispatcher, PlatformAdminMfa);
+    public static readonly TenantCapability RecordDriverDocument =
+        Create("recordDriverDocument", Dispatcher, PlatformAdminMfa);
+    public static readonly TenantCapability RevokeDriverDocument =
+        Create("revokeDriverDocument", Dispatcher, PlatformAdminMfa);
+    public static readonly TenantCapability ListMyDriverDocuments = Create("listMyDriverDocuments", Driver);
+
     // D5-CAPABILITY-MATRIX: FINANCE is limited to settlements and finance.
     public static readonly TenantCapability CreateSettlement = Settlement("createSettlement");
     public static readonly TenantCapability ListSettlements = Settlement("listSettlements");
