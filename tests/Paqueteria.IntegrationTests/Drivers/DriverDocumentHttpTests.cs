@@ -414,6 +414,32 @@ public sealed class DriverDocumentHttpTests : IClassFixture<DriverDocumentHttpWe
         return json.RootElement.TryGetProperty("code", out var code) ? code.GetString() : null;
     }
 
+    /// <summary>
+    /// registerMyDriverDocument stays RESERVED_NOT_IMPLEMENTED (Y1, Y3, Y13): only the GET of the path is mapped, so a POST
+    /// - anonymous, a driver or a dispatcher, with a body and a key - is the routing layer's empty 405 with
+    /// <c>Allow: GET</c>, decided before authentication; no body is read and the service never runs. AI-05 states this
+    /// answer in the operation's description until a later owner decision serves the operation.
+    /// </summary>
+    [Fact]
+    public async Task The_reserved_driver_upload_is_not_served_and_reads_nothing()
+    {
+        foreach (var profile in new string?[]
+                 {
+                     null, MockIdentityProfiles.ActiveDriver, MockIdentityProfiles.ActiveDispatcher,
+                 })
+        {
+            using var response = await client.SendAsync(Request("POST", MinePath, profile));
+            Assert.Equal(HttpStatusCode.MethodNotAllowed, response.StatusCode);
+            Assert.Equal(["GET"], response.Content.Headers.Allow.ToArray());
+            Assert.Null(response.Content.Headers.ContentType);
+            Assert.Empty(await response.Content.ReadAsByteArrayAsync());
+            // No body, so nothing to keep out of a cache: the routing layer sets no Cache-Control.
+            Assert.Null(response.Headers.CacheControl);
+        }
+
+        Assert.Equal(0, factory.Service.Invocations);
+    }
+
     private static HttpRequestMessage Request(
         string method,
         string path,

@@ -11,6 +11,8 @@
   (Recommended)" y Y12 "Sí, todo ese día (Recommended)". ADR: `docs/adr/ADR-DRV-DOC-001-IN-PERSON-DRIVER-DOCUMENTS.md`.
   El 2026-11-02 (ronda Y continuada, sobre el PR #332) el owner aprobó juntas las 18 subdecisiones técnicas del ADR:
   Y13 "Aprobarlas todas (Recommended)", citada en la misma fila con la vista previa y la opción no elegida.
+  `registerMyDriverDocument` sigue reservada: mientras ninguna decisión la sirva, un POST a `/driver/me/documents`
+  recibe el 405 vacío del enrutador con `Allow: GET` (lo dice su descripción en AI-05 y lo fija una prueba).
   Es el PR-1 de tres (ADR, contratos, migración y API); el panel y la app del repartidor van en sus propios PR.
 - AI-06: `drivers.driver_documents` gana `evidence_kind` (`FILE` por omisión o `IN_PERSON`), `expiry_basis`,
   `rejection_code`, `reviewed_by`, `reviewed_at`, `revoked_by` y `revoked_at`; `object_key` y `sha256` pasan a ser nulos

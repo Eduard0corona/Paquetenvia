@@ -3389,7 +3389,10 @@ paths:
         shape of a later upload path, which needs its own owner decision, an upload-session operation (ADR-020: the API
         never receives a file as multipart and the client never chooses the object key or the hash), GATE-007 and an
         AI-05 change of its own. The request names an upload session and the type and printed date only; the stored row
-        would be evidence_kind FILE and start PENDING until dispatch decides (AI-08 DRV-DOC-001).
+        would be evidence_kind FILE and start PENDING until dispatch decides (AI-08 DRV-DOC-001). Until a later owner
+        decision serves it, only the GET of this path is mapped: a POST is answered by the routing layer with an empty
+        405 Method Not Allowed and Allow GET (no body, no content type), decided before authentication, and nothing is
+        read or written; the responses below describe the reserved operation, not that answer.
       x-implementation-status: RESERVED_NOT_IMPLEMENTED
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
