@@ -196,9 +196,15 @@ la app, decidir antes: base legal, consentimiento expreso, horario (solo en jorn
 ve, plazo de conservación y su relación con las reglas de trabajo en plataformas digitales (Ley Federal del Trabajo,
 artículos 291-A a 291-U; GATE-008).]**
 
-**[PENDIENTE: documentos del repartidor. La base de datos tiene una tabla para los metadatos (tipo, vigencia, estado,
-huella SHA-256 y ubicación del archivo), pero ninguna función los escribe y el piloto no exige ninguno. Si el owner los
-quiere, se decide antes qué documentos, dónde se guardan los archivos, quién los revisa y por cuánto tiempo.]**
+**[PENDIENTE: documentos del repartidor. El owner decidió el método (DRV-DOC-001-IN-PERSON-2026-11-02): el repartidor
+muestra el original a despacho de su empresa, que solo anota el tipo, la fecha de vencimiento (o la de revisión de una
+licencia permanente de Sinaloa), si lo aprueba o lo rechaza (con un motivo de una lista fija) y quién lo revisó. Nadie
+toma ni guarda fotos, copias ni números de documento. Solo se piden los que exige su vehículo (identificación, licencia,
+tarjeta de circulación y seguro); nunca antecedentes. Los ve el propio repartidor en la app y despacho de su empresa; ni
+finanzas ni consulta. La función está construida y apagada en el piloto hasta que se registre GATE-007; mientras tanto la
+fila de la tabla sigue siendo cierta. Plazo propuesto al abogado: la vigencia del documento y 1 año después de terminar
+la relación (reglas de retención, sección 3.3). El abogado debe aprobar el texto que reemplace la fila de la tabla y el
+plazo.]**
 
 **[PENDIENTE: si GATE-008 concluye que los repartidores son personas trabajadoras de plataformas digitales, la Ley
 Federal del Trabajo (artículo 291-K, fracción IV) exige garantizar también la portabilidad de sus datos, y el
@@ -212,8 +218,11 @@ sistema solo filtra a los repartidores elegibles por estado, zona, vehículo y c
 > `VOICE-001-CONSENT-V1` en `apps/web/src/driver/contracts/voice.ts`. Ubicación: `POST /driver/me/location-updates`
 > solo para perfiles `OWN` (`docs/development/drv-003-driver-location-ingestion.md`), tabla `drivers.driver_positions`
 > y evento `DriverLocationUpdated` al tablero (AI-12). En `apps/web/src` no hay `navigator.geolocation` ni llamadas a
-> ese endpoint. Documentos: `drivers.driver_documents` se lee en la elegibilidad (DSP-001) y no se escribe en `src` ni
-> en `tools`; `Drivers:Eligibility:RequiredDocumentTypesByVehicleType` está vacío. Teléfono: IndexedDB particionado,
+> ese endpoint. Documentos: `drivers.driver_documents` (DRV-DOC-001, `docs/adr/ADR-DRV-DOC-001-IN-PERSON-DRIVER-DOCUMENTS.md`)
+> guarda en filas `IN_PERSON` solo tipo, vencimiento, base del vencimiento, estado, motivo de rechazo, revisor y
+> revocación, sin archivo, llave ni hash; lo escriben `recordDriverDocument` y `revokeDriverDocument` con
+> `Drivers:Documents:Enabled`, apagado en el piloto hasta GATE-007; la lista del piloto
+> (`Drivers__Eligibility__RequiredDocumentTypesByVehicleType`) es la de H3. Teléfono: IndexedDB particionado,
 > borrado de instantáneas (UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11) y regla de 72 h (OPS-003).
 
 ### 3.5 Visitantes de la página de seguimiento

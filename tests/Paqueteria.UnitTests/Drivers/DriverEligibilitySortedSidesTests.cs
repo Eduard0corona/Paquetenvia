@@ -271,7 +271,7 @@ public sealed class DriverEligibilitySortedSidesTests
             null,
             new Dictionary<string, DriverDocumentSnapshot>(StringComparer.Ordinal)
             {
-                ["IDENTITY"] = new("IDENTITY", "VALID", "synthetic/identity", new byte[32], null),
+                ["IDENTITY"] = new("IDENTITY", "VALID", "FILE", "synthetic/identity", new byte[32], null),
             },
             "h4-sorted-sides-unit-v1");
         var result = DriverEligibilityPolicy.Evaluate(

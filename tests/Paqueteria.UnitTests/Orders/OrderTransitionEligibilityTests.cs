@@ -56,7 +56,7 @@ public sealed class OrderTransitionEligibilityTests
             null,
             new Dictionary<string, DriverDocumentSnapshot>(StringComparer.Ordinal)
             {
-                ["IDENTITY"] = new("IDENTITY", "VALID", "synthetic/identity", new byte[32], Now.AddDays(30)),
+                ["IDENTITY"] = new("IDENTITY", "VALID", "FILE", "synthetic/identity", new byte[32], Now.AddDays(30)),
             },
             "ord-002-unit-v1");
 

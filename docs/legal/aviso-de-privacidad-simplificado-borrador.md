@@ -121,8 +121,10 @@ habilite. Para WhatsApp hay que aprobar la plantilla en Meta.]**
 **[PENDIENTE: si se habilita la ubicación del repartidor (DRV-003), agregarla aquí con su propio consentimiento expreso
 y separado, que diga cuándo se recaba, quién la ve y por cuánto tiempo. Ver aviso integral, sección 3.4.]**
 
-**[PENDIENTE: si se piden documentos (identificación, licencia, tarjeta de circulación, seguro, antecedentes),
-agregarlos aquí.]**
+**[PENDIENTE: documentos del repartidor. Método decidido por el owner (DRV-DOC-001-IN-PERSON-2026-11-02): despacho
+revisa en persona los que exige su vehículo (identificación, licencia, tarjeta de circulación y seguro; nunca
+antecedentes) y solo anota tipo, vencimiento, estado y quién lo revisó, sin fotos, copias ni números. Está apagado
+hasta GATE-007. Agregarlos aquí cuando el abogado apruebe el texto y el plazo propuesto (vigencia + 1 año).]**
 
 **[PENDIENTE: el consentimiento expreso para el número de celular ya existe y no cambia. Es el texto versionado
 VOICE-001-CONSENT-V1 de "Cuenta": "Acepto que este número se use solo para conectar mis llamadas con los destinatarios

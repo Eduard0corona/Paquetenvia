@@ -113,7 +113,7 @@ public sealed class OrderPackageDimensionsReaderTests : PackageDimensionsReaderC
             null,
             new Dictionary<string, DriverDocumentSnapshot>(StringComparer.Ordinal)
             {
-                ["IDENTITY"] = new("IDENTITY", "VALID", "synthetic/identity", new byte[32], Now.AddDays(30)),
+                ["IDENTITY"] = new("IDENTITY", "VALID", "FILE", "synthetic/identity", new byte[32], Now.AddDays(30)),
             },
             "dimensions-null-unit-v1");
 

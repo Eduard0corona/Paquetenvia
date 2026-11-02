@@ -359,8 +359,8 @@ There is no default: they are business rules the owner chooses. The file carries
 | `WALKER` | 2 | 5000 | 5000 | 450 × 400 × 300 | `false` | `IDENTITY` |
 
 - There is no `NonExpiringDocumentTypes` entry: every required document needs an expiry date that has not passed, and
-  a permanent Sinaloa driver license gets a review date the owner defines. There is no `BACKGROUND_CHECK` for now; it
-  is decided with GATE-007 and GATE-008 (H3).
+  a permanent Sinaloa driver license gets a review date of the review day plus 12 months (DRV-DOC-001-IN-PERSON-2026-11-02,
+  Y5). There is no `BACKGROUND_CHECK` for now; it is decided with GATE-007 and GATE-008 (H3).
 - The package counts of `MOTORCYCLE`, `CAR`, `BICYCLE` and `WALKER`, and the weights and size of `WALKER`, are
   assumptions without a source, to be adjusted with the real operation (H2). `INSURANCE` is the owner's policy while
   GATE-009 is open; it is removed if the company contracts a fleet policy (H3).
@@ -369,10 +369,13 @@ There is no default: they are business rules the owner chooses. The file carries
   weight, heaviest package, the largest length, width and height captured); nobody adds up the orders a driver already
   carries or a route holds. Dispatch decides how many orders each driver carries. A quote does not check any vehicle,
   so an order larger than the `VAN` row can be created but no driver can take it.
-- **The API starts, but no real driver can be assigned yet.** Nothing registers or validates driver documents: AI-05
-  `/driver/me/documents` is not implemented and only the synthetic DevSeed writes `drivers.driver_documents`. Until the
-  AI-08 task DRV-DOC-001 (driver document registration and dispatch validation, owner decision H1) and GATE-007 land,
-  every driver is refused with `REQUIRED_DOCUMENT_MISSING`.
+- **The API starts, but no real driver can be assigned yet.** AI-08 DRV-DOC-001 (DRV-DOC-001-IN-PERSON-2026-11-02)
+  lets dispatch record in person the documents a driver shows (`recordDriverDocument`, no photo or copy), but
+  `Drivers:Documents:Enabled` stays false in the pilot (`Drivers__Documents__` is platform-managed by `apps.bicep`)
+  until the owner registers GATE-007, so every driver is refused with `REQUIRED_DOCUMENT_MISSING` until then. Turning
+  it on is an `apps.bicep` change that sets `Drivers__Documents__Enabled=true` and
+  `Drivers__Documents__Gate007DecisionId` to the `GATE-007-…` row; the API refuses to start under `PILOT_REAL_PEOPLE`
+  without it.
 - GATE-010 stays open (zones, hours, prohibited items, SLA): this decision covers only these vehicle rules. Changing a
   value is a new owner decision and a PR to this file; an organization's `driver_eligibility_policy_version` (above) is
   not raised automatically, so evaluations under different rules would share one version label until it is.

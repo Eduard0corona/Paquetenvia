@@ -1,5 +1,43 @@
 # Changelog
 
+## Documentos del repartidor registrados en persona (DRV-DOC-001-IN-PERSON-2026-11-02, AI-08 DRV-DOC-001) — 2026-11-02
+
+- Respuestas literales del project owner (ronda Y, preguntas Y1 a Y12, 2026-11-01), registradas en `decision-log.md`
+  con su contexto, los textos de las opciones y las opciones no elegidas: Y1 "Despacho en persona (Recommended)" (una
+  tercera vía, además de la API de carga y el cargador MDM-001 que nombra AI-08, aprobada explícitamente), Y2 "Ya,
+  apagado (Recommended)", Y3 "No, solo datos (Recommended)", Y4 "Él y despacho (Recommended)", Y5 "Cada año
+  (Recommended)", Y6 "Aviso en el panel (Recommended)", Y7 "Lista fija (Recommended)", Y8 "En la app (Recommended)", Y9
+  "Vigencia + 1 año (Recommended)", Y10 "Revocar, lo actual sigue (Recommended)", Y11 "Solo los exigidos
+  (Recommended)" y Y12 "Sí, todo ese día (Recommended)". ADR: `docs/adr/ADR-DRV-DOC-001-IN-PERSON-DRIVER-DOCUMENTS.md`.
+  El 2026-11-02 (ronda Y continuada, sobre el PR #332) el owner aprobó juntas las 18 subdecisiones técnicas del ADR:
+  Y13 "Aprobarlas todas (Recommended)", citada en la misma fila con la vista previa y la opción no elegida.
+  `registerMyDriverDocument` sigue reservada: mientras ninguna decisión la sirva, un POST a `/driver/me/documents`
+  recibe el 405 vacío del enrutador con `Allow: GET` (lo dice su descripción en AI-05 y lo fija una prueba).
+  Es el PR-1 de tres (ADR, contratos, migración y API); el panel y la app del repartidor van en sus propios PR.
+- AI-06: `drivers.driver_documents` gana `evidence_kind` (`FILE` por omisión o `IN_PERSON`), `expiry_basis`,
+  `rejection_code`, `reviewed_by`, `reviewed_at`, `revoked_by` y `revoked_at`; `object_key` y `sha256` pasan a ser nulos
+  y existen exactamente en las filas `FILE`; cinco restricciones fijan cada forma. El paso del carril Drivers
+  `20261102000100_AddInPersonDriverDocuments` aplica o adopta el mismo DDL (Up, Down y Up probados en PostgreSQL 18 /
+  PostGIS 3.6); su Down se niega mientras haya datos en persona. AI-18 no cambia.
+- DSP-001 conserva su garantía de evidencia por tipo: una fila `FILE` necesita llave y SHA-256 de 32 bytes, una
+  `IN_PERSON` ninguna de las dos, cualquier otra forma es `DOCUMENT_HASH_INVALID`; la política y sus seis lectores leen
+  `evidence_kind`.
+- AI-05: `listDriverDocuments`, `recordDriverDocument` y `revokeDriverDocument` (DISPATCHER y PLATFORM_ADMIN con MFA) y
+  `listMyDriverDocuments` (el propio repartidor), sección `driver_document_operations` de `x-capability-matrix` y la
+  entrada `DRV-DOC-001-IN-PERSON` de `x-pilot-contract-deltas`. `DriverDocument` pierde `object_key` y gana
+  `rejection_code`, `valid_through`, `expiry_basis`, `recorded_at` y `revoked_at`. `registerMyDriverDocument` queda
+  reservada y sin implementar, y su cuerpo ya no deja elegir llave ni hash. Ninguna respuesta lleva foto, archivo,
+  número, llave, hash ni quién revisó.
+- AI-07: columna "Documentos" de "Repartidores" con «Vence en N días» y «Vencido», diálogos de registrar y revocar y la
+  regla de privacidad ajustada (solo tipo, estado, motivo y fecha); lista de solo lectura en "Cuenta". AI-08: criterio
+  DECIDED de DRV-DOC-001. AI-24: sección `driver_documents`.
+- Apagado por omisión y en el piloto (`Drivers:Documents:Enabled=false`; `Drivers__Documents__` administrado por
+  `apps.bicep`) hasta que el owner registre GATE-007; encenderlo fuera de Development, Testing y DEV_SYNTHETIC, y siempre
+  con `PILOT_REAL_PEOPLE`, exige `Drivers:Documents:Gate007DecisionId`. Borradores legales: solo las notas de revisión y
+  las marcas [PENDIENTE] sobre documentos del repartidor (método en persona, sin copias, vigencia + 1 año propuesta al
+  abogado).
+- Sin dependencias nuevas, sin séptimo flujo de AI-13, sin cambios de roles ni permisos.
+
 ## Aviso conocido aceptado de minimatch (SEC-2026-16-MINIMATCH-KNOWN-ADVISORY-2026-10-31) — 2026-10-31
 
 - Respuesta literal del project owner (ronda X, pregunta X1, 2026-10-31), registrada en `decision-log.md` con su contexto,

@@ -497,6 +497,53 @@ CREATE TABLE drivers.driver_documents (
   created_at timestamptz NOT NULL DEFAULT now()
 );
 CREATE INDEX driver_documents_eligibility_idx ON drivers.driver_documents(driver_id,status,expires_at);
+-- DRV-DOC-001-IN-PERSON-2026-11-02 (project owner, round Y: Y1 "Despacho en persona (Recommended)", Y3 "No, solo
+-- datos (Recommended)", Y5, Y7, Y10, Y11 and Y12; docs/adr/ADR-DRV-DOC-001-IN-PERSON-DRIVER-DOCUMENTS.md; AI-08
+-- DRV-DOC-001). Installed by the Drivers lane step 20261102000100_AddInPersonDriverDocuments, which runs this same DDL
+-- on installations whose baseline predates it and adopts it here (the NTF-002 precedent); the baseline assertions check
+-- the columns and the five checks.
+--   evidence_kind: FILE (a stored object with its SHA-256, the DSP-001 shape kept for a later upload path) or
+--     IN_PERSON (a dispatcher of the driver's organization saw the original; no photo, file, document number, object
+--     key or hash exists). object_key and sha256 are present exactly for FILE rows.
+--   expiry_basis: PRINTED_EXPIRY, or PERMANENT_LICENSE_REVIEW for a permanent Sinaloa driver license (review day plus
+--     12 months, Y5); expires_at is 00:00 America/Mazatlan of the day after the last valid day (Y12).
+--   rejection_code: the six Y7 reasons, only on a REJECTED row; no free text.
+--   reviewed_by/reviewed_at: who recorded the decision and when; revoked_by/revoked_at: who revoked it (Y10); each
+--     pair is set together and a revoked row is REVOKED.
+--   An IN_PERSON row was reviewed, is IDENTITY, DRIVER_LICENSE, VEHICLE_CARD or INSURANCE (Y11) and is VALID or REVOKED
+--     with an expiry and its basis, or REJECTED with a reason and no expiry. Nothing is ever stored as EXPIRED (Y6).
+ALTER TABLE drivers.driver_documents
+  ALTER COLUMN object_key DROP NOT NULL,
+  ALTER COLUMN sha256 DROP NOT NULL,
+  ADD COLUMN evidence_kind text NOT NULL DEFAULT 'FILE',
+  ADD COLUMN expiry_basis text,
+  ADD COLUMN rejection_code text,
+  ADD COLUMN reviewed_by uuid REFERENCES identity.users(id),
+  ADD COLUMN reviewed_at timestamptz,
+  ADD COLUMN revoked_by uuid REFERENCES identity.users(id),
+  ADD COLUMN revoked_at timestamptz,
+  ADD CONSTRAINT driver_documents_evidence_check CHECK (
+    (evidence_kind='FILE' AND object_key IS NOT NULL AND sha256 IS NOT NULL)
+    OR (evidence_kind='IN_PERSON' AND object_key IS NULL AND sha256 IS NULL)),
+  ADD CONSTRAINT driver_documents_expiry_basis_check CHECK (
+    expiry_basis IS NULL OR (expires_at IS NOT NULL AND (expiry_basis='PRINTED_EXPIRY'
+      OR (expiry_basis='PERMANENT_LICENSE_REVIEW' AND document_type='DRIVER_LICENSE')))),
+  ADD CONSTRAINT driver_documents_rejection_code_check CHECK (
+    rejection_code IS NULL OR (status='REJECTED' AND rejection_code IN
+      ('ILLEGIBLE','EXPIRED','WRONG_DOCUMENT','HOLDER_MISMATCH','INCOMPLETE','NOT_ACCEPTED'))),
+  ADD CONSTRAINT driver_documents_review_check CHECK (
+    (reviewed_by IS NULL) = (reviewed_at IS NULL)
+    AND (revoked_by IS NULL) = (revoked_at IS NULL)
+    AND (revoked_at IS NULL OR status='REVOKED')),
+  ADD CONSTRAINT driver_documents_in_person_check CHECK (
+    evidence_kind<>'IN_PERSON' OR (
+      reviewed_at IS NOT NULL
+      AND document_type IN ('IDENTITY','DRIVER_LICENSE','VEHICLE_CARD','INSURANCE')
+      AND status IN ('VALID','REJECTED','REVOKED')
+      AND (status='REJECTED') = (rejection_code IS NOT NULL)
+      AND (status='REJECTED') = (expires_at IS NULL)
+      AND (status='REJECTED') = (expiry_basis IS NULL)
+      AND (status='REVOKED') = (revoked_at IS NOT NULL)));
 
 CREATE TABLE drivers.driver_positions (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
