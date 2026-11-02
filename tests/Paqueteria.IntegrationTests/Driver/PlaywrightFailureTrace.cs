@@ -7,20 +7,23 @@ namespace Paqueteria.IntegrationTests.Driver;
 /// A Playwright trace of one browser context (screenshots, DOM snapshots and the network log) that is kept only when
 /// the test fails. The test calls <see cref="Passed"/> as its last step, also before an early return; a test that never
 /// gets there (an assertion or a timeout threw) leaves
-/// <c>TestResults/driver-stops-pwa/playwright-traces/&lt;class&gt;.&lt;test&gt;.zip</c> under the repository root, open
-/// it with <c>pwsh bin/Release/net10.0/playwright.ps1 show-trace &lt;zip&gt;</c> or at trace.playwright.dev.
+/// <c>TestResults/&lt;job&gt;/playwright-traces/&lt;class&gt;.&lt;test&gt;.zip</c> under the repository root, open it
+/// with <c>pwsh bin/Release/net10.0/playwright.ps1 show-trace &lt;zip&gt;</c> or at trace.playwright.dev.
 /// </summary>
 /// <remarks>
 /// <para>
 /// The driver PWA job runs its <c>dotnet test</c> steps from the repository root with
 /// <c>--results-directory ./TestResults/driver-stops-pwa</c> and, when a step fails, uploads that directory as the
 /// <c>driver-stops-pwa-results</c> artifact (pr-validation.yml and ci.yml alike), so the trace travels with the TRX.
+/// The operations dashboard job does the same with <c>./TestResults/operations-dashboard</c> and its
+/// <c>operations-dashboard-test-results</c> artifact, so its suites pass <see cref="OperationsDashboardJob"/>.
 /// A passing run writes nothing there.
 /// </para>
 /// <para>
-/// Only the BFF suites record one (<see cref="DriverBffSession"/>): every byte their pages show or exchange is synthetic
-/// (stops, names, the session answer and its CSRF token are test constants fulfilled in the browser, no cookie is set
-/// and nothing reaches a real service); the trace keeps no source files.
+/// Only suites whose every byte is synthetic record one: the BFF suites (<see cref="DriverBffSession"/>: stops, names,
+/// the session answer and its CSRF token are test constants fulfilled in the browser, no cookie is set and nothing
+/// reaches a real service) and the panel screen suites of the operations dashboard job, whose API answers are test
+/// constants fulfilled in the browser as well. The trace keeps no source files.
 /// </para>
 /// </remarks>
 internal sealed class PlaywrightFailureTrace : IAsyncDisposable
@@ -35,17 +38,26 @@ internal sealed class PlaywrightFailureTrace : IAsyncDisposable
         _path = path;
     }
 
-    internal static string TraceDirectory { get; } = Path.Combine(
+    /// <summary>The driver PWA job's results directory (the default).</summary>
+    internal const string DriverStopsJob = "driver-stops-pwa";
+
+    /// <summary>The operations dashboard job's results directory.</summary>
+    internal const string OperationsDashboardJob = "operations-dashboard";
+
+    /// <summary><c>TestResults/&lt;job&gt;/playwright-traces</c> under the repository root.</summary>
+    internal static string TraceDirectoryFor(string job) => Path.Combine(
         DriverStopsNextServer.FindRepositoryRoot(),
         "TestResults",
-        "driver-stops-pwa",
+        job,
         "playwright-traces");
 
     /// <param name="context">A context no page has been opened in yet.</param>
     /// <param name="variant">Tells the cases of a theory apart in the file name.</param>
+    /// <param name="job">The CI job whose results directory keeps the trace of a failure.</param>
     internal static async Task<PlaywrightFailureTrace> StartAsync(
         IBrowserContext context,
         string? variant = null,
+        string job = DriverStopsJob,
         [CallerFilePath] string testFile = "",
         [CallerMemberName] string test = "")
     {
@@ -57,7 +69,7 @@ internal sealed class PlaywrightFailureTrace : IAsyncDisposable
             Snapshots = true,
             Sources = false,
         });
-        return new PlaywrightFailureTrace(context, Path.Combine(TraceDirectory, $"{name}.zip"));
+        return new PlaywrightFailureTrace(context, Path.Combine(TraceDirectoryFor(job), $"{name}.zip"));
     }
 
     /// <summary>The test reached its end: the trace is discarded.</summary>
@@ -73,7 +85,7 @@ internal sealed class PlaywrightFailureTrace : IAsyncDisposable
 
         try
         {
-            Directory.CreateDirectory(TraceDirectory);
+            Directory.CreateDirectory(Path.GetDirectoryName(_path)!);
             await _context.Tracing.StopAsync(new TracingStopOptions { Path = _path });
         }
         catch (Exception)
