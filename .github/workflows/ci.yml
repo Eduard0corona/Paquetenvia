@@ -87,6 +87,10 @@ jobs:
       - name: Test AZR-001 static guard tooling
         run: python -m unittest discover -s ./tools/azr-001 -p "test_*.py" -v
 
+      # REL-001 pilot readiness evidence tool (tools/rel-001); its on-demand workflow is pilot-readiness.yml.
+      - name: Test REL-001 pilot readiness tooling
+        run: python -m unittest discover -s ./tools/rel-001 -p "test_*.py" -v
+
       # CI-OPT slice 1: change classifier, PR Gate and main source guard tooling
       # (tools/ci). Tooling only; nothing here is wired into validation yet.
       - name: Test CI tooling
