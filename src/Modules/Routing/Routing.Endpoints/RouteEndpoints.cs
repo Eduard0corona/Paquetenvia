@@ -4,16 +4,18 @@ using System.Text.Json.Serialization;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Logging;
 using Organizations.Application.Session;
 using Organizations.Endpoints.Authorization;
 using Organizations.Endpoints.Tenancy;
+using Paqueteria.Application.Diagnostics;
 using Paqueteria.Application.Idempotency;
 using Paqueteria.Application.Tenancy;
 using Routing.Application.Routes;
 
 namespace Routing.Endpoints;
 
-public static class RouteEndpoints
+public static partial class RouteEndpoints
 {
     private static readonly JsonSerializerOptions RequestJsonOptions = new(JsonSerializerDefaults.Web)
     {
@@ -102,6 +104,7 @@ public static class RouteEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IRouteService service,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         var request = await ReadAsync<CreateRouteRequest>(httpContext, cancellationToken);
@@ -133,7 +136,7 @@ public static class RouteEndpoints
         catch (RoutingForbiddenException) { return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.CreateRoute); }
         catch (RoutingNotFoundException) { return NotFound(); }
         catch (RoutingConflictException exception) { return Conflict(PublicCode(exception.Code)); }
-        catch (RoutingUnavailableException) { return Conflict("CONFLICT"); }
+        catch (RoutingUnavailableException exception) { return Unavailable(loggerFactory, "createRoute", exception); }
     }
 
     private static async Task<IResult> ListAsync(
@@ -141,6 +144,7 @@ public static class RouteEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IRouteService service,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         if (!TrySession(session, tenantContext, out var actorId) ||
@@ -161,8 +165,8 @@ public static class RouteEndpoints
                 page.NextCursor));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception exception) when (
-            exception is RoutingForbiddenException or RoutingUnavailableException) { return Forbidden(); }
+        catch (RoutingForbiddenException) { return Forbidden(); }
+        catch (RoutingUnavailableException exception) { return Unavailable(loggerFactory, "listRoutes", exception); }
     }
 
     private static async Task<IResult> GetAsync(
@@ -170,6 +174,7 @@ public static class RouteEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IRouteService service,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         if (!TryGuid(routeId, out var parsedRouteId) ||
@@ -181,8 +186,8 @@ public static class RouteEndpoints
                 cancellationToken)));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { throw; }
-        catch (Exception exception) when (
-            exception is RoutingForbiddenException or RoutingUnavailableException) { return Forbidden(); }
+        catch (RoutingForbiddenException) { return Forbidden(); }
+        catch (RoutingUnavailableException exception) { return Unavailable(loggerFactory, "getRoute", exception); }
         catch (RoutingNotFoundException) { return NotFound(); }
     }
 
@@ -192,6 +197,7 @@ public static class RouteEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IRouteService service,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         var request = await ReadAsync<AddRouteStopRequest>(httpContext, cancellationToken);
@@ -212,7 +218,7 @@ public static class RouteEndpoints
         catch (RoutingForbiddenException) { return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.AddRouteStop); }
         catch (RoutingNotFoundException) { return NotFound(); }
         catch (RoutingConflictException exception) { return Conflict(PublicCode(exception.Code)); }
-        catch (RoutingUnavailableException) { return Conflict("CONFLICT"); }
+        catch (RoutingUnavailableException exception) { return Unavailable(loggerFactory, "addRouteStop", exception); }
     }
 
     private static async Task<IResult> RemoveStopAsync(
@@ -222,6 +228,7 @@ public static class RouteEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IRouteService service,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         if (!TryGuid(routeId, out var parsedRouteId) || !TryGuid(stopId, out var parsedStopId) ||
@@ -239,7 +246,7 @@ public static class RouteEndpoints
         catch (RoutingForbiddenException) { return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.RemoveRouteStop); }
         catch (RoutingNotFoundException) { return NotFound(); }
         catch (RoutingConflictException exception) { return Conflict(PublicCode(exception.Code)); }
-        catch (RoutingUnavailableException) { return Conflict("CONFLICT"); }
+        catch (RoutingUnavailableException exception) { return Unavailable(loggerFactory, "removeRouteStop", exception); }
     }
 
     private static async Task<IResult> ReorderStopsAsync(
@@ -248,6 +255,7 @@ public static class RouteEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IRouteService service,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         var request = await ReadAsync<ReorderRouteStopsRequest>(httpContext, cancellationToken);
@@ -269,7 +277,7 @@ public static class RouteEndpoints
         catch (RoutingForbiddenException) { return TenantCapabilityGate.Refused(session, tenantContext, TenantCapabilities.ReorderRouteStops); }
         catch (RoutingNotFoundException) { return NotFound(); }
         catch (RoutingConflictException exception) { return Conflict(PublicCode(exception.Code)); }
-        catch (RoutingUnavailableException) { return Conflict("CONFLICT"); }
+        catch (RoutingUnavailableException exception) { return Unavailable(loggerFactory, "reorderRouteStops", exception); }
     }
 
     private static async Task<T?> ReadAsync<T>(HttpContext context, CancellationToken cancellationToken)
@@ -388,6 +396,33 @@ public static class RouteEndpoints
 
     private static IResult NotFound() =>
         Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Not Found.");
+
+    /// <summary>
+    /// REL-001-INFRASTRUCTURE-503-2026-11-01 (owner decision Z3): an unavailable routing store is the AI-05 503 problem,
+    /// with one redacted error line (<see cref="InfrastructureFailureLog"/>) that names only the operation id, the
+    /// innermost exception type and the SQLSTATE; the exception and its text never reach the logger.
+    /// </summary>
+    private static IResult Unavailable(ILoggerFactory loggerFactory, string operation, Exception exception)
+    {
+        var failure = InfrastructureFailureLog.Describe(exception);
+        LogInfrastructureFailure(
+            loggerFactory.CreateLogger(typeof(RouteEndpoints)),
+            operation,
+            failure.ErrorClass,
+            failure.SqlState);
+        return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Service Unavailable.");
+    }
+
+    [LoggerMessage(
+        EventId = InfrastructureFailureLog.EventId,
+        EventName = InfrastructureFailureLog.EventName,
+        Level = LogLevel.Error,
+        Message = InfrastructureFailureLog.Message)]
+    private static partial void LogInfrastructureFailure(
+        ILogger logger,
+        string operation,
+        string errorClass,
+        string sqlState);
 }
 
 public sealed record CreateRouteRequest(

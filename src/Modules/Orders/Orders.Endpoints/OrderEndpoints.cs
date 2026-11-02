@@ -1,16 +1,18 @@
 using System.Text.Json;
 using System.Text.Json.Serialization;
+using Microsoft.Extensions.Logging;
 using Orders.Application.Orders;
 using Organizations.Application.Session;
 using Organizations.Endpoints.Authorization;
 using Organizations.Endpoints.Tenancy;
 using Paqueteria.Application;
+using Paqueteria.Application.Diagnostics;
 using Paqueteria.Application.Idempotency;
 using Paqueteria.Application.Tenancy;
 
 namespace Orders.Endpoints;
 
-public static class OrderEndpoints
+public static partial class OrderEndpoints
 {
     /// <summary>
     /// SEC-004: <c>listOrders</c>, <c>RateLimits:OrderList</c> (120 per minute) per user. The host registers it with
@@ -282,6 +284,7 @@ public static class OrderEndpoints
         IOrderTransitionService service,
         OfflineOperationAgePolicy offlinePolicy,
         IClock clock,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         if (!TryReadIdempotencyKey(httpContext.Request, out var idempotencyKey) ||
@@ -342,9 +345,9 @@ public static class OrderEndpoints
         {
             return TransitionConflict(exception.RejectionCode);
         }
-        catch (OrderTransitionInfrastructureException)
+        catch (OrderTransitionInfrastructureException exception)
         {
-            return Conflict();
+            return InfrastructureUnavailable(loggerFactory, "transitionOrder", exception);
         }
     }
 
@@ -606,6 +609,33 @@ public static class OrderEndpoints
 
     private static IResult Unavailable() =>
         Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Service unavailable.");
+
+    /// <summary>
+    /// REL-001-INFRASTRUCTURE-503-2026-11-01 (owner decision Z3): a failed transition dependency is the AI-05 503
+    /// problem, with one redacted error line (<see cref="InfrastructureFailureLog"/>) that names only the operation id,
+    /// the innermost exception type and the SQLSTATE; the exception and its text never reach the logger.
+    /// </summary>
+    private static IResult InfrastructureUnavailable(ILoggerFactory loggerFactory, string operation, Exception exception)
+    {
+        var failure = InfrastructureFailureLog.Describe(exception);
+        LogInfrastructureFailure(
+            loggerFactory.CreateLogger(typeof(OrderEndpoints)),
+            operation,
+            failure.ErrorClass,
+            failure.SqlState);
+        return Unavailable();
+    }
+
+    [LoggerMessage(
+        EventId = InfrastructureFailureLog.EventId,
+        EventName = InfrastructureFailureLog.EventName,
+        Level = LogLevel.Error,
+        Message = InfrastructureFailureLog.Message)]
+    private static partial void LogInfrastructureFailure(
+        ILogger logger,
+        string operation,
+        string errorClass,
+        string sqlState);
 }
 
 /// <summary>

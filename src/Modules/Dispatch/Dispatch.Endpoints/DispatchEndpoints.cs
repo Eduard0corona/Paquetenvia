@@ -7,15 +7,17 @@ using Dispatch.Application.Stops;
 using Microsoft.AspNetCore.Builder;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Routing;
+using Microsoft.Extensions.Logging;
 using Organizations.Application.Session;
 using Organizations.Endpoints.Authorization;
 using Organizations.Endpoints.Tenancy;
+using Paqueteria.Application.Diagnostics;
 using Paqueteria.Application.Idempotency;
 using Paqueteria.Application.Tenancy;
 
 namespace Dispatch.Endpoints;
 
-public static class DispatchEndpoints
+public static partial class DispatchEndpoints
 {
     /// <summary>
     /// SEC-004: <c>listAssignableDrivers</c>, <c>RateLimits:AssignableDrivers</c> (60 per minute) per user. The host
@@ -120,6 +122,7 @@ public static class DispatchEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IExternalOfferService service,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         CreateExternalOfferRequest? request;
@@ -179,9 +182,9 @@ public static class DispatchEndpoints
         {
             return Conflict(PublicCode(exception.Code));
         }
-        catch (ExternalOfferInfrastructureException)
+        catch (ExternalOfferInfrastructureException exception)
         {
-            return Conflict("CONFLICT");
+            return Unavailable(loggerFactory, "createExternalOffer", exception);
         }
     }
 
@@ -191,6 +194,7 @@ public static class DispatchEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IExternalOfferService service,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         if (!Guid.TryParseExact(offerId, "D", out var parsedOfferId) ||
@@ -224,9 +228,9 @@ public static class DispatchEndpoints
         {
             return Conflict(PublicCode(exception.Code));
         }
-        catch (ExternalOfferInfrastructureException)
+        catch (ExternalOfferInfrastructureException exception)
         {
-            return Conflict("CONFLICT");
+            return Unavailable(loggerFactory, "acceptExternalOffer", exception);
         }
     }
 
@@ -235,6 +239,7 @@ public static class DispatchEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IExternalOfferService service,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         if (!TrySession(session, tenantContext, out var actorId))
@@ -266,9 +271,9 @@ public static class DispatchEndpoints
         {
             return Forbidden();
         }
-        catch (ExternalOfferInfrastructureException)
+        catch (ExternalOfferInfrastructureException exception)
         {
-            return Forbidden();
+            return Unavailable(loggerFactory, "listMyEligibleExternalOffers", exception);
         }
     }
 
@@ -278,6 +283,7 @@ public static class DispatchEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IAssignmentService service,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         CreateAssignmentRequest? request;
@@ -348,9 +354,9 @@ public static class DispatchEndpoints
         {
             return Conflict(PublicCode(exception.Code));
         }
-        catch (AssignmentInfrastructureException)
+        catch (AssignmentInfrastructureException exception)
         {
-            return Conflict("CONFLICT");
+            return Unavailable(loggerFactory, "assignDriver", exception);
         }
     }
 
@@ -562,6 +568,7 @@ public static class DispatchEndpoints
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
         IDriverStopsQuery query,
+        ILoggerFactory loggerFactory,
         CancellationToken cancellationToken)
     {
         // UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11: the body can carry decrypted addresses and contact names, so no
@@ -603,9 +610,9 @@ public static class DispatchEndpoints
         {
             return Forbidden();
         }
-        catch (DriverStopsInfrastructureException)
+        catch (DriverStopsInfrastructureException exception)
         {
-            return Forbidden();
+            return Unavailable(loggerFactory, "listMyStops", exception);
         }
     }
 
@@ -704,6 +711,33 @@ public static class DispatchEndpoints
 
     private static IResult NotFound() =>
         Results.Problem(statusCode: StatusCodes.Status404NotFound, title: "Not Found.");
+
+    /// <summary>
+    /// REL-001-INFRASTRUCTURE-503-2026-11-01 (owner decision Z3): an infrastructure failure is the AI-05 503 problem,
+    /// with one redacted error line (<see cref="InfrastructureFailureLog"/>) that names only the operation id, the
+    /// innermost exception type and the SQLSTATE; the exception and its text never reach the logger.
+    /// </summary>
+    private static IResult Unavailable(ILoggerFactory loggerFactory, string operation, Exception exception)
+    {
+        var failure = InfrastructureFailureLog.Describe(exception);
+        LogInfrastructureFailure(
+            loggerFactory.CreateLogger(typeof(DispatchEndpoints)),
+            operation,
+            failure.ErrorClass,
+            failure.SqlState);
+        return Results.Problem(statusCode: StatusCodes.Status503ServiceUnavailable, title: "Service Unavailable.");
+    }
+
+    [LoggerMessage(
+        EventId = InfrastructureFailureLog.EventId,
+        EventName = InfrastructureFailureLog.EventName,
+        Level = LogLevel.Error,
+        Message = InfrastructureFailureLog.Message)]
+    private static partial void LogInfrastructureFailure(
+        ILogger logger,
+        string operation,
+        string errorClass,
+        string sqlState);
 }
 
 public sealed record CreateAssignmentRequest(
