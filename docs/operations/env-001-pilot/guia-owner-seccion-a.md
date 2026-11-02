@@ -83,18 +83,17 @@ propónmelos (Recommended)", H2 "Aprobar la tabla (Recommended)" y H3 "Aprobar l
 | `BICYCLE` (bici) | 3 | 10 kg | 10 kg | 45 × 40 × 30 cm | no | INE |
 | `WALKER` (a pie) | 2 | 5 kg | 5 kg | 45 × 40 × 30 cm | no | INE |
 
-- **La API arranca, pero todavía no se puede asignar a ningún repartidor real.** Hoy nada registra ni valida
-  documentos de repartidor (el API los define en `/driver/me/documents`, pero no está implementado; solo los datos
-  sintéticos tienen). Hasta que lleguen la tarea DRV-DOC-001 de AI-08 (registro de documentos y validación por
-  despacho, tu decisión H1) y GATE-007, cada repartidor recibe `REQUIRED_DOCUMENT_MISSING`.
+- **La API arranca, pero todavía no se puede asignar a ningún repartidor real.** La tarea DRV-DOC-001 (tu decisión
+  DRV-DOC-001-IN-PERSON-2026-11-02: despacho registra en persona, sin fotos ni copias) queda apagada en el piloto hasta
+  que registres GATE-007; mientras tanto cada repartidor recibe `REQUIRED_DOCUMENT_MISSING`.
 - **Pickup cuenta como `VAN` y bici de carga como `BICYCLE`** (H2); no hay otros tipos de vehículo.
 - **Para operación: los límites se aplican a cada pedido.** Cada pedido se compara solo, con todos sus paquetes;
   nadie suma los pedidos que ya lleva un repartidor ni los de una ruta. Despacho decide cuántos pedidos lleva cada
   quien. La cotización no revisa ningún vehículo: un pedido más grande que la fila `VAN` se crea, pero nadie lo puede
   tomar.
 - Todos los documentos llevan fecha de vencimiento (no hay `NonExpiringDocumentTypes`); a una licencia permanente de
-  Sinaloa se le pone una fecha de revisión que tú definas. Sin antecedentes penales (`BACKGROUND_CHECK`) por ahora
-  (se decide con GATE-007 y GATE-008).
+  Sinaloa se le pone como fecha de revisión el día de revisión + 12 meses (tu respuesta Y5, "Cada año"). Sin
+  antecedentes penales (`BACKGROUND_CHECK`) por ahora (se decide con GATE-007 y GATE-008).
 - Los números de paquetes de moto, auto, bici y a pie, y el peso y tamaño a pie, son supuestos sin fuente; se ajustan
   después con la operación real. El seguro es política tuya (GATE-009 sigue abierto); si contratas una póliza de
   flotilla se quita.

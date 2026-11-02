@@ -1,8 +1,10 @@
 using Drivers.Application.DispatchContacts;
+using Drivers.Application.Documents;
 using Drivers.Application.Eligibility;
 using Drivers.Application.Locations;
 using Drivers.Application.Voice;
 using Drivers.Infrastructure.DispatchContacts;
+using Drivers.Infrastructure.Documents;
 using Drivers.Infrastructure.Eligibility;
 using Drivers.Infrastructure.Locations;
 using Drivers.Infrastructure.Persistence;
@@ -59,6 +61,9 @@ public static class DependencyInjection
                 "UUID (not the nil UUID) and a PhoneE164 that is +52 followed by ten digits, the first one 2-9; each " +
                 "organization at most once.")
             .ValidateOnStart();
+        // DRV-DOC-001-IN-PERSON-2026-11-02 (Y2): Drivers:Documents stays off unless GATE-007 is named where people are real.
+        services.TryAddEnumerable(
+            ServiceDescriptor.Singleton<IValidateOptions<DriversOptions>, DriverDocumentsOptionsValidation>());
 
         // SCL-007: the API's one paqueteria_app pool, shared with every other API module; PostGIS types on it.
         services.AddRuntimeDataSource(configuration, RuntimeDatabaseRole.Application);
@@ -143,6 +148,15 @@ public static class DependencyInjection
             });
         // DRV-DISPATCH-CONTACT-2026-10-12: configuration only, whatever the provider.
         services.TryAddSingleton<IDriverDispatchContactDirectory, ConfiguredDriverDispatchContactDirectory>();
+        // DRV-DOC-001-IN-PERSON-2026-11-02: the in-person documents; Drivers:Documents:Enabled decides inside the service.
+        services.AddSingleton<DisabledDriverDocumentService>();
+        services.AddScoped<PostgreSqlDriverDocumentService>();
+        services.AddScoped<IDriverDocumentService>(serviceProvider =>
+            serviceProvider.GetRequiredService<IOptions<DriversOptions>>().Value.Provider switch
+            {
+                DriversProviderKind.PostgreSql => serviceProvider.GetRequiredService<PostgreSqlDriverDocumentService>(),
+                _ => serviceProvider.GetRequiredService<DisabledDriverDocumentService>(),
+            });
         services.AddSingleton<DisabledDriverEligibilityService>();
         services.AddScoped<PostgreSqlDriverEligibilityService>();
         services.AddScoped<IDriverEligibilityService>(serviceProvider =>

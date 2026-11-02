@@ -162,6 +162,48 @@ public sealed class DriverEligibilityPolicyTests
         Assert.DoesNotContain(result.Rejections, rejection => rejection.Code.Contains("object", StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>
+    /// DRV-DOC-001-IN-PERSON-2026-11-02: the evidence guarantee is kept per kind. A VALID, unexpired IN_PERSON document
+    /// (no key, no hash) counts like a verified file; an IN_PERSON row that carries a key or a hash, a FILE row without
+    /// them and an unknown kind are DOCUMENT_HASH_INVALID; status and expiry keep their own codes.
+    /// </summary>
+    [Fact]
+    public void In_person_evidence_is_verified_by_kind_and_fails_closed_on_any_mixed_shape()
+    {
+        Assert.True(Evaluate(snapshot: WithIdentity(InPerson())).IsEligible);
+
+        foreach (var mixed in new[]
+                 {
+                     InPerson() with { ObjectKey = "synthetic/identity" },
+                     InPerson() with { Sha256 = new byte[32] },
+                     Document() with { ObjectKey = null },
+                     Document() with { Sha256 = null },
+                     Document() with { EvidenceKind = "PHOTO" },
+                     InPerson() with { EvidenceKind = "in_person" },
+                 })
+        {
+            Assert.Equal([DriverEligibilityRejectionCodes.DocumentHashInvalid], Codes(Evaluate(snapshot: WithIdentity(mixed))));
+        }
+
+        foreach (var status in new[] { "PENDING", "REJECTED", "REVOKED", "EXPIRED" })
+        {
+            Assert.Equal(
+                [DriverEligibilityRejectionCodes.DocumentStatusNotValid],
+                Codes(Evaluate(snapshot: WithIdentity(InPerson(status: status)))));
+        }
+
+        // Y12: an in-person document expires at 00:00 of the day after its printed date; at that instant it blocks.
+        Assert.Equal(
+            [DriverEligibilityRejectionCodes.DocumentExpired],
+            Codes(Evaluate(snapshot: WithIdentity(InPerson(expiresAt: Now)))));
+        Assert.True(Evaluate(snapshot: WithIdentity(InPerson(expiresAt: Now.AddTicks(10)))).IsEligible);
+    }
+
+    private static DriverEligibilitySnapshot WithIdentity(DriverDocumentSnapshot document) => Snapshot() with
+    {
+        LatestDocuments = new Dictionary<string, DriverDocumentSnapshot> { ["IDENTITY"] = document },
+    };
+
     [Theory]
     [MemberData(nameof(CapacityCases))]
     public void Capacity_limits_are_evaluated_independently(
@@ -343,8 +385,12 @@ public sealed class DriverEligibilityPolicyTests
         int hashLength = 32,
         DateTimeOffset? expiresAt = null,
         bool hasExpiry = true) =>
-        new("IDENTITY", status, objectKey, new byte[hashLength],
+        new("IDENTITY", status, DriverDocumentEvidenceKinds.File, objectKey, new byte[hashLength],
             hasExpiry ? expiresAt ?? Now.AddDays(1) : null);
+
+    /// <summary>DRV-DOC-001-IN-PERSON-2026-11-02: an in-person document has no key and no hash.</summary>
+    private static DriverDocumentSnapshot InPerson(string status = "VALID", DateTimeOffset? expiresAt = null) =>
+        new("IDENTITY", status, DriverDocumentEvidenceKinds.InPerson, null, null, expiresAt ?? Now.AddDays(1));
 
     private static DriverEligibilityPolicyConfiguration Policy(string[]? nonExpiring = null) => new(
         new Dictionary<string, IReadOnlyList<string>>(StringComparer.Ordinal)

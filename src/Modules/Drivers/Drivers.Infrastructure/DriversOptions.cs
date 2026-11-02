@@ -26,6 +26,28 @@ public sealed class DriversOptions
     /// button. Read by the API only, from configuration; it does not depend on <see cref="Provider"/>.
     /// </summary>
     public List<DriverDispatchContactOptions> DispatchContacts { get; set; } = [];
+
+    /// <summary>
+    /// DRV-DOC-001-IN-PERSON-2026-11-02 (Y2 "Ya, apagado"): <c>Drivers:Documents</c>, the in-person driver documents
+    /// dispatch records in the panel. Off by default and off in the pilot until GATE-007 is registered.
+    /// </summary>
+    public DriverDocumentsOptions Documents { get; set; } = new();
+}
+
+/// <summary>
+/// <c>Drivers:Documents</c>. While <see cref="Enabled"/> is false nothing is recorded or read: the dispatcher list and the
+/// driver's list answer <c>documents_enabled=false</c> and recording or revoking answers 503. Enabling it outside
+/// Development, Testing and DEV_SYNTHETIC (in particular under <c>PAQUETERIA_DEPLOYMENT_CLASS=PILOT_REAL_PEOPLE</c>)
+/// requires <see cref="Gate007DecisionId"/> to name the decision-log row that resolves GATE-007, like
+/// <c>Voice:Twilio:Gate007DecisionId</c> and <c>Notifications:RecipientNotices:Gate007DecisionId</c>; in the pilot
+/// <c>Drivers__Documents__</c> is platform-managed by apps.bicep, so the settings file cannot turn it on.
+/// </summary>
+public sealed class DriverDocumentsOptions
+{
+    public bool Enabled { get; set; }
+
+    /// <summary>The decision-log row that resolves GATE-007 (<c>GATE-007-...</c>); format only, never logged.</summary>
+    public string Gate007DecisionId { get; set; } = string.Empty;
 }
 
 /// <summary>

@@ -53,14 +53,34 @@ public sealed class DriversDbContext(
         document.Property(value => value.OrganizationId).HasColumnName("org_id").ValueGeneratedNever();
         document.Property(value => value.DocumentType).HasColumnName("document_type").HasColumnType("text")
             .HasConversion(value => value.ToContractValue(), value => ParseDocumentType(value)).ValueGeneratedNever();
-        document.Property(value => value.ObjectKey).HasColumnName("object_key").HasColumnType("text").IsRequired()
+        // DRV-DOC-001-IN-PERSON-2026-11-02: the evidence kind decides whether object_key and sha256 exist (FILE) or
+        // not (IN_PERSON); the review columns record who decided and when. AI-06 checks both shapes.
+        document.Property(value => value.EvidenceKind).HasColumnName("evidence_kind").HasColumnType("text")
+            .HasConversion(value => value.ToContractValue(), value => ParseEvidenceKind(value)).ValueGeneratedNever();
+        document.Property(value => value.ObjectKey).HasColumnName("object_key").HasColumnType("text")
             .ValueGeneratedNever();
-        document.Property(value => value.Sha256).HasColumnName("sha256").HasColumnType("bytea").IsRequired()
+        document.Property(value => value.Sha256).HasColumnName("sha256").HasColumnType("bytea")
             .ValueGeneratedNever();
         document.Property(value => value.ExpiresAt).HasColumnName("expires_at")
             .HasColumnType("timestamp with time zone");
+        document.Property(value => value.ExpiryBasis).HasColumnName("expiry_basis").HasColumnType("text")
+            .HasConversion(
+                value => value.HasValue ? value.Value.ToContractValue() : null,
+                value => value == null ? null : ParseExpiryBasis(value))
+            .ValueGeneratedNever();
         document.Property(value => value.Status).HasColumnName("status").HasColumnType("text")
             .HasConversion(value => value.ToContractValue(), value => ParseDocumentStatus(value)).ValueGeneratedNever();
+        document.Property(value => value.RejectionCode).HasColumnName("rejection_code").HasColumnType("text")
+            .HasConversion(
+                value => value.HasValue ? value.Value.ToContractValue() : null,
+                value => value == null ? null : ParseRejectionCode(value))
+            .ValueGeneratedNever();
+        document.Property(value => value.ReviewedBy).HasColumnName("reviewed_by").ValueGeneratedNever();
+        document.Property(value => value.ReviewedAt).HasColumnName("reviewed_at")
+            .HasColumnType("timestamp with time zone").ValueGeneratedNever();
+        document.Property(value => value.RevokedBy).HasColumnName("revoked_by").ValueGeneratedNever();
+        document.Property(value => value.RevokedAt).HasColumnName("revoked_at")
+            .HasColumnType("timestamp with time zone").ValueGeneratedNever();
         document.Property(value => value.CreatedAt).HasColumnName("created_at")
             .HasColumnType("timestamp with time zone").ValueGeneratedNever();
         document.HasOne<DriverProfile>().WithMany().HasForeignKey(value => value.DriverId)
@@ -158,6 +178,31 @@ public sealed class DriversDbContext(
         "EXPIRED" => DriverDocumentStatus.Expired,
         "REVOKED" => DriverDocumentStatus.Revoked,
         _ => throw Unknown("driver document status"),
+    };
+
+    private static DriverDocumentEvidenceKind ParseEvidenceKind(string value) => value switch
+    {
+        "FILE" => DriverDocumentEvidenceKind.File,
+        "IN_PERSON" => DriverDocumentEvidenceKind.InPerson,
+        _ => throw Unknown("driver document evidence kind"),
+    };
+
+    private static DriverDocumentExpiryBasis ParseExpiryBasis(string value) => value switch
+    {
+        "PRINTED_EXPIRY" => DriverDocumentExpiryBasis.PrintedExpiry,
+        "PERMANENT_LICENSE_REVIEW" => DriverDocumentExpiryBasis.PermanentLicenseReview,
+        _ => throw Unknown("driver document expiry basis"),
+    };
+
+    private static DriverDocumentRejectionCode ParseRejectionCode(string value) => value switch
+    {
+        "ILLEGIBLE" => DriverDocumentRejectionCode.Illegible,
+        "EXPIRED" => DriverDocumentRejectionCode.Expired,
+        "WRONG_DOCUMENT" => DriverDocumentRejectionCode.WrongDocument,
+        "HOLDER_MISMATCH" => DriverDocumentRejectionCode.HolderMismatch,
+        "INCOMPLETE" => DriverDocumentRejectionCode.Incomplete,
+        "NOT_ACCEPTED" => DriverDocumentRejectionCode.NotAccepted,
+        _ => throw Unknown("driver document rejection code"),
     };
 
     private static InvalidOperationException Unknown(string kind) =>

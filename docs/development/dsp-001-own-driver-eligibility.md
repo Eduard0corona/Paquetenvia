@@ -80,15 +80,20 @@ La versión autoritativa por tipo es la fila más reciente por
 `created_at DESC, id DESC`. Para cada tipo requerido:
 
 - la fila más reciente debe existir y tener estado `VALID`;
-- `object_key` no puede estar vacío;
-- `sha256` debe medir exactamente 32 bytes;
+- su evidencia debe ser verificable según `evidence_kind`
+  (DRV-DOC-001-IN-PERSON-2026-11-02): una fila `FILE` necesita `object_key` no
+  vacío y `sha256` de exactamente 32 bytes; una fila `IN_PERSON` (despacho vio
+  el original, sin archivo) no debe tener ninguno de los dos; cualquier otro
+  valor o forma mezclada es `DOCUMENT_HASH_INVALID`;
 - `expires_at` debe ser estrictamente posterior a `EvaluatedAt`, salvo que el
   tipo esté declarado explícitamente como no expirable.
 
 Una expiración exactamente igual a `EvaluatedAt` bloquea. Un documento anterior
 válido no reemplaza a una versión más reciente revocada, rechazada o expirada.
-DSP-001 sólo evalúa metadata sintética; no carga, descarga, escanea ni conserva
-documentos reales.
+Los seis lectores (este servicio, `assignDriver`, el selector, las ofertas
+externas, las transiciones de orden y las rutas) leen `evidence_kind`. DSP-001
+no carga, descarga, escanea ni conserva documentos; los registros en persona
+los escribe DRV-DOC-001 (`docs/development/drv-doc-001-in-person-driver-documents.md`).
 
 ### Capacidad
 

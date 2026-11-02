@@ -192,6 +192,7 @@ app.MapDispatchEndpoints();
 app.MapDriverLocationEndpoints();
 app.MapDriverVoiceEndpoints();
 app.MapDriverDispatchContactEndpoints();
+app.MapDriverDocumentEndpoints();
 app.MapRealtimeHubs();
 app.MapProofEndpoints();
 app.MapProofReadEndpoints();

@@ -172,6 +172,22 @@ class SettingsTests(unittest.TestCase):
         entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
         self.assertFalse(any(entry["name"].startswith("Voice__") for entry in entries))
 
+    def test_driver_documents_cannot_be_enabled_from_the_settings_file(self):
+        # DRV-DOC-001-IN-PERSON-2026-11-02 (Y2): documents stay off in the pilot until GATE-007; every
+        # Drivers__Documents__ key is refused, whatever its case, and the file has none.
+        for name, value in {
+            "Drivers__Documents__Enabled": "true",
+            "Drivers__Documents__Gate007DecisionId": "GATE-007-PILOT",
+            "drivers__documents__enabled": "true",
+        }.items():
+            with self.subTest(name=name):
+                failures = guards.validate_settings([{"name": name, "value": value}] + SYNTHETIC_ELIGIBILITY, allow_sentinel=False)
+                self.assertIn(f"setting {name} is platform-managed by apps.bicep and cannot be overridden", failures)
+        entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
+        self.assertFalse(any(entry["name"].casefold().startswith("drivers__documents__") for entry in entries))
+        # The eligibility and dispatch contact settings keep their own rules (not platform-managed).
+        self.assertEqual([], guards.validate_settings(SYNTHETIC_ELIGIBILITY, allow_sentinel=False))
+
     def test_dispatch_contacts_are_empty_by_default_and_checked_before_deploying(self):
         # DRV-DISPATCH-CONTACT-2026-10-12: the owner gives the number later; until then the file has no entry and
         # the driver app shows no "Llamar a despacho". The numbers below are synthetic.

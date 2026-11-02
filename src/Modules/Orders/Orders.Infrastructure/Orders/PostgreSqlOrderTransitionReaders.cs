@@ -298,7 +298,7 @@ public sealed class PostgreSqlOrderAssignmentGuardReader(
             WHERE p.id=@driver AND p.org_id=@org;
 
             SELECT DISTINCT ON (document_type)
-                   document_type,status,object_key,sha256,expires_at
+                   document_type,status,object_key,sha256,expires_at,evidence_kind
             FROM drivers.driver_documents
             WHERE driver_id=@driver AND org_id=@org
             ORDER BY document_type,created_at DESC,id DESC
@@ -339,8 +339,9 @@ public sealed class PostgreSqlOrderAssignmentGuardReader(
             documents[type] = new DriverDocumentSnapshot(
                 type,
                 reader.GetString(1),
-                reader.GetString(2),
-                reader.GetFieldValue<byte[]>(3),
+                reader.GetString(5),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetFieldValue<byte[]>(3),
                 reader.IsDBNull(4) ? null : reader.GetFieldValue<DateTimeOffset>(4));
         }
 

@@ -1,11 +1,24 @@
 namespace Drivers.Application.Eligibility;
 
+/// <summary>
+/// The latest row of one document type. DRV-DOC-001-IN-PERSON-2026-11-02: <see cref="EvidenceKind"/> is the stored
+/// <c>evidence_kind</c> - <c>FILE</c> rows carry <see cref="ObjectKey"/> and <see cref="Sha256"/>, <c>IN_PERSON</c> rows
+/// carry neither (a dispatcher saw the original; no file, key or hash exists).
+/// </summary>
 public sealed record DriverDocumentSnapshot(
     string DocumentType,
     string Status,
-    string ObjectKey,
-    byte[] Sha256,
+    string EvidenceKind,
+    string? ObjectKey,
+    byte[]? Sha256,
     DateTimeOffset? ExpiresAt);
+
+/// <summary>The stored <c>evidence_kind</c> values (AI-06 <c>driver_documents_evidence_kind_check</c>).</summary>
+public static class DriverDocumentEvidenceKinds
+{
+    public const string File = "FILE";
+    public const string InPerson = "IN_PERSON";
+}
 
 public sealed record DriverEligibilitySnapshot(
     Guid DriverId,
@@ -161,8 +174,7 @@ public static class DriverEligibilityPolicy
             }
 
             AddWhen(codes, document.Status != "VALID", DriverEligibilityRejectionCodes.DocumentStatusNotValid);
-            AddWhen(codes, string.IsNullOrWhiteSpace(document.ObjectKey) || document.Sha256.Length != 32,
-                DriverEligibilityRejectionCodes.DocumentHashInvalid);
+            AddWhen(codes, !HasVerifiableEvidence(document), DriverEligibilityRejectionCodes.DocumentHashInvalid);
 
             if (policy.NonExpiringDocumentTypes.Contains(documentType))
             {
@@ -179,6 +191,20 @@ public static class DriverEligibilityPolicy
             }
         }
     }
+
+    /// <summary>
+    /// DRV-DOC-001-IN-PERSON-2026-11-02 keeps the DSP-001 evidence guarantee per evidence kind: a <c>FILE</c> document
+    /// needs a non-blank object key and a SHA-256 of exactly 32 bytes; an <c>IN_PERSON</c> document must have neither
+    /// (its evidence is the dispatcher's review, which AI-06 requires on the row). Any other kind, or a mixed shape, is
+    /// <c>DOCUMENT_HASH_INVALID</c>: the policy fails closed on evidence it cannot classify.
+    /// </summary>
+    private static bool HasVerifiableEvidence(DriverDocumentSnapshot document) => document.EvidenceKind switch
+    {
+        DriverDocumentEvidenceKinds.File =>
+            !string.IsNullOrWhiteSpace(document.ObjectKey) && document.Sha256 is { Length: 32 },
+        DriverDocumentEvidenceKinds.InPerson => document.ObjectKey is null && document.Sha256 is null,
+        _ => false,
+    };
 
     private static void EvaluateCapacity(
         DriverCapacityRequirement requirement,

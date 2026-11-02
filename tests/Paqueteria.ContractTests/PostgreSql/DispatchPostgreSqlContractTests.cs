@@ -368,8 +368,9 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
                 snapshot.LatestDocuments
                     .OrderBy(pair => pair.Key, StringComparer.Ordinal)
                     .Select(pair =>
-                        $"{pair.Key}={pair.Value.DocumentType},{pair.Value.Status},{pair.Value.ObjectKey}," +
-                        $"{Convert.ToHexString(pair.Value.Sha256)},{pair.Value.ExpiresAt?.UtcDateTime.Ticks}")));
+                        $"{pair.Key}={pair.Value.DocumentType},{pair.Value.Status},{pair.Value.EvidenceKind}," +
+                        $"{pair.Value.ObjectKey},{(pair.Value.Sha256 is null ? string.Empty : Convert.ToHexString(pair.Value.Sha256))}," +
+                        $"{pair.Value.ExpiresAt?.UtcDateTime.Ticks}")));
 
     [PostgreSqlContractFact]
     public async Task Coordinator_creates_one_accepted_assignment_transition_event_outbox_audits_and_replay()

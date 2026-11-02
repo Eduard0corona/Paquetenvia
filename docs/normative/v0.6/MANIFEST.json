@@ -4,7 +4,7 @@
   "bundle_revision": "v0.6-full-canonical-sync-7-fin001-mvp1",
   "date": "2026-07-31",
   "status": "NORMATIVE_BASELINE_CANONICAL_SYNC_FIN001_MVP1",
-  "canonical_sql_sha256": "b83ed5283e4fd03a4cf6afc958345fe45556fb42b2a79fc13c0fd973f8eed32f",
+  "canonical_sql_sha256": "61bb933752da93c6317ef642aedc18fc6a89eb639a5aef84795cb4299d535082",
   "file_count": 74,
   "files": [
     {
@@ -25,7 +25,7 @@
     {
       "path": "CANONICAL_SOURCE_OF_TRUTH.md",
       "bytes": 4696,
-      "sha256": "391d7f163cce8f57fed8314a9df3dc456da51abfbdfa82dbcb20e348a9968a70"
+      "sha256": "ea56dd546356cc9155ecbe860f4f6b026bbf0fcfc813569af12fc3961589c98e"
     },
     {
       "path": "CHANGED_FILES_SINCE_V0.5.md",
@@ -34,18 +34,18 @@
     },
     {
       "path": "CHANGELOG.md",
-      "bytes": 276626,
-      "sha256": "ae0f4750d497eeb98c7d12c00ca7c93d6810136df9bd3e7bdf52e2af7e15240b"
+      "bytes": 280429,
+      "sha256": "30ad154b4cfedcd0c7bb00a7ae6e5dfdfd029b52fe208cec92eb4d65d8bb8dd6"
     },
     {
       "path": "CHECKSUMS_SHA256.txt",
       "bytes": 7583,
-      "sha256": "9ab578bee2309582781bc99f3a1b22862e7725511f817f0fe79e0aeb4130de19"
+      "sha256": "ad3b6c4383f90e699754c768a7c78c8ff2b3cecee50039cbc7df4164861fccf8"
     },
     {
       "path": "CLAUDE_VALIDATION_HANDOFF.md",
       "bytes": 2634,
-      "sha256": "e2f646f281c609e549948a0cbee871de55d5b7299e0039f280b94cc971b8f322"
+      "sha256": "a46e0424ab0d35ab18194ba6291689988d5868ffc766d3267a40c0cb98de9c8e"
     },
     {
       "path": "VALIDATION_RESULTS.txt",
@@ -54,8 +54,8 @@
     },
     {
       "path": "contracts/AI-05_OPENAPI.yaml",
-      "bytes": 363655,
-      "sha256": "5231ddfb529fdfc2a53ba6e21ff2445aa2d5671a4a7ab198251d0293699afd8e"
+      "bytes": 390219,
+      "sha256": "39bd535697055a9a1fdb42d89cd91d21f58419a01de6f18e7cf2b6b7d6ea3d0c"
     },
     {
       "path": "contracts/AI-12_SIGNALR_CONTRACT.yaml",
@@ -64,8 +64,8 @@
     },
     {
       "path": "database/AI-06_SCHEMA.sql",
-      "bytes": 85668,
-      "sha256": "b83ed5283e4fd03a4cf6afc958345fe45556fb42b2a79fc13c0fd973f8eed32f"
+      "bytes": 89010,
+      "sha256": "61bb933752da93c6317ef642aedc18fc6a89eb639a5aef84795cb4299d535082"
     },
     {
       "path": "database/AI-18_DATABASE_ROLE_MODEL.sql",
@@ -74,8 +74,8 @@
     },
     {
       "path": "decision-log.md",
-      "bytes": 646304,
-      "sha256": "b3a50992ee29387ffb75ae0060ad57044fe00ffcc4a21d411754e2e98f032097"
+      "bytes": 664453,
+      "sha256": "55106b31072ecd1e964700115cfb3d9f09fc1ee35740daa6fcf7e010ba0b987e"
     },
     {
       "path": "docs/AI-14_TECH_REFERENCES.md",
@@ -334,13 +334,13 @@
     },
     {
       "path": "specs/AI-07_UI_CONTRACTS.yaml",
-      "bytes": 140375,
-      "sha256": "5dd3709e7655f5951fc42fd983b35cc927c3d514587b56c967ca1f6f42699312"
+      "bytes": 145668,
+      "sha256": "5fae6297a4168b1c4706cca59741018396a92f269ee4fc61e2304b242bb15916"
     },
     {
       "path": "specs/AI-08_BACKLOG.yaml",
-      "bytes": 124103,
-      "sha256": "2c452eafd5041aeeb5f514fef0bed50e13176e43a9a1bcf6ebf642986f10a9c5"
+      "bytes": 126666,
+      "sha256": "76265ed58d5caf466a7fd2e7726239ed967920b8ebeb5f285768e11a7aa20cbf"
     },
     {
       "path": "specs/AI-10_DECISIONS_AND_GATES.yaml",
@@ -364,8 +364,8 @@
     },
     {
       "path": "specs/AI-24_RUNTIME_HARDENING_CONTRACT.yaml",
-      "bytes": 73129,
-      "sha256": "3f5b312744844c9485434df142129203277c150c8808b46109d538b9629ab49c"
+      "bytes": 77546,
+      "sha256": "1c988f15e32aade471b484ee2b1043af0219322e9a2b5e005b13cc7a251fb1a0"
     },
     {
       "path": "tests/AI-09_ACCEPTANCE_TESTS.feature",

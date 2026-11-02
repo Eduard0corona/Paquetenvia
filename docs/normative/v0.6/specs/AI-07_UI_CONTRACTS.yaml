@@ -488,6 +488,7 @@ routes:
     screen_contract: driver_roster
     decisions:
     - UI-PHASE3-DRIVERS-2026-10-11
+    - DRV-DOC-001-IN-PERSON-2026-11-02
 screen_contracts:
   dispatch_dashboard:
     decision_amendments:
@@ -1431,6 +1432,18 @@ screen_contracts:
       celular" calls removeMyDriverPhone, which works whatever the driver profile's status (ARCO; a driver whose
       profile is not active is told it cannot register a new number but can erase the stored one); online only, the
       field is cleared after saving and nothing is kept in browser storage
+    documents: DRV-DOC-001-IN-PERSON-2026-11-02 (Y4 "Él y despacho (Recommended)", Y6 "Aviso en el panel
+      (Recommended)", Y8 "En la app (Recommended)") - a read-only "Documentos" list in "Cuenta", shown only when
+      listMyDriverDocuments answers documents_enabled true (nothing is shown while documents are off); one line per
+      required document of the driver's vehicle with its label (the driver_roster documents.type_labels), its status
+      (Aprobado, Rechazado with the reason label, Revocado, Pendiente, Vencido for a stored EXPIRED, or "Falta" when
+      none was recorded) and its date ("Vence el {fecha}" for PRINTED_EXPIRY, "Revisión el {fecha}" for
+      PERMANENT_LICENSE_REVIEW, the valid_through date in America/Mazatlan), with «Vence en N días» from 30 days before
+      and «Vencido» after, as the panel (driver_roster documents.warning); a fixed line "Despacho revisa tus documentos
+      en persona. Lleva el original cuando te lo pidan."; read when the screen opens and when the driver refreshes; no
+      push, realtime event, WhatsApp or e-mail (Y8); online only, nothing kept in browser storage or the offline
+      queue, never logged; the driver cannot add, edit or delete a document (registerMyDriverDocument is reserved and
+      not implemented)
   external_driver_offers:
     release: MVP-1
     host_route: /driver/stops
@@ -1709,6 +1722,8 @@ screen_contracts:
       - Repartidor (DRV- reference; AI-06 stores no driver name)
       - Vehículo (es-MX vehicle label)
       - Estado (Pendiente de activar, Activo or Suspendido; dot and text, never color alone)
+      - Documentos (DRV-DOC-001-IN-PERSON-2026-11-02; only while listDriverDocuments answers documents_enabled true -
+        see documents)
       - Paradas activas (the stops the driver holds now, the same stops its app shows; no calendar-day filter)
       - Última ubicación (capture time of the latest position in America/Mazatlan; Sin ubicación registrada when none)
       order: by DRV- reference
@@ -1719,13 +1734,53 @@ screen_contracts:
     - load, Actualizar, the page becoming visible and window focus read the first page again (never while hidden and
       never twice within 5 seconds); optimistic UI is never authoritative
     - a 401 or 403 clears the rows
+    documents:
+      decision: DRV-DOC-001-IN-PERSON-2026-11-02 (Y1 "Despacho en persona (Recommended)", Y3 "No, solo datos
+        (Recommended)", Y4, Y5, Y6, Y7, Y10, Y11 and Y12; docs/adr/ADR-DRV-DOC-001-IN-PERSON-DRIVER-DOCUMENTS.md)
+      source: GET /drivers/documents (listDriverDocuments), read with every read of the list and paged with it ("Cargar
+        más" reads the next page of both); POST /drivers/{driverId}/documents (recordDriverDocument) and POST
+        /drivers/{driverId}/documents/{documentId}/revoke (revokeDriverDocument)
+      shown_when: listDriverDocuments answers documents_enabled true; otherwise there is no Documentos column, button or
+        dialog (the pilot until GATE-007 is registered, Y2)
+      column: Documentos, after Estado - "Completos" when every required document is VALID and not expired; «Vence en N
+        días» (or «Revisión en N días» for a permanent license) when one of them reaches its last valid day within 30
+        days, N being the whole local days from today to valid_through (0 reads «Vence hoy» / «Revisión hoy»); «Vencido»
+        (or «Revisión vencida») once expires_at has passed; "Incompletos" when one is missing, REJECTED, REVOKED,
+        PENDING or EXPIRED; the most urgent state wins (Vencido, then Incompletos, then the warning); dot and text,
+        never color alone; nothing is stored as EXPIRED (Y6)
+      dialog: a "Documentos" button per row opens the driver's documents - one line per required type with its label,
+        status, reason, date and warning as in the column - with "Registrar documento" and, on the latest VALID one of a
+        type, "Revocar"
+      type_labels:
+        IDENTITY: Identificación oficial
+        DRIVER_LICENSE: Licencia de conducir
+        VEHICLE_CARD: Tarjeta de circulación
+        INSURANCE: Seguro del vehículo
+      record_dialog: the dialog "Registrar documento" - the type (only the types the driver's vehicle requires, Y11), "Licencia
+        permanente de Sinaloa" (DRIVER_LICENSE only; then no date is asked and the line reads "Revisión el {fecha}", the
+        review day plus 12 months, Y5), "Fecha de vencimiento impresa" (a date; valid through that whole day in Culiacán
+        time, Y12), the decision Aprobado or Rechazado, and for Rechazado the reason, one of the fixed list Ilegible,
+        Vencido, No es el pedido, No es del repartidor, Incompleto, No aceptado (Y7) with no free text; a fixed line "El
+        repartidor te muestra el original. No tomes fotos ni copias; solo anota el tipo y la fecha." (Y3); one
+        Idempotency-Key per submission, reused only to retry the same submission; DOCUMENT_TYPE_NOT_REQUIRED,
+        EXPIRY_DATE_OUT_OF_RANGE ("La fecha ya pasó o está a más de 10 años; si ya venció, recházalo como Vencido") and
+        the other codes shown as messages; the form keeps what was typed on an error
+      revoke_dialog: the confirmation "¿Revocar documento?" - "El repartidor ya no recibirá pedidos nuevos; lo que lleva sigue y puedes
+        reasignarlo desde la orden." (Y10), buttons "Cancelar" (initial focus) and "Revocar"
+      warning: «Vence en N días» from 30 days before the last valid day and «Vencido» after expires_at, computed in the
+        browser from valid_through and expires_at in America/Mazatlan; the label is "Revisión" instead of "Vence" for
+        PERMANENT_LICENSE_REVIEW (Y5)
     privacy:
     - no browser persistence and no client logging; an organization switch clears the list
-    - no name, phone, email, document data, coordinate or internal identifier is shown; the latest position is reduced
-      to its capture time
+    - no name, phone, email, coordinate or internal identifier is shown; the latest position is reduced to its capture
+      time
+    - DRV-DOC-001-IN-PERSON-2026-11-02 (Y3, Y4) - document data is limited to the type, status, rejection reason and
+      the expiry or review date of each required document; no document number, photo, file, key, hash or reviewer is
+      ever shown, because none is sent to the browser (none exists for an in-person document)
     forbidden:
     - adding, editing, suspending or removing a driver (sin altas ni bajas)
     - names and phones while GATE-007 is open
+    - taking, uploading or showing a photo or copy of a document, or typing a document number (Y3)
     not_supported:
     - EXTERNAL drivers and retired (INACTIVE) drivers - outside the approved list
   order_list:

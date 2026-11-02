@@ -60,8 +60,9 @@ public sealed class DriverVoiceBridgePostgreSqlContractTests(PostgreSqlContractF
     [PostgreSqlContractFact]
     public async Task The_lane_carries_the_voice_bridge_with_its_exact_catalog()
     {
+        // DRV-DOC-001-IN-PERSON-2026-11-02 follows it in the lane; the voice step is still verified by its own rule.
         var verified = Assert.Single(ModuleMigrationCoordinator.VerifySources(), state => state.Module == Module);
-        Assert.Equal(AddDriverVoiceBridge.MigrationId, verified.MigrationId);
+        Assert.Equal(AddInPersonDriverDocuments.MigrationId, verified.MigrationId);
         var applied = Assert.Single(
             await new ModuleMigrationCoordinator().AssertAsync(fixture.DeploymentConnectionString, CancellationToken.None),
             state => state.Module == Module);
@@ -128,7 +129,8 @@ public sealed class DriverVoiceBridgePostgreSqlContractTests(PostgreSqlContractF
             await coordinator.ApplyAsync(connectionString, CancellationToken.None);
             Assert.Equal("APPLIED", await LaneStatusAsync(coordinator, connectionString));
             Assert.Equal(
-                [AdoptCanonicalDriversBaseline.MigrationId, AdoptCanonicalDriverPositions.MigrationId, AddDriverVoiceBridge.MigrationId],
+                [AdoptCanonicalDriversBaseline.MigrationId, AdoptCanonicalDriverPositions.MigrationId, AddDriverVoiceBridge.MigrationId,
+                    AddInPersonDriverDocuments.MigrationId],
                 await ListAsync(connectionString, "SELECT \"MigrationId\" FROM platform.__ef_migrations_history_drivers ORDER BY 1"));
 
             // Running the Up SQL again changes nothing.
