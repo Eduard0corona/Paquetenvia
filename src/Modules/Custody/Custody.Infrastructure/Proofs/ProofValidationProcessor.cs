@@ -6,6 +6,7 @@ using Custody.Application.ProofUploads;
 using Custody.Domain;
 using Custody.Infrastructure.Persistence;
 using Custody.Infrastructure.ProofStorage;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
 using Npgsql;
@@ -27,12 +28,16 @@ namespace Custody.Infrastructure.Proofs;
 /// quedan vacías (Recommended)"): the ready and rejected audit rows keep <c>request_id</c> NULL, because no outbox
 /// message or stored trace context reaches this poll; they link to the request through the upload session id, whose
 /// creation row carries that request's trace id.
+/// One scope per object (POD-001; project owner, 2026-11-02, on the REL-001 rehearsal finding: "PR aparte primero
+/// (Recommended)"): the objects of one pass run concurrently (up to <see cref="ProofStorageOptions.MaximumConcurrency"/>),
+/// so each one gets its own DI scope and with it its own Worker tenant transaction context, Custody DbContext, tenant
+/// execution state and audit writer. Sharing the pass's scoped DbContext made every claim after the first fail, and
+/// with it the whole pass.
 /// </summary>
 public sealed class ProofValidationProcessor(
-    WorkerTenantTransactionContext<CustodyDbContext> transactionContext,
+    IServiceScopeFactory scopes,
     IProofObjectStorage storage,
     IProofThreatScanner threatScanner,
-    IAppendOnlyAuditWriter auditWriter,
     IAuditPayloadRedactor redactor,
     IOptions<ProofStorageOptions> options,
     IClock clock,
@@ -87,7 +92,12 @@ public sealed class ProofValidationProcessor(
             // OBS-003-WORKER-PSEUDONYM-2026-10-14 (QC): the rest of this object's flow, its failure line included,
             // carries the pseudonym of the owner organization its signed metadata names and the role kind SYSTEM.
             organization = TelemetryOrganizationContext.EnterSystem(pseudonymizer, metadata.OwnerOrganizationId);
-            await ProcessOneAsync(descriptor, metadata, stopwatch, cancellationToken);
+            // This object's own scope, never shared with another object of the pass.
+            await using var scope = scopes.CreateAsyncScope();
+            var database = new ObjectDatabase(
+                scope.ServiceProvider.GetRequiredService<WorkerTenantTransactionContext<CustodyDbContext>>(),
+                scope.ServiceProvider.GetRequiredService<IAppendOnlyAuditWriter>());
+            await ProcessOneAsync(descriptor, metadata, database, stopwatch, cancellationToken);
             return false;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -110,6 +120,7 @@ public sealed class ProofValidationProcessor(
     private async Task ProcessOneAsync(
         ProofObjectDescriptor descriptor,
         SignedObjectMetadata metadata,
+        ObjectDatabase database,
         Stopwatch stopwatch,
         CancellationToken cancellationToken)
     {
@@ -125,7 +136,7 @@ public sealed class ProofValidationProcessor(
             return;
         }
 
-        var claim = await ClaimAsync(descriptor, metadata, cancellationToken);
+        var claim = await ClaimAsync(database, descriptor, metadata, cancellationToken);
         if (claim is null)
         {
             telemetry.ProcessingCompleted(
@@ -198,7 +209,7 @@ public sealed class ProofValidationProcessor(
 
         if (rejectionCode != "READY")
         {
-            await SettleAsync(claim, "REJECTED", rejectionCode, cancellationToken);
+            await SettleAsync(database, claim, "REJECTED", rejectionCode, cancellationToken);
             telemetry.ProcessingCompleted(
                 metadata.ProofType.ToContractValue(),
                 "rejected",
@@ -207,7 +218,7 @@ public sealed class ProofValidationProcessor(
             return;
         }
 
-        var settled = await SettleAsync(claim, "READY", "VALIDATION_SUCCEEDED", cancellationToken);
+        var settled = await SettleAsync(database, claim, "READY", "VALIDATION_SUCCEEDED", cancellationToken);
         if (settled)
         {
             await storage.DeleteQuarantineAsync(
@@ -338,10 +349,11 @@ public sealed class ProofValidationProcessor(
     }
 
     private async Task<ValidationClaim?> ClaimAsync(
+        ObjectDatabase database,
         ProofObjectDescriptor descriptor,
         SignedObjectMetadata metadata,
         CancellationToken cancellationToken) =>
-        await transactionContext.ExecuteAsync(
+        await database.TransactionContext.ExecuteAsync(
             new TenantDatabaseExecutionContext(metadata.SessionId, [metadata.OwnerOrganizationId]),
             async (dbContext, token) =>
             {
@@ -473,6 +485,7 @@ public sealed class ProofValidationProcessor(
             cancellationToken);
 
     private async Task<bool> SettleAsync(
+        ObjectDatabase database,
         ValidationClaim claim,
         string status,
         string reason,
@@ -481,7 +494,7 @@ public sealed class ProofValidationProcessor(
         var organizations = claim.OperatorOrganizationId is { } operatorOrganizationId
             ? new[] { claim.OwnerOrganizationId, operatorOrganizationId }
             : [claim.OwnerOrganizationId];
-        return await transactionContext.ExecuteAsync(
+        return await database.TransactionContext.ExecuteAsync(
             new TenantDatabaseExecutionContext(claim.RequestedBy, organizations),
             async (dbContext, token) =>
             {
@@ -505,7 +518,7 @@ public sealed class ProofValidationProcessor(
                 }
 
                 using var document = JsonDocument.Parse(JsonSerializer.Serialize(new { code = reason }));
-                await auditWriter.WriteAsync(
+                await database.AuditWriter.WriteAsync(
                     connection,
                     transaction,
                     new AuditEntry(
@@ -615,6 +628,11 @@ public sealed class ProofValidationProcessor(
         ProofType ProofType,
         byte[]? ExpectedSha256,
         long SizeBytes);
+
+    /// <summary>The scoped database services of one object, resolved from that object's own scope.</summary>
+    private sealed record ObjectDatabase(
+        WorkerTenantTransactionContext<CustodyDbContext> TransactionContext,
+        IAppendOnlyAuditWriter AuditWriter);
 
     private sealed record ValidationClaim(
         Guid SessionId,
