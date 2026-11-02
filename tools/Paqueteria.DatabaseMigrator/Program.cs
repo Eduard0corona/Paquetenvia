@@ -158,6 +158,15 @@ internal static partial class DatabaseMigratorProgram
                     var moduleReport = await moduleMigrations.AssertAsync(connectionString, cancellation.Token).ConfigureAwait(false);
                     PrintAssertionReport(report);
                     PrintModulePlan(moduleReport);
+                    if (options.CompareRowCountsEnvironment is { } sourceEnvironment)
+                    {
+                        // ENV-001 restore drill only (Z18): the connection under assert is the restored server; the
+                        // named one is the server in service. Read-only on both; any difference fails the command.
+                        await RowCountComparison.CompareAsync(
+                            ReadConnectionString(sourceEnvironment, "--compare-row-counts-env"), connectionString,
+                            Console.Out, cancellation.Token).ConfigureAwait(false);
+                    }
+
                     return 0;
 
                 default:
@@ -200,6 +209,11 @@ internal static partial class DatabaseMigratorProgram
             Console.Error.WriteLine(exception.Message);
             return 6;
         }
+        catch (RowCountComparisonException exception)
+        {
+            Console.Error.WriteLine(exception.Message);
+            return RowCountComparison.MismatchExitCode;
+        }
         catch (OperationCanceledException)
         {
             Console.Error.WriteLine("Database baseline operation was cancelled.");
@@ -212,11 +226,11 @@ internal static partial class DatabaseMigratorProgram
         }
     }
 
-    private static string ReadConnectionString(string environmentName)
+    private static string ReadConnectionString(string environmentName, string option = "--connection-env")
     {
         if (!EnvironmentVariableName().IsMatch(environmentName))
         {
-            throw new CommandLineException("--connection-env must be a valid environment variable name.");
+            throw new CommandLineException($"{option} must be a valid environment variable name.");
         }
 
         var value = ReadSetting(environmentName);
@@ -378,7 +392,9 @@ internal static partial class DatabaseMigratorProgram
         Environment.NewLine +
         "       Paqueteria.DatabaseMigrator master-data-gate --connection-env NAME --deployment-class SYNTHETIC|REAL --platform-organization-id UUID [--gate-007-closed]" +
         Environment.NewLine +
-        "       Paqueteria.DatabaseMigrator platform-bootstrap --connection-env NAME --identity-subject AUTHCENTER_SUB --legal-name TEXT --display-name TEXT");
+        "       Paqueteria.DatabaseMigrator platform-bootstrap --connection-env NAME --identity-subject AUTHCENTER_SUB --legal-name TEXT --display-name TEXT" +
+        Environment.NewLine +
+        "       Paqueteria.DatabaseMigrator assert --connection-env NAME --compare-row-counts-env SOURCE_NAME   (ENV-001 restore drill only)");
 
     [GeneratedRegex("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant)]
     private static partial Regex EnvironmentVariableName();
@@ -386,8 +402,11 @@ internal static partial class DatabaseMigratorProgram
 
 internal sealed record CommandOptions(string Command, string? ConnectionEnvironment,
     bool ConfirmInitialBaseline, bool AzureOwnershipBridge, MasterDataLoadOptions? MasterData = null,
-    MasterDataGateOptions? MasterDataGate = null, PlatformBootstrapOptions? PlatformBootstrap = null)
+    MasterDataGateOptions? MasterDataGate = null, PlatformBootstrapOptions? PlatformBootstrap = null,
+    string? CompareRowCountsEnvironment = null)
 {
+    private static readonly Regex EnvironmentVariableNamePattern = new("^[A-Za-z_][A-Za-z0-9_]*$", RegexOptions.CultureInvariant);
+
     internal static CommandOptions Parse(IReadOnlyList<string> arguments)
     {
         if (arguments.Count == 0)
@@ -415,6 +434,7 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
         string? identitySubject = null;
         string? legalName = null;
         string? displayName = null;
+        string? compareRowCountsEnvironment = null;
         for (var index = 1; index < arguments.Count; index++)
         {
             switch (arguments[index])
@@ -457,6 +477,10 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
                     break;
                 case "--display-name" when command == "platform-bootstrap" && displayName is null && index + 1 < arguments.Count:
                     displayName = arguments[++index];
+                    break;
+                case "--compare-row-counts-env" when command == "assert" && compareRowCountsEnvironment is null &&
+                                                     index + 1 < arguments.Count:
+                    compareRowCountsEnvironment = arguments[++index];
                     break;
                 // A token that is not an option may be a value (an AuthCenter subject, a name): never echo it.
                 case var token when !token.StartsWith("--", StringComparison.Ordinal):
@@ -509,6 +533,20 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
         {
             return new CommandOptions(command, connectionEnvironment, confirm, azureOwnershipBridge,
                 PlatformBootstrap: ParsePlatformBootstrap(identitySubject, legalName, displayName));
+        }
+
+        if (command == "assert")
+        {
+            if (compareRowCountsEnvironment is not null &&
+                (!EnvironmentVariableNamePattern.IsMatch(compareRowCountsEnvironment) ||
+                 string.Equals(compareRowCountsEnvironment, connectionEnvironment, StringComparison.Ordinal)))
+            {
+                throw new CommandLineException(
+                    "--compare-row-counts-env must be a valid environment variable name other than --connection-env.");
+            }
+
+            return new CommandOptions(command, connectionEnvironment, confirm, azureOwnershipBridge,
+                CompareRowCountsEnvironment: compareRowCountsEnvironment);
         }
 
         if (command != "master-data-load")

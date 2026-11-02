@@ -165,10 +165,13 @@ DATE = re.compile(r"^20[0-9]{2}-[01][0-9]-[0-3][0-9]$")
 INSTANT = re.compile(r"^20[0-9]{2}-[01][0-9]-[0-3][0-9]T[0-2][0-9]:[0-5][0-9]:[0-5][0-9]Z$")
 DECISION_ID = re.compile(r"^REL-001-ENTRY-[0-9]{3}$")
 GATE_ROW = re.compile(r"^(GATE-[0-9]{3})(?:-[A-Z0-9-]+)?$")
-# deploy/azure/pilot/restore-drill.sh, last line. The execution name is never published.
+# deploy/azure/pilot/restore-drill.sh, last line. The execution name is never published. A drill line from before the
+# Z18 comparison has no row_counts and asserted_git_sha tokens; it parses, and the criterion stays MISSING.
 RESTORE_LINE = re.compile(
     r"^EVIDENCE restore_point=(?P<restore_point>\S+) started=(?P<started>\S+) restored=(?P<restored>\S+) "
-    r"verified=(?P<verified>\S+) verify_status=(?P<verify_status>[A-Za-z]{1,32}) execution=(?P<execution>[A-Za-z0-9-]{1,80})$"
+    r"verified=(?P<verified>\S+) verify_status=(?P<verify_status>[A-Za-z]{1,32})"
+    r"(?: row_counts=(?P<row_counts>[A-Z_]{1,32}) asserted_git_sha=(?P<asserted_git_sha>[0-9a-f]{40}|UNVERIFIED))?"
+    r" execution=(?P<execution>[A-Za-z0-9-]{1,80})$"
 )
 # Output redaction: nothing shaped like a personal datum, a secret or an entity identifier may be published.
 REDACTION_PATTERNS = (
@@ -853,7 +856,7 @@ def ci_drill_row_counts(artifacts_dir: Path, tested: str) -> tuple[str, dict[str
 
 def restore_criterion(line: str | None, planned_start: dt.date | None, generated_at: dt.datetime,
                       rel000_summary: dict[str, Any], manifests: dict[str, list[dict[str, Any]]],
-                      ci_counts: tuple[str, dict[str, int] | None, list[str]]) -> dict[str, Any]:
+                      ci_counts: tuple[str, dict[str, int] | None, list[str]], tested: str) -> dict[str, Any]:
     ci_drill_ok = rel000_summary.get("ops002_restore_drill_passed") is True and "backup-restore" in manifests
     ci_status, ci_values, reasons = ci_counts[0], ci_counts[1], list(ci_counts[2])
     ci = {"ops002_restore_drill_passed": ci_drill_ok,
@@ -871,10 +874,13 @@ def restore_criterion(line: str | None, planned_start: dt.date | None, generated
     if not match:
         fail("RESTORE_EVIDENCE_INVALID", "the restore drill line is not the EVIDENCE line of restore-drill.sh")
     times = {k: parse_instant(match.group(k), f"restore {k}") for k in ("restore_point", "started", "restored", "verified")}
+    row_counts_token, asserted = match.group("row_counts"), match.group("asserted_git_sha")
     drill: dict[str, Any] = {"present": True, "verify_status": match.group("verify_status"),
                              **{k: v.strftime("%Y-%m-%dT%H:%M:%SZ") for k, v in times.items()},
-                             "execution_recorded": True, "row_count_comparison": MISSING, "asserted_git_sha": MISSING}
-    status = MISSING
+                             "execution_recorded": True,
+                             "row_count_comparison": row_counts_token or MISSING,
+                             "asserted_git_sha": asserted or MISSING}
+    status = PASSED
     if match.group("verify_status") != "Succeeded":
         reasons.append("PILOT_DRILL_NOT_SUCCEEDED")
         status = FAILED
@@ -891,11 +897,21 @@ def restore_criterion(line: str | None, planned_start: dt.date | None, generated
     if age < dt.timedelta(0) or age > dt.timedelta(days=EXPECTED_READINESS["restore_max_days_before_start"]):
         reasons.append("PILOT_DRILL_NOT_CURRENT")
         status = FAILED
-    # deploy/azure/pilot/restore-drill.sh does not yet compare row counts nor name the commit its assert ran: the
-    # ENV-001 follow-up (Z9) adds both. Until then the criterion cannot pass.
-    reasons += ["PILOT_DRILL_ROW_COUNTS_MISSING", "PILOT_DRILL_COMMIT_MISSING"]
+    # Z9, Z18: the drill compared the four counts (assert fails on any difference) and ran the certified commit.
+    if row_counts_token is None:
+        reasons += ["PILOT_DRILL_ROW_COUNTS_MISSING", "PILOT_DRILL_COMMIT_MISSING"]
+        status = status if status == FAILED else MISSING
+    else:
+        if row_counts_token != "MATCHED":
+            reasons.append("PILOT_DRILL_ROW_COUNTS_NOT_MATCHED")
+            status = FAILED
+        if asserted != tested:
+            reasons.append("PILOT_DRILL_COMMIT_MISMATCH")
+            status = FAILED
     if ci_failed:
         status = FAILED
+    elif ci_status != PASSED and status == PASSED:
+        status = MISSING
     return criterion(status, reasons, source="AI-08 REL-001 restore vigente; Z9", pilot_drill=drill, ci_drill=ci)
 
 
@@ -1022,7 +1038,7 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     plan, planned_start = delivery_plan_criterion(record, record_problems)
     line = os.environ.get(args.restore_evidence_env, "") if args.restore_evidence_env else ""
     restore = restore_criterion(line or None, planned_start, generated_at, rel000_summary, manifests,
-                                ci_drill_row_counts(Path(args.artifacts_dir), tested))
+                                ci_drill_row_counts(Path(args.artifacts_dir), tested), tested)
     approval = approval_status(record, record_problems, provenance, restore)
 
     technical = {"full_regression": regression, "data_completeness": completeness, "latency": latency,
