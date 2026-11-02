@@ -216,6 +216,17 @@
       ]
     },
     {
+      "name": "REL001_READINESS",
+      "patterns": [
+        ".github/workflows/pilot-readiness.yml",
+        "tools/rel-001/**",
+        "tests/fixtures/rel-001/**"
+      ],
+      "jobs": [
+        "azr-static"
+      ]
+    },
+    {
       "name": "GITHUB_AUTOMATION",
       "patterns": [
         ".github/workflows/claude.yml",

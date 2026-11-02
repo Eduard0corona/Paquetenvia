@@ -1,0 +1,1096 @@
+{
+  "format_version": "paquetenvia-rel001-ai09-map-v1",
+  "source": "docs/normative/v0.6/tests/AI-09_ACCEPTANCE_TESTS.feature",
+  "scenarios": [
+    {
+      "feature": "Aislamiento multiempresa",
+      "scenario": "Un aliado no puede leer la orden de otro aliado",
+      "status": "GAP",
+      "reason": "The uniform answer and the RLS isolation are tested; no test (and no implementation) records the security event of the last step.",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OrdersTransitionPostgreSqlContractTests.RLS_hides_cross_tenant_order_and_foreign_guard_rows_and_cancellation_is_partial_row_free"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Security.TenantSelectionPipelineTests.Foreign_organization_is_forbidden_without_disclosure"
+        }
+      ]
+    },
+    {
+      "feature": "Cotización y tarifa de volumen",
+      "scenario": "Bloquear un tier de volumen en un viaje exclusivo",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.UnitTests.Pricing.PricingDomainTests.High_tiers_require_consolidated_route"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.UnitTests.Pricing.LowPriceAuthorizationTests.The_guard_needs_an_authorization_only_without_a_consolidated_route_for_the_52_and_45_tiers_or_a_total_of_52_MXN_or_less"
+        }
+      ]
+    },
+    {
+      "feature": "Cotización y tarifa de volumen",
+      "scenario": "Autorizar tarifa de volumen en ruta",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.UnitTests.Pricing.PricingDomainTests.Low_tiers_do_not_require_consolidated_route"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.PricingPostgreSqlContractTests.Quote_freezes_the_policy_version_of_the_selected_rule_and_the_order_keeps_it"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.PricingPostgreSqlContractTests.Quote_persists_VAT_INCLUDED_amounts_and_refuses_a_rule_in_another_tax_mode"
+        }
+      ]
+    },
+    {
+      "feature": "Creación idempotente de orden",
+      "scenario": "Repetir la misma petición",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Orders.OrderHttpTests.Concurrent_POST_same_key_has_one_identity"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OrdersPostgreSqlContractTests.Create_replay_queries_and_all_transactional_artifacts_match_the_quote"
+        }
+      ]
+    },
+    {
+      "feature": "Aceptación atómica de oferta externa",
+      "scenario": "Dos repartidores aceptan simultáneamente",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.DispatchPostgreSqlContractTests.External_offer_has_one_winner_and_forty_nine_uniform_conflicts_under_real_concurrency"
+        }
+      ]
+    },
+    {
+      "feature": "Elegibilidad del repartidor",
+      "scenario": "Documento vencido",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OrderAttemptCustodyPostgreSqlContractTests.Assigned_rejects_a_driver_with_an_expired_document"
+        }
+      ]
+    },
+    {
+      "feature": "Evidencia de entrega",
+      "scenario": "Entrega sin POD obligatorio",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Orders.OrderTransitionGuardsPostgreSqlHttpTests.Delivering_without_a_delivery_proof_is_409_DELIVERY_PROOF_REQUIRED"
+        }
+      ]
+    },
+    {
+      "feature": "Evidencia de entrega",
+      "scenario": "Sincronización después de pérdida de conectividad",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "driver-stops-pwa",
+          "test": "Paqueteria.IntegrationTests.Driver.DriverOfflineOperationsRealPipelineTests"
+        },
+        {
+          "job": "driver-stops-pwa",
+          "test": "Paqueteria.IntegrationTests.Driver.DriverOfflineOperationsPwaPlaywrightTests.Lost_proof_201_replays_the_same_finalize_key_without_duplicates"
+        }
+      ]
+    },
+    {
+      "feature": "Tracking público privado",
+      "scenario": "Token válido",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "public-tracking",
+          "test": "Paqueteria.IntegrationTests.Tracking.PublicTrackingPostgreSqlTests.Product_endpoint_has_exact_contract_uniform_privacy_and_no_enumeration"
+        },
+        {
+          "job": "public-tracking",
+          "test": "Paqueteria.IntegrationTests.Tracking.PublicTrackingPwaPlaywrightTests.Real_api_signalr_next_and_chromium_render_without_persisting_or_logging_token"
+        }
+      ]
+    },
+    {
+      "feature": "Tracking público privado",
+      "scenario": "Token expirado",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "public-tracking",
+          "test": "Paqueteria.IntegrationTests.Tracking.PublicTrackingPostgreSqlTests.A_finished_order_link_resolves_for_24_hours_then_is_the_uniform_404"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Security.PostgreSqlBootstrapTrackingTests.Invalid_tracking_variants_return_uniform_404"
+        }
+      ]
+    },
+    {
+      "feature": "Intento fallido",
+      "scenario": "Destinatario ausente",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OrderAttemptCustodyPostgreSqlContractTests.A_driver_report_records_a_graded_protected_report_and_leaves_the_decision_to_dispatch"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OrderAttemptCustodyPostgreSqlContractTests.Dispatch_chooses_each_successor_of_a_driver_report"
+        }
+      ]
+    },
+    {
+      "feature": "Cierre financiero",
+      "scenario": "Efectivo pendiente",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OrdersTransitionPostgreSqlContractTests.Confirmation_assignment_custody_incident_delivery_COD_close_and_claim_rules_use_real_rows"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.UnitTests.Finance.CodLifecyclePolicyTests.Fin001_close_requires_reconciled_cash_or_no_record_at_all"
+        }
+      ]
+    },
+    {
+      "feature": "No captación de clientes aliados",
+      "scenario": "Campaña de marketing",
+      "status": "NOT_APPLICABLE",
+      "reason": "No MVP-1 surface builds a promotional audience: the only messages are the transactional recipient notices of AI-24 recipient_notices (audience: the delivery recipient of the order only), and ally networks are MVP-3_ALLIES (AI-07 /ally/network).",
+      "tests": []
+    },
+    {
+      "feature": "Recuperación",
+      "scenario": "Restaurar un backup",
+      "status": "GAP",
+      "reason": "The OPS-002 CI drill restores organizations, orders, events and file references into an empty environment; the row-count comparison that proves nothing is missing (Z9) is the ENV-001 follow-up that extends the pilot and CI drills.",
+      "tests": [
+        {
+          "job": "backup-restore",
+          "test": "tools.test-backup-restore.Backup_restore_drill"
+        }
+      ]
+    },
+    {
+      "feature": "Actualizaciones en tiempo real con SignalR",
+      "scenario": "Un usuario de otra organización no recibe eventos",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Realtime.RealtimeHubIntegrationTests.Operations_groups_isolate_two_organizations"
+        },
+        {
+          "job": "outbox-signalr-delivery",
+          "test": "Paqueteria.IntegrationTests.Realtime.RealtimeOutboxAudienceAndIsolationTests.Real_location_lane_publishes_exact_payload_only_to_same_tenant_operations"
+        }
+      ]
+    },
+    {
+      "feature": "Actualizaciones en tiempo real con SignalR",
+      "scenario": "El cliente recupera estado después de desconectarse",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "outbox-signalr-delivery",
+          "test": "Paqueteria.IntegrationTests.Realtime.RealtimeOutboxPlaywrightTests.Browser_receives_outbox_delivery_deduplicates_isolates_and_resynchronizes"
+        },
+        {
+          "job": "realtime-e2e",
+          "test": "src/realtime/real-reconnect.e2e.ts::real managed SignalR reconnect > observes reconnect lifecycle, restores REST state, recovers groups and deduplicates"
+        }
+      ]
+    },
+    {
+      "feature": "Actualizaciones en tiempo real con SignalR",
+      "scenario": "Solo se publica después del commit",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OrdersTransitionPostgreSqlContractTests.Every_injected_stage_rolls_back_order_event_outbox_audit_and_idempotency"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Realtime.RealtimeReconnectKestrelTests.PostgreSql_dispatcher_claims_committed_status_and_publishes_only_authorized_group"
+        }
+      ]
+    },
+    {
+      "feature": "Arquitectura modular",
+      "scenario": "Un módulo intenta acceder a infraestructura privada de otro módulo",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.ArchitectureTests.DependencyRulesTests.Modules_do_not_reference_foreign_module_internals"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.ArchitectureTests.NegativeFixtureTests"
+        }
+      ]
+    },
+    {
+      "feature": "API sin estado local",
+      "scenario": "Una petición continúa en otra réplica",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Scaling.Scl001ScaleReadyProfileTests.Two_api_replicas_under_the_profile_share_the_same_data_protection_material"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.Scl001StatelessDistributedContractTests.An_api_replica_and_a_worker_replica_share_one_key_ring"
+        }
+      ]
+    },
+    {
+      "feature": "Worker escalado e idempotente",
+      "scenario": "Dos Workers reclaman el mismo mensaje",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OutboxLifecycleContractTests.Two_worker_connections_never_claim_the_same_message"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Notifications.Scl001TwoWorkerNoDuplicateEffectTests.Two_workers_do_not_duplicate_an_external_effect_across_a_failed_settlement"
+        }
+      ]
+    },
+    {
+      "feature": "SignalR multi-instancia",
+      "scenario": "Publicación y conexión viven en nodos diferentes",
+      "status": "NOT_APPLICABLE",
+      "reason": "V1_SCALE_READINESS (AI-10 release_gates and AI-15 release_gate: multi-instance SignalR test); GATE-013 is open and the pilot runs one API replica with SignalR in process (RTM-002-INPROCESS-DISPATCHER-COLOCATION).",
+      "tests": []
+    },
+    {
+      "feature": "Protección de la base transaccional",
+      "scenario": "Reporte pesado durante operación",
+      "status": "NOT_APPLICABLE",
+      "reason": "V1_SCALE_READINESS (AI-10 release_gates: database query budget; AI-15 release_gate); read replicas and a separate analytics store wait on GATE-014 and GATE-015.",
+      "tests": []
+    },
+    {
+      "feature": "Preparación multi-ciudad",
+      "scenario": "Configuración de una ciudad sintética",
+      "status": "NOT_APPLICABLE",
+      "reason": "GATE-017 (multi_city_launch) is open; the pilot runs in one city.",
+      "tests": []
+    },
+    {
+      "feature": "Contrato cotización a orden",
+      "scenario": "La orden copia ubicaciones y paquetes de la cotización",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OrdersPostgreSqlContractTests.Create_replay_queries_and_all_transactional_artifacts_match_the_quote"
+        }
+      ]
+    },
+    {
+      "feature": "RLS forzada y roles separados",
+      "scenario": "El rol de aplicación no puede bypassear RLS",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.RlsAndProvisioningContractTests.Runtime_logins_cannot_assume_privileged_roles"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.AppendOnlyAuditContractTests.App_and_worker_can_insert_and_select_but_cannot_update_delete_or_bypass_RLS"
+        }
+      ]
+    },
+    {
+      "feature": "RLS forzada y roles separados",
+      "scenario": "Documentos y auditoría están aislados",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.DriversEligibilityPostgreSqlContractTests.Driver_RLS_is_forced_fail_closed_and_blocks_cross_tenant_mutations"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.AppendOnlyAuditContractTests.Concurrent_tenant_audits_do_not_cross_contaminate"
+        }
+      ]
+    },
+    {
+      "feature": "Membresías multi-organización",
+      "scenario": "Un usuario tiene roles distintos por organización",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Security.AuthenticationPipelineTests.Organization_authorization_keeps_multi_org_roles_separate"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Security.PostgreSqlBootstrapTrackingTests.Multi_org_roles_are_separate_and_external_role_headers_do_not_elevate"
+        }
+      ]
+    },
+    {
+      "feature": "Custodia y cancelación",
+      "scenario": "Cancelación en punto de recolección sin custodia",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OrderAttemptCustodyPostgreSqlContractTests.A_pickup_incident_photo_is_not_custody_so_the_order_can_still_be_cancelled"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.UnitTests.Orders.OrderTransitionDomainTests.A_pickup_photo_alone_is_never_custody"
+        }
+      ]
+    },
+    {
+      "feature": "Custodia y cancelación",
+      "scenario": "Intento fallido no salta directamente a entregado",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.IncidentsPostgreSqlContractTests.A_failed_attempt_never_reaches_delivered_directly"
+        }
+      ]
+    },
+    {
+      "feature": "Ubicación de repartidor",
+      "scenario": "Persistencia y publicación autorizada",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.DriverLocationIngestionPostgreSqlContractTests.Batch_persists_every_valid_point_deduplicates_and_emits_minimal_throttled_outbox"
+        },
+        {
+          "job": "outbox-signalr-delivery",
+          "test": "Paqueteria.IntegrationTests.Realtime.RealtimeOutboxAudienceAndIsolationTests.Real_location_lane_publishes_exact_payload_only_to_same_tenant_operations"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Realtime.RealtimeHubIntegrationTests.Tracking_groups_isolate_tokens_and_public_payload_has_no_coordinates"
+        }
+      ]
+    },
+    {
+      "feature": "Ubicación de repartidor",
+      "scenario": "Posición duplicada",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.DriverLocationIngestionPostgreSqlContractTests.Concurrent_contexts_serialize_deduplication_and_create_one_position_and_outbox"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Drivers.DriverLocationHttpTests.POST_preserves_order_and_exact_mixed_counts"
+        }
+      ]
+    },
+    {
+      "feature": "Idempotencia financiera y de incidencias",
+      "scenario": "Crear oferta externa requiere idempotencia",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Dispatch.DispatchHttpTests.EXT001_denies_own_driver_and_requires_idempotency_for_mutations"
+        }
+      ]
+    },
+    {
+      "feature": "Idempotencia financiera y de incidencias",
+      "scenario": "Abrir incidencia requiere idempotencia",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.ContractTests.IncidentsOpenApiImplementationTests.Opening_requires_the_idempotency_key_header_the_endpoint_enforces"
+        }
+      ]
+    },
+    {
+      "feature": "Privilegios append-only v0.5",
+      "scenario": "La API no puede modificar evidencia final",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.Acceptance.QuoteOrderAcceptanceContractTests.Acceptance_and_all_evidence_tables_are_rls_protected_and_append_only_for_runtime"
+        },
+        {
+          "job": "backup-restore",
+          "test": "tools.test-backup-restore.append_only_table_independent_custody_proofs"
+        }
+      ]
+    },
+    {
+      "feature": "Privilegios append-only v0.5",
+      "scenario": "El Worker no modifica directamente el outbox",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OutboxLifecycleContractTests.Runtime_outbox_access_is_insert_only_without_returning_for_both_lanes"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OutboxLifecycleContractTests.Business_outbox_claim_settle_requeue_and_purge_enforce_the_full_lease_lifecycle"
+        }
+      ]
+    },
+    {
+      "feature": "Bootstrap bajo FORCE RLS",
+      "scenario": "Resolver identidad sin contexto tenant previo",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.RlsAndProvisioningContractTests.Bootstrap_resolution_returns_only_active_identity_memberships"
+        }
+      ]
+    },
+    {
+      "feature": "Bootstrap bajo FORCE RLS",
+      "scenario": "Tracking no permite enumeración",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Security.PostgreSqlBootstrapTrackingTests.Invalid_tracking_variants_return_uniform_404"
+        },
+        {
+          "job": "public-tracking",
+          "test": "Paqueteria.IntegrationTests.Tracking.PublicTrackingPostgreSqlTests.Product_endpoint_has_exact_contract_uniform_privacy_and_no_enumeration"
+        }
+      ]
+    },
+    {
+      "feature": "Contexto tenant limitado a transacción",
+      "scenario": "Reaplicar contexto después de un fallo transitorio",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.TransactionalRlsPoolingContractTests.Retry_strategy_creates_new_transactions_and_reapplies_the_complete_context_before_business_sql"
+        }
+      ]
+    },
+    {
+      "feature": "Contexto tenant limitado a transacción",
+      "scenario": "Consulta tenant fuera de transacción",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.TransactionalRlsPoolingContractTests.Tenant_queries_commands_and_save_changes_fail_before_useful_sql_outside_transaction"
+        }
+      ]
+    },
+    {
+      "feature": "Contexto tenant limitado a transacción",
+      "scenario": "PgBouncer no filtra contexto entre tenants",
+      "status": "NOT_APPLICABLE",
+      "reason": "AI-15 pooling_contract asks for a real PgBouncer regression before transaction pooling is enabled; the pilot has no PgBouncer and GATE-014 (database_scale_topology) is open. Pooled-connection reuse without PgBouncer is covered by TransactionalRlsPoolingContractTests.",
+      "tests": []
+    },
+    {
+      "feature": "Cotización de uso único",
+      "scenario": "Dos claves distintas intentan consumir la misma cotización",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Orders.OrderHttpTests.Concurrent_POST_distinct_keys_for_same_quote_has_one_201"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OrdersPostgreSqlContractTests.Concurrency_hash_conflict_collision_retry_and_migration_contract_hold"
+        }
+      ]
+    },
+    {
+      "feature": "Snapshot sin PII",
+      "scenario": "Persistir una cotización con datos de contacto",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.PricingPostgreSqlContractTests.Quote_service_selects_active_tariff_persists_safe_snapshots_and_replays"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.PricingPostgreSqlContractTests.A_destination_email_is_sealed_twice_the_origin_never_and_nothing_leaks"
+        }
+      ]
+    },
+    {
+      "feature": "Esquemas físicos por módulo",
+      "scenario": "La migración crea todos los schemas normativos",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.ArchitectureTests.DatabaseSchemaCatalogTests.Ai06_creates_exactly_the_cataloged_application_schemas_and_keeps_postgis_public"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.ArchitectureTests.DatabaseSchemaCatalogTests.Ai18_covers_every_cataloged_schema_and_module_default_privilege_kind"
+        }
+      ]
+    },
+    {
+      "feature": "Esquemas físicos por módulo",
+      "scenario": "FK cross-schema no autorizada",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.ArchitectureTests.CrossSchemaWriteCatalogTests.The_check_fails_on_a_new_site_a_removed_site_and_a_site_without_a_flow"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.ArchitectureTests.OrdersArchitectureTests.Cross_schema_access_is_limited_to_named_coordinators_and_narrow_readers"
+        }
+      ]
+    },
+    {
+      "feature": "Evidencia mediante carga firmada",
+      "scenario": "Finalizar una evidencia validada",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.IntegrationTests.Custody.SecureProofUploadPipelineTests.Api_storage_worker_and_finalization_complete_once_without_order_transition"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.IntegrationTests.Custody.MinioProofStorageTests.Conditional_promotion_is_idempotent_and_publishes_only_trusted_metadata"
+        }
+      ]
+    },
+    {
+      "feature": "Evidencia mediante carga firmada",
+      "scenario": "API no recibe multipart",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.ArchitectureTests.CustodyArchitectureTests.Endpoints_never_accept_file_bytes_or_publish_download_routes"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.ArchitectureTests.CustodyArchitectureTests.Custody_has_no_local_file_or_mutable_singleton_processing"
+        }
+      ]
+    },
+    {
+      "feature": "GPS por lotes y lane independiente",
+      "scenario": "Lote con posiciones nuevas y repetidas",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Drivers.DriverLocationHttpTests.POST_preserves_order_and_exact_mixed_counts"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.DriverLocationIngestionPostgreSqlContractTests.Batch_persists_every_valid_point_deduplicates_and_emits_minimal_throttled_outbox"
+        }
+      ]
+    },
+    {
+      "feature": "GPS por lotes y lane independiente",
+      "scenario": "Telemetría no retrasa eventos críticos",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "outbox-signalr-delivery",
+          "test": "Paqueteria.IntegrationTests.Realtime.RealtimeOutboxAudienceAndIsolationTests.Real_poison_in_each_lane_does_not_starve_the_other_lane"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.ArchitectureTests.DriversArchitectureTests.Driver_location_lane_has_no_realtime_worker_storage_or_generic_repository_dependency"
+        }
+      ]
+    },
+    {
+      "feature": "Política 401 403 404",
+      "scenario": "Solicitud sin autenticación",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Security.TenantSelectionPipelineTests.Protected_tenant_endpoint_requires_authentication_before_tenant_selection"
+        }
+      ]
+    },
+    {
+      "feature": "Política 401 403 404",
+      "scenario": "Actor sin capacidad dentro de su organización",
+      "status": "GAP",
+      "reason": "business_operator and the financial override endpoint belong to MVP-2 businesses; the 403 for an actor without the capability is tested on the pilot capability matrices, not on this exact case.",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Security.OrderCapabilityMatrixHttpTests"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.ContractTests.CapabilityMatrixContractTests"
+        }
+      ]
+    },
+    {
+      "feature": "Política 401 403 404",
+      "scenario": "Recurso de otro tenant",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Dispatch.DispatchHttpTests.POST_uses_uniform_404_for_missing_or_cross_tenant_resources"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.DispatchPostgreSqlContractTests.Missing_and_cross_tenant_resources_execute_the_same_visibility_plan_and_roll_back"
+        }
+      ]
+    },
+    {
+      "feature": "Custodia después de reprogramación",
+      "scenario": "Reanudar entrega sin custodia",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.UnitTests.Orders.OrderTransitionDomainTests.Retry_delivery_guard_rejects_missing_custody_or_assignment"
+        }
+      ]
+    },
+    {
+      "feature": "Custodia después de reprogramación",
+      "scenario": "Una orden reprogramada no sale directo a reparto (D8-RESCHEDULED-NO-DIRECT-DELIVERY)",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.UnitTests.Orders.OrderTransitionDomainTests.Matrix_is_exact_and_table_driven_over_every_possible_pair"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.DispatchPostgreSqlContractTests.D8_reschedule_cancels_the_previous_assignment_and_reassignment_creates_a_new_one"
+        }
+      ]
+    },
+    {
+      "feature": "COD mínimo en MVP-0",
+      "scenario": "Entregar COD sin registro de efectivo",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OrdersTransitionPostgreSqlContractTests.Confirmation_assignment_custody_incident_delivery_COD_close_and_claim_rules_use_real_rows"
+        }
+      ]
+    },
+    {
+      "feature": "COD mínimo en MVP-0",
+      "scenario": "Cerrar COD no conciliado",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OrdersTransitionPostgreSqlContractTests.Confirmation_assignment_custody_incident_delivery_COD_close_and_claim_rules_use_real_rows"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.UnitTests.Finance.CodLifecyclePolicyTests.Fin001_close_policy_agrees_with_the_order_transition_guard"
+        }
+      ]
+    },
+    {
+      "feature": "Ventana de reclamación",
+      "scenario": "Abrir reclamación después de la ventana",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.UnitTests.Orders.ClaimWindowBoundaryTests.Claim_one_microsecond_after_the_window_is_rejected"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OrdersTransitionPostgreSqlContractTests.Claim_window_boundary_and_lifecycle_finalization_gate_claim_open"
+        }
+      ]
+    },
+    {
+      "feature": "Ventana de reclamación",
+      "scenario": "Finalización idempotente",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.ClaimWindowFinalizationPostgreSqlContractTests.Concurrent_workers_finalize_every_order_exactly_once_and_reruns_are_no_ops"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.ClaimWindowFinalizationPostgreSqlContractTests.Finalization_never_touches_order_events_proofs_outbox_audit_or_economics"
+        }
+      ]
+    },
+    {
+      "feature": "Lista blanca transaccional",
+      "scenario": "Aparece un coordinador cross-module nuevo",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.ArchitectureTests.CrossSchemaWriteCatalogTests.The_catalogue_allows_exactly_the_six_ai04_flows_and_existing_adrs"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.ArchitectureTests.CrossSchemaWriteCatalogTests.The_check_fails_on_a_new_site_a_removed_site_and_a_site_without_a_flow"
+        }
+      ]
+    },
+    {
+      "feature": "Extensiones y hash simétrico v0.6",
+      "scenario": "Bootstrap y tracking ejecutan en PostgreSQL real",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.BootstrapContractTests.Extensions_are_placed_and_callable_as_contractually_required"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.BootstrapContractTests.Runtime_login_cannot_create_objects_in_public"
+        }
+      ]
+    },
+    {
+      "feature": "Extensiones y hash simétrico v0.6",
+      "scenario": "C# y SQL producen el mismo hash",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.ContractTests.Cryptography.CryptographicVectorTests.Tracking_token_matches_the_permanent_base64url_and_sha256_vector"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.Tracking.PublicTrackingContractTests"
+        }
+      ]
+    },
+    {
+      "feature": "Lifecycle del outbox con lease v0.6",
+      "scenario": "Settle válido",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OutboxLifecycleContractTests.Business_outbox_claim_settle_requeue_and_purge_enforce_the_full_lease_lifecycle"
+        }
+      ]
+    },
+    {
+      "feature": "Lifecycle del outbox con lease v0.6",
+      "scenario": "Settle obsoleto",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OutboxLifecycleContractTests.Business_outbox_claim_settle_requeue_and_purge_enforce_the_full_lease_lifecycle"
+        }
+      ]
+    },
+    {
+      "feature": "Lifecycle del outbox con lease v0.6",
+      "scenario": "Recuperar Worker muerto",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OutboxLifecycleContractTests.Business_outbox_claim_settle_requeue_and_purge_enforce_the_full_lease_lifecycle"
+        }
+      ]
+    },
+    {
+      "feature": "Lifecycle del outbox con lease v0.6",
+      "scenario": "Productor sin RETURNING",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.EfOutboxInsertContractTests.Ef_core_emits_insert_without_returning_for_both_outbox_lanes"
+        }
+      ]
+    },
+    {
+      "feature": "Tracking público fail-closed v0.6",
+      "scenario": "Mapa completo SQL y C#",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.UnitTests.Tracking.TrackingContractTests.Public_status_policy_maps_exactly_17_states_and_rejects_unknown"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.Tracking.PublicTrackingContractTests"
+        }
+      ]
+    },
+    {
+      "feature": "Tracking público fail-closed v0.6",
+      "scenario": "Evento interno permanece privado",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.UnitTests.Orders.OrderTransitionDomainTests.Public_event_code_mapping_is_exact_and_private_by_default"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.PilotContractDeltasPostgreSqlContractTests.Public_timeline_breaks_equal_occurred_at_by_aggregate_version"
+        }
+      ]
+    },
+    {
+      "feature": "Tracking público fail-closed v0.6",
+      "scenario": "Estado desconocido",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.UnitTests.Tracking.TrackingContractTests.Public_status_policy_maps_exactly_17_states_and_rejects_unknown"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.Tracking.PublicTrackingContractTests"
+        }
+      ]
+    },
+    {
+      "feature": "Evidencia legal de aceptación v0.6",
+      "scenario": "Vector canónico estable",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.ContractTests.Cryptography.CryptographicVectorTests.Acceptance_canonicalizer_matches_the_permanent_utf8_and_hash_vectors"
+        }
+      ]
+    },
+    {
+      "feature": "Evidencia legal de aceptación v0.6",
+      "scenario": "Aceptación atómica y append-only",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.Acceptance.QuoteOrderAcceptanceContractTests.Quote_snapshot_order_acceptance_event_and_outbox_commit_atomically"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.Acceptance.QuoteOrderAcceptanceContractTests.Acceptance_and_all_evidence_tables_are_rls_protected_and_append_only_for_runtime"
+        }
+      ]
+    },
+    {
+      "feature": "Provisioning transaccional v0.6",
+      "scenario": "Primer usuario",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.RlsAndProvisioningContractTests.First_user_and_organization_provisioning_are_preauthorized_and_atomic"
+        }
+      ]
+    },
+    {
+      "feature": "Provisioning transaccional v0.6",
+      "scenario": "Nueva organización",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.RlsAndProvisioningContractTests.First_user_and_organization_provisioning_are_preauthorized_and_atomic"
+        }
+      ]
+    },
+    {
+      "feature": "Lane de telemetría y retención v0.6",
+      "scenario": "Una posición produce como máximo un mensaje",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OutboxLifecycleContractTests.Location_outbox_lifecycle_is_symmetric_and_driver_position_is_unique_without_fk"
+        }
+      ]
+    },
+    {
+      "feature": "Lane de telemetría y retención v0.6",
+      "scenario": "Purga segura",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OutboxRetentionContractTests.Scheduled_run_deletes_only_old_terminal_rows_preserves_active_states_and_is_idempotent"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OutboxRetentionContractTests.Maintenance_role_owns_only_the_purge_functions_and_no_lifecycle_capability"
+        }
+      ]
+    },
+    {
+      "feature": "Dinero de 64 bits v0.6",
+      "scenario": "Contratos monetarios",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.ContractTests.OpenApi.OpenApiContractTests.Every_openapi_cents_field_is_integer_int64_and_uniform_not_found_is_non_enumerating"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.AdditionalDatabaseContractTests.Money_columns_are_bigint_and_large_values_and_constraints_execute_in_postgresql"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.ArchitectureTests.FinanceArchitectureTests.Money_never_leaves_the_finance_module_as_binary_floating_point"
+        }
+      ]
+    },
+    {
+      "feature": "Avisos al destinatario v0.6",
+      "scenario": "Solo cinco transiciones piden aviso",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.ContractTests.Normative.RecipientNoticeProducerNormativeTests.The_policy_covers_the_29_AI04_transitions_and_writes_exactly_the_AI24_triggers"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.OrdersTransitionPostgreSqlContractTests.Recipient_notice_request_row_commits_and_rolls_back_with_its_transition_and_is_never_replayed"
+        }
+      ]
+    },
+    {
+      "feature": "Avisos al destinatario v0.6",
+      "scenario": "Canales según el permiso y el correo",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.UnitTests.Notifications.RecipientNoticeDeliveryTests.Expansion_creates_a_notice_per_eligible_channel"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.RecipientNoticeLanePostgreSqlContractTests"
+        }
+      ]
+    },
+    {
+      "feature": "Avisos al destinatario v0.6",
+      "scenario": "Sin duplicados",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.RecipientNoticeLanePostgreSqlContractTests"
+        }
+      ]
+    },
+    {
+      "feature": "Avisos al destinatario v0.6",
+      "scenario": "Horario sin mensajes",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.UnitTests.Notifications.RecipientNoticeDeliveryTests.Nothing_leaves_outside_the_window_and_a_deferred_send_waits_for_the_next_opening"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.UnitTests.Notifications.RecipientNoticeDeliveryTests.Quiet_hours_are_open_from_eight_inclusive_to_twenty_one_exclusive"
+        }
+      ]
+    },
+    {
+      "feature": "Avisos al destinatario v0.6",
+      "scenario": "Baja global respetada",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.RecipientNoticeDeliveryPostgreSqlContractTests"
+        }
+      ]
+    },
+    {
+      "feature": "Avisos al destinatario v0.6",
+      "scenario": "Avisos apagados",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.UnitTests.Notifications.RecipientNoticeDeliveryTests.Notices_off_or_a_disabled_provider_end_failed_channel_disabled_without_reading_anything"
+        }
+      ]
+    },
+    {
+      "feature": "Avisos al destinatario v0.6",
+      "scenario": "Enlace verificado y sin datos personales",
+      "status": "COVERED",
+      "tests": [
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.UnitTests.Notifications.RecipientNoticeDeliveryTests.A_whatsapp_notice_is_routed_with_the_number_of_guide_the_button_suffix_and_the_quick_reply"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.UnitTests.Notifications.RecipientNoticeDeliveryTests.An_email_notice_is_routed_with_the_link_the_unsubscribe_page_and_the_one_click_header"
+        }
+      ]
+    }
+  ]
+}

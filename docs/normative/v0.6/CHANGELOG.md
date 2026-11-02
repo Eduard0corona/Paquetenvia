@@ -1,5 +1,39 @@
 # Changelog
 
+## Puerta del piloto: fase de arranque (REL-001-PILOT-READINESS-2026-11-02, AI-08 REL-001) — 2026-11-02
+
+- Respuestas literales del project owner (ronda Z, preguntas Z1 a Z12, 2026-11-01), registradas en `decision-log.md` con
+  su contexto, los textos de las opciones y las opciones no elegidas: Z1 "Dos fases (Recommended)", Z2 "En su propia tarea
+  (Recommended)", Z3 "PR aparte ya (Recommended)", Z4 "Local/CI (Recommended)", Z5 "Solo en el ensayo (Recommended)", Z6
+  "Ensayo y luego datos reales (Recommended)", Z7 "Las de producto (Recommended)", Z8 "Las del recorrido principal
+  (Recommended)", Z9 "Semana previa, con conteos (Recommended)", Z10 "Como REL-000, firmas tú (Recommended)", Z11
+  "Workflow bajo demanda (Recommended)" y Z12 "Conteos en la decisión (Recommended)".
+- REL-001 se cierra en dos fases (Z1). Este cambio construye solo el reporte de arranque: plan de entregas, ensayo
+  sintético, restore vigente y regresión completa. El reporte de cierre mide el 98% con las entregas reales mediante una
+  función de solo conteo en la base del piloto (Z6, segunda mitad); queda pendiente como un cambio posterior revisado como
+  cambio de seguridad.
+- AI-24 gana la sección `pilot_readiness` con las definiciones y los umbrales: datos completos (órdenes entregadas con
+  eventos contiguos, cada cambio de estado auditado y las dos fotos, umbral 0.98, al menos 50 entregadas en el ensayo),
+  latencias que bloquean (pantallas críticas p95 < 2 s y alta de orden p95 < 3 s, al menos 100 muestras, percentil por
+  rango más cercano) y las de AI-15 que solo se reportan, las cinco pantallas críticas de Z8, el restore vigente de Z9 (7
+  días o menos antes de arrancar, después de la última migración, con conteos de organizaciones, órdenes, eventos y fotos;
+  ventana de restauración de 14 días), el formato de Z10, el workflow de Z11 y el plan de Z12. AI-08 REL-001 gana su
+  criterio `DECIDED`.
+- Herramienta `tools/rel-001/rel001.py` (formato `paquetenvia-rel001-v1`), a prueba de fallas como REL-000: lee la corrida
+  de Foundation certificada 13/13 y sus artifacts de REL-000 y de ejecución, el ensayo, la línea `EVIDENCE` del simulacro y
+  el registro de decisión `docs/releases/mvp-1-pilot-decision.json` (conteos del plan y firmas por rol); publica seis JSON
+  redactados y un resumen en español. Revisa que los avisos al destinatario sigan apagados hasta GATE-004 y GATE-007 y
+  lista las compuertas abiertas de AI-10 (`MVP-1_PILOT`), que impiden aprobar el arranque mientras sigan abiertas. El
+  ensayo (PR-B) y los conteos del simulacro (PR-C) todavía no existen: el reporte los marca como faltantes y no pasa.
+- Manifiestos cerrados: las pantallas de AI-07 de MVP-0 y MVP-1 con su prueba de navegador o la tarea que la debe (Z2), y
+  el mapa de los 81 escenarios de AI-09 (73 cubiertos, 3 sin prueba y 5 que no aplican al piloto, cada uno con su razón de
+  contrato). La corrección de los 503 (Z3) ya entró con el PR #328.
+- Workflow `.github/workflows/pilot-readiness.yml`, solo `workflow_dispatch` desde `main`, sobre una corrida de Foundation
+  certificada 13/13 (la compuerta `deploy-gate` de AZR-001). Foundation sigue con 13 jobs y PR Validation con 17; las
+  pruebas de la herramienta corren en los jobs existentes. Nota: `docs/development/rel-001-pilot-readiness.md`.
+- Sin migraciones, roles, permisos, funciones, columnas ni dependencias nuevas. Ningún interruptor se enciende, ninguna
+  compuerta se cierra, nada lee los datos del piloto ni toca Azure.
+
 ## Aviso conocido aceptado de minimatch (SEC-2026-16-MINIMATCH-KNOWN-ADVISORY-2026-10-31) — 2026-10-31
 
 - Respuesta literal del project owner (ronda X, pregunta X1, 2026-10-31), registrada en `decision-log.md` con su contexto,

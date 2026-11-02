@@ -1,0 +1,176 @@
+name: Pilot readiness (REL-001)
+
+# AI-08 REL-001 entry phase (REL-001-PILOT-READINESS-2026-11-02, AI-24 pilot_readiness).
+# - Single trigger: workflow_dispatch, launched by the owner from main (Z11). Never part of PR Validation or
+#   Foundation CI, whose 13 jobs do not change.
+# - Provenance: tested_git_sha must be the head of a 13/13 successful Foundation CI push run on main and an ancestor of
+#   the dispatched main head (the AZR-001 deploy-gate, as the deploy workflows use it).
+# - Reads only that run's REL-000 and execution artifacts, the tested tree, the optional restore drill EVIDENCE line and
+#   the decision record on main. It never reaches Azure and never reads the pilot's data.
+# - Publishes only the redacted REL-001 files (six JSON and a Spanish Markdown summary).
+# Note: docs/development/rel-001-pilot-readiness.md.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tested_git_sha:
+        description: Foundation-certified commit SHA the pilot runs (head of foundation_run_id, ancestor of or equal to the dispatched main head).
+        required: true
+        type: string
+      foundation_run_id:
+        description: Foundation CI run id (push on main) whose head is tested_git_sha and whose 13 jobs all succeeded.
+        required: true
+        type: string
+      restore_drill_evidence:
+        description: The EVIDENCE line printed by deploy/azure/pilot/restore-drill.sh (empty while no drill was run).
+        required: false
+        type: string
+        default: ""
+
+permissions: {}
+
+concurrency:
+  group: pilot-readiness
+  cancel-in-progress: false
+
+jobs:
+  report:
+    name: Build the pilot readiness report
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Check out control plane (github.sha)
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.14"
+
+      - name: Install tool dependencies
+        run: python -m pip install PyYAML==6.0.3
+
+      - name: Validate dispatch inputs
+        shell: bash
+        env:
+          TESTED_GIT_SHA: ${{ inputs.tested_git_sha }}
+          FOUNDATION_RUN_ID: ${{ inputs.foundation_run_id }}
+          RESTORE_DRILL_EVIDENCE: ${{ inputs.restore_drill_evidence }}
+        run: |
+          set -euo pipefail
+          if [[ ! "${TESTED_GIT_SHA}" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::tested_git_sha must match ^[0-9a-f]{40}$"; exit 1
+          fi
+          if [[ ! "${FOUNDATION_RUN_ID}" =~ ^[1-9][0-9]{0,19}$ ]]; then
+            echo "::error::foundation_run_id must match ^[1-9][0-9]{0,19}$"; exit 1
+          fi
+          if [[ -n "${RESTORE_DRILL_EVIDENCE}" && ! "${RESTORE_DRILL_EVIDENCE}" =~ ^EVIDENCE\ [A-Za-z0-9=:\ _-]{1,400}$ ]]; then
+            echo "::error::restore_drill_evidence must be the EVIDENCE line of restore-drill.sh"; exit 1
+          fi
+
+      - name: Fetch Foundation run and job records
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          FOUNDATION_RUN_ID: ${{ inputs.foundation_run_id }}
+        run: |
+          set -euo pipefail
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FOUNDATION_RUN_ID}" > "${RUNNER_TEMP}/foundation-run.json"
+          gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${FOUNDATION_RUN_ID}/jobs?per_page=100" > "${RUNNER_TEMP}/foundation-jobs.json"
+
+      - name: Enforce the 13/13 provenance gate
+        shell: bash
+        env:
+          TESTED_GIT_SHA: ${{ inputs.tested_git_sha }}
+          FOUNDATION_RUN_ID: ${{ inputs.foundation_run_id }}
+        run: >-
+          python ./tools/azr-001/azr001_static_guards.py deploy-gate
+          --tested-git-sha "${TESTED_GIT_SHA}"
+          --dispatch-ref "${GITHUB_REF}"
+          --dispatch-sha "${GITHUB_SHA}"
+          --foundation-run-id "${FOUNDATION_RUN_ID}"
+          --foundation-run-json "${RUNNER_TEMP}/foundation-run.json"
+          --foundation-jobs-json "${RUNNER_TEMP}/foundation-jobs.json"
+
+      - name: Check out tested_git_sha
+        uses: actions/checkout@v5
+        with:
+          ref: ${{ inputs.tested_git_sha }}
+          path: tested
+          fetch-depth: 1
+
+      - name: Download the certified run's REL-000 evidence
+        uses: actions/download-artifact@v5
+        with:
+          name: rel000-mvp0-internal-release-evidence
+          path: ${{ runner.temp }}/rel001-foundation/rel000-mvp0-internal-release-evidence
+          run-id: ${{ inputs.foundation_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download the certified run's execution evidence
+        uses: actions/download-artifact@v5
+        with:
+          pattern: rel000-execution-*
+          path: ${{ runner.temp }}/rel001-foundation
+          run-id: ${{ inputs.foundation_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download the certified run's OPS-001 evidence
+        uses: actions/download-artifact@v5
+        with:
+          name: delivery-simulation-results
+          path: ${{ runner.temp }}/rel001-foundation/delivery-simulation-results
+          run-id: ${{ inputs.foundation_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download the certified run's OPS-002 evidence
+        uses: actions/download-artifact@v5
+        with:
+          name: ops002-backup-restore-results
+          path: ${{ runner.temp }}/rel001-foundation/ops002-backup-restore-results
+          run-id: ${{ inputs.foundation_run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Build the REL-001 entry report
+        shell: bash
+        env:
+          TESTED_GIT_SHA: ${{ inputs.tested_git_sha }}
+          FOUNDATION_RUN_ID: ${{ inputs.foundation_run_id }}
+          RESTORE_DRILL_EVIDENCE: ${{ inputs.restore_drill_evidence }}
+        run: >-
+          python ./tools/rel-001/rel001.py report
+          --tested-root tested
+          --control-root .
+          --tested-git-sha "${TESTED_GIT_SHA}"
+          --foundation-run-id "${FOUNDATION_RUN_ID}"
+          --foundation-run-json "${RUNNER_TEMP}/foundation-run.json"
+          --foundation-jobs-json "${RUNNER_TEMP}/foundation-jobs.json"
+          --dispatch-ref "${GITHUB_REF}"
+          --dispatch-sha "${GITHUB_SHA}"
+          --artifacts-dir "${RUNNER_TEMP}/rel001-foundation"
+          --workflow-run-id "${GITHUB_RUN_ID}"
+          --restore-evidence-env RESTORE_DRILL_EVIDENCE
+          --decision-record
+          --output "${RUNNER_TEMP}/rel001-output"
+
+      - name: Publish only the redacted REL-001 report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rel001-pilot-readiness-report
+          path: |
+            ${{ runner.temp }}/rel001-output/rel001-pilot-readiness-report.json
+            ${{ runner.temp }}/rel001-output/rel001-regression-evidence.json
+            ${{ runner.temp }}/rel001-output/rel001-data-completeness.json
+            ${{ runner.temp }}/rel001-output/rel001-latency-evidence.json
+            ${{ runner.temp }}/rel001-output/rel001-restore-evidence.json
+            ${{ runner.temp }}/rel001-output/rel001-delivery-plan.json
+            ${{ runner.temp }}/rel001-output/rel001-pilot-readiness-report.md
+          if-no-files-found: ignore
+          retention-days: 14

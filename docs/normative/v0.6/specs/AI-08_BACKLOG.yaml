@@ -813,6 +813,27 @@ items:
   - NTF-RECIPIENT-NOTICES-2026-10-20 and PILOT-SCOPE-ALL-ENABLED - the recipient notices (NTF-005) are part of the pilot; they go live only once GATE-004 and GATE-007 are resolved
   - datos completos >=98%
   - restore vigente
+  - 'DECIDED REL-001-PILOT-READINESS-2026-11-02 (project owner, Z1 "Dos fases (Recommended)", Z4 "Local/CI
+    (Recommended)", Z5 "Solo en el ensayo (Recommended)", Z6 "Ensayo y luego datos reales (Recommended)", Z7 "Las de
+    producto (Recommended)", Z8 "Las del recorrido principal (Recommended)", Z9 "Semana previa, con conteos
+    (Recommended)", Z10 "Como REL-000, firmas tú (Recommended)", Z11 "Workflow bajo demanda (Recommended)", Z12
+    "Conteos en la decisión (Recommended)"): REL-001 closes in two phases (Z1) - an entry report authorizes the start of
+    the pilot from the delivery plan, a synthetic rehearsal, a current restore drill and the full regression, and a
+    closing report measures datos completos >=98% on the real deliveries; the closing count function is a later
+    security-reviewed change (Z6) and is not part of this item yet; the rehearsal runs on a local/CI synthetic stack
+    with delivery photos and no Azure (Z4) and carries, on demand only, the cobro y fallas journey - cash on delivery to
+    the close, a failed attempt, a CSV import and a paid settlement (Z5); datos completos >=98% is
+    orders_with_complete_events_and_pod measured in that rehearsal - delivered orders with contiguous events, every
+    status change audited and both proof photos (Z6); only the AI-02 latencies block - critical screens p95 below 2 s
+    and order creation p95 below 3 s excluding external providers - while the AI-15 levels are reported, and the
+    report says CI runners are not the pilot database (Z7); the critical screens are /ops/inbox, /ops/orders/:id,
+    /driver/stops, /driver/stops/:id and /track/:token (Z8); restore vigente is a drill 7 days or less before the start
+    and after the last migration that also compares the row counts of organizations, orders, events and photos (Z9);
+    the report follows REL-000 - redacted JSON, a Spanish Markdown summary and a versioned decision record in which the
+    project owner approves operations, finance and legal and names who reviewed legal by role only (Z10); it is
+    produced by a workflow_dispatch workflow from main over a certified 13/13 Foundation run without changing its 13
+    jobs (Z11); the 50-100 planned deliveries are counts in the decision record - total, period, senders and zones, no
+    personal data (Z12); definitions and thresholds in AI-24 pilot_readiness'
   required_tests:
   - full regression
   approval_gate: operations_finance_legal
