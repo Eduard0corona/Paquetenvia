@@ -227,6 +227,18 @@ del Worker aplica el backoff acotado; errores permanentes terminan en
 `REJECTED`. La evidencia rechazada permanece privada porque su retención no
 está autorizada.
 
+Una pasada del Worker procesa hasta `ProofStorage:MaximumConcurrency` objetos a
+la vez (1 a 32; 4 en el Worker). Cada objeto se valida en su propio alcance de
+inyección de dependencias: su propio `WorkerTenantTransactionContext`,
+`CustodyDbContext`, estado de ejecución tenant y escritor de auditoría
+(respuesta del project owner del 2026-11-02 al hallazgo del ensayo de REL-001:
+"PR aparte primero (Recommended)"). Antes, todos los objetos de la pasada
+compartían el `CustodyDbContext` de la pasada: con 2 o más fotos esperando, cada
+claim después del primero fallaba, la pasada terminaba en
+`ProofStorageUnavailableException` y el Worker esperaba con backoff de hasta
+300 s. La pasada sigue fallando cerrada si un objeto falla, y RLS, roles,
+auditoría y telemetría por objeto no cambian.
+
 Las métricas son `custody.proof.sessions`,
 `custody.proof.objects_discovered`, `custody.proof.processing_duration`,
 `custody.proof.validation_outcomes`, `custody.proof.stale_recoveries`,
@@ -259,6 +271,10 @@ append-only, descarga autorizada/no autorizada y limpieza recuperable.
 También cubre replays HTTP y PostgreSQL/MinIO con autorización actual,
 precedencia `403/404/409`, MFA, assignments vigentes/revocadas, cero efectos,
 vigencia del grant y corrupción sintética de evidencia persistida.
+`ProofValidationConcurrencyTests` deja 3 fotos en cuarentena, con concurrencia 3,
+y las retiene en la verificación del veredicto hasta que todas llegan, para que
+sus claims coincidan. Una sola pasada las deja `READY`, con una fila de auditoría
+cada una.
 
 ## Migración y rollback
 
