@@ -169,6 +169,7 @@ export function useOperationsDashboard(
         setLastUpdated(null);
         setError(null);
         setAccessUnavailable(false);
+        setConnection("Conectando");
       },
       async () => {
         if (current !== null) await current.stop().catch(() => undefined);

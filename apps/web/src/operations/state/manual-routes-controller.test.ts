@@ -11,7 +11,8 @@ import {
 } from "../contracts/bulk-route";
 import type { ManualRoute, ManualRouteDetail, ManualRoutePage } from "../contracts/manual-route";
 import { orderNotFoundMessage } from "../contracts/order-transitions";
-import { bearerSession, syntheticUuid } from "../contracts/ui-001-screens.fixtures";
+import { bearerSession, orgB, syntheticUuid } from "../contracts/ui-001-screens.fixtures";
+import type { OperationsSession } from "../session/operations-session";
 import {
   ManualRoutesController,
   maximumGuideReads,
@@ -38,6 +39,7 @@ import {
   type RouteMutation,
 } from "./manual-routes-controller";
 import { orderSearchFailedMessage } from "./order-search";
+import { clearThenStopPrevious } from "./session-switch";
 
 const session = bearerSession();
 const driverId = syntheticUuid(0x601);
@@ -932,5 +934,57 @@ describe("route planner under SEC-004 (owner answers Q9, Q13)", () => {
     await vi.advanceTimersByTimeAsync(1);
     expect(lists()).toBe(3);
     controller.stop();
+  });
+});
+
+describe("route planner organization switch (Z17)", () => {
+  it("drops the previous organization's routes, route shown and guías before its hub closes, reading nothing meanwhile", async () => {
+    const sessionB = bearerSession(orgB);
+    let current: OperationsSession = session;
+    const apiA = new FakeRoutesApi([routeA, routeB]);
+    const apiB = new FakeRoutesApi([detailOf(summary(3), [])]);
+    // The third stop's guía is still being read when the change arrives.
+    const lateGuide = deferred<string>();
+    apiA.guideAnswers = { [orderOf(3)]: () => lateGuide.promise };
+    const controller = new ManualRoutesController({
+      readSession: () => current,
+      createApi: (installed) => (installed === sessionB ? apiB : apiA),
+      readQuery: () => new URLSearchParams(`routeId=${routeA.id}`),
+      randomUuid: () => "key-1",
+    });
+    expect(await controller.start()).toBe(session);
+    await flush();
+    controller.setConnected(true);
+    controller.setGuide(guideOf(7));
+    expect(controller.getSnapshot().selected?.id).toBe(routeA.id);
+    expect(controller.getSnapshot().guides[orderOf(3)]).toEqual({ kind: "loading" });
+    const readsOfA = [...apiA.calls];
+
+    current = sessionB;
+    const closing = deferred<void>();
+    const switching = clearThenStopPrevious(() => controller.stop(), () => closing.promise);
+    // While A's hub closes: nothing of A is shown and nothing is read or sent, under either organization.
+    expect(controller.getSnapshot()).toMatchObject({
+      routes: [],
+      selected: null,
+      guides: {},
+      guide: "",
+      notice: null,
+      connected: false,
+      loading: false,
+    });
+    await controller.refresh();
+    lateGuide.resolve(guideOf(3));
+    await flush();
+    expect(apiA.calls).toEqual(readsOfA);
+    expect(apiB.calls).toEqual([]);
+    expect(controller.getSnapshot()).toMatchObject({ routes: [], selected: null, guides: {} });
+
+    closing.resolve();
+    await switching;
+    expect(await controller.start()).toBe(sessionB);
+    expect(apiB.calls).toEqual(["list"]);
+    expect(controller.getSnapshot().routes.map((route) => route.id)).toEqual([summary(3).id]);
+    expect(apiA.calls).toEqual(readsOfA);
   });
 });

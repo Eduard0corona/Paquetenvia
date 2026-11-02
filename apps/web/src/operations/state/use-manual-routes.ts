@@ -9,12 +9,14 @@ import { createOperationsConnection } from "../../realtime/operations-connection
 import { createRoutesApi } from "../api/routes-api";
 import { subscribeToOperationsSession, readOperationsSession } from "../session/operations-session";
 import { ManualRoutesController, type ManualRoutesState } from "./manual-routes-controller";
+import { clearThenStopPrevious } from "./session-switch";
 
 /**
  * The route planner (`/ops/routes`): REST is the source of truth (ManualRoutesController, UI-PHASE3-ROUTES-NO-IDS-
  * 2026-10-12) and the operations hub only asks for it - RouteChanged reads the list (and the route shown) again, at
  * most once every 3 seconds (owner answer Q9 of SEC-004-RELOADS-AND-BULK-2026-10-13), and a reconnection
- * resynchronizes from that read. A session or organization change stops the hub and starts from empty.
+ * resynchronizes from that read. A session or organization change empties the screen at once, then stops the hub,
+ * then starts for the new session (Z17, "PR aparte después de #339 (Recommended)", with the method of Z15).
  * Nothing is kept outside this tab's memory.
  */
 export function useManualRoutes(): { state: ManualRoutesState; controller: ManualRoutesController } {
@@ -39,7 +41,9 @@ export function useManualRoutes(): { state: ManualRoutesState; controller: Manua
     };
     const start = async () => {
       const current = ++run;
-      await stopConnection();
+      // The previous organization's routes, route shown and guías go before its hub closes; nothing is read meanwhile.
+      await clearThenStopPrevious(() => controller.stop(), stopConnection);
+      if (cancelled || current !== run) return;
       const session = await controller.start();
       if (cancelled || current !== run || session === null) return;
       const next = createOperationsConnection(
