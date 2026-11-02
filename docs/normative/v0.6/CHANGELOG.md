@@ -1,5 +1,14 @@
 # Changelog
 
+## Documentos del repartidor: panel aprobado y lista en la app (DRV-DOC-001-IN-PERSON-2026-11-02, AI-08 DRV-DOC-001) — 2026-11-02
+
+- Respuesta literal del project owner (ronda Y continuada, 2026-11-02, sobre el PR-2 #338 del panel de despacho): Y14
+  "Aprobarlas todas (Recommended)", que aprueba las 14 decisiones del panel que no estaban en Y1 a Y13 ni en el ADR. La pregunta,
+  el texto de la opción, las 14 líneas de la vista previa y la opción no elegida se citan en la fila
+  `DRV-DOC-001-IN-PERSON-2026-11-02` de `decision-log.md`.
+- PR-3 de tres: la lista de solo lectura «Cuenta > Documentos» de la app del repartidor aplica AI-07
+  `driver_account.documents` tal como está (Y4, Y6, Y8); no cambia ningún contrato.
+
 ## Puerta del piloto: fase de arranque (REL-001-PILOT-READINESS-2026-11-02, AI-08 REL-001) — 2026-11-02
 
 - Respuestas literales del project owner (ronda Z, preguntas Z1 a Z12, 2026-11-01), registradas en `decision-log.md` con
