@@ -579,11 +579,76 @@ class RestoreTests(unittest.TestCase):
     CI_OK = {"ops002_restore_drill_passed": True}
     MANIFESTS = {"backup-restore": [{}]}
 
-    def evaluate(self, line, start=None, rel000=None):
-        return rel001.restore_criterion(line, start, self.GENERATED, rel000 or self.CI_OK, self.MANIFESTS)
+    CI_COUNTS = {"organizations": 2, "orders": 2, "order_events": 9, "proof_photos": 2}
+
+    def evaluate(self, line, start=None, rel000=None, ci_counts=None):
+        return rel001.restore_criterion(line, start, self.GENERATED, rel000 or self.CI_OK, self.MANIFESTS,
+                                        ci_counts or ("PASSED", dict(self.CI_COUNTS), []))
+
+    def ops002_report(self, mutate=None, sha="a" * 40) -> Path:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        directory = Path(temp.name) / rel001.OPS002_ARTIFACT
+        directory.mkdir()
+        report = {"result": "RESTORE_DRILL_PASSED", "tested_git_sha": sha, "row_counts_matched": True,
+                  "row_counts_source": dict(self.CI_COUNTS), "row_counts_restored": dict(self.CI_COUNTS)}
+        if mutate:
+            mutate(report)
+        (directory / rel001.OPS002_REPORT_FILE).write_text(json.dumps(report), encoding="utf-8")
+        return Path(temp.name)
+
+    def test_the_ci_drill_counts_match(self):
+        status, counts, reasons = rel001.ci_drill_row_counts(self.ops002_report(), "a" * 40)
+        self.assertEqual(("PASSED", self.CI_COUNTS, []), (status, counts, reasons))
+        result = self.evaluate(None)
+        self.assertEqual("MATCHED", result["ci_drill"]["row_count_comparison"])
+        self.assertEqual(self.CI_COUNTS, result["ci_drill"]["row_counts"])
+        self.assertNotIn("CI_DRILL_ROW_COUNTS_MISSING", result["reasons"])
+
+    def test_a_ci_drill_without_counts_is_missing(self):
+        empty = tempfile.TemporaryDirectory()
+        self.addCleanup(empty.cleanup)
+        self.assertEqual(("MISSING", None, ["CI_DRILL_ROW_COUNTS_MISSING"]),
+                         rel001.ci_drill_row_counts(Path(empty.name), "a" * 40))
+
+        def before_counts(report):
+            for key in ("row_counts_matched", "row_counts_source", "row_counts_restored"):
+                del report[key]
+        self.assertEqual(("MISSING", None, ["CI_DRILL_ROW_COUNTS_MISSING"]),
+                         rel001.ci_drill_row_counts(self.ops002_report(before_counts), "a" * 40))
+
+    def test_a_ci_drill_whose_counts_differ_or_drift_fails(self):
+        cases = {
+            "differ": lambda r: r["row_counts_restored"].update(order_events=8),
+            "not_matched": lambda r: r.update(row_counts_matched=False),
+            "extra_key": lambda r: r["row_counts_source"].update(users=1),
+            "negative": lambda r: (r["row_counts_source"].update(orders=-1), r["row_counts_restored"].update(orders=-1)),
+            "not_int": lambda r: (r["row_counts_source"].update(orders="2"), r["row_counts_restored"].update(orders="2")),
+            "missing_side": lambda r: r.pop("row_counts_restored"),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(case=name):
+                status, counts, reasons = rel001.ci_drill_row_counts(self.ops002_report(mutate), "a" * 40)
+                self.assertEqual(("FAILED", None, ["CI_DRILL_ROW_COUNTS_MISMATCH"]), (status, counts, reasons))
+        for name, (mutate, sha) in {"other_commit": (None, "b" * 40),
+                                    "not_passed": (lambda r: r.update(result="RESTORE_DRILL_FAILED"), "a" * 40)}.items():
+            with self.subTest(case=name):
+                self.assertEqual(("FAILED", None, ["CI_DRILL_REPORT_INVALID"]),
+                                 rel001.ci_drill_row_counts(self.ops002_report(mutate), sha))
+        result = self.evaluate(None, ci_counts=("FAILED", None, ["CI_DRILL_ROW_COUNTS_MISMATCH"]))
+        self.assertEqual("FAILED", result["status"])
+
+    def test_a_symlinked_ci_drill_report_is_missing(self):
+        root = self.ops002_report()
+        report = root / rel001.OPS002_ARTIFACT / rel001.OPS002_REPORT_FILE
+        outside = root / "outside.json"
+        outside.write_text(report.read_text(encoding="utf-8"), encoding="utf-8")
+        report.unlink()
+        report.symlink_to(outside)
+        self.assertEqual("MISSING", rel001.ci_drill_row_counts(root, "a" * 40)[0])
 
     def test_absent_drill_is_missing(self):
-        result = self.evaluate(None)
+        result = self.evaluate(None, ci_counts=("MISSING", None, ["CI_DRILL_ROW_COUNTS_MISSING"]))
         self.assertEqual("MISSING", result["status"])
         self.assertIn("PILOT_DRILL_EVIDENCE_MISSING", result["reasons"])
         self.assertIn("CI_DRILL_ROW_COUNTS_MISSING", result["reasons"])

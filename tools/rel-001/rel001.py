@@ -65,6 +65,10 @@ REL000_REPORT_ARTIFACT = "rel000-mvp0-internal-release-evidence"
 REL000_REPORT_FILE = "rel000-internal-release-report.json"
 EXECUTION_RESULTS_FILE = "rel000-execution-results.json"
 REHEARSAL_FILE = "rel001-rehearsal-evidence.json"
+# OPS-002 CI drill of the certified run (Z9): its final report, in the backup-restore execution artifact.
+OPS002_ARTIFACT = "ops002-backup-restore-results"
+OPS002_REPORT_FILE = "ops002-restore-drill-report.json"
+ROW_COUNT_NAMES = ("organizations", "orders", "order_events", "proof_photos")
 
 # Z1: the entry report covers plan, rehearsal, restore and regression; the closing report is pending.
 CLOSING_PHASE_PENDING = (
@@ -820,16 +824,48 @@ def rehearsal_criteria(rehearsal_dir: Path | None, tested: str, workflow_run_id:
 
 
 # ------------------------------------------------------------------------------------------------ restore (PR-C)
+def row_counts(value: Any) -> dict[str, int] | None:
+    """The four Z9 counts, closed and non-negative, or None when the value is not that shape."""
+    if not isinstance(value, dict) or set(value) != set(ROW_COUNT_NAMES) or \
+            not all(is_int(value[name]) and value[name] >= 0 for name in ROW_COUNT_NAMES):
+        return None
+    return {name: value[name] for name in ROW_COUNT_NAMES}
+
+
+def ci_drill_row_counts(artifacts_dir: Path, tested: str) -> tuple[str, dict[str, int] | None, list[str]]:
+    """The OPS-002 CI drill's comparison: MATCHED with its counts, MISSING (a run before the comparison existed), or
+    FAILED."""
+    path = artifacts_dir / OPS002_ARTIFACT / OPS002_REPORT_FILE
+    if path.is_symlink() or not path.is_file():
+        return MISSING, None, ["CI_DRILL_ROW_COUNTS_MISSING"]
+    report = read_json_file(path, OPS002_REPORT_FILE)
+    if not isinstance(report, dict) or report.get("result") != "RESTORE_DRILL_PASSED" \
+            or report.get("tested_git_sha") != tested:
+        return FAILED, None, ["CI_DRILL_REPORT_INVALID"]
+    if not any(key in report for key in ("row_counts_matched", "row_counts_source", "row_counts_restored")):
+        return MISSING, None, ["CI_DRILL_ROW_COUNTS_MISSING"]
+    source = row_counts(report.get("row_counts_source"))
+    restored = row_counts(report.get("row_counts_restored"))
+    if report.get("row_counts_matched") is not True or source is None or restored is None or source != restored:
+        return FAILED, None, ["CI_DRILL_ROW_COUNTS_MISMATCH"]
+    return PASSED, restored, []
+
+
 def restore_criterion(line: str | None, planned_start: dt.date | None, generated_at: dt.datetime,
-                      rel000_summary: dict[str, Any], manifests: dict[str, list[dict[str, Any]]]) -> dict[str, Any]:
+                      rel000_summary: dict[str, Any], manifests: dict[str, list[dict[str, Any]]],
+                      ci_counts: tuple[str, dict[str, int] | None, list[str]]) -> dict[str, Any]:
     ci_drill_ok = rel000_summary.get("ops002_restore_drill_passed") is True and "backup-restore" in manifests
-    ci = {"ops002_restore_drill_passed": ci_drill_ok, "row_count_comparison": MISSING}
-    reasons = ["CI_DRILL_ROW_COUNTS_MISSING"]
+    ci_status, ci_values, reasons = ci_counts[0], ci_counts[1], list(ci_counts[2])
+    ci = {"ops002_restore_drill_passed": ci_drill_ok,
+          "row_count_comparison": "MATCHED" if ci_status == PASSED else ci_status}
+    if ci_values is not None:
+        ci["row_counts"] = ci_values
     if not ci_drill_ok:
         reasons.append("CI_DRILL_NOT_PASSED")
+    ci_failed = not ci_drill_ok or ci_status == FAILED
     if not line:
         reasons.append("PILOT_DRILL_EVIDENCE_MISSING")
-        return criterion(FAILED if not ci_drill_ok else MISSING, reasons, source="AI-08 REL-001 restore vigente; Z9",
+        return criterion(FAILED if ci_failed else MISSING, reasons, source="AI-08 REL-001 restore vigente; Z9",
                          pilot_drill={"present": False}, ci_drill=ci)
     match = RESTORE_LINE.match(line.strip())
     if not match:
@@ -858,7 +894,7 @@ def restore_criterion(line: str | None, planned_start: dt.date | None, generated
     # deploy/azure/pilot/restore-drill.sh does not yet compare row counts nor name the commit its assert ran: the
     # ENV-001 follow-up (Z9) adds both. Until then the criterion cannot pass.
     reasons += ["PILOT_DRILL_ROW_COUNTS_MISSING", "PILOT_DRILL_COMMIT_MISSING"]
-    if not ci_drill_ok:
+    if ci_failed:
         status = FAILED
     return criterion(status, reasons, source="AI-08 REL-001 restore vigente; Z9", pilot_drill=drill, ci_drill=ci)
 
@@ -985,7 +1021,8 @@ def build_report(args: argparse.Namespace) -> dict[str, Any]:
     record, record_problems = load_decision_record(record_path)
     plan, planned_start = delivery_plan_criterion(record, record_problems)
     line = os.environ.get(args.restore_evidence_env, "") if args.restore_evidence_env else ""
-    restore = restore_criterion(line or None, planned_start, generated_at, rel000_summary, manifests)
+    restore = restore_criterion(line or None, planned_start, generated_at, rel000_summary, manifests,
+                                ci_drill_row_counts(Path(args.artifacts_dir), tested))
     approval = approval_status(record, record_problems, provenance, restore)
 
     technical = {"full_regression": regression, "data_completeness": completeness, "latency": latency,
