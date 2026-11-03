@@ -1,5 +1,86 @@
 # Changelog
 
+## Documentos del repartidor: panel aprobado y lista en la app (DRV-DOC-001-IN-PERSON-2026-11-02, AI-08 DRV-DOC-001) — 2026-11-02
+
+- Respuesta literal del project owner (ronda Y continuada, 2026-11-02, sobre el PR-2 #338 del panel de despacho): Y14
+  "Aprobarlas todas (Recommended)", que aprueba las 14 decisiones del panel que no estaban en Y1 a Y13 ni en el ADR. La pregunta,
+  el texto de la opción, las 14 líneas de la vista previa y la opción no elegida se citan en la fila
+  `DRV-DOC-001-IN-PERSON-2026-11-02` de `decision-log.md`.
+- PR-3 de tres: la lista de solo lectura «Cuenta > Documentos» de la app del repartidor aplica AI-07
+  `driver_account.documents` tal como está (Y4, Y6, Y8); no cambia ningún contrato.
+
+## Puerta del piloto: fase de arranque (REL-001-PILOT-READINESS-2026-11-02, AI-08 REL-001) — 2026-11-02
+
+- Respuestas literales del project owner (ronda Z, preguntas Z1 a Z12, 2026-11-01), registradas en `decision-log.md` con
+  su contexto, los textos de las opciones y las opciones no elegidas: Z1 "Dos fases (Recommended)", Z2 "En su propia tarea
+  (Recommended)", Z3 "PR aparte ya (Recommended)", Z4 "Local/CI (Recommended)", Z5 "Solo en el ensayo (Recommended)", Z6
+  "Ensayo y luego datos reales (Recommended)", Z7 "Las de producto (Recommended)", Z8 "Las del recorrido principal
+  (Recommended)", Z9 "Semana previa, con conteos (Recommended)", Z10 "Como REL-000, firmas tú (Recommended)", Z11
+  "Workflow bajo demanda (Recommended)" y Z12 "Conteos en la decisión (Recommended)".
+- REL-001 se cierra en dos fases (Z1). Este cambio construye solo el reporte de arranque: plan de entregas, ensayo
+  sintético, restore vigente y regresión completa. El reporte de cierre mide el 98% con las entregas reales mediante una
+  función de solo conteo en la base del piloto (Z6, segunda mitad); queda pendiente como un cambio posterior revisado como
+  cambio de seguridad.
+- AI-24 gana la sección `pilot_readiness` con las definiciones y los umbrales: datos completos (órdenes entregadas con
+  eventos contiguos, cada cambio de estado auditado y las dos fotos, umbral 0.98, al menos 50 entregadas en el ensayo),
+  latencias que bloquean (pantallas críticas p95 < 2 s y alta de orden p95 < 3 s, al menos 100 muestras, percentil por
+  rango más cercano) y las de AI-15 que solo se reportan, las cinco pantallas críticas de Z8, el restore vigente de Z9 (7
+  días o menos antes de arrancar, después de la última migración, con conteos de organizaciones, órdenes, eventos y fotos;
+  ventana de restauración de 14 días), el formato de Z10, el workflow de Z11 y el plan de Z12. AI-08 REL-001 gana su
+  criterio `DECIDED`.
+- Herramienta `tools/rel-001/rel001.py` (formato `paquetenvia-rel001-v1`), a prueba de fallas como REL-000: lee la corrida
+  de Foundation certificada 13/13 y sus artifacts de REL-000 y de ejecución, el ensayo, la línea `EVIDENCE` del simulacro y
+  el registro de decisión `docs/releases/mvp-1-pilot-decision.json` (conteos del plan y firmas por rol); publica seis JSON
+  redactados y un resumen en español. Revisa que los avisos al destinatario sigan apagados hasta GATE-004 y GATE-007 y
+  lista las compuertas abiertas de AI-10 (`MVP-1_PILOT`), que impiden aprobar el arranque mientras sigan abiertas. El
+  ensayo (PR-B) y los conteos del simulacro (PR-C) todavía no existen: el reporte los marca como faltantes y no pasa.
+- Manifiestos cerrados: las pantallas de AI-07 de MVP-0 y MVP-1 con su prueba de navegador o la tarea que la debe (Z2), y
+  el mapa de los 81 escenarios de AI-09 (73 cubiertos, 3 sin prueba y 5 que no aplican al piloto, cada uno con su razón de
+  contrato). La corrección de los 503 (Z3) ya entró con el PR #328.
+- Workflow `.github/workflows/pilot-readiness.yml`, solo `workflow_dispatch` desde `main`, sobre una corrida de Foundation
+  certificada 13/13 (la compuerta `deploy-gate` de AZR-001). Foundation sigue con 13 jobs y PR Validation con 17; las
+  pruebas de la herramienta corren en los jobs existentes. Nota: `docs/development/rel-001-pilot-readiness.md`.
+- Sin migraciones, roles, permisos, funciones, columnas ni dependencias nuevas. Ningún interruptor se enciende, ninguna
+  compuerta se cierra, nada lee los datos del piloto ni toca Azure.
+
+## Documentos del repartidor registrados en persona (DRV-DOC-001-IN-PERSON-2026-11-02, AI-08 DRV-DOC-001) — 2026-11-02
+
+- Respuestas literales del project owner (ronda Y, preguntas Y1 a Y12, 2026-11-01), registradas en `decision-log.md`
+  con su contexto, los textos de las opciones y las opciones no elegidas: Y1 "Despacho en persona (Recommended)" (una
+  tercera vía, además de la API de carga y el cargador MDM-001 que nombra AI-08, aprobada explícitamente), Y2 "Ya,
+  apagado (Recommended)", Y3 "No, solo datos (Recommended)", Y4 "Él y despacho (Recommended)", Y5 "Cada año
+  (Recommended)", Y6 "Aviso en el panel (Recommended)", Y7 "Lista fija (Recommended)", Y8 "En la app (Recommended)", Y9
+  "Vigencia + 1 año (Recommended)", Y10 "Revocar, lo actual sigue (Recommended)", Y11 "Solo los exigidos
+  (Recommended)" y Y12 "Sí, todo ese día (Recommended)". ADR: `docs/adr/ADR-DRV-DOC-001-IN-PERSON-DRIVER-DOCUMENTS.md`.
+  El 2026-11-02 (ronda Y continuada, sobre el PR #332) el owner aprobó juntas las 18 subdecisiones técnicas del ADR:
+  Y13 "Aprobarlas todas (Recommended)", citada en la misma fila con la vista previa y la opción no elegida.
+  `registerMyDriverDocument` sigue reservada: mientras ninguna decisión la sirva, un POST a `/driver/me/documents`
+  recibe el 405 vacío del enrutador con `Allow: GET` (lo dice su descripción en AI-05 y lo fija una prueba).
+  Es el PR-1 de tres (ADR, contratos, migración y API); el panel y la app del repartidor van en sus propios PR.
+- AI-06: `drivers.driver_documents` gana `evidence_kind` (`FILE` por omisión o `IN_PERSON`), `expiry_basis`,
+  `rejection_code`, `reviewed_by`, `reviewed_at`, `revoked_by` y `revoked_at`; `object_key` y `sha256` pasan a ser nulos
+  y existen exactamente en las filas `FILE`; cinco restricciones fijan cada forma. El paso del carril Drivers
+  `20261102000100_AddInPersonDriverDocuments` aplica o adopta el mismo DDL (Up, Down y Up probados en PostgreSQL 18 /
+  PostGIS 3.6); su Down se niega mientras haya datos en persona. AI-18 no cambia.
+- DSP-001 conserva su garantía de evidencia por tipo: una fila `FILE` necesita llave y SHA-256 de 32 bytes, una
+  `IN_PERSON` ninguna de las dos, cualquier otra forma es `DOCUMENT_HASH_INVALID`; la política y sus seis lectores leen
+  `evidence_kind`.
+- AI-05: `listDriverDocuments`, `recordDriverDocument` y `revokeDriverDocument` (DISPATCHER y PLATFORM_ADMIN con MFA) y
+  `listMyDriverDocuments` (el propio repartidor), sección `driver_document_operations` de `x-capability-matrix` y la
+  entrada `DRV-DOC-001-IN-PERSON` de `x-pilot-contract-deltas`. `DriverDocument` pierde `object_key` y gana
+  `rejection_code`, `valid_through`, `expiry_basis`, `recorded_at` y `revoked_at`. `registerMyDriverDocument` queda
+  reservada y sin implementar, y su cuerpo ya no deja elegir llave ni hash. Ninguna respuesta lleva foto, archivo,
+  número, llave, hash ni quién revisó.
+- AI-07: columna "Documentos" de "Repartidores" con «Vence en N días» y «Vencido», diálogos de registrar y revocar y la
+  regla de privacidad ajustada (solo tipo, estado, motivo y fecha); lista de solo lectura en "Cuenta". AI-08: criterio
+  DECIDED de DRV-DOC-001. AI-24: sección `driver_documents`.
+- Apagado por omisión y en el piloto (`Drivers:Documents:Enabled=false`; `Drivers__Documents__` administrado por
+  `apps.bicep`) hasta que el owner registre GATE-007; encenderlo fuera de Development, Testing y DEV_SYNTHETIC, y siempre
+  con `PILOT_REAL_PEOPLE`, exige `Drivers:Documents:Gate007DecisionId`. Borradores legales: solo las notas de revisión y
+  las marcas [PENDIENTE] sobre documentos del repartidor (método en persona, sin copias, vigencia + 1 año propuesta al
+  abogado).
+- Sin dependencias nuevas, sin séptimo flujo de AI-13, sin cambios de roles ni permisos.
+
 ## Aviso conocido aceptado de minimatch (SEC-2026-16-MINIMATCH-KNOWN-ADVISORY-2026-10-31) — 2026-10-31
 
 - Respuesta literal del project owner (ronda X, pregunta X1, 2026-10-31), registrada en `decision-log.md` con su contexto,

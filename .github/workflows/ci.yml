@@ -39,7 +39,7 @@ jobs:
         shell: bash
         run: |
           actual="$(sha256sum ./docs/normative/v0.6/database/AI-06_SCHEMA.sql | cut -d ' ' -f 1)"
-          test "$actual" = "b83ed5283e4fd03a4cf6afc958345fe45556fb42b2a79fc13c0fd973f8eed32f"
+          test "$actual" = "61bb933752da93c6317ef642aedc18fc6a89eb639a5aef84795cb4299d535082"
 
       - name: Verify AI-18 remains unchanged
         shell: bash
@@ -86,6 +86,10 @@ jobs:
 
       - name: Test AZR-001 static guard tooling
         run: python -m unittest discover -s ./tools/azr-001 -p "test_*.py" -v
+
+      # REL-001 pilot readiness evidence tool (tools/rel-001); its on-demand workflow is pilot-readiness.yml.
+      - name: Test REL-001 pilot readiness tooling
+        run: python -m unittest discover -s ./tools/rel-001 -p "test_*.py" -v
 
       # CI-OPT slice 1: change classifier, PR Gate and main source guard tooling
       # (tools/ci). Tooling only; nothing here is wired into validation yet.
@@ -248,7 +252,7 @@ jobs:
           dotnet test
           --configuration Release
           --no-build
-          --filter "Category!=PostgreSqlContract&Category!=OutboxSignalRDelivery&Category!=SecureProofUpload&Category!=DriverStopsPwa&Category!=DriverOfflineOperationsPwa&Category!=PublicTrackingPostgreSql&Category!=PublicTrackingPwa&Category!=OperationsDashboardPostgreSql&Category!=OperationsDashboardPwa&Category!=OpsDeliverySimulation&Category!=PlatformEndToEnd"
+          --filter "Category!=PostgreSqlContract&Category!=OutboxSignalRDelivery&Category!=SecureProofUpload&Category!=DriverStopsPwa&Category!=DriverOfflineOperationsPwa&Category!=PublicTrackingPostgreSql&Category!=PublicTrackingPwa&Category!=OperationsDashboardPostgreSql&Category!=OperationsDashboardPwa&Category!=OpsDeliverySimulation&Category!=PlatformEndToEnd&Category!=PilotRehearsal"
           --logger "trx;LogFilePrefix=dotnet"
           --results-directory ./TestResults/dotnet
 

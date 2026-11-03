@@ -7,10 +7,7 @@ import { DescriptionList } from "../../components/ui/description-list";
 import { createIncidentsApi } from "../api/incidents-api";
 import type { OrderStatus } from "../contracts/operations-dashboard";
 import { failedAttemptPendingNote } from "../contracts/failed-attempt";
-import {
-  readOperationsSession,
-  subscribeToOperationsSession,
-} from "../session/operations-session";
+import { readOperationsSession } from "../session/operations-session";
 import {
   failedAttemptUnavailableMessage,
   loadFailedAttempt,
@@ -22,6 +19,8 @@ import {
  * order in FAILED_ATTEMPT shows why the attempt failed, whether dispatch still has to decide
  * and until when to attend it. It is read again whenever the order changes (status or version);
  * the decision itself is taken in "Siguiente paso".
+ * Z17: it reads the session once, when it mounts. The order detail owns the session and unmounts it as soon as the
+ * organization changes, so it never reads this order under another organization.
  */
 export function OperationsFailedAttempt({
   orderId,
@@ -57,10 +56,8 @@ export function OperationsFailedAttempt({
       });
     };
     const timer = window.setTimeout(start, 0);
-    const unsubscribe = subscribeToOperationsSession(start);
     return () => {
       clearTimeout(timer);
-      unsubscribe();
       abort.abort();
     };
   }, [apiBaseUrl, orderId, status, version]);

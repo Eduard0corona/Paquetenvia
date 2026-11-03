@@ -14,10 +14,7 @@ import {
   type AllowedTransition,
   type NextStepAction,
 } from "../contracts/order-transitions";
-import {
-  readOperationsSession,
-  subscribeToOperationsSession,
-} from "../session/operations-session";
+import { readOperationsSession } from "../session/operations-session";
 import {
   initialOrderTransitionState,
   OrderTransitionController,
@@ -34,6 +31,8 @@ import {
  * INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11: from FAILED_ATTEMPT the buttons are the
  * dispatcher's decision ("Reprogramar", "Reintentar hoy", "Regresar"), still only the ones the
  * server listed.
+ * Z17: it reads the session once, when it mounts. The order detail owns the session and unmounts it as soon as the
+ * organization changes, so it never reads this order under another organization.
  */
 export function OperationsNextStep({
   orderId,
@@ -80,9 +79,7 @@ export function OperationsNextStep({
       );
     };
     start();
-    const unsubscribe = subscribeToOperationsSession(start);
     return () => {
-      unsubscribe();
       controllerRef.current?.dispose();
       controllerRef.current = null;
     };

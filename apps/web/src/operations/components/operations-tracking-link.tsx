@@ -9,10 +9,7 @@ import {
   createTrackingLinkApi,
 } from "../api/tracking-link-api";
 import { DateTime } from "../../components/ui/date-time";
-import {
-  readOperationsSession,
-  subscribeToOperationsSession,
-} from "../session/operations-session";
+import { readOperationsSession } from "../session/operations-session";
 import {
   TrackingLinkController,
   type TrackingLinkState,
@@ -29,6 +26,8 @@ import {
  * without a second factor is offered the MFA step-up. The link is kept only in
  * component memory while shown and never persisted or logged. Sending it to
  * the customer is not available (GATE-004, GATE-007).
+ * Z17: it reads the session once, when it mounts. The order detail owns the session and unmounts it as soon as the
+ * organization changes, so it never reads this order under another organization.
  */
 export function OperationsTrackingLink({
   orderId,
@@ -87,12 +86,10 @@ export function OperationsTrackingLink({
     };
 
     const initial = window.setTimeout(() => void start(), 0);
-    const unsubscribe = subscribeToOperationsSession(() => void start());
     return () => {
       cancelled = true;
       abort.abort();
       clearTimeout(initial);
-      unsubscribe();
       controllerRef.current?.dispose();
       controllerRef.current = null;
     };

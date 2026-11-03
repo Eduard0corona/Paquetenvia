@@ -7,6 +7,7 @@ import {
   incidentConflictMessages,
   incidentStatuses,
   type Incident,
+  type IncidentListFilter,
   type IncidentStatus,
   type OpenIncidentDraft,
   type Proof,
@@ -33,6 +34,8 @@ export interface IncidentsState {
   readonly incidents: readonly Incident[];
   /** The listIncidents status filter in effect; null lists every status. */
   readonly statusFilter: IncidentStatus | null;
+  /** The listIncidents order filter in effect (a canonical order id); null lists every order. */
+  readonly orderFilter: string | null;
   /** next_cursor of the last listed page; null when every page was loaded. */
   readonly nextCursor: string | null;
   readonly listing: boolean;
@@ -65,6 +68,7 @@ const initialState: IncidentsState = {
   mfaHint: null,
   incidents: [],
   statusFilter: null,
+  orderFilter: null,
   nextCursor: null,
   listing: false,
   proofsOrderId: null,
@@ -77,11 +81,19 @@ const initialState: IncidentsState = {
   formKey: 0,
 };
 
+const invalidOrderMessage = "El ID de la orden no es válido.";
+
+/** The listIncidents filters in effect; an absent one lists every value. */
+function listFilter(status: IncidentStatus | null, orderId: string | null): IncidentListFilter {
+  return { ...(status === null ? {} : { status }), ...(orderId === null ? {} : { orderId }) };
+}
+
 /**
  * INC-001 open and resolve, with the incidents and order proofs listed by the API
  * (API-INC-LIST-PROOFS-2026-09-29) so ids are picked, not typed. Every incident and
  * proof shown is exactly what the API returned; nothing is inferred locally. A tenant
- * switch drops the incidents, proofs, typed text and pending Idempotency-Keys.
+ * switch drops the incidents, the list filters, proofs, typed text and pending
+ * Idempotency-Keys.
  */
 export class IncidentsController extends ExternalStore<IncidentsState> {
   private api: IncidentsApi | null = null;
@@ -135,26 +147,37 @@ export class IncidentsController extends ExternalStore<IncidentsState> {
           ? "Abrir y resolver incidencias con tu rol requiere verificar tu identidad (MFA)."
           : null,
     });
-    if (canList) await this.refresh(null);
+    if (canList) await this.refresh(null, null);
   }
 
-  /** Loads the first listIncidents page for `status` (null: every status), replacing the list. */
-  public async refresh(status: IncidentStatus | null = this.getSnapshot().statusFilter): Promise<void> {
+  /**
+   * Loads the first listIncidents page for `status` (null: every status) and `orderId` (null: every order), replacing
+   * the list (AI-07 incident_desk: "filterable by status and order"). An order id that is not a canonical UUID is
+   * refused before any request.
+   */
+  public async refresh(
+    status: IncidentStatus | null = this.getSnapshot().statusFilter,
+    orderId: string | null = this.getSnapshot().orderFilter,
+  ): Promise<void> {
     if (!this.getSnapshot().canList) return;
     if (status !== null && !(incidentStatuses as readonly string[]).includes(status)) return;
+    if (orderId !== null && !isCanonicalUuid(orderId)) {
+      this.update({ errors: [invalidOrderMessage], message: null, stepUpHref: null });
+      return;
+    }
     await this.read(
-      () => this.api!.list(status === null ? {} : { status }, null, this.controller?.signal),
-      (page) => ({ incidents: page.items, nextCursor: page.next_cursor, statusFilter: status }),
-      { statusFilter: status },
+      () => this.api!.list(listFilter(status, orderId), null, this.controller?.signal),
+      (page) => ({ incidents: page.items, nextCursor: page.next_cursor, statusFilter: status, orderFilter: orderId }),
+      { statusFilter: status, orderFilter: orderId },
     );
   }
 
-  /** Appends the next listIncidents page, keeping any incident already shown. */
+  /** Appends the next listIncidents page for the filters in effect, keeping any incident already shown. */
   public async loadMore(): Promise<void> {
-    const { canList, nextCursor, statusFilter } = this.getSnapshot();
+    const { canList, nextCursor, statusFilter, orderFilter } = this.getSnapshot();
     if (!canList || nextCursor === null) return;
     await this.read(
-      () => this.api!.list(statusFilter === null ? {} : { status: statusFilter }, nextCursor, this.controller?.signal),
+      () => this.api!.list(listFilter(statusFilter, orderFilter), nextCursor, this.controller?.signal),
       (page) => {
         const known = new Set(this.getSnapshot().incidents.map((incident) => incident.id));
         return {
@@ -169,7 +192,7 @@ export class IncidentsController extends ExternalStore<IncidentsState> {
   public async loadProofs(orderId: string): Promise<void> {
     if (!this.getSnapshot().canListProofs) return;
     if (!isCanonicalUuid(orderId)) {
-      this.update({ errors: ["El ID de la orden no es válido."], message: null, stepUpHref: null });
+      this.update({ errors: [invalidOrderMessage], message: null, stepUpHref: null });
       return;
     }
     await this.read(
@@ -216,6 +239,7 @@ export class IncidentsController extends ExternalStore<IncidentsState> {
       (api, key, body, signal) => api.open(orderId, body, key, signal),
       (incident) => incident.order_id === orderId,
       "Incidencia abierta y registrada.",
+      true,
     );
   }
 
@@ -233,6 +257,7 @@ export class IncidentsController extends ExternalStore<IncidentsState> {
       (api, key, body, signal) => api.resolve(incidentId, body, key, signal),
       (incident) => incident.id === incidentId && (incident.status === "RESOLVED" || incident.status === "REJECTED"),
       "Resolución registrada.",
+      false,
     );
   }
 
@@ -269,6 +294,8 @@ export class IncidentsController extends ExternalStore<IncidentsState> {
     action: (api: IncidentsApi, key: string, payload: T, signal?: AbortSignal) => Promise<Incident>,
     matches: (incident: Incident) => boolean,
     success: string,
+    /** openIncident: an incident not listed yet is the newest, so it goes first. */
+    opened: boolean,
   ): Promise<void> {
     const api = this.api;
     if (api === null || this.getSnapshot().busy) return;
@@ -282,7 +309,7 @@ export class IncidentsController extends ExternalStore<IncidentsState> {
       // A response for another order or incident fails closed.
       if (!matches(incident)) throw new TenantApiError("invalid");
       this.update({
-        incidents: [incident, ...this.getSnapshot().incidents.filter((item) => item.id !== incident.id)],
+        incidents: placeReturned(this.getSnapshot(), incident, opened),
         message: success,
         formKey: this.getSnapshot().formKey + 1,
         // The evidence picked for this opening is not offered again for the next one.
@@ -299,4 +326,33 @@ export class IncidentsController extends ExternalStore<IncidentsState> {
       if (generation === this.generation) this.update({ busy: false });
     }
   }
+}
+
+/**
+ * AI-07 incident_desk: an Incident returned by openIncident or resolveIncident replaces the listed one with the same
+ * id where it is, so the list stays newest first; only a newly opened incident, not listed yet, goes first.
+ * Z14 ("Solo si coincide (Recommended)"): it joins the list only when it matches the status and order filters in
+ * effect; otherwise the list does not change (the screen still says "Incidencia abierta y registrada.").
+ */
+function placeReturned(
+  state: Pick<IncidentsState, "incidents" | "statusFilter" | "orderFilter">,
+  incident: Incident,
+  opened: boolean,
+): readonly Incident[] {
+  const { incidents } = state;
+  if (incidents.some((item) => item.id === incident.id)) {
+    return incidents.map((item) => (item.id === incident.id ? incident : item));
+  }
+  return opened && matchesListFilters(state, incident) ? [incident, ...incidents] : incidents;
+}
+
+/** The incident would be listed by listIncidents with the filters in effect (null: every value). */
+function matchesListFilters(
+  filters: Pick<IncidentsState, "statusFilter" | "orderFilter">,
+  incident: Incident,
+): boolean {
+  return (
+    (filters.statusFilter === null || incident.status === filters.statusFilter) &&
+    (filters.orderFilter === null || incident.order_id === filters.orderFilter)
+  );
 }

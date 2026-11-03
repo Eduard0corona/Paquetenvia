@@ -205,6 +205,16 @@ class ImpactModelTests(unittest.TestCase):
                 self.assertEqual({"secret-scan", "azr-static"}, jobs(plan))
                 self.assertEqual("SELECTIVE", plan["classification"])
 
+    def test_rel001_readiness_tool_workflow_and_manifests(self):
+        # REL-001: the on-demand readiness workflow, its tool and its closed manifests are tested by azr-static only.
+        for paths in ([".github/workflows/pilot-readiness.yml"], ["tools/rel-001/rel001.py", "tools/rel-001/test_rel001.py"],
+                      ["tests/fixtures/rel-001/ai09-scenario-map.json", "tests/fixtures/rel-001/browser-suites.json"]):
+            with self.subTest(paths=paths):
+                plan = classify(paths)
+                self.assertEqual({"secret-scan", "azr-static"}, jobs(plan))
+                self.assertEqual(["REL001_READINESS"], plan["domains"])
+                self.assertEqual("SELECTIVE", plan["classification"])
+
     def test_claude_automation_workflows_need_only_universal_controls(self):
         for path in (".github/workflows/claude.yml", ".github/workflows/claude-code-review.yml"):
             with self.subTest(path=path):

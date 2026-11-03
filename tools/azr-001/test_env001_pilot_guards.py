@@ -172,6 +172,22 @@ class SettingsTests(unittest.TestCase):
         entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
         self.assertFalse(any(entry["name"].startswith("Voice__") for entry in entries))
 
+    def test_driver_documents_cannot_be_enabled_from_the_settings_file(self):
+        # DRV-DOC-001-IN-PERSON-2026-11-02 (Y2): documents stay off in the pilot until GATE-007; every
+        # Drivers__Documents__ key is refused, whatever its case, and the file has none.
+        for name, value in {
+            "Drivers__Documents__Enabled": "true",
+            "Drivers__Documents__Gate007DecisionId": "GATE-007-PILOT",
+            "drivers__documents__enabled": "true",
+        }.items():
+            with self.subTest(name=name):
+                failures = guards.validate_settings([{"name": name, "value": value}] + SYNTHETIC_ELIGIBILITY, allow_sentinel=False)
+                self.assertIn(f"setting {name} is platform-managed by apps.bicep and cannot be overridden", failures)
+        entries = guards.load_settings(REPO_ROOT / guards.SETTINGS_FILE)
+        self.assertFalse(any(entry["name"].casefold().startswith("drivers__documents__") for entry in entries))
+        # The eligibility and dispatch contact settings keep their own rules (not platform-managed).
+        self.assertEqual([], guards.validate_settings(SYNTHETIC_ELIGIBILITY, allow_sentinel=False))
+
     def test_dispatch_contacts_are_empty_by_default_and_checked_before_deploying(self):
         # DRV-DISPATCH-CONTACT-2026-10-12: the owner gives the number later; until then the file has no entry and
         # the driver app shows no "Llamar a despacho". The numbers below are synthetic.
@@ -1676,7 +1692,11 @@ class WorkflowImageStepTests(WorkflowStepHarness):
 
 
 # A stand-in for the Azure CLI as restore-drill.sh calls it. Servers are files in $AZ_STATE/servers; every call is
-# logged to $AZ_STATE/calls (command and names only); FAKE_VERIFY_STATUS is the verify job's final status.
+# logged to $AZ_STATE/calls (command and names only); FAKE_VERIFY_STATUS is the verify job's final status. The verify
+# job's template lives in $AZ_STATE/job.json: `job update --set-env-vars` changes it and `job start --yaml` copies the
+# execution template to $AZ_STATE/start-<n>.json without changing the job. FAKE_IMAGE_SHA is the locked commit tag
+# of the image digest (empty: no commit tag), FAKE_TAG_WRITABLE makes that tag unlocked, FAKE_FAIL_START fails the
+# start.
 FAKE_DRILL_AZ = r'''#!/usr/bin/env python3
 import json, os, sys
 state = os.environ["AZ_STATE"]
@@ -1712,11 +1732,43 @@ elif args[:2] == ["keyvault", "show"]:
     print("/subscriptions/s/resourceGroups/rg-pv-pilot/providers/Microsoft.KeyVault/vaults/kv-pvp-abcdefghijklm")
 elif args[:3] == ["keyvault", "secret", "show"]:
     print(os.environ["FAKE_ADMIN_PASSWORD"])
-elif args[:3] in (["keyvault", "secret", "set"], ["keyvault", "secret", "set-attributes"]) or args[:2] == ["role", "assignment"] \
-        or args[:3] == ["containerapp", "job", "update"]:
+elif args[:3] in (["keyvault", "secret", "set"], ["keyvault", "secret", "set-attributes"]) or args[:2] == ["role", "assignment"]:
     pass
+elif args[:3] == ["containerapp", "job", "show"]:
+    print(open(os.path.join(state, "job.json"), encoding="utf-8").read())
+elif args[:3] == ["containerapp", "job", "update"]:
+    job = json.load(open(os.path.join(state, "job.json"), encoding="utf-8"))
+    env = job["containers"][0]["env"]
+    for pair in args[args.index("--set-env-vars") + 1:]:
+        if pair.startswith("--"):
+            break
+        key, value = pair.split("=", 1)
+        entry = next((e for e in env if e["name"] == key), None)
+        if entry is None:
+            env.append({"name": key, "value": value})
+        else:
+            entry["value"] = value
+    with open(os.path.join(state, "updates"), "a", encoding="utf-8") as log:
+        log.write(" ".join(args[args.index("--set-env-vars") + 1:]) + "\n")
+    json.dump(job, open(os.path.join(state, "job.json"), "w", encoding="utf-8"))
 elif args[:3] == ["containerapp", "job", "start"]:
+    if os.environ.get("FAKE_FAIL_START"):
+        sys.exit(4)
+    starts = len([f for f in os.listdir(state) if f.startswith("start-")])
+    template = open(opt("--yaml"), encoding="utf-8").read() if "--yaml" in args else ""
+    open(os.path.join(state, f"start-{starts}.json"), "w", encoding="utf-8").write(template)
     print("job-pv-pilot-verify-exec1")
+elif args[:3] == ["acr", "repository", "show"]:
+    image = opt("--image")
+    digest = os.environ["FAKE_DIGEST"]
+    sha = os.environ.get("FAKE_IMAGE_SHA", "")
+    if image == "paquetenvia-db-ops@" + digest:
+        print(json.dumps({"digest": digest, "tags": [sha] if sha else ["latest"]}))
+    elif sha and image == "paquetenvia-db-ops:" + sha:
+        print(json.dumps({"name": sha, "digest": digest,
+                          "changeableAttributes": {"writeEnabled": bool(os.environ.get("FAKE_TAG_WRITABLE"))}}))
+    else:
+        sys.exit(3)
 elif args[:4] == ["containerapp", "job", "execution", "show"]:
     print(os.environ["FAKE_VERIFY_STATUS"])
 else:
@@ -1732,6 +1784,20 @@ class RestoreDrillScriptTests(unittest.TestCase):
 
     BASE = "pg-pv-pilot-abcdefghijklm"
     PASSWORD = "Pv1-" + "s" * 54
+    DIGEST = "sha256:" + "d" * 64
+    SHA = "0123456789abcdef0123456789abcdef01234567"
+    # The verify job as jobs.bicep deploys it (one container, `assert`, mapping 0 on pg-migrate-connection).
+    DEPLOYED_JOB = {"containers": [{
+        "name": "db-verify",
+        "image": f"crpvpilotabcdefghij.azurecr.io/paquetenvia-db-ops@{'sha256:' + 'd' * 64}",
+        "command": ["dotnet", "/app/migrator/Paqueteria.DatabaseMigrator.dll"],
+        "args": ["assert", "--connection-env", "PAQUETERIA_MIGRATION_CONNECTION"],
+        "env": [{"name": "PAQUETERIA_DEPLOYMENT_CLASS", "value": "PILOT"},
+                {"name": "AZURE_CLIENT_ID", "value": "00000000-0000-0000-0000-00000000000b"},
+                {"name": "KeyVaultSecrets__VaultUri", "value": "https://kv-pvp-abcdefghijklm.vault.azure.net/"},
+                {"name": "KeyVaultSecrets__Mappings__0__SecretName", "value": "pg-migrate-connection"},
+                {"name": "KeyVaultSecrets__Mappings__0__ConfigurationKey", "value": "PAQUETERIA_MIGRATION_CONNECTION"}],
+        "resources": {"cpu": 0.25, "memory": "0.5Gi"}}]}
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix="env001-drill-")
@@ -1744,16 +1810,34 @@ class RestoreDrillScriptTests(unittest.TestCase):
         shutil.copy(REPO_ROOT / guards.RESTORE_DRILL_SCRIPT, self.root / "pilot" / "restore-drill.sh")
         (self.root / "pilot" / "kv-firewall.sh").write_text("#!/usr/bin/env bash\nexit 0\n", encoding="utf-8")
         self.state = self.root / "state"
+        self.write_job(self.DEPLOYED_JOB)
+
+    def write_job(self, job: dict) -> None:
+        (self.state / "job.json").write_text(json.dumps(job), encoding="utf-8")
+
+    def job(self) -> dict:
+        return json.loads((self.state / "job.json").read_text(encoding="utf-8"))
+
+    def starts(self) -> list[str]:
+        return [(self.state / f"start-{n}.json").read_text(encoding="utf-8")
+                for n in range(len(list(self.state.glob("start-*.json"))))]
+
+    def evidence(self, result) -> str:
+        return next(line for line in result.stdout.splitlines() if line.startswith("EVIDENCE "))
 
     def tearDown(self):
         self.tmp.cleanup()
 
-    def drill(self, source: str, *flags: str, status: str = "Succeeded", servers: tuple[str, ...] = ()) -> tuple[subprocess.CompletedProcess, list[str]]:
+    def drill(self, source: str, *flags: str, status: str = "Succeeded", servers: tuple[str, ...] = (),
+              **fake: str) -> tuple[subprocess.CompletedProcess, list[str]]:
         for server in (source,) + servers:
             (self.state / "servers" / server).touch()
         (self.state / "calls").write_text("", encoding="utf-8")
+        for stale in self.state.glob("start-*.json"):
+            stale.unlink()
         env = dict(os.environ, PATH=f"{self.root / 'bin'}{os.pathsep}{os.environ.get('PATH', '')}", AZ_STATE=str(self.state),
-                   FAKE_SOURCE=source, FAKE_VERIFY_STATUS=status, FAKE_ADMIN_PASSWORD=self.PASSWORD)
+                   FAKE_SOURCE=source, FAKE_VERIFY_STATUS=status, FAKE_ADMIN_PASSWORD=self.PASSWORD,
+                   FAKE_DIGEST=self.DIGEST, **{"FAKE_IMAGE_SHA": self.SHA, **fake})
         result = subprocess.run(["bash", str(self.root / "pilot" / "restore-drill.sh"), "--resource-group", "rg-pv-pilot",
                                  "--restore-time", "2026-10-20T13:10:00Z", *flags], capture_output=True, text=True, env=env)
         self.assertNotIn(self.PASSWORD, result.stdout + result.stderr)
@@ -1818,6 +1902,68 @@ class RestoreDrillScriptTests(unittest.TestCase):
                 self.assertIn("no pilot PostgreSQL server name", result.stderr)
                 self.assertFalse(any(call.startswith("postgres") for call in calls))
                 (self.state / "servers" / source).unlink()
+
+    def test_a_drill_compares_the_row_counts_in_its_own_execution_and_names_the_asserted_commit(self):
+        result, calls = self.drill(self.BASE)
+        self.assertEqual(0, result.returncode, result.stderr)
+        self.assertIn(f"verify_status=Succeeded row_counts=MATCHED asserted_git_sha={self.SHA} execution=", self.evidence(result))
+        [execution] = [json.loads(text) for text in self.starts()]
+        container = execution["containers"][0]
+        self.assertEqual(["assert", "--connection-env", "PAQUETERIA_MIGRATION_CONNECTION",
+                          "--compare-row-counts-env", "PAQUETERIA_ROW_COUNT_SOURCE_CONNECTION"], container["args"])
+        env = {e["name"]: e["value"] for e in container["env"]}
+        self.assertEqual("pg-restore-drill-connection", env["KeyVaultSecrets__Mappings__0__SecretName"])
+        # The second mapping is the verify job's own everyday secret, never another credential.
+        self.assertEqual("pg-migrate-connection", env["KeyVaultSecrets__Mappings__1__SecretName"])
+        self.assertEqual("PAQUETERIA_ROW_COUNT_SOURCE_CONNECTION", env["KeyVaultSecrets__Mappings__1__ConfigurationKey"])
+        self.assertEqual(self.DEPLOYED_JOB["containers"][0]["image"], container["image"])
+        self.assertEqual(self.DEPLOYED_JOB, self.job())
+
+    def test_the_verify_job_is_restored_exactly_on_every_exit(self):
+        cases = {
+            "assert_failed": ({"status": "Failed"}, "row_counts=UNVERIFIED"),
+            "start_failed": ({"FAKE_FAIL_START": "1"}, None),
+            "real_restore": ({"flags": ("--real",)}, "row_counts=NOT_COMPARED"),
+            "unlocked_tag": ({"FAKE_TAG_WRITABLE": "1"}, "asserted_git_sha=UNVERIFIED"),
+            "no_commit_tag": ({"FAKE_IMAGE_SHA": ""}, "asserted_git_sha=UNVERIFIED"),
+        }
+        for name, (options, token) in cases.items():
+            with self.subTest(case=name):
+                options = dict(options)
+                flags = options.pop("flags", ())
+                status = options.pop("status", "Succeeded")
+                result, calls = self.drill(self.BASE, *flags, status=status, **options)
+                if token is not None:
+                    self.assertIn(token, self.evidence(result))
+                if name == "real_restore":
+                    self.assertEqual([""], self.starts())  # started as deployed: no comparison, no extra mapping
+                self.assertEqual(self.DEPLOYED_JOB, self.job())
+                # The job is only ever pointed at the drill secret and back; the comparison never touches it.
+                updates = (self.state / "updates").read_text(encoding="utf-8").split()
+                self.assertTrue(set(updates) <= {"KeyVaultSecrets__Mappings__0__SecretName=pg-restore-drill-connection",
+                                                 "KeyVaultSecrets__Mappings__0__SecretName=pg-migrate-connection"}, updates)
+                self.assertEqual("KeyVaultSecrets__Mappings__0__SecretName=pg-migrate-connection", updates[-1])
+                (self.state / "updates").unlink()
+                for server in self.servers() - {self.BASE}:
+                    (self.state / "servers" / server).unlink()
+
+    def test_a_job_not_in_its_deployed_state_stops_before_any_restore(self):
+        for name, mutate in {
+            "left_on_the_drill_secret": lambda c: c["env"][3].update(value="pg-restore-drill-connection"),
+            "other_arguments": lambda c: c.update(args=["apply", "--connection-env", "PAQUETERIA_MIGRATION_CONNECTION"]),
+            "already_has_a_source": lambda c: c["env"].append(
+                {"name": "KeyVaultSecrets__Mappings__1__ConfigurationKey", "value": "PAQUETERIA_ROW_COUNT_SOURCE_CONNECTION"}),
+        }.items():
+            with self.subTest(case=name):
+                job = json.loads(json.dumps(self.DEPLOYED_JOB))
+                mutate(job["containers"][0])
+                self.write_job(job)
+                result, calls = self.drill(self.BASE)
+                self.assertEqual(1, result.returncode)
+                self.assertIn("is not in its deployed state", result.stderr)
+                self.assertFalse(any(call.startswith(("postgres flexible-server restore", "containerapp job update",
+                                                      "containerapp job start")) for call in calls))
+                self.assertEqual(job, self.job())
 
     def test_keep_and_real_are_exclusive(self):
         result, calls = self.drill(self.BASE, "--keep", "--real")

@@ -229,6 +229,85 @@ money:
 partitioning:
   location_outbox_mvp_unique: UNIQUE(driver_position_id) without FK
   before_partitioning: approve global dedup strategy
+pilot_readiness:
+  decision: REL-001-PILOT-READINESS-2026-11-02
+  item: AI-08 REL-001 (approval_gate operations_finance_legal)
+  phases:
+    entry: Z1 "Dos fases (Recommended)" - an entry report authorizes the start of the pilot from the delivery plan, the
+      synthetic rehearsal, a current restore drill and the full regression; it never reads the pilot's data
+    closing: a closing report measures data_completeness on the 50-100 real deliveries through a read-only count
+      function in the pilot database (Z6, second half); that function, its AI-06/AI-18 change, its migration with up
+      and down and its job are a later security-reviewed change, pending and not built
+  tool: tools/rel-001/rel001.py (format paquetenvia-rel001-v1); closed manifests tests/fixtures/rel-001/browser-suites.json
+    and tests/fixtures/rel-001/ai09-scenario-map.json; note docs/development/rel-001-pilot-readiness.md
+  production: Z11 - the workflow_dispatch workflow .github/workflows/pilot-readiness.yml, launched from main over a
+    tested_git_sha and the push Foundation CI run that certified it 13/13 (the AZR-001 deploy-gate); it downloads that
+    run's REL-000 and execution artifacts; the 13 Foundation jobs do not change
+  report: Z10 - as REL-000, redacted JSON files and a Spanish Markdown summary in the artifact
+    rel001-pilot-readiness-report, and the versioned decision record docs/releases/mvp-1-pilot-decision.json
+    (paquetenvia-mvp1-pilot-decision-v1) in which the project owner approves operations, finance and legal and names
+    who reviewed legal by role only (OWNER_LAWYER or PROJECT_OWNER); the record also anchors the tested_git_sha, the
+    Foundation run and the restore drill it approves; approval never authorizes production
+  delivery_plan:
+    form: Z12 - counts in the decision record only - planned_real_deliveries, period_start, period_end, sender_count
+      and zone_count; no name, address, phone or e-mail
+    minimum: 50
+    maximum: 100
+  full_regression: the certified Foundation run 13/13 on tested_git_sha with REL-000 technical evidence PASSED in that
+    run; every test of its execution artifacts passed; the closed browser-suite manifest (every AI-07 route of MVP-0 and
+    MVP-1 and the MVP-1 screen without a route; Z2 - each missing suite lands in its own UI-001, AUTH-001, EXT-001,
+    NTF-006 or REG-001 task and REL-001 only lists it) and the closed AI-09 scenario-to-test map (COVERED, GAP, or
+    NOT_APPLICABLE only with a contract reason) - every identity executed and passed in that run, and a GAP fails
+  release_gates: AI-10 release_gates.MVP-1_PILOT; a gate counts as closed only with a decision-log row GATE-NNN-...
+    whose Type is Gate resolution or Gate scoping (the ENV-001 gate-decision parser); the report lists every open gate
+    and the entry is not approved while one is open
+  recipient_notices: the AI-08 REL-001 NTF line - unless GATE-004 and GATE-007 both have a Gate resolution row, every
+    switch of recipient_notices.switches (and Locations:NoticeKeyProtector) is off in the tested tree - absent or off in
+    every API and Worker appsettings file other than Development and Testing, off by its option default, and never set
+    by a deploy/azure/pilot template
+  rehearsal:
+    where: Z4 - a local/CI synthetic stack (containers on a GitHub-hosted runner), no Azure; delivery photos through the
+      S3-compatible double and the Synthetic scanner
+    journey: Z5 - only in the REL-001 workflow, on demand, never in PR Validation or Foundation CI; on the real platform
+      - cash on delivery recorded, reconciled and the order closed; a failed attempt decided by dispatch and
+      redelivered; a CSV import that creates orders; a settlement calculated, approved, paid and exported
+  data_completeness:
+    metric: AI-02 mvp_success_metrics.orders_with_complete_events_and_pod
+    threshold: 0.98
+    measured: Z6 - entry phase in the synthetic rehearsal; closing phase on the pilot data (pending)
+    numerator: orders that reached DELIVERED with order_events versions contiguous from 1 to the order version, one
+      audit row per status change and a finalized PICKUP_PHOTO and DELIVERY_PHOTO proof
+    denominator: orders of the rehearsal that reached DELIVERED
+    minimum_delivered_orders: 50
+    report: counts only - delivered, complete and the missing ones by kind (event version gaps, unaudited status
+      changes, missing pickup photo, missing delivery photo)
+  latency:
+    blocking: Z7 - only AI-02, per metric - critical_screen_p95_seconds below 2 on every critical screen and
+      order_creation_p95_seconds below 3 excluding external providers (quote geocoding)
+    critical_screens:
+    - /ops/inbox
+    - /ops/orders/:id
+    - /driver/stops
+    - /driver/stops/:id
+    - /track/:token
+    critical_screen_p95_ms_below: 2000
+    order_creation_p95_ms_below: 3000
+    minimum_samples_per_blocking_metric: 100
+    percentile_method: nearest-rank
+    reported_only: Z7 - AI-15 scaling_signals http_p95_ms, event_delivery_p95_seconds and
+      signed_url_generation_p95_ms at their warning and critical levels, never blocking
+    environment: CI runners do not represent the pilot's burstable database server; the report says so
+  restore:
+    vigente: Z9 - the pilot drill (deploy/azure/pilot/restore-drill.sh) verified 7 days or less before the planned start
+      (period_start of the decision record; the report time before the record exists), after the last migration (its
+      assert ran the deployed tested_git_sha), with verify_status Succeeded, a restore point inside the PITR window,
+      and a read-only comparison of the row counts of organizations, orders, order events and proof photos that
+      matches; the OPS-002 CI drill of the certified run compares the same counts; the drills print counts only, never
+      a value, and the drill execution name is never published
+    max_days_before_start: 7
+    pitr_days: 14
+  never: a personal datum, a secret, a token, an entity identifier or a row value in any output; a read of the pilot's
+    real data in the entry phase
 bff_session:
   decisions:
   - GATE-002-BFF-001
@@ -337,6 +416,52 @@ voice_bridge:
     erasure, offboarding) is a follow-up outside VOICE-001
   rollback: Voice:Provider=Disabled stops every call and every new phone; drivers can still remove their number; the
     Drivers lane rollback refuses while call requests or phones exist
+driver_documents:
+  decisions:
+  - DRV-DOC-001-IN-PERSON-2026-11-02
+  adr: docs/adr/ADR-DRV-DOC-001-IN-PERSON-DRIVER-DOCUMENTS.md
+  status: DECIDED by the project owner on 2026-11-01 (round Y, Y1 to Y12) and 2026-11-02 (Y13, the ADR sub-choices); implemented by AI-08 DRV-DOC-001 (API, panel
+    and driver app PRs); off in the pilot until GATE-007 is registered
+  method: in person (Y1) - the driver shows the original to a dispatcher of the driver organization, who records its
+    type, the printed expiry or the permanent-license review date and the decision (VALID, or REJECTED with one of
+    ILLEGIBLE, EXPIRED, WRONG_DOCUMENT, HOLDER_MISMATCH, INCOMPLETE, NOT_ACCEPTED, Y7); nobody takes or stores a photo, a
+    file or a document number (Y3); the row is evidence_kind IN_PERSON with NULL object_key and sha256, reviewed_by and
+    reviewed_at
+  switch: Drivers:Documents:Enabled, false by default; while false the dispatcher list and the driver list answer
+    documents_enabled false and read nothing, and recording or revoking answers 503 (Y2 "Ya, apagado"); the start
+    validation refuses Enabled without Drivers:Provider=PostgreSql, with a required document type outside IDENTITY,
+    DRIVER_LICENSE, VEHICLE_CARD and INSURANCE (Y11) or with a NonExpiringDocumentTypes entry
+  gate: enabling it outside Development, Testing and DEV_SYNTHETIC, and always under
+    PAQUETERIA_DEPLOYMENT_CLASS=PILOT_REAL_PEOPLE whatever the environment name, requires
+    Drivers:Documents:Gate007DecisionId matching ^GATE-007-[A-Z0-9][A-Z0-9-]{2,76}$ and naming the decision-log row
+    that resolves GATE-007 (the Voice:Twilio:Gate007DecisionId and Notifications:RecipientNotices:Gate007DecisionId
+    pattern; checked by format, a host without a known environment is treated as real); in the pilot Drivers__Documents__
+    is platform-managed (tools/azr-001/env001_pilot_guards.py), so the settings file cannot turn it on and enabling it
+    is a reviewed apps.bicep change
+  calendar: America/Mazatlan (Culiacán time); a printed date is valid through that whole local day, so expires_at is
+    00:00 of the next local day (Y12); a permanent Sinaloa driver license gets the review day plus 12 months (February
+    29 becomes February 28) and is labelled "Revisión" (Y5); an approval whose last valid day is before today or more
+    than ten years ahead is refused (EXPIRY_DATE_OUT_OF_RANGE); the conversion to an instant runs in PostgreSQL (AT TIME
+    ZONE), so the containers need no time zone data
+  eligibility: DSP-001 keeps the latest row per type (created_at DESC, id DESC) and its evidence guarantee per kind - a
+    FILE row needs a non-blank object key and a 32-byte SHA-256, an IN_PERSON row neither, any other shape is
+    DOCUMENT_HASH_INVALID; nothing is stored as EXPIRED (Y6) - an expired document blocks by itself at evaluation
+  revocation: only the latest VALID document of a type becomes REVOKED (revoked_by, revoked_at); the driver gets no new
+    orders and current stops continue - nothing outside drivers.driver_documents and platform.audit_logs is written
+    (Y10, no AI-13 flow)
+  writes: one tenant transaction per record or revoke - the driver profile locked FOR UPDATE (OWN, not INACTIVE, else
+    the uniform 404), the row, the audit row and (record) the idempotency answer (scope DRV-DOC-001:RECORD_DRIVER_DOCUMENT,
+    kept 24 hours, bound to the organization, the person, the driver and the body); created_at and reviewed_at are the
+    statement time after the lock, so one driver's documents are ordered by commit
+  audit: DRIVER_DOCUMENT_RECORDED (driver_id, document_id, document_type, evidence_kind, status, expiry_basis,
+    rejection_code) and DRIVER_DOCUMENT_REVOKED (driver_id, document_id, document_type, status) - types and codes only,
+    never a date, a number, a file, a key or a hash
+  logging: one line per record or revoke with the type and the status only; nothing about the document is in outbox
+    rows, events or realtime messages (none is produced)
+  retention: the owner proposes to the lawyer the validity plus 1 year after the relationship ends (Y9); DRV-DOC-001
+    adds no purge, which is a separate later task with driver offboarding
+  rollback: Drivers:Documents:Enabled=false stops every read and write; the Drivers lane rollback refuses while any
+    in-person record, review, reason or revocation exists (DRVDOC001_DOWNGRADE_BLOCKED_DATA_PRESENT)
 recipient_notices:
   decisions:
   - NTF-RECIPIENT-NOTICES-2026-10-20

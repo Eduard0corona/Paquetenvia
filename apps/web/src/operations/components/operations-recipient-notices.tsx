@@ -16,7 +16,7 @@ import {
   recipientNoticeTexts,
   stopRecipientNoticesConfirmation,
 } from "../contracts/recipient-notices";
-import { readOperationsSession, subscribeToOperationsSession } from "../session/operations-session";
+import { readOperationsSession } from "../session/operations-session";
 import { RecipientNoticesController, type RecipientNoticesState } from "../state/recipient-notices-controller";
 
 /**
@@ -26,6 +26,8 @@ import { RecipientNoticesController, type RecipientNoticesState } from "../state
  * organization never sees it. It is read with each read of the order, after a NotificationStatusChanged v2 notice of
  * the order (the screen gathers both, `revision`) and after "Detener avisos" (`onStopped`). It always shows, with the
  * line of T4 while notices are off and the quiet-hours line of T2, and the button is always offered (T3, T6 choice 13).
+ * Z17: it reads the session once, when it mounts. The order detail owns the session and unmounts it as soon as the
+ * organization changes, so it never reads this order under another organization.
  */
 export function OperationsRecipientNotices({
   orderId,
@@ -95,12 +97,10 @@ export function OperationsRecipientNotices({
     };
 
     const initial = window.setTimeout(() => void start(), 0);
-    const unsubscribe = subscribeToOperationsSession(() => void start());
     return () => {
       cancelled = true;
       abort.abort();
       clearTimeout(initial);
-      unsubscribe();
       controllerRef.current?.dispose();
       controllerRef.current = null;
     };

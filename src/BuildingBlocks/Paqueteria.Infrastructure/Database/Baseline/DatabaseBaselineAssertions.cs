@@ -713,6 +713,9 @@ public sealed class DatabaseBaselineAssertions
             await AssertRecipientNoticeContactAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 
+            await AssertInPersonDriverDocumentsAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
+            checks++;
+
             await AssertLifecycleExecutorBoundaryAsync(connection, activeTransaction, violations, cancellationToken).ConfigureAwait(false);
             checks++;
 
@@ -1238,6 +1241,113 @@ public sealed class DatabaseBaselineAssertions
         {
             violations.Add(
                 "locations.locations recipient contact columns or checks differ from the NTF-RECIPIENT-NOTICES-2026-10-20 contract (AI-06).");
+        }
+    }
+
+    /// <summary>
+    /// DRV-DOC-001-IN-PERSON-2026-11-02 (AI-08 DRV-DOC-001; AI-06 declared contract): the Drivers lane step that adds the
+    /// evidence kind and the review columns of <c>drivers.driver_documents</c>. AI-06 carries the same DDL on fresh
+    /// installations.
+    /// </summary>
+    public const string InPersonDriverDocumentsMigrationId = "20261102000100_AddInPersonDriverDocuments";
+
+    /// <summary>The seven new columns and the two nullable evidence columns as <c>name:type:nullable:default</c>.</summary>
+    public static IReadOnlyList<string> InPersonDriverDocumentColumns { get; } = Array.AsReadOnly(new[]
+    {
+        "evidence_kind:text:NO:'FILE'::text",
+        "expiry_basis:text:YES:",
+        "object_key:text:YES:",
+        "rejection_code:text:YES:",
+        "reviewed_at:timestamp with time zone:YES:",
+        "reviewed_by:uuid:YES:",
+        "revoked_at:timestamp with time zone:YES:",
+        "revoked_by:uuid:YES:",
+        "sha256:bytea:YES:",
+    });
+
+    /// <summary>The shape before the step: the evidence columns required and none of the new ones.</summary>
+    public static IReadOnlyList<string> PreInPersonDriverDocumentColumns { get; } = Array.AsReadOnly(new[]
+    {
+        "object_key:text:NO:",
+        "sha256:bytea:NO:",
+    });
+
+    /// <summary>The five checks as <c>name:pg_get_constraintdef:validated</c>, ordered by name.</summary>
+    public static IReadOnlyList<string> InPersonDriverDocumentChecks { get; } = Array.AsReadOnly(new[]
+    {
+        "driver_documents_evidence_check:CHECK ((((evidence_kind = 'FILE'::text) AND (object_key IS NOT NULL) AND (sha256 IS NOT NULL)) OR ((evidence_kind = 'IN_PERSON'::text) AND (object_key IS NULL) AND (sha256 IS NULL)))):true",
+        "driver_documents_expiry_basis_check:CHECK (((expiry_basis IS NULL) OR ((expires_at IS NOT NULL) AND ((expiry_basis = 'PRINTED_EXPIRY'::text) OR ((expiry_basis = 'PERMANENT_LICENSE_REVIEW'::text) AND (document_type = 'DRIVER_LICENSE'::text)))))):true",
+        "driver_documents_in_person_check:CHECK (((evidence_kind <> 'IN_PERSON'::text) OR ((reviewed_at IS NOT NULL) AND (document_type = ANY (ARRAY['IDENTITY'::text, 'DRIVER_LICENSE'::text, 'VEHICLE_CARD'::text, 'INSURANCE'::text])) AND (status = ANY (ARRAY['VALID'::text, 'REJECTED'::text, 'REVOKED'::text])) AND ((status = 'REJECTED'::text) = (rejection_code IS NOT NULL)) AND ((status = 'REJECTED'::text) = (expires_at IS NULL)) AND ((status = 'REJECTED'::text) = (expiry_basis IS NULL)) AND ((status = 'REVOKED'::text) = (revoked_at IS NOT NULL))))):true",
+        "driver_documents_rejection_code_check:CHECK (((rejection_code IS NULL) OR ((status = 'REJECTED'::text) AND (rejection_code = ANY (ARRAY['ILLEGIBLE'::text, 'EXPIRED'::text, 'WRONG_DOCUMENT'::text, 'HOLDER_MISMATCH'::text, 'INCOMPLETE'::text, 'NOT_ACCEPTED'::text]))))):true",
+        "driver_documents_review_check:CHECK ((((reviewed_by IS NULL) = (reviewed_at IS NULL)) AND ((revoked_by IS NULL) = (revoked_at IS NULL)) AND ((revoked_at IS NULL) OR (status = 'REVOKED'::text)))):true",
+    });
+
+    /// <summary>
+    /// DRV-DOC-001-IN-PERSON-2026-11-02: <c>drivers.driver_documents</c> carries <see cref="InPersonDriverDocumentColumns"/>
+    /// and <see cref="InPersonDriverDocumentChecks"/> exactly. Recorded history decides, as for the recipient contact
+    /// columns: on a fresh baseline (no Drivers lane history yet) and once <see cref="InPersonDriverDocumentsMigrationId"/>
+    /// is recorded they must be present; while the Drivers lane has not recorded that step they must be either exactly
+    /// present or exactly the earlier shape (<see cref="PreInPersonDriverDocumentColumns"/>, no new check), never partial
+    /// or different. The table keeps its FORCE RLS policy and runtime privileges, checked elsewhere.
+    /// </summary>
+    private static async Task AssertInPersonDriverDocumentsAsync(
+        NpgsqlConnection connection,
+        NpgsqlTransaction transaction,
+        ICollection<string> violations,
+        CancellationToken cancellationToken)
+    {
+        var required = await ScalarAsync<bool>(
+            connection,
+            transaction,
+            """
+            SELECT pg_catalog.to_regclass('platform.__ef_migrations_history_drivers') IS NULL
+            """,
+            cancellationToken).ConfigureAwait(false);
+        if (!required)
+        {
+            required = await ScalarAsync<bool>(
+                connection,
+                transaction,
+                """
+                SELECT EXISTS (
+                  SELECT 1 FROM platform.__ef_migrations_history_drivers WHERE "MigrationId"=@migration_id)
+                """,
+                cancellationToken,
+                new NpgsqlParameter<string>("migration_id", InPersonDriverDocumentsMigrationId)).ConfigureAwait(false);
+        }
+
+        var columns = await ListAsync(
+            connection,
+            transaction,
+            """
+            SELECT column_name || ':' || data_type || ':' || is_nullable || ':' || COALESCE(column_default,'')
+            FROM information_schema.columns
+            WHERE table_schema='drivers' AND table_name='driver_documents'
+              AND column_name IN ('evidence_kind','expiry_basis','object_key','rejection_code','reviewed_at','reviewed_by',
+                                  'revoked_at','revoked_by','sha256')
+            ORDER BY column_name
+            """,
+            cancellationToken).ConfigureAwait(false);
+        var checks = await ListAsync(
+            connection,
+            transaction,
+            """
+            SELECT conname || ':' || pg_catalog.pg_get_constraintdef(oid) || ':' || convalidated::text
+            FROM pg_catalog.pg_constraint
+            WHERE conrelid=pg_catalog.to_regclass('drivers.driver_documents') AND contype='c'
+              AND conname IN ('driver_documents_evidence_check','driver_documents_expiry_basis_check',
+                              'driver_documents_in_person_check','driver_documents_rejection_code_check',
+                              'driver_documents_review_check')
+            ORDER BY conname
+            """,
+            cancellationToken).ConfigureAwait(false);
+        var exact = columns.SequenceEqual(InPersonDriverDocumentColumns, StringComparer.Ordinal) &&
+            checks.SequenceEqual(InPersonDriverDocumentChecks, StringComparer.Ordinal);
+        var earlier = columns.SequenceEqual(PreInPersonDriverDocumentColumns, StringComparer.Ordinal) && checks.Count == 0;
+        if (required ? !exact : !(exact || earlier))
+        {
+            violations.Add(
+                "drivers.driver_documents in-person columns or checks differ from the DRV-DOC-001-IN-PERSON-2026-11-02 contract (AI-06).");
         }
     }
 

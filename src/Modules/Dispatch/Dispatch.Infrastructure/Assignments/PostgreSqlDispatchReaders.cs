@@ -257,7 +257,8 @@ public sealed class PostgreSqlDispatchDriverEligibilityReader : IDispatchDriverE
                    COALESCE(docs.object_keys,ARRAY[]::text[]),
                    COALESCE(docs.hashes,ARRAY[]::bytea[]),
                    COALESCE(docs.expirations,ARRAY[]::timestamptz[]),
-                   o.driver_eligibility_policy_version
+                   o.driver_eligibility_policy_version,
+                   COALESCE(docs.evidence_kinds,ARRAY[]::text[])
             FROM drivers.driver_profiles p
             JOIN identity.users u ON u.id=p.user_id AND u.status='ACTIVE'
             JOIN organizations.organizations o ON o.id=p.org_id
@@ -266,10 +267,11 @@ public sealed class PostgreSqlDispatchDriverEligibilityReader : IDispatchDriverE
                      array_agg(d.status ORDER BY d.document_type) AS statuses,
                      array_agg(d.object_key ORDER BY d.document_type) AS object_keys,
                      array_agg(d.sha256 ORDER BY d.document_type) AS hashes,
-                     array_agg(d.expires_at ORDER BY d.document_type) AS expirations
+                     array_agg(d.expires_at ORDER BY d.document_type) AS expirations,
+                     array_agg(d.evidence_kind ORDER BY d.document_type) AS evidence_kinds
               FROM (
                 SELECT DISTINCT ON (dd.document_type)
-                       dd.document_type,dd.status,dd.object_key,dd.sha256,dd.expires_at
+                       dd.document_type,dd.status,dd.object_key,dd.sha256,dd.expires_at,dd.evidence_kind
                 FROM drivers.driver_documents dd
                 WHERE dd.driver_id=p.id AND dd.org_id=p.org_id
                 ORDER BY dd.document_type,dd.created_at DESC,dd.id DESC
@@ -298,11 +300,14 @@ public sealed class PostgreSqlDispatchDriverEligibilityReader : IDispatchDriverE
         {
             var types = reader.GetFieldValue<string[]>(9);
             var statuses = reader.GetFieldValue<string[]>(10);
-            var objectKeys = reader.GetFieldValue<string[]>(11);
-            var hashes = reader.GetFieldValue<byte[][]>(12);
+            // DRV-DOC-001-IN-PERSON-2026-11-02: an IN_PERSON document has no key and no hash (NULL elements).
+            var objectKeys = reader.GetFieldValue<string?[]>(11);
+            var hashes = reader.GetFieldValue<byte[]?[]>(12);
             var expirations = reader.GetFieldValue<DateTime?[]>(13);
+            var evidenceKinds = reader.GetFieldValue<string[]>(15);
             if (statuses.Length != types.Length || objectKeys.Length != types.Length ||
-                hashes.Length != types.Length || expirations.Length != types.Length)
+                hashes.Length != types.Length || expirations.Length != types.Length ||
+                evidenceKinds.Length != types.Length)
             {
                 throw new AssignmentInfrastructureException(
                     "External driver candidate document projection is inconsistent.");
@@ -314,6 +319,7 @@ public sealed class PostgreSqlDispatchDriverEligibilityReader : IDispatchDriverE
                 documents[types[index]] = new DriverDocumentSnapshot(
                     types[index],
                     statuses[index],
+                    evidenceKinds[index],
                     objectKeys[index],
                     hashes[index],
                     expirations[index] is { } expiresAt
@@ -373,7 +379,7 @@ public sealed class PostgreSqlDispatchDriverEligibilityReader : IDispatchDriverE
             WHERE p.id=@driver_id AND p.org_id=@organization_id;
 
             SELECT DISTINCT ON (document_type)
-                   document_type,status,object_key,sha256,expires_at
+                   document_type,status,object_key,sha256,expires_at,evidence_kind
             FROM drivers.driver_documents
             WHERE driver_id=@driver_id AND org_id=@organization_id
             ORDER BY document_type,created_at DESC,id DESC
@@ -418,8 +424,9 @@ public sealed class PostgreSqlDispatchDriverEligibilityReader : IDispatchDriverE
             documents[type] = new DriverDocumentSnapshot(
                 type,
                 reader.GetString(1),
-                reader.GetString(2),
-                reader.GetFieldValue<byte[]>(3),
+                reader.GetString(5),
+                reader.IsDBNull(2) ? null : reader.GetString(2),
+                reader.IsDBNull(3) ? null : reader.GetFieldValue<byte[]>(3),
                 reader.IsDBNull(4) ? null : reader.GetFieldValue<DateTimeOffset>(4));
         }
 

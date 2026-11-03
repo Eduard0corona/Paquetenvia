@@ -47,8 +47,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Organizations/Organizations.Infrastructure/Persistence/Migrations/20261002000100_VersionDispatchPoliciesPerOrganization.cs"),
         ("Locations", "__ef_migrations_history_locations", AddRecipientNoticeContact.MigrationId,
             "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20261020000100_AddRecipientNoticeContact.cs"),
-        ("Drivers", "__ef_migrations_history_drivers", AddDriverVoiceBridge.MigrationId,
-            "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20261011000100_AddDriverVoiceBridge.cs"),
+        ("Drivers", "__ef_migrations_history_drivers", AddInPersonDriverDocuments.MigrationId,
+            "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20261102000100_AddInPersonDriverDocuments.cs"),
         ("Pricing", "__ef_migrations_history_pricing", RequireMazatlanTimeZoneInMasterDataLoader.MigrationId,
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20261002000100_RequireMazatlanTimeZoneInMasterDataLoader.cs"),
         ("Orders", "__ef_migrations_history_orders", AddRecipientNoticeConsents.MigrationId,
@@ -149,10 +149,12 @@ internal sealed class ModuleMigrationCoordinator
                 // follows it: the lane's latest step only adds two read indexes (or adopts the AI-06 ones) and its
                 // rollback drops exactly those two; the OBS-003 step is verified below with its own rule.
                 "Dispatch" => IsAssignmentReadIndexesSource(source),
-                // VOICE-001-MASKED-CALLS-2026-10-11: the lane's latest migration only adds the driver phone columns
-                // and the recipient call request table; its rollback refuses while any request or phone exists and
-                // otherwise drops exactly those objects. DRV-003 is verified below as an adoption.
-                "Drivers" => IsDriverVoiceBridgeSource(source),
+                // DRV-DOC-001-IN-PERSON-2026-11-02: the lane's latest step only adds the evidence kind and the review
+                // columns of drivers.driver_documents with their five checks (or adopts the AI-06 ones) and makes
+                // object_key and sha256 nullable; its rollback refuses while any in-person record, review, reason or
+                // revocation exists and otherwise drops exactly those. VOICE-001-MASKED-CALLS-2026-10-11 is verified
+                // below with its own rule and DRV-003 as an adoption.
+                "Drivers" => IsInPersonDriverDocumentsSource(source),
                 // NTF-RECIPIENT-NOTICES-2026-10-20 (AI-08 NTF-002): the lane's latest step only adds the four nullable
                 // recipient contact columns of locations.locations and their two checks (or adopts the AI-06 ones); its
                 // rollback refuses while any of them holds a value and otherwise drops exactly those. The GEO-001
@@ -290,6 +292,12 @@ internal sealed class ModuleMigrationCoordinator
             "Dispatch",
             AdoptCanonicalDispatchAssignmentsBaseline.MigrationId,
             "src/Modules/Dispatch/Dispatch.Infrastructure/Persistence/Migrations/20260723_AdoptCanonicalDispatchAssignmentsBaseline.cs");
+        VerifyLaneSource(
+            root,
+            "Drivers",
+            AddDriverVoiceBridge.MigrationId,
+            "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20261011000100_AddDriverVoiceBridge.cs",
+            IsDriverVoiceBridgeSource);
         VerifyAdoptionSource(
             root,
             "Drivers",
@@ -568,6 +576,7 @@ internal sealed class ModuleMigrationCoordinator
                     AdoptCanonicalDriversBaseline.MigrationId,
                     AdoptCanonicalDriverPositions.MigrationId,
                     AddDriverVoiceBridge.MigrationId,
+                    AddInPersonDriverDocuments.MigrationId,
                 ],
             "Pricing" =>
                 [
@@ -662,6 +671,27 @@ internal sealed class ModuleMigrationCoordinator
         !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("UPDATE locations", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("GRANT ", StringComparison.Ordinal) &&
+        !source.Contains("REVOKE ", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>DRV-DOC-001-IN-PERSON-2026-11-02: the evidence kind, the review columns and the five checks of
+    /// drivers.driver_documents only; the rollback is guarded by <c>DRVDOC001_DOWNGRADE_BLOCKED_DATA_PRESENT</c> and drops
+    /// no table, role, function, policy, index or row.</summary>
+    private static bool IsInPersonDriverDocumentsSource(string source) =>
+        source.Contains(AddInPersonDriverDocuments.DecisionId, StringComparison.Ordinal) &&
+        source.Contains(AddInPersonDriverDocuments.DowngradeBlockedMessage, StringComparison.Ordinal) &&
+        source.Contains("ALTER TABLE drivers.driver_documents", StringComparison.Ordinal) &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP INDEX", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE drivers", StringComparison.OrdinalIgnoreCase) &&
         !source.Contains("GRANT ", StringComparison.Ordinal) &&
         !source.Contains("REVOKE ", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&

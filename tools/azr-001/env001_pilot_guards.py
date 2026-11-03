@@ -203,6 +203,10 @@ PLATFORM_MANAGED_PREFIXES = (
     # delivers the Twilio account, number and Key Vault secrets and GATE-007 is resolved; enabling it is an
     # apps.bicep change under review, never a free-form setting.
     "Voice__",
+    # DRV-DOC-001-IN-PERSON-2026-11-02 (Y2 "Ya, apagado"): in-person driver documents stay off in the pilot until the
+    # owner registers GATE-007; enabling them (Drivers__Documents__Enabled with Drivers__Documents__Gate007DecisionId)
+    # is an apps.bicep change under review, never a free-form setting. The other Drivers__ settings stay owner settings.
+    "Drivers__Documents__",
     # OBS-003: the export switch, its connection string and the pseudonym key version are reviewed apps.bicep values
     # (P21); apps.settings.json can neither turn the export on nor send telemetry elsewhere.
     "TelemetryExport__",

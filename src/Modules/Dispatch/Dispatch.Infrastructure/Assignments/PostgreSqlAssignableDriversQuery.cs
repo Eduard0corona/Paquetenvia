@@ -229,7 +229,8 @@ public sealed class PostgreSqlAssignableDriversQuery(
                    o.driver_eligibility_policy_version,
                    (SELECT count(*)::integer
                     FROM dispatch.assignments a
-                    WHERE a.driver_id=p.id AND a.status IN ('ACCEPTED','ACTIVE'))
+                    WHERE a.driver_id=p.id AND a.status IN ('ACCEPTED','ACTIVE')),
+                   COALESCE(docs.evidence_kinds,ARRAY[]::text[])
             FROM drivers.driver_profiles p
             JOIN organizations.organizations o ON o.id=p.org_id
             LEFT JOIN identity.users u ON u.id=p.user_id
@@ -238,10 +239,11 @@ public sealed class PostgreSqlAssignableDriversQuery(
                      array_agg(d.status ORDER BY d.document_type) AS statuses,
                      array_agg(d.object_key ORDER BY d.document_type) AS object_keys,
                      array_agg(d.sha256 ORDER BY d.document_type) AS hashes,
-                     array_agg(d.expires_at ORDER BY d.document_type) AS expirations
+                     array_agg(d.expires_at ORDER BY d.document_type) AS expirations,
+                     array_agg(d.evidence_kind ORDER BY d.document_type) AS evidence_kinds
               FROM (
                 SELECT DISTINCT ON (dd.document_type)
-                       dd.document_type,dd.status,dd.object_key,dd.sha256,dd.expires_at
+                       dd.document_type,dd.status,dd.object_key,dd.sha256,dd.expires_at,dd.evidence_kind
                 FROM drivers.driver_documents dd
                 WHERE dd.driver_id=p.id AND dd.org_id=p.org_id
                 ORDER BY dd.document_type,dd.created_at DESC,dd.id DESC
@@ -264,11 +266,14 @@ public sealed class PostgreSqlAssignableDriversQuery(
         {
             var types = reader.GetFieldValue<string[]>(10);
             var statuses = reader.GetFieldValue<string[]>(11);
-            var objectKeys = reader.GetFieldValue<string[]>(12);
-            var hashes = reader.GetFieldValue<byte[][]>(13);
+            // DRV-DOC-001-IN-PERSON-2026-11-02: an IN_PERSON document has no key and no hash (NULL elements).
+            var objectKeys = reader.GetFieldValue<string?[]>(12);
+            var hashes = reader.GetFieldValue<byte[]?[]>(13);
             var expirations = reader.GetFieldValue<DateTime?[]>(14);
+            var evidenceKinds = reader.GetFieldValue<string[]>(17);
             if (statuses.Length != types.Length || objectKeys.Length != types.Length ||
-                hashes.Length != types.Length || expirations.Length != types.Length)
+                hashes.Length != types.Length || expirations.Length != types.Length ||
+                evidenceKinds.Length != types.Length)
             {
                 throw new AssignmentInfrastructureException(
                     "Assignable driver document projection is inconsistent.");
@@ -280,6 +285,7 @@ public sealed class PostgreSqlAssignableDriversQuery(
                 documents[types[index]] = new DriverDocumentSnapshot(
                     types[index],
                     statuses[index],
+                    evidenceKinds[index],
                     objectKeys[index],
                     hashes[index],
                     expirations[index] is { } expiresAt

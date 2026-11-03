@@ -36,6 +36,7 @@ import {
   type RefreshRequirement,
 } from "./authoritative-refresh-coordinator";
 import { ScreenReloads } from "./screen-reloads";
+import { clearThenStopPrevious } from "./session-switch";
 import { isRateLimited } from "./tenant-error-messages";
 import {
   rateLimitWaits,
@@ -144,25 +145,36 @@ export function useOperationsDashboard(
     waitAbortRef.current = new AbortController();
   }, [reloads]);
 
+  // Z15 ("Ambos, panel fijo (Recommended)"): the previous organization's rows, counts and contexts go as soon as the
+  // change arrives, and no read starts for it (no API or session until the new start); its connection closes after.
   const clearForSessionChange = useCallback(async () => {
-    refreshScopeRef.current += 1;
-    refreshCoordinatorRef.current.cancel();
-    abortRef.current?.abort();
-    abortRef.current = null;
-    clearTimers();
     const current = connectionRef.current;
     connectionRef.current = null;
-    if (current !== null) await current.stop().catch(() => undefined);
-    queueCountsLoader.reset();
-    setItems([]);
-    itemsRef.current = [];
-    setContexts([]);
-    setNextCursor(null);
-    nextCursorRef.current = null;
-    seenCursorsRef.current.clear();
-    setLastUpdated(null);
-    setError(null);
-    setAccessUnavailable(false);
+    await clearThenStopPrevious(
+      () => {
+        refreshScopeRef.current += 1;
+        refreshCoordinatorRef.current.cancel();
+        abortRef.current?.abort();
+        abortRef.current = null;
+        clearTimers();
+        sessionRef.current = null;
+        apiRef.current = null;
+        queueCountsLoader.reset();
+        setItems([]);
+        itemsRef.current = [];
+        setContexts([]);
+        setNextCursor(null);
+        nextCursorRef.current = null;
+        seenCursorsRef.current.clear();
+        setLastUpdated(null);
+        setError(null);
+        setAccessUnavailable(false);
+        setConnection("Conectando");
+      },
+      async () => {
+        if (current !== null) await current.stop().catch(() => undefined);
+      },
+    );
   }, [clearTimers, queueCountsLoader]);
 
   // The counts are fetched again with every replacing list load except a

@@ -23,6 +23,7 @@ import { ExternalStore } from "./external-store";
 import { inboxAggregateVersions, mergeInboxSources } from "./inbox-merge";
 import { QueueCountsLoader } from "./queue-counts-loader";
 import { ScreenReloads, type ReloadTimers } from "./screen-reloads";
+import { clearThenStopPrevious } from "./session-switch";
 import { isRateLimited } from "./tenant-error-messages";
 import {
   rateLimitWaits,
@@ -191,6 +192,21 @@ export class InboxController extends ExternalStore<InboxState> {
     this.update({ phase: "loading" });
     await this.load("replace", "initial", "normal");
     return { session, phase: this.getSnapshot().phase };
+  }
+
+  /**
+   * Z15 ("Ambos, panel fijo (Recommended)"): a session or organization change drops the previous organization's rows,
+   * counts and zones at once (`sessionGeneration` changes, so the shell drops its selection, the "Asignar" panel and a
+   * bulk batch), then waits for the previous realtime connection to close, then starts the new session. Nothing is
+   * read meanwhile. Resolves null when `isCurrent` says a newer change superseded this one while it waited.
+   */
+  public async restart(
+    stopPrevious: () => Promise<void>,
+    isCurrent: () => boolean = () => true,
+  ): Promise<{ readonly session: OperationsSession | null; readonly phase: InboxPhase } | null> {
+    await clearThenStopPrevious(() => this.clearSession(), stopPrevious);
+    if (!isCurrent()) return null;
+    return this.start();
   }
 
   /** Leaves the screen: cancels every request and forgets the session's data. */

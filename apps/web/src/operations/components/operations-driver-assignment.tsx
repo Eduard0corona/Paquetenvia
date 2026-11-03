@@ -17,10 +17,7 @@ import {
 } from "../contracts/assignable-driver";
 import { canPerform, resolveActiveRole } from "../contracts/capabilities";
 import { parseMxnToCents } from "../contracts/money";
-import {
-  readOperationsSession,
-  subscribeToOperationsSession,
-} from "../session/operations-session";
+import { readOperationsSession } from "../session/operations-session";
 import {
   assignableDriversRateLimit,
   DriverAssignmentController,
@@ -37,6 +34,11 @@ import {
  * list by their DRV- reference, never by typing an id. The cost is typed in MXN and sent as
  * integer cents after a confirmation. After the server answers, the order detail refetches
  * REST; nothing is assumed locally.
+ *
+ * It reads the session once, when it mounts, and never restarts for a session change by itself. The screen that shows
+ * it owns the session and unmounts it as soon as the organization changes, so it never reads that order's drivers
+ * under another organization: the order detail mounts it only with an order read for the current session (Z17), and
+ * the inbox drops its "Asignar" panel on a session or organization change (Z15, "Ambos, panel fijo (Recommended)").
  */
 export function OperationsDriverAssignment({
   orderId,
@@ -115,12 +117,10 @@ export function OperationsDriverAssignment({
     };
 
     const initial = window.setTimeout(() => void start(), 0);
-    const unsubscribe = subscribeToOperationsSession(() => void start());
     return () => {
       cancelled = true;
       abort.abort();
       clearTimeout(initial);
-      unsubscribe();
       controllerRef.current?.dispose();
       controllerRef.current = null;
     };

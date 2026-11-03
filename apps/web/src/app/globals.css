@@ -964,6 +964,7 @@ ul.notice {
 .statusBadge.statusToneAccent,
 .statusBadge.statusToneWarn,
 .statusBadge.statusToneOk,
+.statusBadge.statusToneCrit,
 .statusChip {
   display: inline-flex;
   align-items: center;
@@ -984,7 +985,8 @@ ul.notice {
 .statusToneInfo .statusBadgeLabel,
 .statusToneAccent .statusBadgeLabel,
 .statusToneWarn .statusBadgeLabel,
-.statusToneOk .statusBadgeLabel {
+.statusToneOk .statusBadgeLabel,
+.statusToneCrit .statusBadgeLabel {
   color: inherit;
 }
 
@@ -1019,6 +1021,12 @@ ul.notice {
 .statusToneOk {
   background: var(--ok-soft);
   color: var(--ok);
+}
+
+/* DRV-DOC-001: a document state that blocks the driver («Vencido», "Incompletos"). */
+.statusToneCrit {
+  background: var(--crit-soft);
+  color: var(--crit);
 }
 
 /* Field: label + control + hint + error, linked through aria-describedby */
@@ -1154,6 +1162,7 @@ ul.notice {
 .opsFilters input,
 .opsFilters select,
 .opsOrderSearch input,
+.opsInlineField input,
 .opsInlineField select,
 .opsTrackingLink input {
   min-width: 0;
@@ -2273,6 +2282,71 @@ button.opsWizardStepItem:hover {
   justify-content: flex-end;
   gap: var(--space-2);
   margin-top: var(--space-4);
+}
+
+/* ---------- Driver documents (DRV-DOC-001) ---------- */
+
+.opsDocumentsCell {
+  display: inline-flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+.documentsDialog {
+  width: min(40rem, calc(100vw - 2rem));
+}
+
+.documentsList {
+  display: grid;
+  gap: var(--space-2);
+  margin: var(--space-3) 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.documentsList li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  border-top: 1px solid var(--line);
+  padding-top: var(--space-2);
+}
+
+.documentsListType {
+  min-width: 12rem;
+  font-weight: 700;
+}
+
+.documentsForm {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.documentsDecision {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+  margin: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-2) var(--space-3);
+}
+
+.documentsDecision legend {
+  font-weight: 600;
+}
+
+.documentsDecision .fieldError {
+  flex-basis: 100%;
+}
+
+.documentsCheck {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  font-weight: 600;
 }
 
 /* ---------- Responsive ---------- */

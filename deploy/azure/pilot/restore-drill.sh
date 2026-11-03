@@ -12,7 +12,16 @@
 # with --real (README §6.4 "Real restore") <base>-r<UTC minute>, kept only when `assert` succeeds, ready to be set as
 # PILOT_POSTGRES_SERVER_NAME. A restore always creates a new server; the source is never changed or deleted here.
 #
-# Prints only resource names, timestamps and job status; never a password or a connection string.
+# REL-001 restore vigente (Z9; Z18, project owner: "Exacto, en el job (Recommended)"): a drill (never --real) also
+# compares the row counts of organizations, orders, order events and pickup and delivery photos of the restored server
+# with the server in service. Only that drill execution runs `assert --compare-row-counts-env`, with one more Key Vault
+# mapping: the verify job's own `pg-migrate-connection`, the connection it holds every day, so nothing reads with more
+# privilege. Both reads are read-only and any difference fails `assert`. The job itself is never given that mapping
+# or argument (`az containerapp job start --yaml` with the job's own template), and its one changed setting, mapping 0,
+# is put back by the cleanup on every exit. The EVIDENCE line names the commit `assert` ran: the locked
+# <tested_git_sha> tag of the verify job's db-ops image digest.
+#
+# Prints only resource names, timestamps, job status and counts; never a password, a connection string or a value.
 set -euo pipefail
 
 usage() { echo "usage: $0 --resource-group NAME --restore-time YYYY-MM-DDTHH:MM:SSZ [--keep | --real]" >&2; exit 2; }
@@ -53,11 +62,25 @@ if az postgres flexible-server show -g "${RG}" -n "${DRILL}" --only-show-errors 
 fi
 JOB="job-pv-pilot-verify"
 SECRET="pg-restore-drill-connection"
+SOURCE_SETTING="PAQUETERIA_ROW_COUNT_SOURCE_CONNECTION"
+ASSERT_ARGS='["assert","--connection-env","PAQUETERIA_MIGRATION_CONNECTION"]'
 MIGRATE_PRINCIPAL="$(az identity show -g "${RG}" -n id-pv-pilot-migrate --query principalId -o tsv)"
+
+# The verify job must be exactly as the deployment leaves it (one container running `assert`, mapping 0 on
+# pg-migrate-connection, no row-count source), so the cleanup's reset restores it exactly.
+deployed_template="$(az containerapp job show -g "${RG}" -n "${JOB}" --query properties.template -o json)"
+if ! jq -e --argjson args "${ASSERT_ARGS}" --arg source "${SOURCE_SETTING}" '
+    (.containers | length) == 1 and .containers[0].args == $args and
+    ([.containers[0].env[] | select(.name == "KeyVaultSecrets__Mappings__0__SecretName") | .value] == ["pg-migrate-connection"]) and
+    ([.containers[0].env[] | select(.value == $source)] | length) == 0' <<<"${deployed_template}" >/dev/null; then
+  echo "${JOB} is not in its deployed state; run Deploy Azure PILOT, then the drill again" >&2
+  exit 1
+fi
 
 FIREWALL="$(dirname "$0")/kv-firewall.sh"
 SECRET_SCOPE=""
 tmp=""
+override=""
 drill_requested=0
 
 # Cleanup on every exit, success or failure, each step best-effort:
@@ -82,6 +105,7 @@ cleanup() {
     --only-show-errors --output none 2>/dev/null || true
   bash "${FIREWALL}" close "${VAULT}" || true
   if [[ -n "${tmp}" ]]; then shred -u "${tmp}" 2>/dev/null || true; fi
+  if [[ -n "${override}" ]]; then rm -f "${override}" || true; fi
   if [[ "${drill_requested}" == 1 && "${KEEP}" == 0 ]]; then
     if az postgres flexible-server delete -g "${RG}" -n "${DRILL}" --yes --only-show-errors --output none; then
       echo "drill_server_deleted=${DRILL}"
@@ -129,7 +153,55 @@ sleep 60
 #    the job reads it itself at start) and run `assert` (baseline + every module lane).
 az containerapp job update -g "${RG}" -n "${JOB}" --only-show-errors --output none \
   --set-env-vars "KeyVaultSecrets__Mappings__0__SecretName=${SECRET}"
-execution="$(az containerapp job start -g "${RG}" -n "${JOB}" --query name -o tsv)"
+template="$(az containerapp job show -g "${RG}" -n "${JOB}" --query properties.template -o json)"
+
+# The commit `assert` runs: the db-ops image is pinned by digest, and the deployment locks its <tested_git_sha> tag.
+asserted_git_sha() {
+  local image registry repository digest tags sha lock
+  image="$(jq -r '.containers[0].image' <<<"${template}")"
+  [[ "${image}" =~ ^([a-z0-9]{5,50})\.azurecr\.io/(paquetenvia-db-ops)@(sha256:[0-9a-f]{64})$ ]] || { echo UNVERIFIED; return; }
+  registry="${BASH_REMATCH[1]}" repository="${BASH_REMATCH[2]}" digest="${BASH_REMATCH[3]}"
+  tags="$(az acr repository show --name "${registry}" --image "${repository}@${digest}" --only-show-errors --output json)" \
+    || { echo UNVERIFIED; return; }
+  sha="$(jq -r '[.tags[]? | select(test("^[0-9a-f]{40}$"))] | if length == 1 then .[0] else "" end' <<<"${tags}")"
+  [[ -n "${sha}" ]] || { echo UNVERIFIED; return; }
+  lock="$(az acr repository show --name "${registry}" --image "${repository}:${sha}" --only-show-errors --output json)" \
+    || { echo UNVERIFIED; return; }
+  if jq -e --arg digest "${digest}" '.digest == $digest and .changeableAttributes.writeEnabled == false' <<<"${lock}" >/dev/null; then
+    echo "${sha}"
+  else
+    echo UNVERIFIED
+  fi
+}
+ASSERTED="$(asserted_git_sha)"
+if [[ "${ASSERTED}" == UNVERIFIED ]]; then
+  echo "WARNING asserted_git_sha=UNVERIFIED: the verify job's image digest has no locked commit tag" >&2
+fi
+
+if [[ "${REAL}" == 1 ]]; then
+  # A real restore follows a loss: the server in service may differ on purpose, so counts are not compared.
+  ROW_COUNTS="NOT_COMPARED"
+  execution="$(az containerapp job start -g "${RG}" -n "${JOB}" --query name -o tsv)"
+else
+  # This execution only: the job's own template with the drill secret in mapping 0, plus the next mapping for the
+  # job's everyday pg-migrate-connection (the server in service) and the argument that compares the counts.
+  override="$(mktemp)"
+  jq --argjson args "${ASSERT_ARGS}" --arg secret "${SECRET}" --arg source "${SOURCE_SETTING}" '
+      .containers[0] as $c
+      | if (.containers | length) != 1 or $c.args != $args or
+           ([$c.env[] | select(.name == "KeyVaultSecrets__Mappings__0__SecretName") | .value] != [$secret])
+        then error("verify job template drifted") else . end
+      | ([$c.env[].name | capture("^KeyVaultSecrets__Mappings__(?<i>[0-9]+)__").i | tonumber] | max + 1) as $n
+      | {containers: [$c
+          | .args += ["--compare-row-counts-env", $source]
+          | .env += [{name: "KeyVaultSecrets__Mappings__\($n)__SecretName", value: "pg-migrate-connection"},
+                     {name: "KeyVaultSecrets__Mappings__\($n)__ConfigurationKey", value: $source}]]}' \
+    <<<"${template}" > "${override}"
+  ROW_COUNTS="UNVERIFIED"
+  execution="$(az containerapp job start -g "${RG}" -n "${JOB}" --yaml "${override}" --query name -o tsv)"
+  rm -f "${override}"
+  override=""
+fi
 status="Running"
 for _ in $(seq 1 60); do
   status="$(az containerapp job execution show -g "${RG}" -n "${JOB}" --job-execution-name "${execution}" --query properties.status -o tsv)"
@@ -138,10 +210,12 @@ for _ in $(seq 1 60); do
 done
 finished="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
 echo "verify_execution=${execution} status=${status} finished=${finished}"
+# `assert --compare-row-counts-env` succeeds only when the four counts match on both servers.
+if [[ "${REAL}" == 0 && "${status}" == "Succeeded" ]]; then ROW_COUNTS="MATCHED"; fi
 
 # 4. The cleanup trap points the job back at the pilot database, disables the drill secret, closes the
 #    firewall and, unless --keep (or --real and success), deletes the restored server.
-echo "EVIDENCE restore_point=${RESTORE_TIME} started=${started} restored=${restored} verified=${finished} verify_status=${status} execution=${execution}"
+echo "EVIDENCE restore_point=${RESTORE_TIME} started=${started} restored=${restored} verified=${finished} verify_status=${status} row_counts=${ROW_COUNTS} asserted_git_sha=${ASSERTED} execution=${execution}"
 [[ "${status}" == "Succeeded" ]]
 if [[ "${REAL}" == 1 ]]; then
   echo "restored_server_kept=${DRILL} source_unchanged=${SOURCE}"

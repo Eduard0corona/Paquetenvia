@@ -1,0 +1,209 @@
+{
+  "format_version": "paquetenvia-rel001-browser-suites-v1",
+  "source": "docs/normative/v0.6/specs/AI-07_UI_CONTRACTS.yaml",
+  "screens": [
+    {
+      "screen": "/login",
+      "status": "GAP",
+      "suites": [],
+      "owner_task": "AUTH-001",
+      "reason": "The panel sign-in through the BFF has no real-browser round trip yet; AUTH-001 owns its browser test (Z2)."
+    },
+    {
+      "screen": "/onboarding",
+      "status": "GAP",
+      "suites": [],
+      "owner_task": "REG-001",
+      "reason": "Self-service onboarding is reachable in the pilot (AUTH-OPEN-REGISTRATION) and has Vitest coverage only."
+    },
+    {
+      "screen": "/ops/dashboard",
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Operations.OperationsDashboardPwaPlaywrightTests"
+        },
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Operations.OperationsDashboardRateLimitPwaPlaywrightTests"
+        }
+      ]
+    },
+    {
+      "screen": "/ops/inbox",
+      "status": "GAP",
+      "suites": [],
+      "owner_task": "UI-001",
+      "reason": "No Playwright suite yet; UI-001 owns it (Z2)."
+    },
+    {
+      "screen": "/ops/orders",
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Operations.OrdersListPwaPlaywrightTests"
+        }
+      ]
+    },
+    {
+      "screen": "/ops/orders/new",
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "driver-stops-pwa",
+          "test": "Paqueteria.IntegrationTests.PlatformEndToEnd.MainJourneyEndToEndTests"
+        },
+        {
+          "job": "driver-stops-pwa",
+          "test": "Paqueteria.IntegrationTests.PlatformEndToEnd.RateLimitEndToEndTests"
+        }
+      ]
+    },
+    {
+      "screen": "/ops/orders/:id",
+      "status": "GAP",
+      "suites": [
+        {
+          "job": "driver-stops-pwa",
+          "test": "Paqueteria.IntegrationTests.PlatformEndToEnd.MainJourneyEndToEndTests"
+        }
+      ],
+      "owner_task": "UI-001",
+      "reason": "The main journey covers release, assignment and the tracking link; the failed-attempt decision, the CASH_PENDING close and the recipient-notice panel have no browser test yet (UI-001, Z2)."
+    },
+    {
+      "screen": "/ops/routes",
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Operations.ManualRoutesPwaPlaywrightTests"
+        }
+      ]
+    },
+    {
+      "screen": "/driver/stops",
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "driver-stops-pwa",
+          "test": "Paqueteria.IntegrationTests.Driver.DriverStopsPwaPlaywrightTests"
+        },
+        {
+          "job": "driver-stops-pwa",
+          "test": "Paqueteria.IntegrationTests.Driver.DriverStopsBffPwaPlaywrightTests"
+        },
+        {
+          "job": "driver-stops-pwa",
+          "test": "Paqueteria.IntegrationTests.Driver.DriverStopsRealtimePlaywrightTests"
+        },
+        {
+          "job": "driver-stops-pwa",
+          "test": "Paqueteria.IntegrationTests.Driver.DriverSessionExpiryBffPwaPlaywrightTests"
+        },
+        {
+          "job": "driver-stops-pwa",
+          "test": "Paqueteria.IntegrationTests.Driver.DriverDocumentsPwaPlaywrightTests"
+        }
+      ]
+    },
+    {
+      "screen": "/driver/stops/:id",
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "driver-stops-pwa",
+          "test": "Paqueteria.IntegrationTests.Driver.DriverStopsPwaPlaywrightTests"
+        },
+        {
+          "job": "driver-stops-pwa",
+          "test": "Paqueteria.IntegrationTests.Driver.DriverOfflineOperationsPwaPlaywrightTests"
+        }
+      ]
+    },
+    {
+      "screen": "/track/:token",
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "public-tracking",
+          "test": "Paqueteria.IntegrationTests.Tracking.PublicTrackingPwaPlaywrightTests"
+        },
+        {
+          "job": "driver-stops-pwa",
+          "test": "Paqueteria.IntegrationTests.Tracking.PublicTrackingNeutralBrandTests"
+        }
+      ]
+    },
+    {
+      "screen": "/avisos/baja/:token",
+      "status": "GAP",
+      "suites": [],
+      "owner_task": "NTF-006",
+      "reason": "The recipient opt-out page has Vitest coverage only (Z2)."
+    },
+    {
+      "screen": "/finance/settlements",
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Finance.SettlementDeskPwaPlaywrightTests"
+        }
+      ]
+    },
+    {
+      "screen": "/ops/orders/import",
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Operations.CsvOrderImportPwaPlaywrightTests"
+        }
+      ]
+    },
+    {
+      "screen": "/ops/incidents",
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Incidents.IncidentDeskPwaPlaywrightTests"
+        }
+      ]
+    },
+    {
+      "screen": "/finance/cod",
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Finance.CodControlPwaPlaywrightTests"
+        }
+      ]
+    },
+    {
+      "screen": "/ops/drivers",
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Operations.DriverRosterPwaPlaywrightTests"
+        },
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Operations.DriverDocumentsPwaPlaywrightTests"
+        }
+      ]
+    },
+    {
+      "screen": "screen:external_driver_offers",
+      "status": "GAP",
+      "suites": [],
+      "owner_task": "EXT-001",
+      "reason": "The driver offer list and the dashboard publish action have Vitest coverage only; EXT-001 owns the browser test (Z2)."
+    }
+  ]
+}

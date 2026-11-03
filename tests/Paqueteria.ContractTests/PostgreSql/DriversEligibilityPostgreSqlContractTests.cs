@@ -209,6 +209,7 @@ public sealed class DriversEligibilityPostgreSqlContractTests(PostgreSqlContract
                 "20260723_AdoptCanonicalDriversBaseline",
                 "20260725000156_AdoptCanonicalDriverPositions",
                 "20261011000100_AddDriverVoiceBridge",
+                "20261102000100_AddInPersonDriverDocuments",
             ],
             migrations.Order(StringComparer.Ordinal));
     }

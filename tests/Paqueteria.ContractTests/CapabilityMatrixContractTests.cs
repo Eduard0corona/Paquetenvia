@@ -527,6 +527,41 @@ public sealed class CapabilityMatrixContractTests
         }
     }
 
+    /// <summary>
+    /// DRV-DOC-001-IN-PERSON-2026-11-02 (Y4 "Él y despacho"): dispatch's document operations take the rule of its other
+    /// driver operations (DISPATCHER without MFA, PLATFORM_ADMIN with MFA) and the driver reads only its own; FINANCE and
+    /// VIEWER never.
+    /// </summary>
+    [Fact]
+    public void Driver_document_operations_take_the_dispatch_driver_rule_and_the_driver_reads_its_own()
+    {
+        var decision = Matrix.Scalar("driver_document_operations_decision");
+        Assert.StartsWith("DRV-DOC-001-IN-PERSON-2026-11-02", decision, StringComparison.Ordinal);
+        Assert.Contains("Y4 \"Él y", decision, StringComparison.Ordinal);
+        Assert.Contains("Finanzas y consulta no.", decision, StringComparison.Ordinal);
+        Assert.Contains("FINANCE, VIEWER and every other role receive the uniform 403", decision, StringComparison.Ordinal);
+        Assert.Equal(
+            ["listDriverDocuments", "listMyDriverDocuments", "recordDriverDocument", "revokeDriverDocument"],
+            OperationIds(Matrix.Mapping("driver_document_operations")).Order(StringComparer.Ordinal));
+        foreach (var capability in new[]
+                 {
+                     TenantCapabilities.ListDriverDocuments,
+                     TenantCapabilities.RecordDriverDocument,
+                     TenantCapabilities.RevokeDriverDocument,
+                 })
+        {
+            Assert.Same(capability, TenantCapabilities.All[capability.OperationId]);
+            Assert.Equal(
+                TenantCapabilities.ListOrganizationDrivers.Grants.Select(grant => (grant.Role, grant.RequiresMfa)),
+                capability.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        }
+
+        Assert.Equal(
+            [(OrganizationRole.Driver, false)],
+            TenantCapabilities.ListMyDriverDocuments.Grants.Select(grant => (grant.Role, grant.RequiresMfa)));
+        Assert.False(TenantCapabilities.All.ContainsKey("registerMyDriverDocument"));
+    }
+
     [Fact]
     public void Every_capability_names_an_AI05_tenant_operation_that_declares_the_Forbidden_response()
     {
@@ -615,6 +650,7 @@ public sealed class CapabilityMatrixContractTests
                      "tracking_link_operations", "incident_operations", "assignable_driver_operations",
                      "operations_queue_operations", "driver_list_operations", "voice_call_operations",
                      "own_membership_operations", "dispatch_contact_operations", "recipient_notice_operations",
+                     "driver_document_operations",
                  })
         {
             foreach (var (key, value) in Matrix.Mapping(section).Children)

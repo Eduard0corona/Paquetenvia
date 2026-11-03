@@ -204,28 +204,50 @@ function ResolveForm({ state, controller }: { readonly state: IncidentsState; re
   );
 }
 
+/** The typed order filter: empty lists every order; anything else must be a canonical order id (the controller checks). */
+function typedOrderFilter(form: HTMLFormElement | null): string | null {
+  const text = form === null ? "" : String(new FormData(form).get("order_filter") ?? "").trim();
+  return text === "" ? null : text;
+}
+
+/**
+ * AI-07 incident_desk: the list is filterable by status and order. A status change and "Actualizar" (or Enter in the
+ * order field) read the first page with the filters on screen; "Cargar más" keeps the filters in effect. The field
+ * remounts with the order filter in effect after a confirmed write and empty after a tenant switch.
+ */
+function IncidentFilters({ state, controller }: { readonly state: IncidentsState; readonly controller: IncidentsController }) {
+  return (
+    <form className="opsFormActions" autoComplete="off" onSubmit={(event) => {
+      event.preventDefault();
+      void controller.refresh(state.statusFilter, typedOrderFilter(event.currentTarget));
+    }}>
+      <label className="opsInlineField">Estado
+        <select
+          value={state.statusFilter ?? ""}
+          disabled={state.listing}
+          onChange={(event) => void controller.refresh(
+            event.target.value === "" ? null : (event.target.value as IncidentStatus),
+            typedOrderFilter(event.currentTarget.form),
+          )}
+        >
+          <option value="">Todos</option>
+          {incidentStatuses.map((value) => <option key={value} value={value}>{incidentStatusLabels[value]}</option>)}
+        </select>
+      </label>
+      <label className="opsInlineField">Orden
+        <input name="order_filter" defaultValue={state.orderFilter ?? ""} spellCheck={false} />
+      </label>
+      <button type="submit" className="btn btnSecondary" disabled={state.listing}>Actualizar</button>
+    </form>
+  );
+}
+
 function IncidentList({ state, controller }: { readonly state: IncidentsState; readonly controller: IncidentsController }) {
   const { incidents } = state;
   return (
     <section>
       <h2>Incidencias de la organización</h2>
-      {state.canList && (
-        <div className="opsFormActions">
-          <label className="opsInlineField">Estado
-            <select
-              value={state.statusFilter ?? ""}
-              disabled={state.listing}
-              onChange={(event) => void controller.refresh(
-                event.target.value === "" ? null : (event.target.value as IncidentStatus),
-              )}
-            >
-              <option value="">Todos</option>
-              {incidentStatuses.map((value) => <option key={value} value={value}>{incidentStatusLabels[value]}</option>)}
-            </select>
-          </label>
-          <button type="button" className="btn btnSecondary" disabled={state.listing} onClick={() => void controller.refresh()}>Actualizar</button>
-        </div>
-      )}
+      {state.canList && <IncidentFilters key={`filters-${state.formKey}`} state={state} controller={controller} />}
       {incidents.length === 0 ? <EmptyState>Sin incidencias para mostrar.</EmptyState> : (
         <table className="opsTable">
           <caption>Incidencias registradas</caption>
