@@ -43,8 +43,11 @@ public sealed partial class OrderDetailActionsPwaPlaywrightTests(DriverStopsNext
     private const string AssignmentId = "a6000000-0000-4000-8000-000000000001";
     private const string TokenId = "7e000000-0000-4000-8000-000000000001";
 
-    /// <summary>A 43-character Base64URL token, as issueTrackingLink returns it.</summary>
-    private const string Token = "SintEticoSeguimiento_0123456789-abcdefghijk";
+    /// <summary>
+    /// A 43-character Base64URL token, as issueTrackingLink returns it: a repeated synthetic word, so it is never
+    /// mistaken for a credential.
+    /// </summary>
+    private const string Token = "sintetico-sintetico-sintetico-sintetico-sin";
 
     private const string TrackingUrl = "https://rastreo.example.test/track/" + Token;
 
