@@ -167,6 +167,48 @@ describe("operations page privacy policy", () => {
     }
   });
 
+  it("offers Verificar identidad on every operations and finance screen when only MFA is missing (Z19)", () => {
+    // The screens that read through createOperationsApi: a 403 MFA_REQUIRED is no longer "Acceso no disponible".
+    const screens: ReadonlyArray<readonly [string, string, string]> = [
+      [
+        "src/operations/components/operations-inbox-shell.tsx",
+        "src/operations/state/inbox-controller.ts",
+        "buildStepUpPromptHref(inboxHref(view))",
+      ],
+      [
+        "src/operations/components/operations-dashboard-shell.tsx",
+        "src/operations/state/use-operations-dashboard.ts",
+        "buildStepUpPromptHref(dashboardViewHref(view))",
+      ],
+      [
+        "src/operations/components/operations-order-detail-shell.tsx",
+        "src/operations/state/use-operations-order-detail.ts",
+        "buildStepUpPromptHref(orderDetailReturnUrl(orderId, inboxHref))",
+      ],
+    ];
+    for (const [shell, state, stepUp] of screens) {
+      const view = readFileSync(shell, "utf8");
+      expect(view, shell).toContain("message={mfaRequiredMessage}");
+      expect(view, shell).toContain(stepUp);
+      expect(readFileSync(state, "utf8"), state).toContain("caught instanceof OperationsApiError && caught.mfaRequired");
+    }
+    // Every other screen already describes a tenant failure with describeFailure, which carries the step-up.
+    for (const shell of [
+      "src/operations/components/operations-drivers-shell.tsx",
+      "src/operations/components/operations-orders-shell.tsx",
+      "src/operations/components/incidents-shell.tsx",
+      "src/operations/components/csv-import-shell.tsx",
+      "src/operations/components/manual-routes-shell.tsx",
+      "src/operations/components/create-order-wizard.tsx",
+      "src/finance/components/cod-shell.tsx",
+      "src/finance/components/settlements-shell.tsx",
+    ])
+      expect(readFileSync(shell, "utf8"), shell).toMatch(/stepUpHref/);
+    expect(readFileSync("src/operations/api/operations-api.ts", "utf8")).toContain(
+      'classified.category === "forbidden" && (await isMfaRequiredResponse(response))',
+    );
+  });
+
   it("reaches order creation and the finance screens from the shared app shell navigation", () => {
     const nav = readFileSync("src/components/app-shell/nav-items.ts", "utf8");
     for (const href of ["/ops/inbox", "/ops/orders/new", "/ops/dashboard", "/finance/cod", "/finance/settlements"])

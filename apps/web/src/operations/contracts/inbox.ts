@@ -267,6 +267,15 @@ export function inboxOrderHref(orderId: string, view: InboxView): string {
 }
 
 /**
+ * Z19 (AUTH-001-MFA-STEP-UP): the order detail's own URL, with the inbox view it was opened from (`returnHref`, a
+ * canonical inbox URL from {@link inboxReturnHref}), so "Verificar identidad" comes back to the same detail.
+ */
+export function orderDetailReturnUrl(orderId: string, returnHref: string | null): string {
+  if (returnHref === null) return operationsOrderHref(orderId);
+  return inboxOrderHref(orderId, parseInboxView(new URLSearchParams(returnHref.slice(returnHref.indexOf("?") + 1))));
+}
+
+/**
  * Where "Volver a la bandeja" goes, from the detail's `inbox` query value. Only a canonical
  * inbox URL is ever built (the path is fixed and the view is parsed again), so the value can
  * never send the person anywhere else; null when the detail was not opened from the inbox.

@@ -71,6 +71,8 @@ export interface OperationsDashboardState {
   readonly loading: boolean;
   readonly loadingMore: boolean;
   readonly accessUnavailable: boolean;
+  /** Z19 (AUTH-001-MFA-STEP-UP): accessUnavailable came from a 403 MFA_REQUIRED; the screen offers "Verificar identidad". */
+  readonly mfaRequired: boolean;
   readonly error: string | null;
   readonly connection: ConnectionState;
   readonly lastUpdated: Date | null;
@@ -103,6 +105,7 @@ export function useOperationsDashboard(
   const [loading, setLoading] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
   const [accessUnavailable, setAccessUnavailable] = useState(false);
+  const [mfaRequired, setMfaRequired] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connection, setConnection] =
     useState<ConnectionState>("Sin sesión");
@@ -169,6 +172,7 @@ export function useOperationsDashboard(
         setLastUpdated(null);
         setError(null);
         setAccessUnavailable(false);
+        setMfaRequired(false);
         setConnection("Conectando");
       },
       async () => {
@@ -280,6 +284,7 @@ export function useOperationsDashboard(
           seenCursorsRef.current.clear();
           setLastUpdated(null);
           setAccessUnavailable(true);
+          setMfaRequired(caught instanceof OperationsApiError && caught.mfaRequired);
           setConnection("Sin conexión");
           if (requirement === "normal") {
             await connectionRef.current?.stop().catch(() => undefined);
@@ -413,6 +418,7 @@ export function useOperationsDashboard(
         caught instanceof OperationsApiError ? caught.category : "network";
       if (category === "unauthorized" || category === "forbidden") {
         setAccessUnavailable(true);
+        setMfaRequired(caught instanceof OperationsApiError && caught.mfaRequired);
         setItems([]);
         itemsRef.current = [];
       } else if (isRateLimited(caught) && rateLimitWaits.isWaiting(dashboardRateLimit)) {
@@ -523,6 +529,7 @@ export function useOperationsDashboard(
     loading,
     loadingMore,
     accessUnavailable,
+    mfaRequired,
     error,
     connection,
     lastUpdated,

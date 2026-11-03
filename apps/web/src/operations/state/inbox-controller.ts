@@ -103,6 +103,11 @@ export interface InboxState {
   readonly zones: readonly InboxZoneOption[];
   /** Changes with every session or organization change. */
   readonly sessionGeneration: number;
+  /**
+   * Z19 (AUTH-001-MFA-STEP-UP): access_unavailable came from a 403 MFA_REQUIRED - only the second factor is missing,
+   * so the screen offers "Verificar identidad" instead of "Acceso no disponible".
+   */
+  readonly mfaRequired: boolean;
 }
 
 export const inboxLoadFailedMessage = "No fue posible actualizar la bandeja.";
@@ -156,6 +161,7 @@ export class InboxController extends ExternalStore<InboxState> {
       countsUnavailable: false,
       zones: [],
       sessionGeneration: 0,
+      mfaRequired: false,
     });
     this.counts = new QueueCountsLoader((view) =>
       this.update({ counts: view.counts, countsUnavailable: view.unavailable }),
@@ -267,6 +273,7 @@ export class InboxController extends ExternalStore<InboxState> {
       countsUnavailable: false,
       zones: [],
       sessionGeneration: this.getSnapshot().sessionGeneration + 1,
+      mfaRequired: false,
     });
   }
 
@@ -343,6 +350,7 @@ export class InboxController extends ExternalStore<InboxState> {
           loadingMore: false,
           error: null,
           lastUpdated: null,
+          mfaRequired: caught instanceof OperationsApiError && caught.mfaRequired,
         });
       } else if (isRateLimited(caught)) {
         // SEC-004: the common message counts down, the rows stay, and the inbox reads once when the wait ends.

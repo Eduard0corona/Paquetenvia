@@ -542,6 +542,7 @@ screen_contracts:
     - UI-PHASE3-INBOX-BULK-ADD-TO-ROUTE-2026-10-11
     - UI-PHASE3-INBOX-CREATE-ROUTE-2026-10-11
     - UI-PHASE3-ROUTES-DAILY-2026-10-12
+    - UI-001-INBOX-MFA-ZONES-2026-11-03
     authority: REST API + PostgreSQL
     sources:
       counts: GET /operations/queue-counts (getOperationsQueueCounts)
@@ -581,9 +582,12 @@ screen_contracts:
     merge: the queries of one queue are merged newest first by updated_at and order id, the dashboard order; a row is
       shown only once every query that still has pages reached it, so "Cargar más" never places an older row above a
       shown one nor skips one
+    # UI-001-INBOX-MFA-ZONES-2026-11-03 (project owner, 2026-11-03, Z20 "Ajustar el contrato (Recommended)"): the zone
+    # chips keep every zone seen during the session, so another zone stays one click away while a zone chip is set.
     filters: chips are server filters of the dashboard queries only - one status of a multi-status queue (Precio por
-      revisar offers none), service type and delivery zone (zones seen in the loaded rows); "Limpiar filtros" removes
-      them; search stays the shell's "Buscar guía" (exact tracking number)
+      revisar offers none), service type and delivery zone (zones seen in the rows loaded during the session; an
+      organization switch clears them); "Limpiar filtros" removes them; search stays the shell's "Buscar guía" (exact
+      tracking number)
     url_state: queue, status, service_type and zone live in the /ops/inbox query; a row opens /ops/orders/:id carrying
       the view, and the detail offers "Volver a la bandeja" to that canonical inbox URL only
     table:

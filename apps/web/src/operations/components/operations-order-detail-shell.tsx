@@ -1,6 +1,9 @@
 "use client";
 
 import Link from "next/link";
+import { buildStepUpPromptHref } from "../../auth/step-up";
+import { Feedback } from "../../components/ui/feedback";
+import { orderDetailReturnUrl } from "../contracts/inbox";
 import type { OperationsDashboardOrder } from "../contracts/operations-dashboard";
 import {
   assignmentTypeLabel,
@@ -16,6 +19,7 @@ import { PageHeader } from "../../components/ui/page-header";
 import { StatusBadge } from "../../components/ui/status-badge";
 import { RateLimitNoticeView, useRateLimitWait } from "../../components/ui/rate-limit-notice";
 import { orderDetailRateLimit, useOperationsOrderDetail } from "../state/use-operations-order-detail";
+import { mfaRequiredMessage } from "../state/tenant-error-messages";
 import { OperationsDriverAssignment } from "./operations-driver-assignment";
 import { OperationsFailedAttempt } from "./operations-failed-attempt";
 import { OperationsNextStep } from "./operations-next-step";
@@ -51,6 +55,20 @@ export function OperationsOrderDetailShell({
             Volver al tablero
           </Link>
         </div>
+      </div>
+    );
+  }
+  if (state.accessUnavailable && state.mfaRequired) {
+    // Z19 (AUTH-001-MFA-STEP-UP): only the second factor is missing; "Verificar identidad" returns to this detail.
+    return (
+      <div className="page">
+        {backToInbox}
+        <PageHeader title="Detalle de orden" />
+        <Feedback
+          errors={[]}
+          message={mfaRequiredMessage}
+          stepUpHref={buildStepUpPromptHref(orderDetailReturnUrl(orderId, inboxHref))}
+        />
       </div>
     );
   }
