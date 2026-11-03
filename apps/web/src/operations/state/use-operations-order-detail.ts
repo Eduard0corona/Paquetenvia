@@ -29,6 +29,7 @@ import {
   type OrderDetailReload,
 } from "./order-detail-reloads";
 import { ScreenReloads } from "./screen-reloads";
+import { clearThenStopPrevious } from "./session-switch";
 import { isRateLimited } from "./tenant-error-messages";
 import {
   rateLimitWaits,
@@ -193,20 +194,39 @@ export function useOperationsOrderDetail(
     });
   }, [load, loadNotices, reloads]);
 
+  // Z17 ("PR aparte después de #339 (Recommended)"), with the method of Z15: the previous organization's order and its
+  // row go as soon as the change arrives, and with them the panels below, which do not follow the session themselves
+  // (operations-order-detail-shell mounts them only with an order read for the current session). No read starts for
+  // it (no API or session until this start goes on); its connection closes after.
   const start = useCallback(async () => {
-    refreshScopeRef.current += 1;
-    refreshCoordinatorRef.current.cancel();
-    reloads.cancel();
-    waitAbortRef.current.abort();
-    waitAbortRef.current = new AbortController();
-    await connectionRef.current?.stop().catch(() => undefined);
+    const previous = connectionRef.current;
     connectionRef.current = null;
-    setOrder(null);
-    setProjection(null);
-    setLastUpdated(null);
-    setNotFound(false);
-    setAccessUnavailable(false);
-    blockedRef.current = false;
+    const scope = refreshScopeRef.current + 1;
+    await clearThenStopPrevious(
+      () => {
+        refreshScopeRef.current = scope;
+        refreshCoordinatorRef.current.cancel();
+        reloads.cancel();
+        waitAbortRef.current.abort();
+        waitAbortRef.current = new AbortController();
+        sessionRef.current = null;
+        apiRef.current = null;
+        blockedRef.current = false;
+        setOrder(null);
+        setProjection(null);
+        setLastUpdated(null);
+        setNotFound(false);
+        setAccessUnavailable(false);
+        setError(null);
+        setLoading(true);
+        setConnectionState("Conectando");
+      },
+      async () => {
+        if (previous !== null) await previous.stop().catch(() => undefined);
+      },
+    );
+    // A later change started again while this connection closed: that start reads its own session.
+    if (refreshScopeRef.current !== scope) return;
     const session = readOperationsSession();
     sessionRef.current = session;
     if (session === null) {
@@ -216,7 +236,6 @@ export function useOperationsOrderDetail(
     }
     const api = createOperationsApi(apiBaseUrl, session);
     apiRef.current = api;
-    setConnectionState("Conectando");
     await load(api, session);
     if (sessionRef.current !== session || blockedRef.current) return;
     // Owner answer Q9: the notices are gathered into at most one reload every 3 seconds, after the existing

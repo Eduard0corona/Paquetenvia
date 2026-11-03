@@ -17,10 +17,7 @@ import {
 } from "../contracts/assignable-driver";
 import { canPerform, resolveActiveRole } from "../contracts/capabilities";
 import { parseMxnToCents } from "../contracts/money";
-import {
-  readOperationsSession,
-  subscribeToOperationsSession,
-} from "../session/operations-session";
+import { readOperationsSession } from "../session/operations-session";
 import {
   assignableDriversRateLimit,
   DriverAssignmentController,
@@ -37,25 +34,22 @@ import {
  * list by their DRV- reference, never by typing an id. The cost is typed in MXN and sent as
  * integer cents after a confirmation. After the server answers, the order detail refetches
  * REST; nothing is assumed locally.
+ *
+ * It reads the session once, when it mounts, and never restarts for a session change by itself. The screen that shows
+ * it owns the session and unmounts it as soon as the organization changes, so it never reads that order's drivers
+ * under another organization: the order detail mounts it only with an order read for the current session (Z17), and
+ * the inbox drops its "Asignar" panel on a session or organization change (Z15, "Ambos, panel fijo (Recommended)").
  */
 export function OperationsDriverAssignment({
   orderId,
   publicId,
   assignable,
   onOrderChanged,
-  followSessionChanges = true,
 }: {
   readonly orderId: string;
   readonly publicId: string;
   readonly assignable: boolean;
   readonly onOrderChanged: () => void;
-  /**
-   * The order detail (the default) restarts the picker for the new session itself. Z15 ("Ambos, panel fijo
-   * (Recommended)"): the inbox passes false, because its "Asignar" panel belongs to the organization it was opened in
-   * and the inbox drops it on a session or organization change, so it never reads drivers of that order under another
-   * organization.
-   */
-  readonly followSessionChanges?: boolean;
 }) {
   const apiBaseUrl = clientApiBaseUrl();
   const [allowed, setAllowed] = useState(false);
@@ -123,16 +117,14 @@ export function OperationsDriverAssignment({
     };
 
     const initial = window.setTimeout(() => void start(), 0);
-    const unsubscribe = followSessionChanges ? subscribeToOperationsSession(() => void start()) : () => undefined;
     return () => {
       cancelled = true;
       abort.abort();
       clearTimeout(initial);
-      unsubscribe();
       controllerRef.current?.dispose();
       controllerRef.current = null;
     };
-  }, [apiBaseUrl, orderId, assignable, followSessionChanges]);
+  }, [apiBaseUrl, orderId, assignable]);
 
   if (!allowed)
     return done === null ? null : (

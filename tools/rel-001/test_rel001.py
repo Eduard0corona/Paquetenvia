@@ -32,6 +32,20 @@ WORKFLOW = REPO_ROOT / ".github/workflows/pilot-readiness.yml"
 DRILL = "EVIDENCE restore_point=2026-11-20T10:00:00Z started=2026-11-20T10:05:00Z restored=2026-11-20T10:40:00Z " \
         "verified=2026-11-20T10:50:00Z verify_status=Succeeded execution=job-pv-pilot-verify-abc123"
 GENERATED_AT = "2026-11-21T12:00:00Z"
+
+
+def counted_drill(sha: str, row_counts: str = "MATCHED", asserted: str | None = None) -> str:
+    """The EVIDENCE line of a drill that compared the row counts (Z18) and names the commit its assert ran."""
+    return DRILL.replace(" execution=", f" row_counts={row_counts} asserted_git_sha={asserted or sha} execution=")
+
+
+def write_ops002_report(artifacts: Path, sha: str, counts: dict | None = None) -> None:
+    directory = artifacts / rel001.OPS002_ARTIFACT
+    directory.mkdir(parents=True, exist_ok=True)
+    counts = counts or {"organizations": 2, "orders": 2, "order_events": 9, "proof_photos": 2}
+    (directory / rel001.OPS002_REPORT_FILE).write_text(json.dumps({
+        "result": "RESTORE_DRILL_PASSED", "tested_git_sha": sha, "row_counts_matched": True,
+        "row_counts_source": counts, "row_counts_restored": counts}), encoding="utf-8")
 # The files and directories the tool reads from a tested tree.
 TREE_PATHS = (
     "docs/normative/v0.6/specs/AI-02_PRODUCT_CONTRACT.yaml",
@@ -163,7 +177,8 @@ class World:
     """A synthetic tested tree, control tree, Foundation run and artifacts."""
 
     def __init__(self, case: unittest.TestCase, mutate=None, record: dict | None = None, rehearsal: bool = False,
-                 drill: str | None = DRILL, artifacts_skip: set[str] | None = None, outcome: str = "PASSED") -> None:
+                 drill: str | None = DRILL, artifacts_skip: set[str] | None = None, outcome: str = "PASSED",
+                 counted: bool = False) -> None:
         self.temp = tempfile.TemporaryDirectory(prefix="rel001-test-")
         case.addCleanup(self.temp.cleanup)
         base = Path(self.temp.name)
@@ -195,6 +210,10 @@ class World:
             target.write_text(json.dumps(record), encoding="utf-8")
         self.args = args
         self.drill = drill
+        if counted:
+            # Z18: the drill compared the counts and ran this commit; the OPS-002 CI drill compared the same counts.
+            self.drill = counted_drill(self.sha)
+            write_ops002_report(self.artifacts, self.sha)
 
     def run(self) -> tuple[int, dict]:
         env = dict(os.environ)
@@ -579,16 +598,117 @@ class RestoreTests(unittest.TestCase):
     CI_OK = {"ops002_restore_drill_passed": True}
     MANIFESTS = {"backup-restore": [{}]}
 
-    def evaluate(self, line, start=None, rel000=None):
-        return rel001.restore_criterion(line, start, self.GENERATED, rel000 or self.CI_OK, self.MANIFESTS)
+    CI_COUNTS = {"organizations": 2, "orders": 2, "order_events": 9, "proof_photos": 2}
+    SHA = "c" * 40
+
+    def evaluate(self, line, start=None, rel000=None, ci_counts=None):
+        return rel001.restore_criterion(line, start, self.GENERATED, rel000 or self.CI_OK, self.MANIFESTS,
+                                        ci_counts or ("PASSED", dict(self.CI_COUNTS), []), self.SHA)
+
+    def ops002_report(self, mutate=None, sha="a" * 40) -> Path:
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        directory = Path(temp.name) / rel001.OPS002_ARTIFACT
+        directory.mkdir()
+        report = {"result": "RESTORE_DRILL_PASSED", "tested_git_sha": sha, "row_counts_matched": True,
+                  "row_counts_source": dict(self.CI_COUNTS), "row_counts_restored": dict(self.CI_COUNTS)}
+        if mutate:
+            mutate(report)
+        (directory / rel001.OPS002_REPORT_FILE).write_text(json.dumps(report), encoding="utf-8")
+        return Path(temp.name)
+
+    def test_the_ci_drill_counts_match(self):
+        status, counts, reasons = rel001.ci_drill_row_counts(self.ops002_report(), "a" * 40)
+        self.assertEqual(("PASSED", self.CI_COUNTS, []), (status, counts, reasons))
+        result = self.evaluate(None)
+        self.assertEqual("MATCHED", result["ci_drill"]["row_count_comparison"])
+        self.assertEqual(self.CI_COUNTS, result["ci_drill"]["row_counts"])
+        self.assertNotIn("CI_DRILL_ROW_COUNTS_MISSING", result["reasons"])
+
+    def test_a_ci_drill_without_counts_is_missing(self):
+        empty = tempfile.TemporaryDirectory()
+        self.addCleanup(empty.cleanup)
+        self.assertEqual(("MISSING", None, ["CI_DRILL_ROW_COUNTS_MISSING"]),
+                         rel001.ci_drill_row_counts(Path(empty.name), "a" * 40))
+
+        def before_counts(report):
+            for key in ("row_counts_matched", "row_counts_source", "row_counts_restored"):
+                del report[key]
+        self.assertEqual(("MISSING", None, ["CI_DRILL_ROW_COUNTS_MISSING"]),
+                         rel001.ci_drill_row_counts(self.ops002_report(before_counts), "a" * 40))
+
+    def test_a_ci_drill_whose_counts_differ_or_drift_fails(self):
+        cases = {
+            "differ": lambda r: r["row_counts_restored"].update(order_events=8),
+            "not_matched": lambda r: r.update(row_counts_matched=False),
+            "extra_key": lambda r: r["row_counts_source"].update(users=1),
+            "negative": lambda r: (r["row_counts_source"].update(orders=-1), r["row_counts_restored"].update(orders=-1)),
+            "not_int": lambda r: (r["row_counts_source"].update(orders="2"), r["row_counts_restored"].update(orders="2")),
+            "missing_side": lambda r: r.pop("row_counts_restored"),
+        }
+        for name, mutate in cases.items():
+            with self.subTest(case=name):
+                status, counts, reasons = rel001.ci_drill_row_counts(self.ops002_report(mutate), "a" * 40)
+                self.assertEqual(("FAILED", None, ["CI_DRILL_ROW_COUNTS_MISMATCH"]), (status, counts, reasons))
+        for name, (mutate, sha) in {"other_commit": (None, "b" * 40),
+                                    "not_passed": (lambda r: r.update(result="RESTORE_DRILL_FAILED"), "a" * 40)}.items():
+            with self.subTest(case=name):
+                self.assertEqual(("FAILED", None, ["CI_DRILL_REPORT_INVALID"]),
+                                 rel001.ci_drill_row_counts(self.ops002_report(mutate), sha))
+        result = self.evaluate(None, ci_counts=("FAILED", None, ["CI_DRILL_ROW_COUNTS_MISMATCH"]))
+        self.assertEqual("FAILED", result["status"])
+
+    def test_a_symlinked_ci_drill_report_is_missing(self):
+        root = self.ops002_report()
+        report = root / rel001.OPS002_ARTIFACT / rel001.OPS002_REPORT_FILE
+        outside = root / "outside.json"
+        outside.write_text(report.read_text(encoding="utf-8"), encoding="utf-8")
+        report.unlink()
+        report.symlink_to(outside)
+        self.assertEqual("MISSING", rel001.ci_drill_row_counts(root, "a" * 40)[0])
 
     def test_absent_drill_is_missing(self):
-        result = self.evaluate(None)
+        result = self.evaluate(None, ci_counts=("MISSING", None, ["CI_DRILL_ROW_COUNTS_MISSING"]))
         self.assertEqual("MISSING", result["status"])
         self.assertIn("PILOT_DRILL_EVIDENCE_MISSING", result["reasons"])
         self.assertIn("CI_DRILL_ROW_COUNTS_MISSING", result["reasons"])
 
-    def test_a_succeeded_drill_still_misses_row_counts_and_commit_and_never_passes(self):
+    def test_a_counted_drill_of_the_certified_commit_passes(self):
+        result = self.evaluate(counted_drill(self.SHA), rel001.parse_date("2026-11-27", "s"))
+        self.assertEqual("PASSED", result["status"], result["reasons"])
+        self.assertEqual([], result["reasons"])
+        self.assertEqual("MATCHED", result["pilot_drill"]["row_count_comparison"])
+        self.assertEqual(self.SHA, result["pilot_drill"]["asserted_git_sha"])
+        self.assertNotIn("abc123", json.dumps(result))
+
+    def test_a_drill_that_did_not_match_or_ran_another_commit_fails(self):
+        cases = {
+            "unverified_counts": (counted_drill(self.SHA, row_counts="UNVERIFIED"), "PILOT_DRILL_ROW_COUNTS_NOT_MATCHED"),
+            "real_restore": (counted_drill(self.SHA, row_counts="NOT_COMPARED"), "PILOT_DRILL_ROW_COUNTS_NOT_MATCHED"),
+            "unverified_commit": (counted_drill(self.SHA, asserted="UNVERIFIED"), "PILOT_DRILL_COMMIT_MISMATCH"),
+            "other_commit": (counted_drill(self.SHA, asserted="d" * 40), "PILOT_DRILL_COMMIT_MISMATCH"),
+        }
+        for name, (line, reason) in cases.items():
+            with self.subTest(case=name):
+                result = self.evaluate(line)
+                self.assertEqual("FAILED", result["status"])
+                self.assertIn(reason, result["reasons"])
+
+    def test_a_counted_drill_still_needs_the_ci_drill_counts(self):
+        missing = self.evaluate(counted_drill(self.SHA), ci_counts=("MISSING", None, ["CI_DRILL_ROW_COUNTS_MISSING"]))
+        self.assertEqual("MISSING", missing["status"])
+        self.assertEqual(["CI_DRILL_ROW_COUNTS_MISSING"], missing["reasons"])
+        failed = self.evaluate(counted_drill(self.SHA), ci_counts=("FAILED", None, ["CI_DRILL_ROW_COUNTS_MISMATCH"]))
+        self.assertEqual("FAILED", failed["status"])
+
+    def test_a_drill_line_with_only_one_new_token_is_refused(self):
+        for line in (DRILL.replace(" execution=", " row_counts=MATCHED execution="),
+                     DRILL.replace(" execution=", f" asserted_git_sha={self.SHA} execution="),
+                     counted_drill(self.SHA, asserted="C" * 40)):
+            with self.subTest(line=line), self.assertRaises(rel001.Rel001Error):
+                self.evaluate(line)
+
+    def test_a_drill_line_from_before_the_comparison_misses_row_counts_and_commit_and_never_passes(self):
         result = self.evaluate(DRILL)
         self.assertEqual("MISSING", result["status"])
         self.assertIn("PILOT_DRILL_ROW_COUNTS_MISSING", result["reasons"])
@@ -766,6 +886,40 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual("MISSING", criteria["restore_vigente"])
         self.assertEqual(["restore_vigente"], report["blocking_criteria"])
         self.assertEqual("NOT_READY", report["entry_status"])
+        for name in rel001.OUTPUT_FILES:
+            text = (world.output / name).read_text(encoding="utf-8")
+            self.assertNotIn("abc123", text)
+            self.assertNotIn("job-pv-pilot-verify", text)
+
+    def test_a_complete_world_with_a_counted_drill_is_approved(self):
+        def close_everything(root: Path) -> None:
+            log = root / rel001.DECISION_LOG
+            rows = [f"| 2026-11-21 | {gate}-SYNTHETIC-CLOSED | Gate resolution | synthetic | none | owner |"
+                    for gate in ("GATE-003", "GATE-004", "GATE-007", "GATE-008", "GATE-009", "GATE-010")]
+            log.write_text(log.read_text(encoding="utf-8") + "\n".join(rows) + "\n", encoding="utf-8")
+            for path, key in ((rel001.BROWSER_MANIFEST, "screens"), (rel001.AI09_MAP, "scenarios")):
+                document = json.loads((root / path).read_text(encoding="utf-8"))
+                for entry in document[key]:
+                    if entry["status"] == "GAP":
+                        entry.pop("reason")
+                        entry.pop("owner_task", None)
+                        entry["status"] = "COVERED"
+                        tests_key = "suites" if key == "screens" else "tests"
+                        entry[tests_key] = [{"job": "dotnet", "test": "Paqueteria.Synthetic.GapClosedTests"}]
+                (root / path).write_text(json.dumps(document), encoding="utf-8")
+        world = World(self, mutate=close_everything, rehearsal=True, counted=True)
+        target = world.root / rel001.DECISION_RECORD
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(json.dumps(decision_record(world.sha)), encoding="utf-8")
+        code, result = world.run()
+        report = world.output_json("rel001-pilot-readiness-report.json")
+        self.assertEqual("PASSED", report["criteria"]["restore_vigente"]["status"], report["criteria"]["restore_vigente"])
+        self.assertEqual([], report["blocking_criteria"])
+        self.assertEqual("APPROVED_FOR_PILOT_START", report["entry_status"])
+        self.assertEqual(0, code)
+        restore = world.output_json("rel001-restore-evidence.json")
+        self.assertEqual({"organizations": 2, "orders": 2, "order_events": 9, "proof_photos": 2},
+                         restore["ci_drill"]["row_counts"])
         for name in rel001.OUTPUT_FILES:
             text = (world.output / name).read_text(encoding="utf-8")
             self.assertNotIn("abc123", text)

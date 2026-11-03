@@ -15,10 +15,11 @@ The entry phase lands in three PRs:
 
 1. **PR-A (#335):** the AI-08 criterion, AI-24 `pilot_readiness`, the decision-log row, the tool, its closed manifests
    and the workflow.
-2. **PR-B (this change):** the local/CI synthetic rehearsal with the cobro y fallas journey, which writes the
+2. **PR-B (#340):** the local/CI synthetic rehearsal with the cobro y fallas journey, which writes the
    rehearsal evidence the tool validates (Z4, Z5, Z6, Z7, Z8). See *Synthetic rehearsal* below.
-3. **PR-C:** `deploy/azure/pilot/restore-drill.sh` and the OPS-002 CI drill compare the row counts of organizations,
-   orders, order events and proof photos, and the drill names the commit its `assert` ran (Z9).
+3. **PR-C (this change):** `deploy/azure/pilot/restore-drill.sh` and the OPS-002 CI drill compare the row counts of
+   organizations, orders, order events and proof photos, and the drill names the commit its `assert` ran (Z9, Z18).
+   See *Restore drill row counts* below.
 
 ## Criteria
 
@@ -27,7 +28,7 @@ The entry phase lands in three PRs:
 | `full_regression` | AI-08 required test | Foundation CI 13/13 push run on `main` whose head is `tested_git_sha`; REL-000 technical evidence `PASSED` in that run; no failed or skipped test in any execution artifact; every identity of the two closed manifests executed and passed in that run; no `GAP` | Fails: 6 screens and 3 AI-09 scenarios have no test |
 | `data_completeness` | AI-02, Z6 | The rehearsal has at least 50 delivered orders and `complete * 100 >= delivered * 98`, and the four journey steps passed | Measured by the rehearsal of each dispatch; `MISSING` if it fails |
 | `latency` | AI-02, Z7, Z8 | Each critical screen p95 < 2000 ms and order creation p95 < 3000 ms, at least 100 samples each, nearest-rank | Measured by the rehearsal of each dispatch; `MISSING` if it fails |
-| `restore_vigente` | AI-08, Z9 | The pilot drill `Succeeded`, restore point inside the 14-day PITR window, verified 0 to 7 days before `period_start` (before the record exists: before the report time), row counts matched, `assert` ran `tested_git_sha`; the OPS-002 CI drill passed with the same counts | `MISSING` until PR-C |
+| `restore_vigente` | AI-08, Z9 | The pilot drill `Succeeded`, restore point inside the 14-day PITR window, verified 0 to 7 days before `period_start` (before the record exists: before the report time), row counts matched, `assert` ran `tested_git_sha`; the OPS-002 CI drill passed with the same counts | `MISSING` until the owner runs the drill on the pilot; a certified run from before PR-C has no CI counts (`MISSING`) |
 | `recipient_notices_line` | AI-08 NTF line | Every switch off, or GATE-004 and GATE-007 both resolved | Passes: all six switches off |
 | `release_gates` | AI-10 `release_gates.MVP-1_PILOT` | Each gate has a `Gate resolution` or `Gate scoping` row | Fails: GATE-003, 004, 007, 008, 009, 010 open |
 | `delivery_plan` | AI-08, Z12 | The decision record holds 50 to 100 planned deliveries, a period, senders and zones | Pending the owner |
@@ -119,6 +120,41 @@ per-object scope (#337), proof validation can hold up to `ProofStorage:MaximumCo
 SEC-004 permit at its maximum (10,000 per window; public tracking 1,000), so the 100-sample loops measure the screens,
 not the rate limiter's waits. Nothing else changes.
 
+## Restore drill row counts (Z9, Z18)
+
+Z18 (project owner, 2026-11-02): "Exacto, en el job (Recommended)". In full, as recorded in the session record: "Solo
+para el simulacro, el job de verificación también lee el servidor de origen y compara los 4 conteos en ambos, en solo
+lectura; falla ante cualquier diferencia. Antes del arranque no hay tráfico, así que coincide; si el origen cambió, se
+repite con un punto de restauración más nuevo."
+
+- **Pilot drill.** Only a drill execution, never `--real`, runs `assert --compare-row-counts-env
+  PAQUETERIA_ROW_COUNT_SOURCE_CONNECTION`:
+  - It gets one more Key Vault mapping: the verify job's own everyday `pg-migrate-connection`, which points at the
+    server in service. That is the same login and privilege the job already holds, so nothing reads with more.
+  - After the baseline and lane assertions on the restored server, the migrator counts organizations, orders, order
+    events, and `PICKUP_PHOTO` and `DELIVERY_PHOTO` proofs on both servers. Each side is one READ ONLY REPEATABLE READ
+    transaction.
+  - Any difference fails `assert` with exit 13, and so do a login that is neither superuser nor BYPASSRLS and the same
+    database named twice.
+  - The job log gets one `ROW_COUNTS_MATCHED` or `ROW_COUNTS_DIFFER` line with the counts only.
+  - The job is never given that mapping or argument. The drill starts that one execution with `az containerapp job
+    start --yaml` and the job's own template. The only setting it changes on the job, mapping 0 (the drill secret),
+    is reset by the cleanup on every exit.
+  - Before restoring anything, the drill checks that the job is exactly as deployed; otherwise it stops.
+- **The EVIDENCE line** gains `row_counts=MATCHED` (the comparing `assert` succeeded), `UNVERIFIED` (it did not) or
+  `NOT_COMPARED` (`--real`). It also gains `asserted_git_sha`: the locked `<tested_git_sha>` tag of the verify job's
+  db-ops image digest, or `UNVERIFIED`.
+- **The tool:**
+  - A line without those tokens is `MISSING`.
+  - Any value other than `MATCHED`, or a commit other than `tested_git_sha`, is `FAILED`.
+- **OPS-002 CI drill:**
+  - `backup-environment.ps1` records the same four counts in its report while the source is quiesced, and the
+    fingerprint check shows they did not move.
+  - `restore-environment.ps1` counts again in the restored database and fails on any difference.
+  - The final report holds `row_counts_source`, `row_counts_restored` and `row_counts_matched`, and
+    `test-backup-restore.ps1` requires them equal to the seed (2, 2, 9, 2).
+  - The tool reads that report from the certified run's `ops002-backup-restore-results` artifact.
+
 ## Inputs and outputs
 
 | Input | Where it comes from |
@@ -171,7 +207,7 @@ artifact is frozen under `docs/releases/evidence/` with a manifest of digests, a
 
 1. Dispatch *Pilot readiness (REL-001)* from `main` with the certified SHA and its Foundation run id. Read the summary.
 2. After ENV-001's first deployment and the last migration, run the restore drill in Cloud Shell and dispatch again with
-   its `EVIDENCE` line (PR-C adds the row counts).
+   its `EVIDENCE` line. It must say `verify_status=Succeeded row_counts=MATCHED asserted_git_sha=<tested_git_sha>`.
 3. Write the decision record with the plan counts and the three approvals, merge it to `main`, and dispatch once more
    with the same SHA, run id and drill line, at most 7 days before `period_start`.
 

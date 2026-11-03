@@ -102,6 +102,10 @@
         {
           "job": "driver-stops-pwa",
           "test": "Paqueteria.IntegrationTests.Driver.DriverSessionExpiryBffPwaPlaywrightTests"
+        },
+        {
+          "job": "driver-stops-pwa",
+          "test": "Paqueteria.IntegrationTests.Driver.DriverDocumentsPwaPlaywrightTests"
         }
       ]
     },
@@ -187,6 +191,10 @@
         {
           "job": "operations-dashboard",
           "test": "Paqueteria.IntegrationTests.Operations.DriverRosterPwaPlaywrightTests"
+        },
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Operations.DriverDocumentsPwaPlaywrightTests"
         }
       ]
     },

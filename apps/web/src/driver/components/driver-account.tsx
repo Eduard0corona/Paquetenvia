@@ -12,6 +12,7 @@ import {
   readBrowserDriverSession,
   type DriverSession,
 } from "../session/driver-session";
+import { DriverDocumentsList } from "./driver-documents-list";
 import { DriverPhoneSettings } from "./driver-phone-settings";
 import styles from "./driver-stops.module.css";
 
@@ -21,7 +22,8 @@ import styles from "./driver-stops.module.css";
  * and the offline queue are left exactly as they are. UI-PHASE3-DRIVER-STOP-DETAILS-2026-10-11:
  * once the server ended the session, the saved stop details are wiped from the phone before
  * leaving; the offline queue is kept. "Cuenta" (VOICE-001, AI-07 driver_account) opens the
- * driver's own phone for masked calls; it reads the API only once opened.
+ * driver's own phone for masked calls and (DRV-DOC-001-IN-PERSON-2026-11-02) the read-only list
+ * of the driver's own documents; it reads the API only once opened.
  */
 export function DriverAccount() {
   const [session, setSession] = useState<DriverSession | null>(null);
@@ -105,6 +107,7 @@ export function DriverAccount() {
         >
           <summary>Cuenta</summary>
           {accountOpen ? <DriverPhoneSettings session={session} /> : null}
+          {accountOpen ? <DriverDocumentsList session={session} /> : null}
         </details>
       )}
     </div>

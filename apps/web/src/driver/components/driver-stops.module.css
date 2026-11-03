@@ -1000,3 +1000,30 @@
   outline: 3px solid var(--focus);
   outline-offset: 3px;
 }
+
+/* DRV-DOC-001: "Cuenta > Documentos", the driver's own documents, read-only. */
+.documentsList {
+  display: grid;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.documentsList li {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 0.75rem;
+  border-top: 1px solid var(--line);
+  padding-top: 0.5rem;
+  line-height: 1.45;
+}
+
+.documentsType {
+  flex-basis: 100%;
+  font-weight: 700;
+}
+
+.documentsWarning {
+  font-weight: 700;
+}
