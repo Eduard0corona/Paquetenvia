@@ -856,6 +856,57 @@ COPY (
     return @($references)
 }
 
+# ENV-001 / REL-001 Z9: the row counts a restore must bring back unchanged, by table group, counts only (never a value).
+# "proof_photos" are the PICKUP_PHOTO and DELIVERY_PHOTO rows of custody.proofs.
+$script:Ops002RowCountNames = @("organizations", "orders", "order_events", "proof_photos")
+
+function Get-Ops002RowCounts {
+    param(
+        [Parameter(Mandatory)] $Context,
+        [string] $Database,
+        [int] $TimeoutSeconds = 120
+    )
+
+    $query = @'
+BEGIN TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY;
+SELECT concat_ws(E'\t',
+  (SELECT count(*) FROM organizations.organizations),
+  (SELECT count(*) FROM orders.orders),
+  (SELECT count(*) FROM orders.order_events),
+  (SELECT count(*) FROM custody.proofs WHERE proof_type IN ('PICKUP_PHOTO','DELIVERY_PHOTO')));
+COMMIT;
+'@
+    $result = Invoke-Ops002PostgresQuery -Context $Context -Query $query `
+        -Database $Database -TimeoutSeconds $TimeoutSeconds
+    $lines = @($result.StandardOutput -split "`r?`n" | Where-Object { $_ -match '^\d+\t\d+\t\d+\t\d+$' })
+    if ($lines.Count -ne 1) {
+        throw "Row counts could not be read."
+    }
+    $values = $lines[0].Split("`t")
+    $counts = [ordered]@{}
+    for ($index = 0; $index -lt $script:Ops002RowCountNames.Count; $index++) {
+        $counts[$script:Ops002RowCountNames[$index]] = [int64]$values[$index]
+    }
+    return $counts
+}
+
+function Test-Ops002RowCountsEqual {
+    param(
+        [Parameter(Mandatory)] $Expected,
+        [Parameter(Mandatory)] $Actual
+    )
+
+    foreach ($name in $script:Ops002RowCountNames) {
+        $expectedValue = $Expected.$name
+        $actualValue = $Actual.$name
+        if ($null -eq $expectedValue -or $null -eq $actualValue -or
+            [int64]$expectedValue -ne [int64]$actualValue) {
+            return $false
+        }
+    }
+    return $true
+}
+
 function Get-Ops002ObjectInventory {
     param([Parameter(Mandatory)] [string] $Root)
 

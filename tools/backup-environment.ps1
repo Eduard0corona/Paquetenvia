@@ -104,6 +104,9 @@ try {
 
     $currentPhase = "source_fingerprint"
     $fingerprintBefore = Get-Ops002Fingerprint -Context $context
+    # REL-001 Z9: the counts the restore must bring back; the fingerprint check below proves they did not move.
+    $currentPhase = "source_row_counts"
+    $rowCounts = Get-Ops002RowCounts -Context $context
     $currentPhase = "database_versions"
     $versions = Get-Ops002DatabaseVersions -Context $context
     $currentPhase = "migration_histories"
@@ -395,6 +398,7 @@ pg_restore --list "$OPS002_DUMP_PATH"
         object_inventory_sha256 = $inventory.Digest
         proof_objects_expected = $proofReferences.Count
         proof_objects_restored = 0
+        row_counts = $rowCounts
         source_fingerprint_stable = $true
         source_destroyed_before_restore = $false
         target_was_clean = $false
