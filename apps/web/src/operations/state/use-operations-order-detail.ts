@@ -52,6 +52,8 @@ export interface OperationsOrderDetailState {
   readonly loading: boolean;
   readonly notFound: boolean;
   readonly accessUnavailable: boolean;
+  /** Z19 (AUTH-001-MFA-STEP-UP): accessUnavailable came from a 403 MFA_REQUIRED; the screen offers "Verificar identidad". */
+  readonly mfaRequired: boolean;
   readonly error: string | null;
   readonly connection: string;
   readonly lastUpdated: Date | null;
@@ -72,6 +74,7 @@ export function useOperationsOrderDetail(
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [accessUnavailable, setAccessUnavailable] = useState(false);
+  const [mfaRequired, setMfaRequired] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [connectionState, setConnectionState] = useState("Sin sesión");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
@@ -156,6 +159,7 @@ export function useOperationsOrderDetail(
         } else if (category === "unauthorized" || category === "forbidden") {
           blockedRef.current = true;
           setAccessUnavailable(true);
+          setMfaRequired(caught instanceof OperationsApiError && caught.mfaRequired);
           setOrder(null);
           setProjection(null);
           setLastUpdated(null);
@@ -217,6 +221,7 @@ export function useOperationsOrderDetail(
         setLastUpdated(null);
         setNotFound(false);
         setAccessUnavailable(false);
+        setMfaRequired(false);
         setError(null);
         setLoading(true);
         setConnectionState("Conectando");
@@ -322,6 +327,7 @@ export function useOperationsOrderDetail(
     loading,
     notFound,
     accessUnavailable,
+    mfaRequired,
     error,
     connection: connectionState,
     lastUpdated,

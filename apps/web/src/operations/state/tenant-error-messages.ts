@@ -9,6 +9,9 @@ export interface FailureView {
   readonly stepUpHref: string | null;
 }
 
+/** AUTH-001-MFA-STEP-UP: the message shown with "Verificar identidad" when only the second factor is missing. */
+export const mfaRequiredMessage = "Esta acción requiere verificar tu identidad (MFA).";
+
 /**
  * Spanish copy for a failed tenant operation. It never includes server text,
  * identifiers or anything the person typed.
@@ -28,7 +31,7 @@ export function describeFailure(
     case "forbidden":
       return error.mfaRequired
         ? {
-            message: "Esta acción requiere verificar tu identidad (MFA).",
+            message: mfaRequiredMessage,
             stepUpHref: buildStepUpPromptHref(returnUrl),
           }
         : {

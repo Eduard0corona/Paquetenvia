@@ -23,7 +23,8 @@ namespace Paqueteria.IntegrationTests.Operations;
 /// rows; realtime notices give one reload at most every 3 seconds, and a repeated event or a location update reads
 /// nothing; a switch from a page DISPATCHER cannot use lands it on the inbox, and a switch clears rows, zones, counts,
 /// the selection and the open assignment before the next organization answers; for VIEWER, FINANCE, DRIVER and
-/// PLATFORM_ADMIN without MFA the API answers 403 and no order, count or zone is shown. Nothing is kept in browser
+/// PLATFORM_ADMIN without MFA the API answers 403 and no order, count or zone is shown, and PLATFORM_ADMIN is offered
+/// "Verificar identidad" (Z19). Nothing is kept in browser
 /// storage or logged, no internal id is shown, every amount comes from integer cents and every time is in
 /// America/Mazatlan whatever the device zone.
 /// </summary>
@@ -594,7 +595,8 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
     /// <summary>
     /// AI-07 work_inbox.roles and excluded_roles: DISPATCHER and PLATFORM_ADMIN with MFA only. The shell does not offer
     /// the inbox to VIEWER, FINANCE or DRIVER, and for them, as for PLATFORM_ADMIN without MFA, the API answers 403: no
-    /// order, count or realtime connection is shown.
+    /// order, count or realtime connection is shown. VIEWER, FINANCE and DRIVER see "Acceso no disponible"; PLATFORM_ADMIN,
+    /// whose 403 is MFA_REQUIRED, is offered "Verificar identidad" back to this view (Z19, AUTH-001-MFA-STEP-UP).
     /// </summary>
     [Theory]
     [Trait("Category", "OperationsDashboardPwa")]
@@ -621,8 +623,23 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
         api.MfaRequired = role == "PLATFORM_ADMIN";
 
         await page.GotoAsync(new Uri(server.BaseAddress, "/ops/inbox").AbsoluteUri);
-        await page.GetByRole(AriaRole.Heading, new() { Name = "Acceso no disponible", Exact = true }).WaitForAsync();
-        await ExpectTextAsync(page, "No es posible mostrar la bandeja de trabajo.");
+        var stepUp = page.GetByRole(AriaRole.Link, new() { Name = "Verificar identidad", Exact = true });
+        if (role == "PLATFORM_ADMIN")
+        {
+            // Only the second factor is missing: the MFA message and "Verificar identidad", which returns to this view.
+            await page.Locator("main").GetByRole(AriaRole.Status)
+                .GetByText("Esta acción requiere verificar tu identidad (MFA).", new() { Exact = false })
+                .WaitForAsync();
+            Assert.Equal("/login?mfa=required&return_url=%2Fops%2Finbox%3Fqueue%3Dunassigned", await stepUp.GetAttributeAsync("href"));
+            Assert.Equal(0, await page.GetByRole(AriaRole.Heading, new() { Name = "Acceso no disponible", Exact = true }).CountAsync());
+        }
+        else
+        {
+            await page.GetByRole(AriaRole.Heading, new() { Name = "Acceso no disponible", Exact = true }).WaitForAsync();
+            await ExpectTextAsync(page, "No es posible mostrar la bandeja de trabajo.");
+            Assert.Equal(0, await stepUp.CountAsync());
+        }
+
         await ExpectNavigationAsync(page, role);
         await Task.Delay(500);
         Assert.Equal(0, await page.Locator("table.opsInboxTable").CountAsync());

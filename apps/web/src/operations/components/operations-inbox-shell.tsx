@@ -5,7 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { DateTime } from "../../components/ui/date-time";
 import { EmptyState } from "../../components/ui/empty-state";
-import { ScreenGate } from "../../components/ui/feedback";
+import { buildStepUpPromptHref } from "../../auth/step-up";
+import { Feedback, ScreenGate } from "../../components/ui/feedback";
 import { Money } from "../../components/ui/money";
 import { PageHeader } from "../../components/ui/page-header";
 import { StatusBadge } from "../../components/ui/status-badge";
@@ -40,6 +41,7 @@ import type { OperationsQueueId } from "../contracts/queue-counts";
 import { formatServiceWindow } from "../contracts/service-window";
 import { useOperationsInbox } from "../state/use-operations-inbox";
 import { inboxRateLimit } from "../state/inbox-controller";
+import { mfaRequiredMessage } from "../state/tenant-error-messages";
 import { RateLimitNoticeView, useRateLimitWait } from "../../components/ui/rate-limit-notice";
 import { bulkAssignmentTitleId, OperationsBulkAssignment } from "./operations-bulk-assignment";
 import { OperationsDriverAssignment } from "./operations-driver-assignment";
@@ -186,10 +188,15 @@ export function OperationsInboxShell() {
 
       <p className="pageNote">Horarios mostrados en hora de Mazatlán.</p>
 
-      <ScreenGate
-        phase={state.phase === "loading" ? "ready" : state.phase}
-        accessMessage="No es posible mostrar la bandeja de trabajo."
-      />
+      {state.phase === "access_unavailable" && state.mfaRequired ? (
+        // Z19 (AUTH-001-MFA-STEP-UP): only the second factor is missing; "Verificar identidad" returns to this view.
+        <Feedback errors={[]} message={mfaRequiredMessage} stepUpHref={buildStepUpPromptHref(inboxHref(view))} />
+      ) : (
+        <ScreenGate
+          phase={state.phase === "loading" ? "ready" : state.phase}
+          accessMessage="No es posible mostrar la bandeja de trabajo."
+        />
+      )}
 
       {!blocked && (
         <>
