@@ -41,4 +41,8 @@ regexes = [
   # credential. It is only in the history of fix/ops-002-restore-follows-server (commit a77d2f8; the test now uses
   # "ab" * 32), and the task rules forbid amending or rebasing that commit.
   '''PASSWORD = "0123456789abcdef"''',
+  # UI-001 order-detail Playwright suite tracking token, a synthetic 43-character Base64URL value that never reached a
+  # tracking page. It is only in the history of test/ui-001-playwright-order-detail (commit f384e8b; the suite now
+  # uses a repeated synthetic word) and that pushed history cannot be rewritten.
+  '''SintEticoSeguimiento_0123456789-abcdefghijk''',
 ]

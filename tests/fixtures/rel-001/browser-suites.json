@@ -32,10 +32,17 @@
     },
     {
       "screen": "/ops/inbox",
-      "status": "GAP",
-      "suites": [],
-      "owner_task": "UI-001",
-      "reason": "No Playwright suite yet; UI-001 owns it (Z2)."
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Operations.WorkInboxPwaPlaywrightTests"
+        },
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Operations.WorkInboxBulkPwaPlaywrightTests"
+        }
+      ]
     },
     {
       "screen": "/ops/orders",
@@ -63,15 +70,17 @@
     },
     {
       "screen": "/ops/orders/:id",
-      "status": "GAP",
+      "status": "COVERED",
       "suites": [
         {
           "job": "driver-stops-pwa",
           "test": "Paqueteria.IntegrationTests.PlatformEndToEnd.MainJourneyEndToEndTests"
+        },
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Operations.OrderDetailActionsPwaPlaywrightTests"
         }
-      ],
-      "owner_task": "UI-001",
-      "reason": "The main journey covers release, assignment and the tracking link; the failed-attempt decision, the CASH_PENDING close and the recipient-notice panel have no browser test yet (UI-001, Z2)."
+      ]
     },
     {
       "screen": "/ops/routes",
