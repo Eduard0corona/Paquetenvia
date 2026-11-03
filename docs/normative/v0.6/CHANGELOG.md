@@ -13,6 +13,18 @@
 - Z20: AI-07 `work_inbox.filters` dice ahora que los chips de zona son las zonas vistas en las filas cargadas durante la
   sesión, y que un cambio de organización las borra. El código no cambia.
 
+## Aprobaciones del owner al fusionar: Y15 (DRV-DOC-001 PR-3) y Z21 (REL-001 PR-C) — 2026-11-03
+
+- Respuesta literal del project owner (ronda Y continuada, 2026-11-03, sobre el PR-3 #342 de la app del repartidor):
+  Y15 "Aprobarlas todas (Recommended)", que aprueba las 12 decisiones de «Cuenta > Documentos» que no estaban en Y1 a Y14 ni en el
+  ADR. La pregunta, el texto de la opción, las 12 líneas de la vista previa y la opción no elegida se citan en la fila
+  `DRV-DOC-001-IN-PERSON-2026-11-02` de `decision-log.md`.
+- Respuestas literales del project owner sobre el PR-C #344 de REL-001, citadas completas en la fila
+  `REL-001-PILOT-READINESS-2026-11-02`: Z18 "Exacto, en el job (Recommended)" (ronda Z continuada, 2026-11-02: cómo compara
+  conteos el simulacro de restauración del piloto), que aplica ese PR, y Z21 "Aprobarlas todas (Recommended)" (2026-11-03),
+  que aprueba sus 8 decisiones no cubiertas por Z9 ni Z18, con el riesgo anotado.
+- Solo se registran decisiones ya aplicadas: no cambia ningún contrato ni código.
+
 ## Documentos del repartidor: panel aprobado y lista en la app (DRV-DOC-001-IN-PERSON-2026-11-02, AI-08 DRV-DOC-001) — 2026-11-02
 
 - Respuesta literal del project owner (ronda Y continuada, 2026-11-02, sobre el PR-2 #338 del panel de despacho): Y14
