@@ -934,23 +934,33 @@ public sealed partial class OrderDetailActionsPwaPlaywrightTests(DriverStopsNext
     }
 
     /// <summary>
-    /// No internal id is visible anywhere on the page: no UUID, nor the first 8 characters of any synthetic organization,
-    /// order, zone, client, driver, assignment, incident, notice or link id. Only guías and DRV- references are shown.
+    /// Every synthetic id the fake API can send: the six orders (each test uses its own), the organizations, zone,
+    /// client, drivers, assignment, link, incidents, proof, notices and the order's location, quote and city ids.
+    /// </summary>
+    private static readonly string[] SyntheticIds =
+    [
+        .. OrderIds,
+        OrganizationA, OrganizationB, ZoneCentro, ClientAccount, DriverMoto, DriverCar, DriverVan, AssignmentId, TokenId,
+        "e2000000-0000-4000-8000-000000000001", "e2000000-0000-4000-8000-000000000002",
+        "f3000000-0000-4000-8000-000000000001",
+        "b4000000-0000-4000-8000-000000000001", "b4000000-0000-4000-8000-000000000002",
+        "b4000000-0000-4000-8000-000000000003", "b4000000-0000-4000-8000-000000000004",
+        "61000000-0000-4000-8000-000000000001", "62000000-0000-4000-8000-000000000001",
+        "63000000-0000-4000-8000-000000000001", "64000000-0000-4000-8000-000000000001",
+    ];
+
+    /// <summary>
+    /// No internal id is visible anywhere on the page: no UUID, nor a fragment of any synthetic id - its first 8
+    /// characters or its last 12, the part that tells the six orders apart. Only guías and DRV- references are shown.
     /// </summary>
     private static async Task AssertNoIdentifiersAsync(IPage page)
     {
         var visible = await page.Locator("body").InnerTextAsync();
         Assert.DoesNotMatch(UuidPattern(), visible);
-        foreach (var id in new[]
-                 {
-                     OrganizationA, OrganizationB, OrderIds[0], ZoneCentro, ClientAccount, DriverMoto, AssignmentId, TokenId,
-                     "e2000000-0000-4000-8000-000000000001", "b4000000-0000-4000-8000-000000000001",
-                     "f3000000-0000-4000-8000-000000000001", "61000000-0000-4000-8000-000000000001",
-                     "62000000-0000-4000-8000-000000000001", "63000000-0000-4000-8000-000000000001",
-                     "64000000-0000-4000-8000-000000000001",
-                 })
+        foreach (var id in SyntheticIds)
         {
             Assert.DoesNotContain(id[..8], visible, StringComparison.Ordinal);
+            Assert.DoesNotContain(id[^12..], visible, StringComparison.Ordinal);
         }
     }
 
