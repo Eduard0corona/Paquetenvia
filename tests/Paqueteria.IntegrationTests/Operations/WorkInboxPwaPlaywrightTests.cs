@@ -10,19 +10,22 @@ namespace Paqueteria.IntegrationTests.Operations;
 /// <summary>
 /// UI-001 "Playwright per role" and "tenant switch clears prior state" for AI-07 <c>work_inbox</c> (<c>/ops/inbox</c>,
 /// UI-PHASE3-INBOX-2026-10-10, UI-PHASE3-INBOX-TOTAL-2026-10-10, UI-PHASE3-INBOX-PRICE-REVIEW-BULK-2026-10-11,
-/// SEC-004-RELOADS-AND-BULK-2026-10-13, SEC-004-PANEL-SCREENS-2026-10-13), the list and the single assignment (B5a; the
-/// bulk actions are their own suite), in a real browser against the production Next build. The API is fulfilled in the
-/// browser: the operations dashboard read model (OBS-001, ADR-OBS-001, declared by AI-07 as the list source) with its
-/// own filters, and the AI-05 shapes of getOperationsQueueCounts, listAssignableDrivers, assignDriver and
-/// /me/organization-contexts; the OperationsHub is a mocked SignalR WebSocket. Each queue is its own server query (one
-/// per status where AI-07 says so) merged newest first, its tab shows the server count, the chips are server filters
-/// kept in the URL, "Precio por revisar" fails closed on a row outside its rule and keeps the rows shown, "Cargar más"
-/// follows the cursors; "Asignar" uses the order detail's picker with integer cents and its confirmation, and the inbox
-/// and the counts are read again; a 429 pauses the whole inbox with one message and reads once at 0 with the view on
-/// screen; realtime notices give one reload at most every 3 seconds; an organization switch lands DISPATCHER and
-/// PLATFORM_ADMIN on the inbox and clears rows, counts, selection and the open assignment; VIEWER, FINANCE, DRIVER and
-/// PLATFORM_ADMIN without MFA see no inbox. The screen keeps nothing in browser storage, logs nothing, shows every
-/// amount from integer cents and every time in America/Mazatlan whatever the device zone.
+/// SEC-004-RELOADS-AND-BULK-2026-10-13, SEC-004-PANEL-SCREENS-2026-10-13): the list and the single assignment (B5a; the
+/// bulk actions are B5b), in a real browser against the production Next build. The API is fulfilled in the browser:
+/// the operations dashboard read model (AI-07 work_inbox.sources.list: OBS-001, ADR-OBS-001, not declared in AI-05)
+/// with its own filters, and the AI-05 shapes of getOperationsQueueCounts (no query string), listAssignableDrivers,
+/// assignDriver and /me/organization-contexts; the OperationsHub is a mocked SignalR WebSocket. Each queue is its own
+/// server query (one per status where AI-07 says so) merged newest first by updated_at, its tab shows the server count,
+/// the chips are server filters kept in the URL, "Precio por revisar" fails closed on a row outside its rule and keeps
+/// the rows shown, "Cargar más" follows the cursor of a one-query queue; "Asignar" uses the order detail's picker with
+/// integer cents and its confirmation, and the inbox and the counts are read again; a 429 on the counts or on the list
+/// pauses the whole inbox with one message and reads once at 0 with the view on screen; a 403 mid-session clears the
+/// rows; realtime notices give one reload at most every 3 seconds, and a repeated event or a location update reads
+/// nothing; a switch from a page DISPATCHER cannot use lands it on the inbox, and a switch clears rows, zones, counts,
+/// the selection and the open assignment before the next organization answers; for VIEWER, FINANCE, DRIVER and
+/// PLATFORM_ADMIN without MFA the API answers 403 and no order, count or zone is shown. Nothing is kept in browser
+/// storage or logged, no internal id is shown, every amount comes from integer cents and every time is in
+/// America/Mazatlan whatever the device zone.
 /// </summary>
 [Collection(DriverStopsPwaCollection.Name)]
 public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFixture server)
@@ -58,9 +61,10 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
         ZoneCentro, ("2026-11-03T05:30:00Z", "2026-11-03T06:30:00Z"), "DRV-7c2e9f10", 18_050, null, false,
         "2026-11-02T06:25:00Z");
 
+    /// <summary>The newest row of "Requiere atención", though its status query comes last.</summary>
     private static readonly InboxOrder Returning = new(
         "a1000000-0000-4000-8000-000000000004", "ORD_BandejaSintetica000004", "RETURNING", "SCHEDULED_ROUTE",
-        null, null, "DRV-0b1c2d3e", 5_000, null, false, "2026-11-02T06:00:00Z");
+        null, null, "DRV-0b1c2d3e", 5_000, null, false, "2026-11-02T06:28:00Z");
 
     private static readonly InboxOrder OrderOfC = new(
         "c1000000-0000-4000-8000-000000000001", "ORD_BandejaSinteticaSur01", "READY_FOR_PICKUP", "SAME_DAY",
@@ -135,6 +139,7 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
         await page.GetByRole(AriaRole.Heading, new() { Name = "Bandeja de trabajo", Exact = true }).WaitForAsync();
         await ExpectNavigationAsync(page, "DISPATCHER");
         await ExpectRowsAsync(page, ReadyRow, RescheduledRow);
+        await AssertNoIdentifiersAsync(page);
         Assert.Equal(new[] { "unassigned=true" }, api.TakeQueries(OrganizationA));
         await ExpectTabsAsync(page, "Sin asignar", "Sin asignar 2 órdenes", "Requiere atención 3 órdenes",
             "Precio por revisar 1 orden", "Entregadas sin cerrar 0 órdenes", "En ruta 0 órdenes");
@@ -169,9 +174,11 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
         await ExpectRowsAsync(page, ReadyRow, RescheduledRow);
         Assert.Equal(new[] { "unassigned=true" }, api.TakeQueries(OrganizationA));
 
-        // "Requiere atención": one query per status, merged newest first; only flagged rows can be assigned.
+        // "Requiere atención": one query per status, merged newest first by updated_at (Returning, last of the queries,
+        // is the newest row); only flagged rows can be assigned.
         await Tab(page, "Requiere atención").ClickAsync();
-        await ExpectRowsAsync(page, FailedAttemptRow, RescheduledRow, ReturningRow);
+        await ExpectRowsAsync(page, ReturningRow, FailedAttemptRow, RescheduledRow);
+        await AssertNoIdentifiersAsync(page);
         Assert.Equal(
             new[] { "status=CLAIM_OPEN", "status=FAILED_ATTEMPT", "status=RESCHEDULED", "status=RETURNING" },
             api.TakeQueries(OrganizationA).Order(StringComparer.Ordinal));
@@ -187,13 +194,19 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
             },
             api.TakeQueries(OrganizationA).Order(StringComparer.Ordinal));
         await page.GetByRole(AriaRole.Button, new() { Name = "Limpiar filtros", Exact = true }).ClickAsync();
-        await ExpectRowsAsync(page, FailedAttemptRow, RescheduledRow, ReturningRow);
+        await ExpectRowsAsync(page, ReturningRow, FailedAttemptRow, RescheduledRow);
         api.TakeQueries(OrganizationA);
         // The zone chips name the zones of the loaded rows; a zone is sent by its id and shown by its name.
         Assert.Equal(new[] { "Todas", "Centro", "Norte" }, await ChipsAsync(page, "Zona de entrega"));
         await Chip(page, "Zona de entrega", "Centro").ClickAsync();
         await ExpectRowsAsync(page, FailedAttemptRow);
-        Assert.All(api.TakeQueries(OrganizationA), query => Assert.Contains($"delivery_zone_id={ZoneCentro}", query, StringComparison.Ordinal));
+        Assert.Equal(
+            new[]
+            {
+                $"status=CLAIM_OPEN&delivery_zone_id={ZoneCentro}", $"status=FAILED_ATTEMPT&delivery_zone_id={ZoneCentro}",
+                $"status=RESCHEDULED&delivery_zone_id={ZoneCentro}", $"status=RETURNING&delivery_zone_id={ZoneCentro}",
+            },
+            api.TakeQueries(OrganizationA).Order(StringComparer.Ordinal));
         Assert.EndsWith($"/ops/inbox?queue=needs_attention&zone={ZoneCentro}", page.Url, StringComparison.Ordinal);
 
         // "Precio por revisar": one price_review query, no status chip; the tab keeps the other chips.
@@ -271,23 +284,24 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
             await choices.EvaluateAllAsync<string[]>("items => items.map(item => item.innerText.replace(/\\s+/g, ' ').trim())"));
         Assert.True(await panel.Locator($"input[type=radio][value=\"{DriverVan}\"]").IsDisabledAsync());
         Assert.Equal(new[] { $"/api/v1/orders/{Ready.Id}/assignable-drivers" }, api.DriverReads(OrganizationA));
-        Assert.DoesNotContain(DriverCar, await page.Locator("main").InnerTextAsync(), StringComparison.Ordinal);
+        await AssertNoIdentifiersAsync(page);
 
-        // A cost that is not pesos with up to two decimals is refused before any request.
+        // A cost that is not pesos with up to two decimals (a decimal comma here) is refused before any request.
         await panel.Locator($"input[type=radio][value=\"{DriverCar}\"]").CheckAsync();
-        await panel.GetByLabel("Costo de la asignación (MXN)").FillAsync("1,001.13");
+        await panel.GetByLabel("Costo de la asignación (MXN)").FillAsync("19,99");
         await panel.GetByRole(AriaRole.Button, new() { Name = "Asignar repartidor", Exact = true }).ClickAsync();
         await panel.Locator("p.fieldError").GetByText("Escribe un costo válido en pesos, por ejemplo 45.00.", new() { Exact = true }).WaitForAsync();
         Assert.Equal(0, await OpenDialog(page).CountAsync());
 
-        // $1,001.13 is 100112.99999999999 in floating point: only integer parsing sends 100113.
-        await panel.GetByLabel("Costo de la asignación (MXN)").FillAsync("1001.13");
+        // 19.99 × 100 is 1998.9999999999998 in binary floating point, so a float parse that truncates would send 1998;
+        // the value also differs from every row total, so only the typed cost can produce 1999.
+        await panel.GetByLabel("Costo de la asignación (MXN)").FillAsync("19.99");
         await panel.GetByRole(AriaRole.Button, new() { Name = "Asignar repartidor", Exact = true }).ClickAsync();
         var dialog = OpenDialog(page);
         await dialog.WaitForAsync();
         Assert.Equal("¿Asignar repartidor?", (await dialog.Locator("h2").InnerTextAsync()).Trim());
         Assert.Equal(
-            $"La orden {Ready.PublicId} se asignará al repartidor DRV-5e6f7a8b (automóvil) con un costo de $1,001.13 MXN.",
+            $"La orden {Ready.PublicId} se asignará al repartidor DRV-5e6f7a8b (automóvil) con un costo de $19.99 MXN.",
             (await dialog.Locator("p").InnerTextAsync()).Trim());
         var countReadsBefore = api.CountReads(OrganizationA);
         api.TakeQueries(OrganizationA);
@@ -297,9 +311,9 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
         Assert.Equal($"/api/v1/orders/{Ready.Id}/assignments", assignment.Path);
         Assert.Matches(AssignmentKeyPattern(), assignment.IdempotencyKey ?? string.Empty);
         Assert.Equal(
-            JsonSerializer.Serialize(new { driver_id = DriverCar, assignment_type = "OWN", cost_cents = 100_113, route_id = (string?)null }),
+            JsonSerializer.Serialize(new { driver_id = DriverCar, assignment_type = "OWN", cost_cents = 1_999, route_id = (string?)null }),
             assignment.Body);
-        Assert.Contains("\"cost_cents\":100113", assignment.Body, StringComparison.Ordinal);
+        Assert.Contains("\"cost_cents\":1999,", assignment.Body, StringComparison.Ordinal);
 
         // The inbox and its counts are read again: the order left "Sin asignar".
         await ExpectRowsAsync(page, RescheduledRow);
@@ -315,14 +329,17 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
     }
 
     /// <summary>
-    /// SEC-004-PANEL-SCREENS-2026-10-13 (Q11, Q14, Q16), AI-07 work_inbox.counts and panel_rate_limit
-    /// self_refreshing_screens: a 429 on the counts (Retry-After: 3) keeps the counts and rows shown and pauses the whole
-    /// inbox with one message; "Actualizar" and "Cargar más" are disabled; a queue change is kept on screen and not
-    /// sent; at 0 the inbox reads once, by itself, with the queue on screen, and never again by itself.
+    /// SEC-004-PANEL-SCREENS-2026-10-13 (Q11, Q14, Q16), AI-07 work_inbox.rate_limit and panel_rate_limit
+    /// self_refreshing_screens: a 429 (Retry-After: 6) on the counts or on the list keeps the counts and rows shown and
+    /// pauses the whole inbox with one message, announced once; "Actualizar" and "Cargar más" are disabled; a queue
+    /// change is kept on screen and not sent; at 0 the inbox reads once, by itself, the queue on screen and the counts,
+    /// and never again by itself.
     /// </summary>
-    [Fact]
+    [Theory]
     [Trait("Category", "OperationsDashboardPwa")]
-    public async Task A_429_on_the_counts_pauses_the_whole_inbox_and_reads_once_at_zero_with_the_queue_on_screen()
+    [InlineData("queue-counts")]
+    [InlineData("dashboard")]
+    public async Task A_429_pauses_the_whole_inbox_and_reads_once_at_zero_with_the_queue_on_screen(string limited)
     {
         using var playwright = await Playwright.CreateAsync();
         await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
@@ -330,7 +347,7 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
         {
             ViewportSize = new ViewportSize { Width = 1440, Height = 900 },
         });
-        await using var trace = await PlaywrightFailureTrace.StartAsync(context, job: PlaywrightFailureTrace.OperationsDashboardJob);
+        await using var trace = await PlaywrightFailureTrace.StartAsync(context, limited, PlaywrightFailureTrace.OperationsDashboardJob);
         var page = await context.NewPageAsync();
         page.SetDefaultTimeout(20_000);
         var console = CaptureConsole(page);
@@ -344,13 +361,17 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
         await ExpectRowsAsync(page, ReadyRow);
         await WaitForAsync(() => api.CountReads(OrganizationA) == 1, "the counts were not read");
         api.TakeQueries(OrganizationA);
-        api.CountsTooManyRequests = 1;
+        if (limited == "dashboard") api.DashboardTooManyRequests = 1;
+        else api.CountsTooManyRequests = 1;
         await RefreshButton(page).ClickAsync();
-        await countdown.GetByText(TooManyRequestsText(3), new() { Exact = true }).WaitForAsync();
-        Assert.Equal(TooManyRequestsText(3), (await page.Locator("p.srOnly[role=status]").InnerTextAsync()).Trim());
+        // The visible countdown moves on its own; only the announcer, written once, holds the server's exact wait.
+        await countdown.GetByText(TooManyRequestsPattern()).WaitForAsync();
+        Assert.Equal(TooManyRequestsText(6), (await page.Locator("p.srOnly[role=status]").InnerTextAsync()).Trim());
         Assert.Null(await countdown.GetAttributeAsync("aria-live"));
         Assert.Single(api.TakeQueries(OrganizationA));
-        Assert.Equal(2, api.CountReads(OrganizationA));
+        // The counts are read after a list read: a 429 on the list leaves them unread until the wait ends.
+        var countsDuringWait = limited == "dashboard" ? 1 : 2;
+        Assert.Equal(countsDuringWait, api.CountReads(OrganizationA));
         // The counts and the rows shown stay; the buttons that read wait.
         await ExpectRowsAsync(page, ReadyRow);
         await ExpectTabsAsync(page, "Sin asignar", "Sin asignar 2 órdenes", "Requiere atención 3 órdenes",
@@ -364,17 +385,17 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
         Assert.Equal("page", await Tab(page, "En ruta").GetAttributeAsync("aria-current"));
         await Task.Delay(500);
         Assert.Empty(api.TakeQueries(OrganizationA));
-        Assert.Equal(2, api.CountReads(OrganizationA));
+        Assert.Equal(countsDuringWait, api.CountReads(OrganizationA));
 
         // At 0 the inbox reads once, by itself, the queue on screen and the counts; the message goes.
-        await countdown.WaitForAsync(new() { State = WaitForSelectorState.Detached, Timeout = 10_000 });
+        await countdown.WaitForAsync(new() { State = WaitForSelectorState.Detached, Timeout = 15_000 });
         await ExpectEmptyAsync(page, "No hay órdenes en ruta.");
-        await WaitForAsync(() => api.CountReads(OrganizationA) == 3, "the counts were not read at 0");
+        await WaitForAsync(() => api.CountReads(OrganizationA) == countsDuringWait + 1, "the counts were not read at 0");
         Assert.Equal(new[] { "status=DELIVERING", "status=IN_TRANSIT" }, api.TakeQueries(OrganizationA).Order(StringComparer.Ordinal));
         Assert.False(await RefreshButton(page).IsDisabledAsync());
         await Task.Delay(2_500);
         Assert.Empty(api.TakeQueries(OrganizationA));
-        Assert.Equal(3, api.CountReads(OrganizationA));
+        Assert.Equal(countsDuringWait + 1, api.CountReads(OrganizationA));
 
         await AssertNothingStoredAsync(page);
         Assert.Empty(console);
@@ -384,8 +405,9 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
 
     /// <summary>
     /// SEC-004-RELOADS-AND-BULK-2026-10-13 Q9, AI-07 panel_rate_limit.realtime_reloads: OperationsHub notices are gathered
-    /// into at most one reload every 3 seconds, no sooner than 3 seconds after the previous reload of any kind; a
-    /// repeated event and a location update read nothing. Each reload reads the queue and the counts again.
+    /// into at most one reload every 3 seconds, no sooner than 3 seconds after the previous reload of any kind (checked
+    /// with a 2.5 s floor measured where the requests arrive); a lone repeated event and a location update read nothing.
+    /// Each reload reads the queue and the counts again.
     /// </summary>
     [Fact]
     [Trait("Category", "OperationsDashboardPwa")]
@@ -411,22 +433,25 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
         Assert.Equal(OrganizationA, api.HubOrganization);
         Assert.Single(api.ListReadTimes(OrganizationA));
 
-        // Three notices at once, one of them repeated: one reload, 3 seconds after the first read.
+        // Three notices at once: one reload, no sooner than the spacing after the first read.
         api.SendNotice("OrderStatusChanged", Ready.Id, 4, "e1000000-0000-4000-8000-000000000001");
         api.SendNotice("AssignmentChanged", Rescheduled.Id, 2, "e1000000-0000-4000-8000-000000000002");
-        api.SendNotice("OrderStatusChanged", Ready.Id, 4, "e1000000-0000-4000-8000-000000000001");
+        api.SendNotice("IncidentCreated", FailedAttempt.Id, 5, "e1000000-0000-4000-8000-000000000003");
         await WaitForAsync(() => api.ListReadTimes(OrganizationA).Length == 2, "the notices did not reload the inbox");
         var times = api.ListReadTimes(OrganizationA);
-        Assert.True(times[1] - times[0] >= TimeSpan.FromMilliseconds(2_900), $"reloaded {(times[1] - times[0]).TotalMilliseconds} ms after the first read");
+        Assert.True(times[1] - times[0] >= TimeSpan.FromMilliseconds(2_500), $"reloaded {(times[1] - times[0]).TotalMilliseconds} ms after the first read");
         await WaitForAsync(() => api.CountReads(OrganizationA) == 2, "the counts were not read with the reload");
 
-        // A notice right after that reload waits 3 seconds from it; a location update changes no queue.
-        api.SendNotice("IncidentCreated", FailedAttempt.Id, 5, "e1000000-0000-4000-8000-000000000003");
-        api.SendNotice("DriverLocationUpdated", DriverCar, 9, "e1000000-0000-4000-8000-000000000004");
+        // A notice right after that reload waits for the spacing from it.
+        api.SendNotice("OrderStatusChanged", Rescheduled.Id, 3, "e1000000-0000-4000-8000-000000000004");
         await WaitForAsync(() => api.ListReadTimes(OrganizationA).Length == 3, "the next notice did not reload the inbox");
         times = api.ListReadTimes(OrganizationA);
-        Assert.True(times[2] - times[1] >= TimeSpan.FromMilliseconds(2_900), $"reloaded {(times[2] - times[1]).TotalMilliseconds} ms after the previous read");
-        api.SendNotice("DriverLocationUpdated", DriverCar, 10, "e1000000-0000-4000-8000-000000000005");
+        Assert.True(times[2] - times[1] >= TimeSpan.FromMilliseconds(2_500), $"reloaded {(times[2] - times[1]).TotalMilliseconds} ms after the previous read");
+        await WaitForAsync(() => api.CountReads(OrganizationA) == 3, "the counts were not read with the reload");
+
+        // Long after it, a lone repeat of an applied event (same event_id) and a location update read nothing.
+        api.SendNotice("OrderStatusChanged", Ready.Id, 4, "e1000000-0000-4000-8000-000000000001");
+        api.SendNotice("DriverLocationUpdated", DriverCar, 9, "e1000000-0000-4000-8000-000000000005");
         await Task.Delay(3_500);
         Assert.Equal(3, api.ListReadTimes(OrganizationA).Length);
         Assert.Equal(3, api.CountReads(OrganizationA));
@@ -438,9 +463,63 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
         trace.Passed();
     }
 
+    /// <summary>
+    /// AI-07 work_inbox.recovery "a 401 or 403 clears the rows": access withdrawn mid-session (a plain 403 on the next
+    /// read) drops the rows, the counts and the zone chips and shows the access state; nothing is read by itself after.
+    /// The realtime hub is left unreachable here (see the realtime test), so its stop is not observed.
+    /// </summary>
     [Fact]
     [Trait("Category", "OperationsDashboardPwa")]
-    public async Task Organization_switch_lands_on_the_inbox_and_clears_rows_counts_selection_and_the_open_assignment()
+    public async Task A_403_mid_session_clears_the_rows_counts_and_zones()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync(new BrowserNewContextOptions
+        {
+            ViewportSize = new ViewportSize { Width = 1440, Height = 900 },
+        });
+        await using var trace = await PlaywrightFailureTrace.StartAsync(context, job: PlaywrightFailureTrace.OperationsDashboardJob);
+        var page = await context.NewPageAsync();
+        page.SetDefaultTimeout(20_000);
+        var console = CaptureConsole(page);
+        var calls = RecordCalls(page);
+        var api = await InstallAsync(page, realtime: false, (OrganizationA, OrganizationAName, "DISPATCHER"));
+        api.Seed(OrganizationA, Ready, Rescheduled, FailedAttempt, Returning);
+
+        await page.GotoAsync(new Uri(server.BaseAddress, "/ops/inbox").AbsoluteUri);
+        await ExpectRowsAsync(page, ReadyRow, RescheduledRow);
+        await WaitForAsync(() => api.CountReads(OrganizationA) == 1, "the counts were not read");
+        Assert.Equal(new[] { "Todas", "Centro", "Norte" }, await ChipsAsync(page, "Zona de entrega"));
+
+        api.Forbidden = true;
+        await RefreshButton(page).ClickAsync();
+        await page.GetByRole(AriaRole.Heading, new() { Name = "Acceso no disponible", Exact = true }).WaitForAsync();
+        await ExpectTextAsync(page, "No es posible mostrar la bandeja de trabajo.");
+        Assert.Equal(0, await page.Locator("table.opsInboxTable").CountAsync());
+        Assert.Equal(0, await page.Locator("nav.opsInboxQueues").CountAsync());
+        Assert.Equal(0, await ZoneChipGroup(page).CountAsync());
+        var main = await page.Locator("main").InnerTextAsync();
+        Assert.DoesNotContain(Ready.PublicId, main, StringComparison.Ordinal);
+        Assert.DoesNotContain("2 órdenes", main, StringComparison.Ordinal);
+        var reads = api.AllCalls.Count;
+        await Task.Delay(1_000);
+        Assert.Equal(reads, api.AllCalls.Count);
+
+        await AssertNothingStoredAsync(page);
+        Assert.Empty(console);
+        AssertOnlyAllowedCalls(calls, server.BaseAddress);
+        trace.Passed();
+    }
+
+    /// <summary>
+    /// AI-07 work_inbox.landing and privacy ("an organization switch clears rows, zones, counts, the selection and the
+    /// batch"; the batch is B5b's): DISPATCHER lands on the inbox from a page its role cannot use; a switch drops the
+    /// rows, the zone chips, the counts, the selection and the open "Asignar" panel before the next organization
+    /// answers, and reads no driver list under it; VIEWER lands on "Órdenes".
+    /// </summary>
+    [Fact]
+    [Trait("Category", "OperationsDashboardPwa")]
+    public async Task Organization_switch_lands_on_the_inbox_and_clears_rows_zones_counts_selection_and_the_open_assignment()
     {
         using var playwright = await Playwright.CreateAsync();
         await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
@@ -470,7 +549,8 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
         await ExpectRowsAsync(page, ReadyRow, RescheduledRow);
         await ExpectNavigationAsync(page, "DISPATCHER");
 
-        // A selection and an open assignment...
+        // Zones, a selection and an open assignment...
+        Assert.Equal(new[] { "Todas", "Centro", "Norte" }, await ChipsAsync(page, "Zona de entrega"));
         await RowCheckbox(page, Ready).CheckAsync();
         await ExpectFooterAsync(page, "Mostrando 2 de 2 sin asignar · seleccionadas: 1");
         await AssignButton(page, Rescheduled).ClickAsync();
@@ -485,10 +565,13 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
         Assert.DoesNotContain(Rescheduled.PublicId, during, StringComparison.Ordinal);
         Assert.DoesNotContain("seleccionadas", during, StringComparison.Ordinal);
         Assert.DoesNotContain("2 órdenes", during, StringComparison.Ordinal);
+        Assert.Equal(0, await ZoneChipGroup(page).CountAsync());
         Assert.Equal(0, await page.Locator("main section.opsInboxAssign").CountAsync());
         releaseOrganizationC.TrySetResult();
         await ExpectRowsAsync(page, [OrderOfC.PublicId, "Lista para recolección", "Centro", "Horario de la zona", "Sin repartidor", "$99.00 MXN", "seleccionable", "Asignar"]);
         await ExpectFooterAsync(page, "Mostrando 1 de 1 sin asignar · seleccionadas: 0");
+        // Only C's zones: B's "Norte" went with the switch.
+        Assert.Equal(new[] { "Todas", "Centro" }, await ChipsAsync(page, "Zona de entrega"));
         await ExpectNavigationAsync(page, "PLATFORM_ADMIN");
         Assert.Equal("/ops/inbox", new Uri(page.Url).AbsolutePath);
         Assert.Equal(0, await page.Locator("main section.opsInboxAssign").CountAsync());
@@ -559,11 +642,18 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
         ? "Demasiadas solicitudes. Espera 1 segundo e intenta de nuevo."
         : $"Demasiadas solicitudes. Espera {seconds} segundos e intenta de nuevo.";
 
+    /// <summary>The visible countdown at any second of the 6-second wait.</summary>
+    [GeneratedRegex("^Demasiadas solicitudes\\. Espera [1-6] segundos? e intenta de nuevo\\.$")]
+    private static partial Regex TooManyRequestsPattern();
+
     private static ILocator Tab(IPage page, string label) =>
         page.Locator("nav.opsInboxQueues a.opsInboxQueue", new() { Has = page.Locator($"span.opsInboxQueueLabel > span:text-is('{label}')") });
 
     private static ILocator Chip(IPage page, string group, string label) =>
         page.Locator($"fieldset.opsChipGroup:has(legend:text-is('{group}')) button.opsChip:text-is('{label}')");
+
+    private static ILocator ZoneChipGroup(IPage page) =>
+        page.Locator("fieldset.opsChipGroup:has(legend:text-is('Zona de entrega'))");
 
     private static async Task<string[]> ChipsAsync(IPage page, string group) =>
         (await page.Locator($"fieldset.opsChipGroup:has(legend:text-is('{group}')) button.opsChip").AllInnerTextsAsync())
@@ -669,6 +759,24 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
         if (expected.Contains("/ops/inbox") && new Uri(page.Url).AbsolutePath == "/ops/inbox")
         {
             Assert.Equal("page", await page.Locator("nav.appNav a[href=\"/ops/inbox\"]").GetAttributeAsync("aria-current"));
+        }
+    }
+
+    /// <summary>
+    /// No internal id is visible anywhere on the page (the sibling panel suites' check): no UUID, nor the first 8
+    /// characters of any synthetic organization, zone, driver or order id. Only guías and DRV- references are shown.
+    /// </summary>
+    private static async Task AssertNoIdentifiersAsync(IPage page)
+    {
+        var visible = await page.Locator("body").InnerTextAsync();
+        Assert.DoesNotMatch(UuidPattern(), visible);
+        foreach (var id in new[]
+                 {
+                     OrganizationA, OrganizationB, OrganizationC, ZoneCentro, ZoneNorte, DriverMoto, DriverCar, DriverVan,
+                     Ready.Id, Rescheduled.Id, FailedAttempt.Id, Returning.Id, OrderOfC.Id, $"d2{Ready.Id[2..]}",
+                 })
+        {
+            Assert.DoesNotContain(id[..8], visible, StringComparison.Ordinal);
         }
     }
 
@@ -815,6 +923,9 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
                 : JsonSerializer.Serialize(new { type = "about:blank", title = "Problem.", status, code }),
         });
 
+    [GeneratedRegex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")]
+    private static partial Regex UuidPattern();
+
     /// <summary>The order detail's key: one per confirmed driver and cost (driver-assignment-controller.ts).</summary>
     [GeneratedRegex("^assign-driver-[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")]
     private static partial Regex AssignmentKeyPattern();
@@ -910,7 +1021,14 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
 
         internal bool PriceReviewOutsideRule { get; set; }
 
+        /// <summary>How many of the next counts reads answer 429 with Retry-After: 6.</summary>
         internal int CountsTooManyRequests { get; set; }
+
+        /// <summary>How many of the next dashboard reads answer 429 with Retry-After: 6.</summary>
+        internal int DashboardTooManyRequests { get; set; }
+
+        /// <summary>The dashboard and the counts answer a plain 403 from now on (access withdrawn mid-session).</summary>
+        internal bool Forbidden { get; set; }
 
         /// <summary>The dashboard and the counts answer 403 MFA_REQUIRED (PLATFORM_ADMIN without MFA).</summary>
         internal bool MfaRequired { get; set; }
@@ -978,6 +1096,8 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
 
         internal async Task HandleAsync(IRoute route)
         {
+            // Taken before anything is awaited, so the read times measure the browser's spacing, not this handler's.
+            var receivedAt = DateTimeOffset.UtcNow;
             var request = route.Request;
             var uri = new Uri(request.Url);
             var headers = await request.AllHeadersAsync();
@@ -996,11 +1116,12 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
                 {
                     if (!_queries.TryGetValue(organization, out var queries)) _queries[organization] = queries = [];
                     queries.Add(call.Query);
-                    // Queries of one load arrive together; a new read starts after 500 ms without one.
+                    // The queries of one load arrive within milliseconds of each other: a query more than 500 ms after the
+                    // start of the organization's previous read starts a new read.
                     var last = _listReads.LastOrDefault(read => read.Organization == organization);
-                    if (last.Organization is null || DateTimeOffset.UtcNow - last.At > TimeSpan.FromMilliseconds(500))
+                    if (last.Organization is null || receivedAt - last.At > TimeSpan.FromMilliseconds(500))
                     {
-                        _listReads.Add((organization, DateTimeOffset.UtcNow));
+                        _listReads.Add((organization, receivedAt));
                     }
                 }
             }
@@ -1012,7 +1133,14 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
             {
                 case ("GET", ["api", "v1", "operations", "dashboard"]):
                 case ("GET", ["api", "v1", "operations", "queue-counts"]):
-                    if (role != "DISPATCHER" && role != "PLATFORM_ADMIN")
+                    // AI-05 getOperationsQueueCounts: any query string is 400, before capability.
+                    if (segments[3] == "queue-counts" && call.Query.Length > 0)
+                    {
+                        await ProblemAsync(route, 400);
+                        return;
+                    }
+
+                    if (Forbidden || (role != "DISPATCHER" && role != "PLATFORM_ADMIN"))
                     {
                         await ProblemAsync(route, 403);
                         return;
@@ -1025,7 +1153,7 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
                     }
 
                     if (segments[3] == "dashboard") await DashboardAsync(route, call);
-                    else await CountsAsync(route, organization);
+                    else await CountsAsync(route, call);
                     return;
                 case ("GET", ["api", "v1", "orders", _, "assignable-drivers"]):
                     await FulfillAsync(route, new
@@ -1060,6 +1188,12 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
 
         private async Task DashboardAsync(IRoute route, InboxCall call)
         {
+            if (TakeLimit(isCounts: false))
+            {
+                await TooManyRequestsAsync(route);
+                return;
+            }
+
             var query = new Dictionary<string, string>();
             foreach (var pair in call.Query.Split('&', StringSplitOptions.RemoveEmptyEntries))
             {
@@ -1097,35 +1231,42 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
             });
         }
 
-        private async Task CountsAsync(IRoute route, string organization)
+        private bool TakeLimit(bool isCounts)
         {
-            bool limited;
             lock (_gate)
             {
-                limited = CountsTooManyRequests > 0;
-                if (limited) CountsTooManyRequests -= 1;
+                if (isCounts ? CountsTooManyRequests == 0 : DashboardTooManyRequests == 0) return false;
+                if (isCounts) CountsTooManyRequests -= 1;
+                else DashboardTooManyRequests -= 1;
+                return true;
             }
+        }
 
-            if (limited)
+        private static Task TooManyRequestsAsync(IRoute route) =>
+            route.FulfillAsync(new RouteFulfillOptions
             {
-                await route.FulfillAsync(new RouteFulfillOptions
+                Status = 429,
+                ContentType = "application/problem+json",
+                // The test API is another origin, so it exposes Retry-After as a cross-origin API would have to.
+                Headers = new Dictionary<string, string>
                 {
-                    Status = 429,
-                    ContentType = "application/problem+json",
-                    // The test API is another origin, so it exposes Retry-After as a cross-origin API would have to.
-                    Headers = new Dictionary<string, string>
-                    {
-                        ["Retry-After"] = "3",
-                        ["Cache-Control"] = "no-store",
-                        ["Access-Control-Expose-Headers"] = "Retry-After",
-                    },
-                    Body = JsonSerializer.Serialize(new { type = "about:blank", title = "Too Many Requests", status = 429, traceId = new string('0', 32) }),
-                });
+                    ["Retry-After"] = "6",
+                    ["Cache-Control"] = "no-store",
+                    ["Access-Control-Expose-Headers"] = "Retry-After",
+                },
+                Body = JsonSerializer.Serialize(new { type = "about:blank", title = "Too Many Requests", status = 429, traceId = new string('0', 32) }),
+            });
+
+        private async Task CountsAsync(IRoute route, InboxCall call)
+        {
+            if (TakeLimit(isCounts: true))
+            {
+                await TooManyRequestsAsync(route);
                 return;
             }
 
             InboxOrder[] orders;
-            lock (_gate) orders = [.. _orders.GetValueOrDefault(organization, [])];
+            lock (_gate) orders = [.. _orders.GetValueOrDefault(call.Organization, [])];
             var byStatus = OrderStatuses.ToDictionary(status => status, status => orders.Count(order => order.Status == status));
             int Sum(params string[] statuses) => statuses.Sum(status => byStatus[status]);
             await FulfillAsync(route, new
@@ -1202,17 +1343,44 @@ public sealed partial class WorkInboxPwaPlaywrightTests(DriverStopsNextServerFix
             });
         }
 
-        /// <summary>One AI-12 envelope pushed by the hub.</summary>
+        /// <summary>
+        /// One AI-12 envelope pushed by the hub: the hub method is the event name, <c>event_type</c> its versioned type
+        /// (realtime/event-types.ts) and the payload that event's AI-12 fields, with synthetic values.
+        /// </summary>
         internal void SendNotice(string target, string aggregateId, int version, string eventId)
         {
+            const string occurredAt = "2026-11-02T06:35:00Z";
+            object payload = target switch
+            {
+                "OrderStatusChanged" => new { order_id = aggregateId, previous_status = "CONFIRMED", new_status = "READY_FOR_PICKUP", occurred_at = occurredAt },
+                "AssignmentChanged" => new
+                {
+                    order_id = aggregateId,
+                    assignment_id = "a6000000-0000-4000-8000-000000000002",
+                    driver_id = DriverCar,
+                    assignment_status = "CANCELLED",
+                    occurred_at = occurredAt,
+                },
+                "IncidentCreated" => new
+                {
+                    incident_id = "e2000000-0000-4000-8000-000000000001",
+                    order_id = aggregateId,
+                    type = "FAILED_ATTEMPT",
+                    severity = "MEDIUM",
+                    status = "OPEN",
+                    occurred_at = occurredAt,
+                },
+                "DriverLocationUpdated" => new { driver_id = aggregateId, lat = 23.2494, lng = -106.4111, accuracy_m = 12.5, captured_at = occurredAt },
+                _ => throw new ArgumentOutOfRangeException(nameof(target), target, "No AI-12 payload is written for this event."),
+            };
             var envelope = new
             {
                 event_id = eventId,
-                event_type = target,
-                occurred_at = "2026-11-02T06:35:00Z",
+                event_type = $"{target}.v1",
+                occurred_at = occurredAt,
                 aggregate_id = aggregateId,
                 aggregate_version = version,
-                payload = new { order_id = aggregateId, occurred_at = "2026-11-02T06:35:00Z" },
+                payload,
             };
             _hub!.Send(JsonSerializer.Serialize(new { type = 1, target, arguments = new[] { envelope } }) + "\u001e");
         }
