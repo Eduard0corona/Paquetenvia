@@ -4,10 +4,13 @@
   "screens": [
     {
       "screen": "/login",
-      "status": "GAP",
-      "suites": [],
-      "owner_task": "AUTH-001",
-      "reason": "The panel sign-in through the BFF has no real-browser round trip yet; AUTH-001 owns its browser test (Z2)."
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "driver-stops-pwa",
+          "test": "Paqueteria.IntegrationTests.Security.AuthCenter.PanelSignInPwaPlaywrightTests"
+        }
+      ]
     },
     {
       "screen": "/onboarding",
