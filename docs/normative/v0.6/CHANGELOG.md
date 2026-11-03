@@ -1,10 +1,10 @@
 # Changelog
 
-## Bandeja: «Verificar identidad» y chips de zona por sesión (UI-001-INBOX-MFA-ZONES-2026-11-03, AI-08 UI-001) — 2026-11-03
+## Bandeja: «Verificar identidad», chips de zona por sesión y orden del menú (UI-001-INBOX-MFA-ZONES-2026-11-03, AI-08 UI-001) — 2026-11-03
 
-- Respuestas literales del project owner (ronda Z continuada, preguntas Z19 y Z20, 2026-11-03), registradas en
-  `decision-log.md` con su contexto, los textos de las opciones y las opciones no elegidas: Z19 "Ofrecer Verificar
-  identidad (Recommended)" y Z20 "Ajustar el contrato (Recommended)".
+- Respuestas literales del project owner (ronda Z continuada, preguntas Z19, Z20 y Z22, 2026-11-03), registradas en
+  `decision-log.md` con sus contextos, los textos de las opciones y las opciones no elegidas: Z19 "Ofrecer Verificar
+  identidad (Recommended)", Z20 "Ajustar el contrato (Recommended)" y Z22 "Como está la app (Recommended)".
 - Z19: con un 403 `MFA_REQUIRED`, la bandeja (`/ops/inbox`), el tablero (`/ops/dashboard`) y el detalle de orden
   (`/ops/orders/:id`) muestran «Esta acción requiere verificar tu identidad (MFA).» con el botón «Verificar identidad»,
   que vuelve a la misma vista, como ya hacían las demás pantallas de operación y finanzas (AUTH-001-MFA-STEP-UP). Eran
@@ -12,6 +12,9 @@
   disponible». Ningún contrato cambia.
 - Z20: AI-07 `work_inbox.filters` dice ahora que los chips de zona son las zonas vistas en las filas cargadas durante la
   sesión, y que un cambio de organización las borra. El código no cambia.
+- Z22: AI-07 dice el orden actual del menú en sus dos frases de navegación (`work_inbox` y `order_list`) y en la nota del
+  tablero: Bandeja · Órdenes · Tablero · + Nueva orden · Rutas · Incidencias · Importar CSV · Repartidores. El código no
+  cambia.
 
 ## Aprobaciones del owner al fusionar: Y15 (DRV-DOC-001 PR-3) y Z21 (REL-001 PR-C) — 2026-11-03
 
