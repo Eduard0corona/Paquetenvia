@@ -27,6 +27,10 @@
         {
           "job": "operations-dashboard",
           "test": "Paqueteria.IntegrationTests.Operations.OperationsDashboardRateLimitPwaPlaywrightTests"
+        },
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Operations.ExternalOfferPublishPwaPlaywrightTests"
         }
       ]
     },
@@ -209,10 +213,13 @@
     },
     {
       "screen": "screen:external_driver_offers",
-      "status": "GAP",
-      "suites": [],
-      "owner_task": "EXT-001",
-      "reason": "The driver offer list and the dashboard publish action have Vitest coverage only; EXT-001 owns the browser test (Z2)."
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "driver-stops-pwa",
+          "test": "Paqueteria.IntegrationTests.Driver.ExternalOffersDriverPwaPlaywrightTests"
+        }
+      ]
     }
   ]
 }
