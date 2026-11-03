@@ -13,8 +13,11 @@ namespace Paqueteria.IntegrationTests.Operations;
 /// (<c>/ops/inbox</c>, AI-07 work_inbox) and the operations dashboard (<c>/ops/dashboard</c>) must drop the previous
 /// organization's orders, counts, selection and "Asignar" panel as soon as the change arrives, and send nothing of it
 /// under the new organization (the embedded picker no longer restarts by itself); the new organization is read once
-/// the previous connection closed. The API is fulfilled in the browser: the dashboard read model (OBS-001, ADR-OBS-001),
-/// the AI-05 shapes of getOperationsQueueCounts, listAssignableDrivers and /me/organization-contexts.
+/// the previous connection closed. Z17 ("PR aparte después de #339 (Recommended)") does the same for the order detail
+/// (<c>/ops/orders/:id</c>), whose panels no longer restart by themselves for the URL's order, and for Rutas
+/// (<c>/ops/routes</c>). The API is fulfilled in the browser: the dashboard read model (OBS-001, ADR-OBS-001), the AI-05
+/// shapes of getOperationsQueueCounts, listAssignableDrivers, getOrder, listRoutes, getRoute and
+/// /me/organization-contexts.
 /// </summary>
 [Collection(DriverStopsPwaCollection.Name)]
 public sealed class OrganizationSwitchSlowHubPwaPlaywrightTests(DriverStopsNextServerFixture server)
@@ -26,6 +29,7 @@ public sealed class OrganizationSwitchSlowHubPwaPlaywrightTests(DriverStopsNextS
 
     private static readonly SwitchOrder ReadyOfB = new("a1000000-0000-4000-8000-000000000001", "ORD_BandejaSintetica000001", "READY_FOR_PICKUP", "2026-11-02T06:20:00Z");
     private static readonly SwitchOrder RescheduledOfB = new("a1000000-0000-4000-8000-000000000002", "ORD_BandejaSintetica000002", "RESCHEDULED", "2026-11-02T06:10:00Z");
+    private static readonly SwitchOrder FailedOfB = new("a1000000-0000-4000-8000-000000000003", "ORD_BandejaSintetica000003", "FAILED_ATTEMPT", "2026-11-02T06:00:00Z");
     private static readonly SwitchOrder ReadyOfC = new("c1000000-0000-4000-8000-000000000001", "ORD_BandejaSinteticaSur01", "READY_FOR_PICKUP", "2026-11-02T06:05:00Z");
 
     private static readonly Regex[] AllowedCalls =
@@ -140,6 +144,160 @@ public sealed class OrganizationSwitchSlowHubPwaPlaywrightTests(DriverStopsNextS
         trace.Passed();
     }
 
+    /// <summary>
+    /// Z17: the order detail of an order of B, with the panel that reads that order by itself: "Asignar repartidor" with
+    /// B's drivers (READY_FOR_PICKUP), or "Intento fallido" with its reason read from listIncidents (FAILED_ATTEMPT). The
+    /// change to C arrives while B's hub still negotiates: the order and every panel go at once, and nothing is read
+    /// under C, least of all for B's order. Once B's hub closed, the screen reads the URL's order under C, which RLS does
+    /// not show; none of its panels reads it.
+    /// </summary>
+    [Theory]
+    [Trait("Category", "OperationsDashboardPwa")]
+    [InlineData("READY_FOR_PICKUP")]
+    [InlineData("FAILED_ATTEMPT")]
+    public async Task Order_detail_drops_the_previous_organization_and_its_panels_before_the_slow_hub_closes(string status)
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync(new BrowserNewContextOptions
+        {
+            ViewportSize = new ViewportSize { Width = 1440, Height = 900 },
+        });
+        await using var trace = await PlaywrightFailureTrace.StartAsync(context, job: PlaywrightFailureTrace.OperationsDashboardJob);
+        var page = await context.NewPageAsync();
+        page.SetDefaultTimeout(20_000);
+        var console = CaptureConsole(page);
+        var calls = RecordCalls(page);
+        var api = await InstallAsync(page, (OrganizationB, OrganizationBName, "DISPATCHER"), (OrganizationC, OrganizationCName, "DISPATCHER"));
+        api.Seed(OrganizationB, ReadyOfB, RescheduledOfB, FailedOfB);
+        api.Seed(OrganizationC, ReadyOfC);
+        var order = status == "FAILED_ATTEMPT" ? FailedOfB : ReadyOfB;
+
+        await page.GotoAsync(new Uri(server.BaseAddress, $"/ops/orders/{order.Id}").AbsoluteUri);
+        await WaitForAsync(async () => (await page.Locator("main").InnerTextAsync()).Contains(order.PublicId, StringComparison.Ordinal),
+            "B's order was not shown");
+        if (order == ReadyOfB)
+        {
+            await page.Locator("main section.opsDriverAssignment ul.opsDriverChoices > li").First.WaitForAsync();
+        }
+        else
+        {
+            // listIncidents answers 404 here, so the reason stays hidden; the read went under B.
+            await WaitForAsync(
+                () => calls.Api.Any(call => call.Organization == OrganizationB && call.PathAndQuery == $"/api/v1/incidents?order_id={order.Id}"),
+                "the failed attempt was never read");
+        }
+
+        await WaitForAsync(() => api.Negotiations == 1, "B's hub never negotiated");
+
+        // The change arrives while B's hub still negotiates: the order and its panels go at once.
+        await page.Locator("label.appOrg select").SelectOptionAsync(new SelectOptionValue { Label = OrganizationCName });
+        await WaitForAsync(async () => !(await page.Locator("main").InnerTextAsync()).Contains(order.PublicId, StringComparison.Ordinal),
+            "B's order was still shown under C while B's hub closed", seconds: 1);
+        Assert.Equal(0, await page.Locator("main section.opsDriverAssignment").CountAsync());
+        Assert.DoesNotContain("DRV-1a2b3c4d", await page.Locator("main").InnerTextAsync(), StringComparison.Ordinal);
+        await Task.Delay(1_000);
+        Assert.DoesNotContain(api.AllCalls, call => call.Organization == OrganizationC);
+        Assert.DoesNotContain(calls.Api, call => call.Organization == OrganizationC && call.PathAndQuery.Contains(order.Id, StringComparison.Ordinal));
+
+        // Once B's hub closed, the screen reads the URL's order under C, and RLS does not show it to C.
+        api.ReleaseNegotiation();
+        await page.GetByRole(AriaRole.Heading, new() { Name = "Orden no disponible", Exact = true }).WaitForAsync();
+        await Task.Delay(500);
+        // Only the screen's own reads of the URL's order went under C; none of its panels read it.
+        Assert.Equal(
+            new[] { $"GET /api/v1/operations/dashboard?order_id={order.Id}", $"GET /api/v1/orders/{order.Id}" },
+            calls.Api
+                .Where(call => call.Organization == OrganizationC && call.PathAndQuery.Contains(order.Id, StringComparison.Ordinal))
+                .Select(call => $"{call.Method} {call.PathAndQuery}")
+                .Order(StringComparer.Ordinal));
+        Assert.DoesNotContain(order.PublicId, await page.Locator("main").InnerTextAsync(), StringComparison.Ordinal);
+
+        await AssertNothingStoredAsync(page);
+        Assert.Empty(console);
+        AssertOnlyAllowedCalls(calls, server.BaseAddress, OrderDetailCalls);
+        trace.Passed();
+    }
+
+    /// <summary>
+    /// Z17: Rutas shows B's route of today with its stop named by its guía. The change to C arrives while B's hub still
+    /// negotiates: the route list and the route shown go at once and no route or order is read under C; once B's hub
+    /// closed, C's own route is listed and nothing of B is read under C.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "OperationsDashboardPwa")]
+    public async Task Routes_drop_the_previous_organization_before_the_slow_hub_closes()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync(new BrowserNewContextOptions
+        {
+            ViewportSize = new ViewportSize { Width = 1440, Height = 900 },
+        });
+        await using var trace = await PlaywrightFailureTrace.StartAsync(context, job: PlaywrightFailureTrace.OperationsDashboardJob);
+        var page = await context.NewPageAsync();
+        page.SetDefaultTimeout(20_000);
+        var console = CaptureConsole(page);
+        var calls = RecordCalls(page);
+        var api = await InstallAsync(page, (OrganizationB, OrganizationBName, "DISPATCHER"), (OrganizationC, OrganizationCName, "DISPATCHER"));
+        api.Seed(OrganizationB, ReadyOfB, RescheduledOfB);
+        api.Seed(OrganizationC, ReadyOfC);
+        api.SeedRoute(OrganizationB, new SwitchRoute(RouteOfB, "2026-11-02", ReadyOfB.Id));
+        api.SeedRoute(OrganizationC, new SwitchRoute(RouteOfC, "2026-11-03"));
+
+        await page.GotoAsync(new Uri(server.BaseAddress, $"/ops/routes?routeId={RouteOfB}").AbsoluteUri);
+        await page.GetByRole(AriaRole.Heading, new() { Name = "Ruta del 2 de noviembre de 2026", Exact = true }).WaitForAsync();
+        await page.Locator(".opsRouteStops li strong").GetByText(ReadyOfB.PublicId, new() { Exact = true }).WaitForAsync();
+        await WaitForAsync(() => api.Negotiations == 1, "B's hub never negotiated");
+
+        // The change arrives while B's hub still negotiates: B's routes, the route shown and its guía go at once.
+        await page.Locator("label.appOrg select").SelectOptionAsync(new SelectOptionValue { Label = OrganizationCName });
+        await WaitForAsync(async () => !(await page.Locator("main").InnerTextAsync()).Contains(ReadyOfB.PublicId, StringComparison.Ordinal),
+            "B's route was still shown under C while B's hub closed", seconds: 1);
+        var during = await page.Locator("main").InnerTextAsync();
+        Assert.DoesNotContain("2 de noviembre", during, StringComparison.Ordinal);
+        Assert.Equal(0, await page.Locator(".opsRouteList button").CountAsync());
+        await Task.Delay(1_000);
+        Assert.DoesNotContain(api.AllCalls, call => call.Organization == OrganizationC);
+
+        // Once B's hub closed, C's own route is listed, and nothing of B was read under C.
+        api.ReleaseNegotiation();
+        await page.Locator(".opsRouteList button strong").GetByText("Ruta del 3 de noviembre de 2026", new() { Exact = false }).WaitForAsync();
+        var after = await page.Locator("main").InnerTextAsync();
+        Assert.DoesNotContain("2 de noviembre", after, StringComparison.Ordinal);
+        Assert.DoesNotContain(ReadyOfB.PublicId, after, StringComparison.Ordinal);
+        Assert.DoesNotContain(calls.Api, call => call.Organization == OrganizationC &&
+            (call.PathAndQuery.Contains(RouteOfB, StringComparison.Ordinal) || call.PathAndQuery.Contains(OrganizationBOrderPrefix, StringComparison.Ordinal)));
+        Assert.Equal(1, api.AllCalls.Count(call => call.Organization == OrganizationC && call.Path == "/api/v1/routes"));
+
+        await AssertNothingStoredAsync(page);
+        Assert.Empty(console);
+        AssertOnlyAllowedCalls(calls, server.BaseAddress, RoutesCalls);
+        trace.Passed();
+    }
+
+    private const string RouteOfB = "7b000000-0000-4000-8000-000000000001";
+    private const string RouteOfC = "7c000000-0000-4000-8000-000000000001";
+
+    /// <summary>The order detail's own reads and those of its panels that answer 404 here (recipient notices, incidents).</summary>
+    private static readonly Regex[] OrderDetailCalls =
+    [
+        new("^GET /api/v1/orders/[0-9a-f-]{36}$"),
+        new("^GET /api/v1/orders/[0-9a-f-]{36}/recipient-notices$"),
+        new("^GET /api/v1/incidents$"),
+    ];
+
+    /// <summary>Rutas: the routes, a route, each stop's guía (getOrder) and the lists of "Crear ruta".</summary>
+    private static readonly Regex[] RoutesCalls =
+    [
+        new("^GET /api/v1/routes$"),
+        new("^GET /api/v1/routes/[0-9a-f-]{36}$"),
+        new("^GET /api/v1/orders/[0-9a-f-]{36}$"),
+        new("^GET /api/v1/drivers$"),
+        new("^GET /api/v1/cities$"),
+        new("^GET /api/v1/service-areas$"),
+    ];
+
     /// <summary>Every synthetic order id of organization B starts with it.</summary>
     private const string OrganizationBOrderPrefix = "a1000000-";
 
@@ -181,9 +339,9 @@ public sealed class OrganizationSwitchSlowHubPwaPlaywrightTests(DriverStopsNextS
         Assert.Empty(findings);
     }
 
-    private static void AssertOnlyAllowedCalls(CallRecorder calls, Uri web)
+    private static void AssertOnlyAllowedCalls(CallRecorder calls, Uri web, params Regex[] alsoAllowed)
     {
-        Assert.All(calls.Api, call => Assert.Contains(AllowedCalls, pattern => pattern.IsMatch($"{call.Method} {call.Path}")));
+        Assert.All(calls.Api, call => Assert.Contains(AllowedCalls.Concat(alsoAllowed), pattern => pattern.IsMatch($"{call.Method} {call.Path}")));
         var webOrigin = web.GetLeftPart(UriPartial.Authority) + "/";
         Assert.DoesNotContain(calls.Foreign, url => !url.StartsWith(webOrigin, StringComparison.Ordinal));
     }
@@ -225,10 +383,12 @@ public sealed class OrganizationSwitchSlowHubPwaPlaywrightTests(DriverStopsNextS
             if (!request.Url.StartsWith("http", StringComparison.Ordinal)) return;
             if (request.Url.StartsWith(DriverStopsNextServerFixture.TestApiOrigin + "/", StringComparison.Ordinal))
             {
+                var uri = new Uri(request.Url);
                 calls.Api.Enqueue((
                     request.Method,
-                    new Uri(request.Url).AbsolutePath,
-                    request.Headers.TryGetValue("x-organization-id", out var organization) ? organization : string.Empty));
+                    uri.AbsolutePath,
+                    request.Headers.TryGetValue("x-organization-id", out var organization) ? organization : string.Empty,
+                    uri.PathAndQuery));
                 return;
             }
 
@@ -267,6 +427,8 @@ public sealed class OrganizationSwitchSlowHubPwaPlaywrightTests(DriverStopsNextS
         await page.RouteAsync("**/api/v1/me/organization-contexts**", api.HandleRoleReadAsync);
         await page.RouteAsync("**/api/v1/operations/**", api.HandleAsync);
         await page.RouteAsync("**/api/v1/orders/*/assignable-drivers**", api.HandleAsync);
+        await page.RouteAsync("**/api/v1/orders/*", api.HandleAsync);
+        await page.RouteAsync("**/api/v1/routes**", api.HandleAsync);
         return api;
     }
 
@@ -275,7 +437,7 @@ public sealed class OrganizationSwitchSlowHubPwaPlaywrightTests(DriverStopsNextS
 
     private sealed class CallRecorder
     {
-        internal ConcurrentQueue<(string Method, string Path, string Organization)> Api { get; } = new();
+        internal ConcurrentQueue<(string Method, string Path, string Organization, string PathAndQuery)> Api { get; } = new();
         internal ConcurrentQueue<string> Foreign { get; } = new();
     }
 
@@ -302,9 +464,72 @@ public sealed class OrganizationSwitchSlowHubPwaPlaywrightTests(DriverStopsNextS
             cost_warning = (string?)null,
             unassigned_alert = true,
         };
+
+        /// <summary>AI-05 Order as getOrder returns it.</summary>
+        internal object Detail(string organization) => new
+        {
+            id = Id,
+            public_id = PublicId,
+            owner_org_id = organization,
+            operator_org_id = (string?)null,
+            status = Status,
+            price_net = new { currency = "MXN", amount_cents = 25_000L },
+            version = 3,
+            origin_location_id = "61000000-0000-4000-8000-000000000001",
+            destination_location_id = "62000000-0000-4000-8000-000000000001",
+            service_type = "SAME_DAY",
+            quote_id = "63000000-0000-4000-8000-000000000001",
+            city_id = "64000000-0000-4000-8000-000000000001",
+            service_area_id = (string?)null,
+            pricing_tier = "OCCASIONAL",
+            total = new { currency = "MXN", amount_cents = 25_000L },
+            claim_window_ends_at = (string?)null,
+            finalized_at = (string?)null,
+            service_window = (object?)null,
+            timeline = Array.Empty<object>(),
+            allowed_transitions = Array.Empty<object>(),
+        };
     }
 
-    private sealed record SwitchCall(string Organization, string Method, string Path);
+    /// <summary>A DRAFT route of the organization, its stops by order id.</summary>
+    private sealed record SwitchRoute(string Id, string ScheduledFor, params string[] OrderIds)
+    {
+        internal object Summary() => new
+        {
+            id = Id,
+            status = "DRAFT",
+            version = 2,
+            driver_id = "d1000000-0000-4000-8000-000000000001",
+            city_id = "64000000-0000-4000-8000-000000000001",
+            service_area_id = (string?)null,
+            scheduled_for = ScheduledFor,
+            assignment_cost_cents_total = OrderIds.Length * 1_000L,
+            stop_count = OrderIds.Length,
+        };
+
+        internal object Detail() => new
+        {
+            id = Id,
+            status = "DRAFT",
+            version = 2,
+            driver_id = "d1000000-0000-4000-8000-000000000001",
+            city_id = "64000000-0000-4000-8000-000000000001",
+            service_area_id = (string?)null,
+            scheduled_for = ScheduledFor,
+            assignment_cost_cents_total = OrderIds.Length * 1_000L,
+            stop_count = OrderIds.Length,
+            stops = OrderIds.Select((orderId, index) => new
+            {
+                id = $"e{index + 1:x7}-0000-4000-8000-{orderId[^12..]}",
+                order_id = orderId,
+                sequence = index + 1,
+                stop_type = "DELIVERY",
+                status = "PENDING",
+            }).ToArray(),
+        };
+    }
+
+    private sealed record SwitchCall(string Organization, string Method, string Path, string Query);
 
     /// <summary>The dashboard read model and its counts, the driver list and a slow OperationsHub negotiation.</summary>
     private sealed class SwitchApi((string Id, string Name, string Role)[] organizations)
@@ -319,6 +544,7 @@ public sealed class OrganizationSwitchSlowHubPwaPlaywrightTests(DriverStopsNextS
         private readonly object _gate = new();
         private readonly List<SwitchCall> _calls = [];
         private readonly Dictionary<string, SwitchOrder[]> _orders = [];
+        private readonly Dictionary<string, SwitchRoute[]> _routes = [];
         private readonly TaskCompletionSource _negotiation = new(TaskCreationOptions.RunContinuationsAsynchronously);
         private int _negotiations;
 
@@ -335,6 +561,11 @@ public sealed class OrganizationSwitchSlowHubPwaPlaywrightTests(DriverStopsNextS
         internal void Seed(string organization, params SwitchOrder[] orders)
         {
             lock (_gate) _orders[organization] = orders;
+        }
+
+        internal void SeedRoute(string organization, params SwitchRoute[] routes)
+        {
+            lock (_gate) _routes[organization] = routes;
         }
 
         /// <summary>Organization B's hub negotiation answers (refused) now; the connection closes.</summary>
@@ -358,20 +589,47 @@ public sealed class OrganizationSwitchSlowHubPwaPlaywrightTests(DriverStopsNextS
         internal async Task HandleAsync(IRoute route)
         {
             var request = route.Request;
-            var path = new Uri(request.Url).AbsolutePath;
+            var uri = new Uri(request.Url);
+            var path = uri.AbsolutePath;
+            var query = uri.Query.TrimStart('?');
             var organization = (await request.AllHeadersAsync()).GetValueOrDefault("x-organization-id") ?? string.Empty;
-            lock (_gate) _calls.Add(new SwitchCall(organization, request.Method, path));
+            lock (_gate) _calls.Add(new SwitchCall(organization, request.Method, path, query));
             var name = organizations.First(entry => entry.Id == organization).Name;
             SwitchOrder[] orders;
-            lock (_gate) orders = _orders.GetValueOrDefault(organization, []);
+            SwitchRoute[] routes;
+            lock (_gate)
+            {
+                orders = _orders.GetValueOrDefault(organization, []);
+                routes = _routes.GetValueOrDefault(organization, []);
+            }
+
+            var segments = path.Split('/', StringSplitOptions.RemoveEmptyEntries);
             if (path == "/api/v1/operations/dashboard")
             {
+                // The order detail reads its own row with order_id; RLS shows only the organization's orders.
+                var orderId = System.Web.HttpUtility.ParseQueryString(query)["order_id"];
                 await FulfillAsync(route, new
                 {
                     generated_at = "2026-11-02T06:30:00Z",
-                    items = orders.Select(order => order.Json(organization, name)).ToArray(),
+                    items = orders.Where(order => orderId is null || order.Id == orderId).Select(order => order.Json(organization, name)).ToArray(),
                     next_cursor = (string?)null,
                 });
+            }
+            else if (segments is ["api", "v1", "orders", var orderId] && request.Method == "GET")
+            {
+                var order = orders.FirstOrDefault(item => item.Id == orderId);
+                if (order is null) await NotFoundAsync(route);
+                else await FulfillAsync(route, order.Detail(organization));
+            }
+            else if (path == "/api/v1/routes" && request.Method == "GET")
+            {
+                await FulfillAsync(route, new { items = routes.Select(item => item.Summary()).ToArray(), next_cursor = (string?)null });
+            }
+            else if (segments is ["api", "v1", "routes", var routeId] && request.Method == "GET")
+            {
+                var found = routes.FirstOrDefault(item => item.Id == routeId);
+                if (found is null) await NotFoundAsync(route);
+                else await FulfillAsync(route, found.Detail());
             }
             else if (path == "/api/v1/operations/queue-counts")
             {
@@ -396,12 +654,7 @@ public sealed class OrganizationSwitchSlowHubPwaPlaywrightTests(DriverStopsNextS
                 // An order of another organization is the uniform 404, as RLS answers it.
                 if (!orders.Any(order => path.Contains(order.Id, StringComparison.Ordinal)))
                 {
-                    await route.FulfillAsync(new RouteFulfillOptions
-                    {
-                        Status = 404,
-                        ContentType = "application/problem+json",
-                        Body = """{"type":"about:blank","title":"Problem.","status":404}""",
-                    });
+                    await NotFoundAsync(route);
                     return;
                 }
 
@@ -427,5 +680,13 @@ public sealed class OrganizationSwitchSlowHubPwaPlaywrightTests(DriverStopsNextS
                 await route.FulfillAsync(new RouteFulfillOptions { Status = 404 });
             }
         }
+
+        private static Task NotFoundAsync(IRoute route) =>
+            route.FulfillAsync(new RouteFulfillOptions
+            {
+                Status = 404,
+                ContentType = "application/problem+json",
+                Body = """{"type":"about:blank","title":"Problem.","status":404}""",
+            });
     }
 }
