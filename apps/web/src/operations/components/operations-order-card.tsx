@@ -38,7 +38,7 @@ export function OperationsOrderCard({
 }) {
   const [publishing, setPublishing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  // Z25: the key of an offer published without a confirmation, kept only for the identical offer.
+  // Z25: the keys of the offers sent without a confirmation, each reused only for that identical offer.
   const [submissions] = useState(() => new PendingSubmissions());
   const canPublish = order.assignment === null &&
     ["READY_FOR_PICKUP", "RESCHEDULED"].includes(order.status);
