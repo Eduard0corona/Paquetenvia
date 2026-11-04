@@ -16,6 +16,15 @@ export type FailedAttemptState =
 
 export const failedAttemptUnavailableMessage = "No fue posible leer el motivo del intento fallido.";
 
+/**
+ * Z23 ("Releer con Actualizar"): the reason is read again with every read of the order. While it is read, what the
+ * panel shows stays until the answer (no flicker, nothing announced again every read); only a panel that shows nothing
+ * yet says it is loading.
+ */
+export function failedAttemptReading(previous: FailedAttemptState): FailedAttemptState {
+  return previous.kind === "hidden" ? { kind: "loading" } : previous;
+}
+
 export async function loadFailedAttempt(
   api: Pick<IncidentsApi, "list">,
   orderId: string,

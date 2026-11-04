@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { useRef, useState } from "react";
+import { useState } from "react";
 import type { ConfirmRequest } from "../../components/confirm-dialog";
-import { externalOfferConfirmation } from "../contracts/external-offer-confirmation";
+import { externalOfferConfirmation, type ExternalOfferVehicleType } from "../contracts/external-offer-confirmation";
 import type { OperationsDashboardOrder } from "../contracts/operations-dashboard";
 import {
   assignmentTypeLabel,
@@ -18,6 +18,8 @@ import { parseMxnToCents } from "../contracts/money";
 import { formatServiceWindow } from "../contracts/service-window";
 import { operationsOrderHref } from "../routing/operations-routing";
 import { mazatlanWallTimeToInstant } from "../../lib/mazatlan-time";
+import { externalOfferPublished, prepareExternalOffer } from "../state/external-offer-publish";
+import { PendingSubmissions } from "../state/pending-submissions";
 
 export function OperationsOrderCard({
   order,
@@ -30,13 +32,14 @@ export function OperationsOrderCard({
     orderId: string,
     commissionCents: number,
     expiresAt: string,
-    vehicleType: "MOTORCYCLE" | "CAR" | "VAN" | "BICYCLE" | "WALKER",
+    vehicleType: ExternalOfferVehicleType,
     idempotencyKey: string,
   ) => Promise<void>;
 }) {
   const [publishing, setPublishing] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
-  const keyRef = useRef<string | null>(null);
+  // Z25: the keys of the offers sent without a confirmation, each reused only for that identical offer.
+  const [submissions] = useState(() => new PendingSubmissions());
   const canPublish = order.assignment === null &&
     ["READY_FOR_PICKUP", "RESCHEDULED"].includes(order.status);
   return (
@@ -78,8 +81,7 @@ export function OperationsOrderCard({
             const data = new FormData(event.currentTarget);
             const commissionCents = parseMxnToCents(String(data.get("commission") ?? ""));
             const expires = String(data.get("expires"));
-            const vehicle = String(data.get("vehicle")) as
-              | "MOTORCYCLE" | "CAR" | "VAN" | "BICYCLE" | "WALKER";
+            const vehicle = String(data.get("vehicle")) as ExternalOfferVehicleType;
             // The typed expiry is America/Mazatlan wall-clock time, whatever the device zone.
             const expiresAt = mazatlanWallTimeToInstant(expires);
             if (commissionCents === null || expiresAt === null) {
@@ -88,19 +90,24 @@ export function OperationsOrderCard({
             }
             confirm({
               ...externalOfferConfirmation(order.public_id, commissionCents, expiresAt, vehicle),
+              // Z25: a retry of the identical offer resends its key; any change is a new offer with a new key.
               onConfirm: () => {
-                const key = keyRef.current ?? crypto.randomUUID();
-                keyRef.current = key;
+                const { key, payload } = prepareExternalOffer(submissions, {
+                  orderId: order.order_id,
+                  commissionCents,
+                  expiresAt: expiresAt.toISOString(),
+                  vehicleType: vehicle,
+                });
                 setPublishing(true);
                 setMessage(null);
                 void onPublishExternalOffer(
-                  order.order_id,
-                  commissionCents,
-                  expiresAt.toISOString(),
-                  vehicle,
+                  payload.orderId,
+                  payload.commissionCents,
+                  payload.expiresAt,
+                  payload.vehicleType,
                   key,
                 ).then(() => {
-                  keyRef.current = null;
+                  externalOfferPublished(submissions);
                   setMessage("Oferta externa publicada.");
                 }).catch(() => {
                   setMessage("No fue posible publicar la oferta.");
