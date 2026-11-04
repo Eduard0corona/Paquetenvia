@@ -279,7 +279,7 @@ class ManifestTests(unittest.TestCase):
         statuses = {s: sum(1 for e in scenarios if e["status"] == s) for s in ("COVERED", "GAP", "NOT_APPLICABLE")}
         self.assertEqual({"COVERED": 73, "GAP": 3, "NOT_APPLICABLE": 5}, statuses)
         gaps = sorted(e["screen"] for e in screens if e["status"] == "GAP")
-        self.assertEqual(["/avisos/baja/:token", "/login", "/onboarding"], gaps)
+        self.assertEqual(["/login", "/onboarding"], gaps)
 
     def test_critical_screens_are_ai07_routes(self):
         routes = yaml.safe_load((REPO_ROOT / rel001.AI07).read_text(encoding="utf-8"))["routes"]
@@ -844,7 +844,7 @@ class EndToEndTests(unittest.TestCase):
         self.assertFalse(report["scope"]["real_pilot_data_read"])
         self.assertEqual("NOT_STARTED", report["closing_phase"]["status"])
         regression = world.output_json("rel001-regression-evidence.json")
-        self.assertEqual({"COVERED": 15, "GAP": 3}, regression["browser_suites"]["manifest_counts"])
+        self.assertEqual({"COVERED": 16, "GAP": 2}, regression["browser_suites"]["manifest_counts"])
         self.assertEqual({"COVERED": 73, "GAP": 3, "NOT_APPLICABLE": 5}, regression["ai09_scenarios"]["manifest_counts"])
         self.assertEqual(73, regression["ai09_scenarios"]["status_counts"]["PASSED"])
         markdown = (world.output / "rel001-pilot-readiness-report.md").read_text(encoding="utf-8")
