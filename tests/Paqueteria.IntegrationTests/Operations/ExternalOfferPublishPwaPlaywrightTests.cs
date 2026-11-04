@@ -16,8 +16,10 @@ namespace Paqueteria.IntegrationTests.Operations;
 /// that is READY_FOR_PICKUP or RESCHEDULED without an assignment offers the form; the commission typed in pesos is sent
 /// as integer cents, the expiry typed in Mazatlán wall-clock time as its UTC instant whatever the device zone, and the
 /// vehicle as the only eligible type; the confirmation names the order, the commission, the vehicle and the expiry; a
-/// retry after an unanswered request resends the same Idempotency-Key and body, and a new offer gets a new key. Nothing
-/// is kept in browser storage or logged and no internal id is shown.
+/// retry after an unanswered request resends the same Idempotency-Key and body, and a new offer gets a new key. Z25
+/// ("Corregirlo"): the key is reused only for the identical offer, so a commission, expiry or vehicle changed after an
+/// unanswered request goes with a new key. The fake server answers a known key with another body with AI-05's 409
+/// IDEMPOTENCY_CONFLICT, as the real one does. Nothing is kept in browser storage or logged and no internal id is shown.
 /// </summary>
 [Collection(DriverStopsPwaCollection.Name)]
 public sealed partial class ExternalOfferPublishPwaPlaywrightTests(DriverStopsNextServerFixture server)
@@ -154,6 +156,115 @@ public sealed partial class ExternalOfferPublishPwaPlaywrightTests(DriverStopsNe
     }
 
     /// <summary>
+    /// Z25 ("Corregirlo"): after unanswered publishes, each changed offer (commission, then expiry, then vehicle) goes
+    /// with a new key and its own body, never a key already sent with another body, which the server refuses as a
+    /// reuse. The identical retry of an offer resends its key and body: the last one, and the first one when dispatch
+    /// goes back to it, which is published. Once the server confirmed it, the same offer again is a new offer with a
+    /// new key.
+    /// </summary>
+    [Fact]
+    [Trait("Category", "OperationsDashboardPwa")]
+    public async Task A_changed_offer_after_an_unanswered_publish_goes_with_a_new_key()
+    {
+        using var playwright = await Playwright.CreateAsync();
+        await using var browser = await playwright.Chromium.LaunchAsync(new BrowserTypeLaunchOptions { Headless = true });
+        await using var context = await browser.NewContextAsync(new BrowserNewContextOptions
+        {
+            ViewportSize = new ViewportSize { Width = 1440, Height = 900 },
+            Locale = "en-US",
+            TimezoneId = "Asia/Tokyo",
+        });
+        await using var trace = await PlaywrightFailureTrace.StartAsync(context, job: PlaywrightFailureTrace.OperationsDashboardJob);
+        var page = await context.NewPageAsync();
+        page.SetDefaultTimeout(20_000);
+        var console = CaptureConsole(page);
+        var calls = RecordCalls(page);
+        var api = await InstallAsync(page);
+        foreach (var _ in Enumerable.Range(0, 5)) api.OfferAnswers.Enqueue(503);
+
+        await page.GotoAsync(new Uri(server.BaseAddress, "/ops/dashboard").AbsoluteUri);
+        var form = Card(page, Ready).Locator("form.opsExternalOffer");
+        await form.WaitForAsync();
+        var status = form.Locator("span[role=status]");
+
+        // 45.5 pesos by car until 23:30 in Mazatlán: unanswered.
+        await form.GetByLabel("Comisión (MXN)").FillAsync("45.5");
+        await form.GetByLabel("Expiración (hora de Mazatlán)").FillAsync("2026-11-02T23:30");
+        await form.GetByLabel("Vehículo").SelectOptionAsync(new SelectOptionValue { Label = "Automóvil" });
+        await ConfirmAsync(page, form, Description("$45.50 MXN (automóvil)", "2 nov 2026, 23:30"));
+        await ExpectTextAsync(status, "No fue posible publicar la oferta.");
+        await WaitForAsync(() => api.Offers().Length == 1, "the first offer was not sent");
+
+        // Another commission: unanswered too.
+        await form.GetByLabel("Comisión (MXN)").FillAsync("50");
+        await ConfirmAsync(page, form, Description("$50.00 MXN (automóvil)", "2 nov 2026, 23:30"));
+        await WaitForAsync(() => api.Offers().Length == 2, "the offer with another commission was not sent");
+        await ExpectTextAsync(status, "No fue posible publicar la oferta.");
+
+        // Another expiry: unanswered too.
+        await form.GetByLabel("Expiración (hora de Mazatlán)").FillAsync("2026-11-02T23:45");
+        await ConfirmAsync(page, form, Description("$50.00 MXN (automóvil)", "2 nov 2026, 23:45"));
+        await WaitForAsync(() => api.Offers().Length == 3, "the offer with another expiry was not sent");
+        await ExpectTextAsync(status, "No fue posible publicar la oferta.");
+
+        // Another vehicle: unanswered too.
+        await form.GetByLabel("Vehículo").SelectOptionAsync(new SelectOptionValue { Label = "Van" });
+        await ConfirmAsync(page, form, Description("$50.00 MXN (van)", "2 nov 2026, 23:45"));
+        await WaitForAsync(() => api.Offers().Length == 4, "the offer with another vehicle was not sent");
+        await ExpectTextAsync(status, "No fue posible publicar la oferta.");
+
+        // The identical retry of the last offer: its key and body again, unanswered too.
+        await ConfirmAsync(page, form, Description("$50.00 MXN (van)", "2 nov 2026, 23:45"));
+        await WaitForAsync(() => api.Offers().Length == 5, "the identical retry was not sent");
+        await ExpectTextAsync(status, "No fue posible publicar la oferta.");
+
+        // Back to the first offer: its own key and body again, and it is published.
+        await form.GetByLabel("Comisión (MXN)").FillAsync("45.5");
+        await form.GetByLabel("Expiración (hora de Mazatlán)").FillAsync("2026-11-02T23:30");
+        await form.GetByLabel("Vehículo").SelectOptionAsync(new SelectOptionValue { Label = "Automóvil" });
+        var readsBefore = api.DashboardReads().Length;
+        await ConfirmAsync(page, form, Description("$45.50 MXN (automóvil)", "2 nov 2026, 23:30"));
+        await ExpectTextAsync(status, "Oferta externa publicada.");
+        await WaitForAsync(() => api.DashboardReads().Length > readsBefore, "the dashboard was not read again after the offer");
+
+        // The same offer once more after the confirmation: a new offer, with a new key.
+        await ConfirmAsync(page, form, Description("$45.50 MXN (automóvil)", "2 nov 2026, 23:30"));
+        await WaitForAsync(() => api.Offers().Length == 7, "the next offer was not sent");
+        await ExpectTextAsync(status, "Oferta externa publicada.");
+
+        var offers = api.Offers();
+        Assert.Equal(
+            new[]
+            {
+                OfferBody(4_550, "2026-11-03T06:30:00.000Z", "CAR"),
+                OfferBody(5_000, "2026-11-03T06:30:00.000Z", "CAR"),
+                OfferBody(5_000, "2026-11-03T06:45:00.000Z", "CAR"),
+                OfferBody(5_000, "2026-11-03T06:45:00.000Z", "VAN"),
+                OfferBody(5_000, "2026-11-03T06:45:00.000Z", "VAN"),
+                OfferBody(4_550, "2026-11-03T06:30:00.000Z", "CAR"),
+                OfferBody(4_550, "2026-11-03T06:30:00.000Z", "CAR"),
+            },
+            offers.Select(offer => offer.Body));
+        var keys = offers.Select(offer => offer.IdempotencyKey ?? string.Empty).ToArray();
+        foreach (var key in keys) Assert.Matches(UuidKeyPattern(), key);
+        // One key per offer: the four different offers and the one after the confirmation each have their own, and
+        // only an identical retry repeats one.
+        Assert.Equal(5, keys.Distinct().Count());
+        Assert.Equal(keys[3], keys[4]);
+        Assert.Equal(keys[0], keys[5]);
+        Assert.DoesNotContain(keys[6], keys[..6]);
+        Assert.Equal(new[] { 503, 503, 503, 503, 503, 201, 201 }, api.OfferStatuses());
+        Assert.Equal(string.Empty, string.Concat(offers.Select(offer => offer.Query)));
+        AssertDashboardQueriesAreEmpty(api);
+
+        await AssertNoIdentifiersAsync(page);
+        await AssertNothingStoredAsync(page);
+        Assert.Empty(console);
+        AssertOnlyAllowedCalls(calls, server.BaseAddress);
+        trace.Passed();
+    }
+
+    /// <summary>
     /// AI-07 /ops/dashboard rate_limit: during the dashboard's 429 wait the offer, which is not limited, is published,
     /// but the reload after it waits for 0 and happens once, by itself, list and counts; the countdown is announced once
     /// with the seconds asked for and "Actualizar" is disabled meanwhile.
@@ -228,6 +339,19 @@ public sealed partial class ExternalOfferPublishPwaPlaywrightTests(DriverStopsNe
         AssertOnlyAllowedCalls(calls, server.BaseAddress);
         trace.Passed();
     }
+
+    private static string Description(string commission, string expiry) =>
+        $"Se ofrecerá la orden {Ready.PublicId} a repartidores externos con una comisión de {commission}, " +
+        $"vigente hasta {expiry} (hora de Mazatlán).";
+
+    private static string OfferBody(long commissionCents, string expiresAt, string vehicle) =>
+        JsonSerializer.Serialize(new
+        {
+            order_id = Ready.Id,
+            commission_cents = commissionCents,
+            expires_at = expiresAt,
+            eligible_constraints = new { vehicle_types = new[] { vehicle } },
+        });
 
     private static ILocator Card(IPage page, CardOrder order) =>
         page.Locator("article.opsOrderCard", new() { Has = page.Locator($"h3:text-is('{order.PublicId}')") });
@@ -381,12 +505,14 @@ public sealed partial class ExternalOfferPublishPwaPlaywrightTests(DriverStopsNe
     private static Task FulfillAsync(IRoute route, object body, int status = 200) =>
         route.FulfillAsync(new RouteFulfillOptions { Status = status, ContentType = "application/json", Body = JsonSerializer.Serialize(body) });
 
-    private static Task ProblemAsync(IRoute route, int status) =>
+    private static Task ProblemAsync(IRoute route, int status, string? code = null) =>
         route.FulfillAsync(new RouteFulfillOptions
         {
             Status = status,
             ContentType = "application/problem+json",
-            Body = JsonSerializer.Serialize(new { type = "about:blank", title = "Problem.", status }),
+            Body = code is null
+                ? JsonSerializer.Serialize(new { type = "about:blank", title = "Problem.", status })
+                : JsonSerializer.Serialize(new { type = "about:blank", title = "Problem.", status, code }),
         });
 
     [GeneratedRegex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")]
@@ -449,6 +575,8 @@ public sealed partial class ExternalOfferPublishPwaPlaywrightTests(DriverStopsNe
 
         private readonly object _gate = new();
         private readonly List<PublishCall> _calls = [];
+        private readonly List<int> _offerStatuses = [];
+        private readonly Dictionary<string, string?> _offerBodiesByKey = [];
         private int _dashboardTooManyRequests;
 
         /// <summary>The statuses of the next createExternalOffer answers; 201 once they run out.</summary>
@@ -460,6 +588,12 @@ public sealed partial class ExternalOfferPublishPwaPlaywrightTests(DriverStopsNe
         }
 
         internal PublishCall[] Offers() => Calls("POST", "/api/v1/external-offers");
+
+        /// <summary>The status each createExternalOffer was answered with, in order.</summary>
+        internal int[] OfferStatuses()
+        {
+            lock (_gate) return [.. _offerStatuses];
+        }
 
         internal PublishCall[] DashboardReads() => Calls("GET", "/api/v1/operations/dashboard");
 
@@ -514,11 +648,31 @@ public sealed partial class ExternalOfferPublishPwaPlaywrightTests(DriverStopsNe
                     });
                     return;
                 case ("POST", "/api/v1/external-offers"):
+                    // Every key is kept with its body, as if an unanswered request had reached the server: the same key
+                    // with another body is AI-05's 409 IDEMPOTENCY_CONFLICT.
+                    bool reused;
+                    lock (_gate)
+                    {
+                        var key = call.IdempotencyKey ?? string.Empty;
+                        reused = _offerBodiesByKey.TryGetValue(key, out var known) && known != call.Body;
+                        if (!reused) _offerBodiesByKey[key] = call.Body;
+                    }
+
+                    if (reused)
+                    {
+                        lock (_gate) _offerStatuses.Add(409);
+                        await ProblemAsync(route, 409, "IDEMPOTENCY_CONFLICT");
+                        return;
+                    }
+
                     if (OfferAnswers.TryDequeue(out var status) && status != 201)
                     {
+                        lock (_gate) _offerStatuses.Add(status);
                         await ProblemAsync(route, status);
                         return;
                     }
+
+                    lock (_gate) _offerStatuses.Add(201);
 
                     using (var body = JsonDocument.Parse(call.Body ?? "{}"))
                     {
