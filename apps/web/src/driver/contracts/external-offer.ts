@@ -3,9 +3,15 @@ export interface ExternalOfferMoney {
   readonly amount_cents: number;
 }
 
+/**
+ * AI-05 DriverExternalOffer, one item of listMyEligibleExternalOffers. EXT-001-OFFER-GUIA-2026-11-04 (Z24 "La guía
+ * (Recommended)"): `public_id` is the guía of the offer's order, the identifier the card shows; `order_id` is still
+ * parsed but never shown.
+ */
 export interface ExternalOffer {
   readonly id: string;
   readonly order_id: string;
+  readonly public_id: string;
   readonly status: "OPEN" | "ACCEPTED" | "EXPIRED" | "CANCELLED";
   readonly commission: ExternalOfferMoney;
   readonly expires_at: string;
@@ -22,6 +28,8 @@ export interface ExternalOfferPage {
 export class ExternalOfferContractError extends Error {}
 
 const uuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+/** AI-05 DriverExternalOffer.public_id: the guía, ORD_ and 22 Base64URL characters, case sensitive. */
+export const externalOfferPublicIdPattern = /^ORD_[A-Za-z0-9_-]{22}$/;
 
 export function parseExternalOfferPage(value: unknown): ExternalOfferPage {
   const root = object(value);
@@ -37,10 +45,12 @@ export function parseExternalOfferPage(value: unknown): ExternalOfferPage {
 
 export function parseExternalOffer(value: unknown): ExternalOffer {
   const root = object(value);
-  exact(root, ["id", "order_id", "status", "commission", "expires_at", "accepted_by_driver_id", "accepted_at", "version"]);
+  exact(root, [
+    "id", "order_id", "public_id", "status", "commission", "expires_at", "accepted_by_driver_id", "accepted_at", "version",
+  ]);
   const money = object(root.commission);
   exact(money, ["currency", "amount_cents"]);
-  if (!validUuid(root.id) || !validUuid(root.order_id) ||
+  if (!validUuid(root.id) || !validUuid(root.order_id) || !validPublicId(root.public_id) ||
       !["OPEN", "ACCEPTED", "EXPIRED", "CANCELLED"].includes(String(root.status)) ||
       money.currency !== "MXN" || !integer(money.amount_cents, 0) ||
       !utcTimestamp(root.expires_at) || !integer(root.version, 1) ||
@@ -51,6 +61,7 @@ export function parseExternalOffer(value: unknown): ExternalOffer {
   return Object.freeze({
     id: root.id as string,
     order_id: root.order_id as string,
+    public_id: root.public_id as string,
     status: root.status as ExternalOffer["status"],
     commission: Object.freeze({ currency: "MXN", amount_cents: money.amount_cents as number }),
     expires_at: root.expires_at as string,
@@ -72,6 +83,10 @@ function exact(value: Record<string, unknown>, names: readonly string[]): void {
 
 function validUuid(value: unknown): value is string {
   return typeof value === "string" && uuid.test(value) && value !== "00000000-0000-0000-0000-000000000000";
+}
+
+function validPublicId(value: unknown): value is string {
+  return typeof value === "string" && externalOfferPublicIdPattern.test(value);
 }
 
 function integer(value: unknown, minimum: number): value is number {

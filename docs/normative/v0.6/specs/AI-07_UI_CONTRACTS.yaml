@@ -1469,8 +1469,11 @@ screen_contracts:
     - OPEN
     - not expired
     - currently eligible
+    # EXT-001-OFFER-GUIA-2026-11-04 (project owner, 2026-11-04, Z24 "La guía (Recommended)"): the card names the order
+    # by its guía, the public_id that listMyEligibleExternalOffers returns with each offer, in place of the internal
+    # order UUID.
     must_show_before_accept:
-    - order_id
+    - la guía de la orden (the order's public_id, ORD_…), never the internal order_id
     - commission
     - expires_at
     accept:

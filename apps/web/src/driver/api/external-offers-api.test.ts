@@ -11,6 +11,7 @@ const response = {
   items: [{
     id: "22222222-2222-2222-2222-222222222222",
     order_id: "33333333-3333-3333-3333-333333333333",
+    public_id: "ORD_SyntheticGuia000000001",
     status: "OPEN",
     commission: { currency: "MXN", amount_cents: 5000 },
     expires_at: "2026-08-28T02:00:00Z",

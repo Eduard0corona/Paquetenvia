@@ -58,11 +58,20 @@ public sealed record ExternalOfferResult(
     DateTimeOffset? AcceptedAt,
     int Version);
 
+/// <summary>
+/// EXT-001-OFFER-GUIA-2026-11-04: one offer of the driver's eligible list (AI-05 DriverExternalOffer) - the offer and
+/// the guía of its order (Order.public_id), read with the offer in the same RLS-scoped tenant transaction. The guía is
+/// an identifier and is never logged.
+/// </summary>
+public sealed record DriverExternalOfferResult(
+    ExternalOfferResult Offer,
+    string PublicId);
+
 public sealed record ExternalOfferPageResult(
-    IReadOnlyList<ExternalOfferResult> Items,
+    IReadOnlyList<DriverExternalOfferResult> Items,
     string? NextCursor)
 {
-    public IReadOnlyList<ExternalOfferResult> Items { get; } = Items.ToArray();
+    public IReadOnlyList<DriverExternalOfferResult> Items { get; } = Items.ToArray();
 }
 
 public interface IExternalOfferService

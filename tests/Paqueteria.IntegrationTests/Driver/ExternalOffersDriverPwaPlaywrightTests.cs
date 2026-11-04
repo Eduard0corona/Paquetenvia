@@ -11,14 +11,15 @@ namespace Paqueteria.IntegrationTests.Driver;
 /// not mutate server state": AI-07 <c>external_driver_offers</c> (hosted on <c>/driver/stops</c>) in a real browser
 /// against the production Next build, on a phone in Tokyo. The API is fulfilled in the browser in AI-05 shapes:
 /// listMyEligibleExternalOffers (GET /driver/me/external-offers, no driver_id), acceptExternalOffer, listMyStops,
-/// /me/organization-roles and the phone read; the DriverHub is a mocked SignalR JSON hub over long polling where a
-/// test needs it (a routed WebSocket cannot be dropped from the test with Microsoft.Playwright 1.61 for .NET). Each
-/// offer shows its order, its commission from integer cents and its expiry in Mazatlán before "Aceptar oferta"; the
-/// accept is the normative POST with one Idempotency-Key per offer, reused for a retry after a failure; a 409 says the
-/// offer is gone and reads the list again; "No me interesa" sends nothing and the offer comes back after a reload; an
-/// ExternalOfferChanged notice only triggers a REST read (its payload is never shown) and a reconnect reads the list
-/// again; a driver without the external-offer capability (403) sees no panel and reads nothing more. No offer reaches
-/// browser storage and nothing is logged. The dispatcher's "Publicar oferta externa" is
+/// /me/organization-roles and the phone read; the DriverHub is a mocked SignalR JSON hub over long polling where a test
+/// needs it (a routed WebSocket cannot be dropped from the test with Microsoft.Playwright 1.61 for .NET). Each offer
+/// shows its order's guía (EXT-001-OFFER-GUIA-2026-11-04: AI-05 DriverExternalOffer public_id, never the internal order
+/// UUID nor any fragment of an id), its commission from integer cents and its expiry in Mazatlán before
+/// "Aceptar oferta"; the accept is the normative POST with one Idempotency-Key per offer, reused for a retry after a
+/// failure; a 409 says the offer is gone and reads the list again; "No me interesa" sends nothing and the offer comes
+/// back after a reload; an ExternalOfferChanged notice only triggers a REST read (its payload is never shown) and a
+/// reconnect reads the list again; a driver without the external-offer capability (403) sees no panel and reads nothing
+/// more. No offer reaches browser storage and nothing is logged. The dispatcher's "Publicar oferta externa" is
 /// <c>ExternalOfferPublishPwaPlaywrightTests</c>.
 /// </summary>
 [Collection(DriverStopsPwaCollection.Name)]
@@ -28,8 +29,8 @@ public sealed partial class ExternalOffersDriverPwaPlaywrightTests(DriverStopsNe
     private const string DriverId = "d1000000-0000-4000-8000-000000000009";
     private const string OffersRoute = "**/api/v1/driver/me/external-offers**";
 
-    private static readonly Offer First = new("0f000000-0000-4000-8000-000000000001", "0e000000-0000-4000-8000-0000000000a1", 4_550, "2026-11-03T06:30:00Z");
-    private static readonly Offer Second = new("0f000000-0000-4000-8000-000000000002", "0e000000-0000-4000-8000-0000000000b2", 2_500, "2026-11-03T15:05:00Z");
+    private static readonly Offer First = new("0f000000-0000-4000-8000-000000000001", "0e000000-0000-4000-8000-0000000000a1", "ORD_SyntheticOfferGuia_A01", 4_550, "2026-11-03T06:30:00Z");
+    private static readonly Offer Second = new("0f000000-0000-4000-8000-000000000002", "0e000000-0000-4000-8000-0000000000b2", "ORD_SyntheticOfferGuia_B02", 2_500, "2026-11-03T15:05:00Z");
 
     private static readonly Regex[] AllowedCalls =
     [
@@ -44,13 +45,14 @@ public sealed partial class ExternalOffersDriverPwaPlaywrightTests(DriverStopsNe
     ];
 
     /// <summary>
-    /// AI-07 must_show_before_accept and accept: each card shows the order, the commission and the expiry in Mazatlán
-    /// (2 November there, already 3 November on the phone). A 503 keeps the offer and its key; the retry with the same
-    /// key is accepted and the list is read again; a 409 on the other offer says it is gone and reads the list again.
+    /// AI-07 must_show_before_accept and accept: each card shows the order's guía (never its internal UUID), the
+    /// commission and the expiry in Mazatlán (2 November there, already 3 November on the phone). A 503 keeps the offer
+    /// and its key; the retry with the same key is accepted and the list is read again; a 409 on the other offer says it
+    /// is gone and reads the list again.
     /// </summary>
     [Fact]
     [Trait("Category", "DriverStopsPwa")]
-    public async Task Driver_sees_the_order_commission_and_expiry_before_accepting_and_retries_with_the_same_key()
+    public async Task Driver_sees_the_guia_commission_and_expiry_before_accepting_and_retries_with_the_same_key()
     {
         await using var phone = await StartAsync();
         var page = phone.Page;
@@ -70,7 +72,7 @@ public sealed partial class ExternalOffersDriverPwaPlaywrightTests(DriverStopsNe
             new[] { "Aceptar oferta", "No me interesa" },
             (await Card(page, First).GetByRole(AriaRole.Button).AllInnerTextsAsync()).Select(text => text.Trim()));
         Assert.False(await DriverStopsPwaPlaywrightTests.HasHorizontalOverflowAsync(page));
-        await phone.AssertOnlyOrderIdsShownAsync(First, Second);
+        await phone.AssertGuiasShownAndNoIdAsync(First, Second);
 
         // A 503: the offer stays with a message; the retry sends the same key and the accepted offer leaves the list.
         await Card(page, First).GetByRole(AriaRole.Button, new() { Name = "Aceptar oferta", Exact = true }).ClickAsync();
@@ -210,7 +212,7 @@ public sealed partial class ExternalOffersDriverPwaPlaywrightTests(DriverStopsNe
     private static ILocator Panel(IPage page) => page.Locator("section[aria-labelledby=external-offers-heading]");
 
     private static ILocator Card(IPage page, Offer offer) =>
-        Panel(page).Locator("li", new() { Has = page.Locator($"h3:text-is('{offer.OrderId}')") });
+        Panel(page).Locator("li", new() { Has = page.Locator($"h3:text-is('{offer.Guia}')") });
 
     private static async Task ExpectMessageAsync(ILocator panel, string message)
     {
@@ -231,8 +233,8 @@ public sealed partial class ExternalOffersDriverPwaPlaywrightTests(DriverStopsNe
     }
 
     /// <summary>
-    /// The cards in order: the order, "Externa", the commission from integer cents, the expiry as Mazatlán formats it (a
-    /// Mazatlán date, the phone being in Tokyo) and "Disponible".
+    /// The cards in order: the order's guía, "Externa", the commission from integer cents, the expiry as Mazatlán formats
+    /// it (a Mazatlán date, the phone being in Tokyo) and "Disponible".
     /// </summary>
     private static async Task ExpectCardsAsync(IPage page, params Offer[] offers)
     {
@@ -250,7 +252,7 @@ public sealed partial class ExternalOffersDriverPwaPlaywrightTests(DriverStopsNe
                 offer.ExpiresAt);
             Assert.StartsWith(offer.MazatlanDate, expiry, StringComparison.Ordinal);
             expected.Add(Regex.Replace(
-                $"Oferta para orden {offer.OrderId} Externa Comisión {offer.Commission} Expira {expiry} Estado Disponible",
+                $"Oferta para orden {offer.Guia} Externa Comisión {offer.Commission} Expira {expiry} Estado Disponible",
                 "\\s+", " "));
         }
 
@@ -314,12 +316,19 @@ public sealed partial class ExternalOffersDriverPwaPlaywrightTests(DriverStopsNe
     [GeneratedRegex("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}")]
     private static partial Regex UuidPattern();
 
+    /// <summary>Eight hexadecimal characters in a row: what any fragment of a UUID group of 8 or 12 would show.</summary>
+    [GeneratedRegex("[0-9a-fA-F]{8}")]
+    private static partial Regex HexRunPattern();
+
     /// <summary>The accept key: a random UUID per offer (external-offers-controller.ts), at least 16 characters (AI-05).</summary>
     [GeneratedRegex("^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")]
     private static partial Regex KeyPattern();
 
-    /// <summary>An AI-05 ExternalOffer the driver may accept: OPEN, its commission in integer cents.</summary>
-    private sealed record Offer(string Id, string OrderId, long CommissionCents, string ExpiresAt)
+    /// <summary>
+    /// An AI-05 DriverExternalOffer the driver may accept: OPEN, the synthetic guía of its order (ORD_ and 22 Base64URL
+    /// characters, no hexadecimal run), its commission in integer cents.
+    /// </summary>
+    private sealed record Offer(string Id, string OrderId, string Guia, long CommissionCents, string ExpiresAt)
     {
         internal string Commission => $"${CommissionCents / 100}.{CommissionCents % 100:00}";
 
@@ -331,6 +340,7 @@ public sealed partial class ExternalOffersDriverPwaPlaywrightTests(DriverStopsNe
         {
             id = Id,
             order_id = OrderId,
+            public_id = Guia,
             status = "OPEN",
             commission = new { currency = "MXN", amount_cents = CommissionCents },
             expires_at = ExpiresAt,
@@ -626,16 +636,26 @@ public sealed partial class ExternalOffersDriverPwaPlaywrightTests(DriverStopsNe
             polls.Writer.TryWrite(null);
         }
 
-        /// <summary>The only UUIDs on screen are the offers' order ids (AI-07 must_show_before_accept: order_id).</summary>
-        internal async Task AssertOnlyOrderIdsShownAsync(params Offer[] offers)
+        /// <summary>
+        /// AI-07 must_show_before_accept (EXT-001-OFFER-GUIA-2026-11-04): each offer's guía is on screen once, and no
+        /// UUID is - neither whole nor any fragment of the organization, the driver, an offer or an order id, nor any
+        /// run of eight hexadecimal characters.
+        /// </summary>
+        internal async Task AssertGuiasShownAndNoIdAsync(params Offer[] offers)
         {
             var visible = await page.Locator("body").InnerTextAsync();
-            var shown = UuidPattern().Matches(visible).Select(match => match.Value).Distinct().Order(StringComparer.Ordinal);
-            Assert.Equal(offers.Select(offer => offer.OrderId).Order(StringComparer.Ordinal), shown);
-            foreach (var id in new[] { OrganizationId, DriverId, First.Id, Second.Id })
+            foreach (var offer in offers)
             {
-                Assert.DoesNotContain(id[..8], visible, StringComparison.Ordinal);
-                Assert.DoesNotContain(id[^12..], visible, StringComparison.Ordinal);
+                Assert.Equal(1, visible.Split(offer.Guia, StringSplitOptions.None).Length - 1);
+            }
+
+            Assert.Empty(UuidPattern().Matches(visible));
+            Assert.Empty(HexRunPattern().Matches(visible));
+            foreach (var id in new[] { OrganizationId, DriverId, First.Id, Second.Id, First.OrderId, Second.OrderId })
+            {
+                Assert.DoesNotContain(id[..8], visible, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain(id[8..24], visible, StringComparison.OrdinalIgnoreCase);
+                Assert.DoesNotContain(id[^12..], visible, StringComparison.OrdinalIgnoreCase);
             }
         }
 
@@ -645,7 +665,7 @@ public sealed partial class ExternalOffersDriverPwaPlaywrightTests(DriverStopsNe
         /// </summary>
         internal async Task FinishAsync(params Offer[] offers)
         {
-            var needles = offers.SelectMany(offer => new[] { offer.Id, offer.OrderId }).Append("external-offers").ToArray();
+            var needles = offers.SelectMany(offer => new[] { offer.Id, offer.OrderId, offer.Guia }).Append("external-offers").ToArray();
             var stored = await page.EvaluateAsync<string[]>(
                 """
                 async needles => {

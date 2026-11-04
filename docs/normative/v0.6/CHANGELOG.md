@@ -1,5 +1,21 @@
 # Changelog
 
+## Ofertas externas: la tarjeta del repartidor muestra la guía (EXT-001-OFFER-GUIA-2026-11-04, AI-08 EXT-001) — 2026-11-04
+
+- Respuesta literal del project owner (ronda Z continuada, pregunta Z24, 2026-11-04), registrada en `decision-log.md` con
+  su contexto, el texto de la opción y la opción no elegida: Z24 "La guía (Recommended)".
+- AI-05: cada oferta de `listMyEligibleExternalOffers` es ahora `DriverExternalOffer`, la `ExternalOffer` más
+  `public_id`, la guía de su orden (`ORD_` y 22 caracteres Base64URL, el mismo formato del filtro `public_id` de
+  `listOrders`). `order_id` se queda para los clientes de la API que relacionan la oferta con su orden y con la
+  asignación que devuelve `acceptExternalOffer`; aceptar sigue usando `offerId`. `createExternalOffer` sigue respondiendo
+  `ExternalOffer`, y el evento `ExternalOfferChanged` no cambia.
+- AI-07: `external_driver_offers.must_show_before_accept` dice «la guía de la orden» y nunca el `order_id` interno.
+- API: el lector de Dispatch devuelve la guía que ya leía con cada oferta, en la misma lectura con RLS dentro de la
+  transacción del repartidor; no hay consulta nueva, escritura en otro esquema ni flujo atómico nuevo, y la guía nunca
+  se escribe en los logs.
+- App del repartidor: el parser exige `public_id` con el patrón de AI-05 y falla cerrado; la tarjeta «Oferta para orden»
+  muestra la guía en lugar del UUID. AI-08 no cambia. Sin migración.
+
 ## Bandeja: «Verificar identidad», chips de zona por sesión y orden del menú (UI-001-INBOX-MFA-ZONES-2026-11-03, AI-08 UI-001) — 2026-11-03
 
 - Respuestas literales del project owner (ronda Z continuada, preguntas Z19, Z20 y Z22, 2026-11-03), registradas en

@@ -260,7 +260,7 @@ public static partial class DispatchEndpoints
                 cursor,
                 cancellationToken);
             return Results.Ok(new ExternalOfferPageResponse(
-                page.Items.Select(ToResponse).ToArray(),
+                page.Items.Select(ToDriverResponse).ToArray(),
                 page.NextCursor));
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
@@ -670,6 +670,18 @@ public static partial class DispatchEndpoints
         result.AcceptedAt,
         result.Version);
 
+    /// <summary>EXT-001-OFFER-GUIA-2026-11-04: the AI-05 DriverExternalOffer, the offer and the guía of its order.</summary>
+    private static DriverExternalOfferResponse ToDriverResponse(DriverExternalOfferResult result) => new(
+        result.Offer.Id,
+        result.Offer.OrderId,
+        result.PublicId,
+        result.Offer.Status,
+        new MoneyResponse(result.Offer.Commission.Currency, result.Offer.Commission.AmountCents),
+        result.Offer.ExpiresAt,
+        result.Offer.AcceptedByDriverId,
+        result.Offer.AcceptedAt,
+        result.Offer.Version);
+
     private static bool TrySession(
         IOrganizationRequestSession session,
         ITenantContext tenantContext,
@@ -868,6 +880,21 @@ public sealed record ExternalOfferResponse(
     [property: JsonPropertyName("accepted_at")] DateTimeOffset? AcceptedAt,
     [property: JsonPropertyName("version")] int Version);
 
+/// <summary>
+/// EXT-001-OFFER-GUIA-2026-11-04: one item of listMyEligibleExternalOffers (AI-05 DriverExternalOffer) - the
+/// ExternalOffer and public_id, the guía of its order, which the driver's card shows in place of order_id.
+/// </summary>
+public sealed record DriverExternalOfferResponse(
+    [property: JsonPropertyName("id")] Guid Id,
+    [property: JsonPropertyName("order_id")] Guid OrderId,
+    [property: JsonPropertyName("public_id")] string PublicId,
+    [property: JsonPropertyName("status")] string Status,
+    [property: JsonPropertyName("commission")] MoneyResponse Commission,
+    [property: JsonPropertyName("expires_at")] DateTimeOffset ExpiresAt,
+    [property: JsonPropertyName("accepted_by_driver_id")] Guid? AcceptedByDriverId,
+    [property: JsonPropertyName("accepted_at")] DateTimeOffset? AcceptedAt,
+    [property: JsonPropertyName("version")] int Version);
+
 public sealed record ExternalOfferPageResponse(
-    [property: JsonPropertyName("items")] IReadOnlyList<ExternalOfferResponse> Items,
+    [property: JsonPropertyName("items")] IReadOnlyList<DriverExternalOfferResponse> Items,
     [property: JsonPropertyName("next_cursor")] string? NextCursor);
