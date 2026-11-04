@@ -114,6 +114,9 @@ AI-04 agrega la guarda `failed_attempt_dispatch_decides` a RESCHEDULED, DELIVERI
   que registró el despacho) y "Atender antes de" (`sla_due_at`, hora de Mazatlán). Lee la incidencia más reciente de la
   orden con `listIncidents?order_id=`; quien no puede leer incidencias (VIEWER, PLATFORM_ADMIN sin MFA) no ve la
   sección y "Siguiente paso" nunca depende de esa lectura. No muestra descripción, evidencias ni identificadores.
+  Z23 ("Releer con Actualizar"): la incidencia se vuelve a leer con cada lectura de la orden, "Actualizar" incluido,
+  aunque la versión no cambie, así que una lectura fallida se reintenta; mientras se relee, la sección conserva lo que
+  muestra hasta la respuesta.
 - "Siguiente paso": desde FAILED_ATTEMPT ofrece "Reprogramar", "Reintentar hoy" y "Regresar", cada uno solo si
   `allowed_transitions` lo lista, con motivo obligatorio, ConfirmDialog, Idempotency-Key reutilizada en reintentos y
   recarga de la orden. DELIVERING no se ofrece desde ningún otro estado.
