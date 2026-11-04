@@ -116,15 +116,23 @@ describe("operations page privacy policy", () => {
 
   it("shows why a failed attempt failed and who decides it (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11)", () => {
     const detail = readFileSync("src/operations/components/operations-order-detail-shell.tsx", "utf8");
+    // Z23 ("Releer con Actualizar"): the reason is read again with every read of the order, not only a new version.
     expect(detail).toContain(
-      "<OperationsFailedAttempt orderId={order.id} status={order.status} version={order.version} />",
+      "<OperationsFailedAttempt orderId={order.id} status={order.status} revision={state.orderRevision} />",
     );
     // The reason comes before the decision it explains.
     expect(detail.indexOf("<OperationsFailedAttempt")).toBeLessThan(detail.indexOf("<OperationsNextStep"));
 
     const panel = readFileSync("src/operations/components/operations-failed-attempt.tsx", "utf8");
     expect(panel).toContain("loadFailedAttempt(createIncidentsApi(apiBaseUrl, session), orderId, signal)");
-    expect(panel).toContain("[apiBaseUrl, orderId, status, version]");
+    expect(panel).toContain("[apiBaseUrl, orderId, status, revision]");
+    expect(panel).toContain("setState(failedAttemptReading);");
+    expect(panel).not.toContain("readonly version");
+    const hook = readFileSync("src/operations/state/use-operations-order-detail.ts", "utf8");
+    const apply = hook.slice(hook.indexOf("apply: (result) => {"), hook.indexOf("} catch (caught: unknown) {"));
+    expect(apply).toContain("setOrderRevision((value) => value + 1);");
+    // Only a read of the order moves it: the notices' own reloads do not.
+    expect(hook.split("setOrderRevision(").length - 1).toBe(1);
     const sources = [
       panel,
       readFileSync("src/operations/state/failed-attempt-loader.ts", "utf8"),

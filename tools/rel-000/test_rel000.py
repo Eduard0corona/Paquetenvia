@@ -8227,20 +8227,47 @@ class BracesKnownAdvisoryTests(unittest.TestCase):
 class MinimatchKnownAdvisoryTests(unittest.TestCase):
     """SEC-2026-16: minimatch GHSA-g3hv-75wg-m249 accepted as a tracked known advisory.
 
-    No minimatch 3.x or 10.x release patches the advisory and no dependent accepts minimatch 11,
-    so the owner accepted it (decision X1, "Aceptarlo como conocido", 2026-10-31) only on its
-    exact package, severity, the two installed versions 3.1.5 and 10.2.5, their exact lockfile
-    parents, its 96 development-only paths, the pinned lockfile and open Issue #324. Unlike
-    braces it resolves to two versions with several parents, so it declares the parent set of
-    each version (lock_parents) and REL-000 proves the package is outside the production graph
-    with the web image smoke's own module. Everything else fails closed.
+    No minimatch 3.x or 10.x release patched the advisory and no dependent accepted minimatch 11,
+    so the owner accepted it (decision X1, "Aceptarlo como conocido", 2026-10-31) on minimatch
+    3.1.5 and 10.2.5 and their 96 development-only paths. On 2026-11-04 GitHub narrowed it to
+    >=7.0.0 <11.0.1, and the owner narrowed the acceptance to exactly that (decision X3, "Ajustar
+    la aceptación"): its package, severity, the single installed version 10.2.5, its exact
+    lockfile parent @typescript-eslint/typescript-estree@8.64.0, its 11 development-only paths,
+    the pinned lockfile and open Issue #324. minimatch 3.1.5 stays in the lockfile outside the
+    advisory (unaffected_lock_versions). REL-000 proves the affected version is outside the
+    production graph with the web image smoke's own module. Everything else fails closed: the
+    X1 scope, 3.1.5 reported again, any other version, parent, range or count.
     """
 
     ADVISORY = "GHSA-g3hv-75wg-m249"
     LOCKFILE = "apps/web/pnpm-lock.yaml"
     # Sanitized pnpm 11.15.1 audit of the development lockfile (f944eecd), byte-for-byte what
-    # `rel000.py sanitize-audit` produces for the REL-000 base audit on 2026-10-31.
+    # `rel000.py sanitize-audit` produces for the REL-000 base audit since GitHub narrowed the
+    # advisory on 2026-11-04 (development a243e78e, PR #354 run 41924303312).
     REAL_DEVELOPMENT_BASE_AUDIT = {
+        "format_version": "paquetenvia-rel000-audit-v1",
+        "command_executed": True,
+        "command_exit_code": 1,
+        "parse_succeeded": True,
+        "totals": {"critical": 0, "high": 0, "moderate": 1, "low": 0, "total": 1},
+        "affected_packages": ["minimatch"],
+        "advisories": [
+            {
+                "advisory_id": "GHSA-g3hv-75wg-m249",
+                "package": "minimatch",
+                "installed_versions": ["10.2.5"],
+                "severity": "moderate",
+                "affected_range": ">=7.0.0 <11.0.1",
+                "patched_range": ">=11.0.1",
+                "direct_or_transitive": "transitive",
+                "dependency_path_count": 11,
+                "fix_available": True,
+                "fix_compatibility": "requires_compatibility_assessment",
+            }
+        ],
+    }
+    # The same audit before the narrowing (2026-10-31, decision X1): 3.1.5 and 10.2.5, 96 paths.
+    X1_DEVELOPMENT_BASE_AUDIT = {
         "format_version": "paquetenvia-rel000-audit-v1",
         "command_executed": True,
         "command_exit_code": 1,
@@ -8262,7 +8289,9 @@ class MinimatchKnownAdvisoryTests(unittest.TestCase):
             }
         ],
     }
-    # The 96 paths of the raw `pnpm audit --json` report for that lockfile (all `dev: true`).
+    # The 96 paths of the X1 raw `pnpm audit --json` report for that lockfile (all `dev: true`):
+    # 85 to 3.1.5, which the narrowed advisory no longer affects, and the 11 to 10.2.5 the audit
+    # still reports.
     MINIMATCH_3_1_5_AUDIT_PATHS = [
         ".>eslint>@eslint/config-array>minimatch",
         ".>eslint>@eslint/eslintrc>minimatch",
@@ -8366,6 +8395,20 @@ class MinimatchKnownAdvisoryTests(unittest.TestCase):
 
     @classmethod
     def real_raw_audit(cls) -> dict[str, Any]:
+        """The raw `pnpm audit --json` report since the narrowing: 10.2.5 and its 11 paths."""
+
+        raw = cls.x1_raw_audit()
+        advisory = raw["advisories"].pop("1244012")
+        advisory.update(
+            id=1244623,
+            vulnerable_versions=">=7.0.0 <11.0.1",
+            findings=[item for item in advisory["findings"] if item["version"] == "10.2.5"],
+        )
+        raw["advisories"]["1244623"] = advisory
+        return raw
+
+    @classmethod
+    def x1_raw_audit(cls) -> dict[str, Any]:
         return {
             "advisories": {
                 "1244012": {
@@ -8541,6 +8584,20 @@ class MinimatchKnownAdvisoryTests(unittest.TestCase):
             mutate(audit["advisories"][0])
         return audit
 
+    def x1_audit(self):
+        return copy.deepcopy(self.X1_DEVELOPMENT_BASE_AUDIT)
+
+    def x1_policy_value(self) -> dict[str, Any]:
+        """The repository policy as it stood before the narrowing: the X1 acceptance."""
+
+        value = copy.deepcopy(self.policy_value)
+        next(
+            item
+            for item in value["active_remediations"]
+            if item["id"] == rel000.MINIMATCH_KNOWN_ADVISORY_ID
+        )["accepted_known_advisory"] = copy.deepcopy(rel000.MINIMATCH_KNOWN_ADVISORY_X1)
+        return value
+
     @staticmethod
     def with_advisory(audit, advisory):
         audit = copy.deepcopy(audit)
@@ -8600,31 +8657,41 @@ class MinimatchKnownAdvisoryTests(unittest.TestCase):
         self.assertEqual(rel000.MINIMATCH_KNOWN_ADVISORY_AUTHORIZATION_FIELDS, set(authorization))
         self.assertEqual(rel000.MINIMATCH_KNOWN_ADVISORY, authorization["accepted_known_advisory"])
         accepted = authorization["accepted_known_advisory"]
+        # X3: exactly the narrowed advisory, 10.2.5 from 7.0.0 to before 11.0.1 and its 11 paths.
         self.assertEqual(
-            (self.ADVISORY, "minimatch", "moderate", ["10.2.5", "3.1.5"], 96, "dev"),
+            (
+                self.ADVISORY,
+                "minimatch",
+                "moderate",
+                ["10.2.5"],
+                ">=7.0.0 <11.0.1",
+                ">=11.0.1",
+                "transitive",
+                11,
+                "dev",
+            ),
             (
                 accepted["advisory_id"],
                 accepted["package"],
                 accepted["severity"],
                 accepted["installed_versions"],
+                accepted["affected_range"],
+                accepted["patched_range"],
+                accepted["direct_or_transitive"],
                 accepted["dependency_path_count"],
                 accepted["dependency_scope"],
             ),
         )
         self.assertEqual(
-            {
-                "3.1.5": [
-                    "@eslint/config-array@0.21.2",
-                    "@eslint/eslintrc@3.3.6",
-                    "eslint-plugin-import@2.32.0",
-                    "eslint-plugin-jsx-a11y@6.10.2",
-                    "eslint-plugin-react@7.37.5",
-                    "eslint@9.39.5",
-                ],
-                "10.2.5": ["@typescript-eslint/typescript-estree@8.64.0"],
-            },
-            accepted["lock_parents"],
+            {"10.2.5": ["@typescript-eslint/typescript-estree@8.64.0"]}, accepted["lock_parents"]
         )
+        self.assertEqual(["3.1.5"], accepted["unaffected_lock_versions"])
+        # Each field the audit reports is exactly what today's sanitized audit carries.
+        for field in rel000.KNOWN_ADVISORY_AUDIT_FIELDS:
+            with self.subTest(field=field):
+                self.assertEqual(
+                    self.REAL_DEVELOPMENT_BASE_AUDIT["advisories"][0][field], accepted[field]
+                )
         self.assertEqual(
             "f944eecd2b6dd09f39fbe06677be038e6e38bdbcaca901da330353f02f0b5aa4",
             accepted["expected_lockfile_sha256"],
@@ -8750,30 +8817,61 @@ class MinimatchKnownAdvisoryTests(unittest.TestCase):
             "accepted: another version added": lambda value: accepted(value)["installed_versions"].append(
                 "9.0.5"
             ),
-            "accepted: a version dropped": lambda value: accepted(value).update(
-                installed_versions=["3.1.5"]
+            "accepted: 3.1.5 back": lambda value: accepted(value).update(
+                installed_versions=["10.2.5", "3.1.5"]
             ),
+            "accepted: no version": lambda value: accepted(value).update(installed_versions=[]),
+            "accepted: only 3.1.5": lambda value: accepted(value).update(installed_versions=["3.1.5"]),
             "accepted: other version": lambda value: accepted(value).update(
-                installed_versions=["10.2.6", "3.1.5"]
+                installed_versions=["10.2.6"]
+            ),
+            "accepted: the X1 affected range": lambda value: accepted(value).update(
+                affected_range="<11.0.1"
             ),
             "accepted: other affected range": lambda value: accepted(value).update(
                 affected_range="<10.2.7"
+            ),
+            "accepted: affected from 8": lambda value: accepted(value).update(
+                affected_range=">=8.0.0 <11.0.1"
             ),
             "accepted: other patched range": lambda value: accepted(value).update(
                 patched_range=">=10.2.7"
             ),
             "accepted: direct": lambda value: accepted(value).update(direct_or_transitive="direct"),
-            "accepted: path count 95": lambda value: accepted(value).update(dependency_path_count=95),
-            "accepted: path count 97": lambda value: accepted(value).update(dependency_path_count=97),
+            "accepted: path count 10": lambda value: accepted(value).update(dependency_path_count=10),
+            "accepted: path count 12": lambda value: accepted(value).update(dependency_path_count=12),
+            "accepted: the X1 path count": lambda value: accepted(value).update(dependency_path_count=96),
             "accepted: production scope": lambda value: accepted(value).update(dependency_scope="prod"),
-            "accepted: extra parent": lambda value: accepted(value)["lock_parents"]["3.1.5"].append(
+            "accepted: extra parent": lambda value: accepted(value)["lock_parents"]["10.2.5"].append(
                 "glob@7.2.3"
             ),
-            "accepted: missing parent": lambda value: accepted(value)["lock_parents"]["3.1.5"].remove(
-                "eslint@9.39.5"
+            "accepted: missing parent": lambda value: accepted(value)["lock_parents"]["10.2.5"].remove(
+                "@typescript-eslint/typescript-estree@8.64.0"
+            ),
+            "accepted: other parent": lambda value: accepted(value)["lock_parents"].update(
+                {"10.2.5": ["@typescript-eslint/typescript-estree@8.72.1"]}
             ),
             "accepted: parent of another version": lambda value: accepted(value)["lock_parents"].update(
                 {"9.0.5": ["eslint@9.39.5"]}
+            ),
+            "accepted: the X1 parents of 3.1.5": lambda value: accepted(value)["lock_parents"].update(
+                {"3.1.5": copy.deepcopy(rel000.MINIMATCH_KNOWN_ADVISORY_X1["lock_parents"]["3.1.5"])}
+            ),
+            "accepted: no unaffected version": lambda value: accepted(value).pop("unaffected_lock_versions"),
+            "accepted: other unaffected version": lambda value: accepted(value).update(
+                unaffected_lock_versions=["3.1.4"]
+            ),
+            "accepted: another unaffected version": lambda value: accepted(value)[
+                "unaffected_lock_versions"
+            ].append("9.0.5"),
+            "accepted: 10.2.5 also unaffected": lambda value: accepted(value)[
+                "unaffected_lock_versions"
+            ].append("10.2.5"),
+            "accepted: the X1 exit": lambda value: accepted(value).update(
+                exit_condition=rel000.MINIMATCH_KNOWN_ADVISORY_X1["exit_condition"]
+            ),
+            "accepted: the X1 acceptance in the tree": lambda value: minimatch(value).update(
+                accepted_known_advisory=copy.deepcopy(rel000.MINIMATCH_KNOWN_ADVISORY_X1)
             ),
             "accepted: linear path": lambda value: accepted(value).update(
                 lock_path=["eslint@9.39.5", "minimatch@3.1.5"]
@@ -8887,8 +8985,14 @@ class MinimatchKnownAdvisoryTests(unittest.TestCase):
         smoke = graph.check(["minimatch@3.1.5", "minimatch@10.2.5"], manifest, lockfile)
         self.assertIn("minimatch@3.1.5: outside the production graph", smoke.problems)
         self.assertIn("minimatch@10.2.5: outside the production graph", smoke.problems)
-        # Every path starts at a development dependency, and the lockfile walk reproduces the
-        # audit's 96 paths exactly.
+        # Every path to the affected 10.2.5 starts at a development dependency, and the lockfile
+        # walk reproduces the audit's 11 paths exactly.
+        roots, paths = rel000.known_advisory_dev_paths(lockfile, "minimatch", 11, {"10.2.5"})
+        self.assertEqual({("devDependencies", "eslint-config-next")}, roots)
+        self.assertEqual(sorted(self.MINIMATCH_10_2_5_AUDIT_PATHS), sorted(paths))
+        self.assertEqual(11, len(self.MINIMATCH_10_2_5_AUDIT_PATHS))
+        # The lockfile still carries 3.1.5 and the 85 paths the narrowed advisory no longer
+        # counts: the walk over every version reproduces the X1 audit's 96.
         roots, paths = rel000.known_advisory_dev_paths(lockfile, "minimatch", 96)
         self.assertEqual(
             {("devDependencies", "eslint"), ("devDependencies", "eslint-config-next")}, roots
@@ -8898,15 +9002,23 @@ class MinimatchKnownAdvisoryTests(unittest.TestCase):
             sorted(paths),
         )
         self.assertEqual(85, len(self.MINIMATCH_3_1_5_AUDIT_PATHS))
-        self.assertEqual(11, len(self.MINIMATCH_10_2_5_AUDIT_PATHS))
+        _, paths = rel000.known_advisory_dev_paths(lockfile, "minimatch", 85, {"3.1.5"})
+        self.assertEqual(sorted(self.MINIMATCH_3_1_5_AUDIT_PATHS), sorted(paths))
 
     def test_real_audit_shape_is_what_the_sanitizer_produces(self):
-        (self.root / "raw.json").write_text(json.dumps(self.real_raw_audit()), encoding="utf-8")
-        rel000.sanitize_audit(self.root / "raw.json", self.root / "sanitized.json", True, 1)
-        self.assertEqual(
-            self.REAL_DEVELOPMENT_BASE_AUDIT,
-            json.loads((self.root / "sanitized.json").read_text(encoding="utf-8")),
-        )
+        for name, raw, expected in (
+            ("narrowed", self.real_raw_audit(), self.REAL_DEVELOPMENT_BASE_AUDIT),
+            ("X1", self.x1_raw_audit(), self.X1_DEVELOPMENT_BASE_AUDIT),
+        ):
+            with self.subTest(audit=name):
+                (self.root / f"raw-{name}.json").write_text(json.dumps(raw), encoding="utf-8")
+                rel000.sanitize_audit(
+                    self.root / f"raw-{name}.json", self.root / f"sanitized-{name}.json", True, 1
+                )
+                self.assertEqual(
+                    expected,
+                    json.loads((self.root / f"sanitized-{name}.json").read_text(encoding="utf-8")),
+                )
 
     def assert_lock_rejected(self, text: bytes, message: str) -> None:
         """Rejected by the validator itself and through the resolver, on the branch or base."""
@@ -8944,7 +9056,7 @@ class MinimatchKnownAdvisoryTests(unittest.TestCase):
             with self.subTest(case=name):
                 self.assert_lock_rejected(text, "resolves to a different version set")
         # Reported by the audit, another version breaks the exact audit identity.
-        for versions in (["10.2.5", "3.1.5", "9.0.5"], ["3.1.5"], ["10.2.6", "3.1.5"]):
+        for versions in (["10.2.5", "9.0.5"], ["9.0.5"], ["10.2.6"], ["3.1.5"]):
             with self.subTest(audit_versions=versions):
                 self.assert_reason(
                     "KNOWN_ADVISORY_SCOPE_INVALID",
@@ -8957,38 +9069,55 @@ class MinimatchKnownAdvisoryTests(unittest.TestCase):
 
     def test_extra_or_missing_parent_fails_closed(self):
         resolver_node = "  eslint-import-resolver-node@0.3.10(supports-color@7.2.0):\n    dependencies:\n"
-        cases = {
-            "extra parent": self.mutated_lock(
-                resolver_node, resolver_node + "      minimatch: 3.1.5\n"
-            ),
-            "extra parent of the other version": self.mutated_lock(
-                resolver_node, resolver_node + "      minimatch: 10.2.5\n"
-            ),
-            "missing parent": self.mutated_lock(
-                "      js-yaml: 4.3.2\n      minimatch: 3.1.5\n      strip-json-comments: 3.1.1\n",
-                "      js-yaml: 4.3.2\n      strip-json-comments: 3.1.1\n",
-            ),
-        }
-        for name, text in cases.items():
-            with self.subTest(case=name):
-                self.assert_lock_rejected(text, "parents changed")
+        # A new parent of the affected 10.2.5.
+        self.assert_lock_rejected(
+            self.mutated_lock(resolver_node, resolver_node + "      minimatch: 10.2.5\n"),
+            "parents changed",
+        )
         # Without its only parent, 10.2.5 is no longer linked at all.
         self.assert_lock_rejected(
             self.mutated_lock("      minimatch: 10.2.5\n", ""),
             "resolves to a different version set",
         )
+        # The parents of 3.1.5 are no longer part of the accepted graph, which the advisory no
+        # longer affects there; the pinned lockfile hash still refuses any change to them.
+        for name, text in {
+            "extra parent of 3.1.5": self.mutated_lock(
+                resolver_node, resolver_node + "      minimatch: 3.1.5\n"
+            ),
+            "missing parent of 3.1.5": self.mutated_lock(
+                "      js-yaml: 4.3.2\n      minimatch: 3.1.5\n      strip-json-comments: 3.1.1\n",
+                "      js-yaml: 4.3.2\n      strip-json-comments: 3.1.1\n",
+            ),
+        }.items():
+            with self.subTest(case=name):
+                rel000.validate_known_advisory_dev_graph(text, self.accepted_advisory())
+                self.assert_reason(
+                    "KNOWN_ADVISORY_LOCK_GRAPH_CHANGED",
+                    lambda: rel000.validate_known_advisory_lock_graph(
+                        text, self.accepted_advisory(), "branch"
+                    ),
+                )
 
     def test_production_path_fails_closed(self):
         signalr = "  '@microsoft/signalr@10.0.0':\n    dependencies:\n"
-        # The parents of minimatch stay exact, but a production package now links one of them.
+        estree = "      '@typescript-eslint/typescript-estree': 8.64.0(supports-color@7.2.0)(typescript@5.9.3)\n"
+        import yaml
+
+        graph = rel000.web_image_dependencies()
+        # The parent of 10.2.5 stays exact, but a production package now links it.
+        production = self.mutated_lock(signalr, signalr + estree)
+        self.assert_lock_rejected(production, "is in the production graph")
+        # The image smoke would ship it: the production graph reaches minimatch 10.2.5.
+        self.assertIn(
+            "minimatch@10.2.5", graph.production_graph(yaml.safe_load(production.decode("utf-8")))
+        )
+        # minimatch 3.1.5 in the production graph fails too, although the advisory no longer
+        # covers it: no version of the package may reach a production image.
         production = self.mutated_lock(
             signalr, signalr + "      '@eslint/eslintrc': 3.3.6(supports-color@7.2.0)\n"
         )
         self.assert_lock_rejected(production, "is in the production graph")
-        # The image smoke would ship it: the production graph reaches minimatch 3.1.5.
-        import yaml
-
-        graph = rel000.web_image_dependencies()
         reached = graph.production_graph(yaml.safe_load(production.decode("utf-8")))
         self.assertIn("minimatch@3.1.5", reached)
         # minimatch itself as a direct dependency of the importer.
@@ -8998,11 +9127,10 @@ class MinimatchKnownAdvisoryTests(unittest.TestCase):
             "        version: 3.1.5\n      '@types/node':\n",
         )
         self.assert_lock_rejected(direct, "became a direct dependency")
-        # A snapshot outside the importer graph linking one of its parents.
+        # A snapshot outside the importer graph linking the parent of 10.2.5.
         orphan = self.mutated_lock(
             "  '@eslint/js@9.39.5': {}\n",
-            "  '@eslint/js@9.39.5': {}\n\n  orphan@1.0.0:\n    dependencies:\n"
-            "      '@eslint/eslintrc': 3.3.6(supports-color@7.2.0)\n",
+            "  '@eslint/js@9.39.5': {}\n\n  orphan@1.0.0:\n    dependencies:\n" + estree,
         )
         self.assert_lock_rejected(orphan, "outside the importer graph")
 
@@ -9012,18 +9140,21 @@ class MinimatchKnownAdvisoryTests(unittest.TestCase):
             "supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3))(eslint@9.39.5("
             "supports-color@7.2.0))(supports-color@7.2.0)(typescript@5.9.3):\n    dependencies:\n"
         )
-        # A development-only edge adds one path; parents, versions and roots stay exact.
+        # A development-only edge adds one path to 10.2.5; parents, versions and roots stay exact.
         more = self.mutated_lock(
             eslint_config_next,
-            eslint_config_next + "      '@eslint/eslintrc': 3.3.6(supports-color@7.2.0)\n",
+            eslint_config_next
+            + "      '@typescript-eslint/typescript-estree': 8.64.0(supports-color@7.2.0)(typescript@5.9.3)\n",
         )
         import yaml
 
-        _, paths = rel000.known_advisory_dev_paths(yaml.safe_load(more.decode("utf-8")), "minimatch", 1000)
-        self.assertEqual(97, len(paths))
+        _, paths = rel000.known_advisory_dev_paths(
+            yaml.safe_load(more.decode("utf-8")), "minimatch", 1000, {"10.2.5"}
+        )
+        self.assertEqual(12, len(paths))
         self.assert_lock_rejected(more, "dependency path count changed")
-        # The audit reporting another count breaks the exact audit identity.
-        for count in (95, 97):
+        # The audit reporting another count breaks the exact audit identity, the X1 96 included.
+        for count in (10, 12, 96):
             for label, inputs in (
                 ("base", lambda count=count: {"base_audit": self.count_audit(count), "branch_audit": self.count_audit(count)}),
                 ("branch", lambda count=count: {"branch_audit": self.count_audit(count)}),
@@ -9095,11 +9226,11 @@ class MinimatchKnownAdvisoryTests(unittest.TestCase):
         cases = {
             "package": lambda item: item.update(package="brace-expansion"),
             "severity": lambda item: item.update(severity="low"),
-            "installed_versions": lambda item: item.update(installed_versions=["10.2.5"]),
-            "affected_range": lambda item: item.update(affected_range="<10.2.7"),
+            "installed_versions": lambda item: item.update(installed_versions=["10.2.5", "3.1.5"]),
+            "affected_range": lambda item: item.update(affected_range="<11.0.1"),
             "patched_range": lambda item: item.update(patched_range=">=10.2.7"),
             "direct_or_transitive": lambda item: item.update(direct_or_transitive="direct"),
-            "dependency_path_count": lambda item: item.update(dependency_path_count=69),
+            "dependency_path_count": lambda item: item.update(dependency_path_count=96),
         }
         self.assertEqual(set(rel000.KNOWN_ADVISORY_AUDIT_FIELDS), set(cases))
         for field, mutate in cases.items():
@@ -9120,6 +9251,168 @@ class MinimatchKnownAdvisoryTests(unittest.TestCase):
         higher["totals"].update(moderate=0, high=1)
         self.assert_reason(
             "KNOWN_ADVISORY_SCOPE_INVALID", lambda: self.normal(higher, higher)
+        )
+
+    def test_the_x1_wide_scope_is_refused_against_todays_audit(self):
+        """What PR #354 hit: the X1 acceptance against the narrowed audit fails closed, and so
+        does the narrowed acceptance against the X1 audit, should the advisory widen again."""
+
+        root, base = self.repo()
+        tracking = self.normal_tracking()
+        # The X1 policy, as development carried it, resolved without the tree's policy check.
+        x1_accepted = self.accepted(root, base, tracking, policy=self.x1_policy_value())
+        self.assertEqual(rel000.MINIMATCH_KNOWN_ADVISORY_X1, x1_accepted[0]["accepted"])
+        expected_fields = ["affected_range", "dependency_path_count", "installed_versions"]
+        for label, inputs in (
+            ("base", {"base_audit": self.real_audit(), "branch_audit": self.real_audit()}),
+            ("branch", {"base_audit": self.x1_audit(), "branch_audit": self.real_audit()}),
+        ):
+            with self.subTest(acceptance="X1", audit=label):
+                failure = self.assert_reason(
+                    "KNOWN_ADVISORY_SCOPE_INVALID", lambda: self.normal(accepted=x1_accepted, **inputs)
+                )
+                self.assertEqual(expected_fields, failure.details["fields"])
+                self.assertIn(label, failure.message)
+        for label, inputs in (
+            ("base", {"base_audit": self.x1_audit(), "branch_audit": self.x1_audit()}),
+            ("branch", {"base_audit": self.real_audit(), "branch_audit": self.x1_audit()}),
+        ):
+            with self.subTest(acceptance="narrowed", audit=label):
+                failure = self.assert_reason(
+                    "KNOWN_ADVISORY_SCOPE_INVALID", lambda: self.normal(**inputs)
+                )
+                self.assertEqual(expected_fields, failure.details["fields"])
+        # And the tree under test can no longer declare the X1 scope at all.
+        path = self.root / "x1-policy.json"
+        path.write_text(json.dumps(self.x1_policy_value()), encoding="utf-8")
+        self.assert_reason("REMEDIATION_POLICY_INVALID", lambda: rel000.load_remediation_policy(path))
+
+    def test_a_returning_3_1_5_fails_closed(self):
+        """3.1.5 reported by an audit again, alone or with the X1 range and count, fails closed."""
+
+        cases = {
+            "3.1.5 alongside": (
+                lambda item: item.update(installed_versions=["10.2.5", "3.1.5"]),
+                ["installed_versions"],
+            ),
+            "3.1.5 with its paths": (
+                lambda item: item.update(
+                    installed_versions=["10.2.5", "3.1.5"], dependency_path_count=96
+                ),
+                ["dependency_path_count", "installed_versions"],
+            ),
+            "only 3.1.5": (
+                lambda item: item.update(installed_versions=["3.1.5"], dependency_path_count=85),
+                ["dependency_path_count", "installed_versions"],
+            ),
+        }
+        for name, (mutate, fields) in cases.items():
+            audit = self.real_audit(mutate)
+            for label, inputs in (
+                ("base", {"base_audit": audit, "branch_audit": audit}),
+                ("branch", {"branch_audit": audit}),
+            ):
+                with self.subTest(case=name, audit=label):
+                    failure = self.assert_reason(
+                        "KNOWN_ADVISORY_SCOPE_INVALID", lambda: self.normal(**inputs)
+                    )
+                    self.assertEqual(fields, failure.details["fields"])
+        # 3.1.5 declared as affected without being affected in the lockfile graph is refused by
+        # the graph validator itself, before any audit: it has no accepted parents.
+        accepted = {
+            **self.accepted_advisory(),
+            "installed_versions": ["10.2.5", "3.1.5"],
+            "unaffected_lock_versions": [],
+        }
+        failure = self.assert_reason(
+            "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+            lambda: rel000.validate_known_advisory_dev_graph(self.lock(), accepted),
+        )
+        self.assertIn("resolves to a different version set", failure.message)
+        # Declared both affected and unaffected is refused too.
+        accepted = {**self.accepted_advisory(), "unaffected_lock_versions": ["10.2.5", "3.1.5"]}
+        self.assert_reason(
+            "KNOWN_ADVISORY_LOCK_PATH_INVALID",
+            lambda: rel000.validate_known_advisory_dev_graph(self.lock(), accepted),
+        )
+
+    def test_x1_acceptance_loads_only_in_a_base_policy_that_predates_the_narrowing(self):
+        """A tested base whose policy still carries the X1 acceptance judges dependency admissions
+        as before; the X1 acceptance is accepted there exactly, and nowhere else."""
+
+        x1 = self.x1_policy_value()
+        # The X1 constant is exactly what development recorded when #325 merged (974a11cf).
+        merged = json.loads(
+            subprocess.check_output(
+                ["git", "show", f"974a11cf9b5814cff0c83f9ca8e5de6ecbed08a9:{rel000.REMEDIATION_POLICY_PATH}"],
+                cwd=REPOSITORY_ROOT,
+            )
+        )
+        self.assertEqual(
+            rel000.MINIMATCH_KNOWN_ADVISORY_X1,
+            next(
+                item
+                for item in merged["active_remediations"]
+                if item["id"] == rel000.MINIMATCH_KNOWN_ADVISORY_ID
+            )["accepted_known_advisory"],
+        )
+        self.assertEqual(
+            self.policy()["dependency_admissions"],
+            rel000.validate_remediation_policy(copy.deepcopy(x1), base_policy=True)[
+                "dependency_admissions"
+            ],
+        )
+        self.assert_reason(
+            "REMEDIATION_POLICY_INVALID", lambda: rel000.validate_remediation_policy(copy.deepcopy(x1))
+        )
+        # The narrowed acceptance loads as a base too.
+        rel000.validate_remediation_policy(copy.deepcopy(self.policy_value), base_policy=True)
+
+        def x1_entry(value):
+            return next(
+                item
+                for item in value["active_remediations"]
+                if item["id"] == rel000.MINIMATCH_KNOWN_ADVISORY_ID
+            )["accepted_known_advisory"]
+
+        for name, mutate in {
+            "X1 with the narrowed versions": lambda value: x1_entry(value).update(
+                installed_versions=["10.2.5"]
+            ),
+            "X1 with the narrowed range": lambda value: x1_entry(value).update(
+                affected_range=">=7.0.0 <11.0.1"
+            ),
+            "X1 with another count": lambda value: x1_entry(value).update(dependency_path_count=95),
+            "X1 without a 3.1.5 parent": lambda value: x1_entry(value)["lock_parents"]["3.1.5"].pop(),
+            "X1 with the unaffected version": lambda value: x1_entry(value).update(
+                unaffected_lock_versions=["3.1.5"]
+            ),
+            "X1 with the narrowed exit": lambda value: x1_entry(value).update(
+                exit_condition=rel000.MINIMATCH_KNOWN_ADVISORY_EXIT_CONDITION
+            ),
+        }.items():
+            with self.subTest(base_policy=name):
+                value = copy.deepcopy(x1)
+                mutate(value)
+                self.assert_reason(
+                    "REMEDIATION_POLICY_INVALID",
+                    lambda: rel000.validate_remediation_policy(value, base_policy=True),
+                )
+        # Through the real reader: a base commit that carries the X1 policy still yields its
+        # admissions, which are the only thing a base policy decides.
+        root = Path(tempfile.mkdtemp(prefix="repo-x1-", dir=self.root))
+        policy_path = root / rel000.REMEDIATION_POLICY_PATH
+        policy_path.parent.mkdir(parents=True)
+        policy_path.write_text(json.dumps(x1), encoding="utf-8")
+        subprocess.run(["git", "init", "-q"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.email", "rel000@example.invalid"], cwd=root, check=True)
+        subprocess.run(["git", "config", "user.name", "REL-000 Tests"], cwd=root, check=True)
+        subprocess.run(["git", "add", "."], cwd=root, check=True)
+        subprocess.run(["git", "commit", "-qm", "x1 base"], cwd=root, check=True)
+        base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=root, text=True).strip()
+        self.assertEqual(
+            self.policy()["dependency_admissions"],
+            rel000.load_base_dependency_admissions(root, base),
         )
 
     def test_another_package_advisory_fails_closed(self):
@@ -9350,17 +9643,21 @@ class MinimatchKnownAdvisoryTests(unittest.TestCase):
     def test_exit_condition_records_the_owner_exit(self):
         exit_condition = self.accepted_advisory()["exit_condition"]
         self.assertEqual(rel000.MINIMATCH_KNOWN_ADVISORY_EXIT_CONDITION, exit_condition)
+        # X3: Issue #324 stays open until typescript-eslint accepts minimatch 11.
         for fragment in (
-            "patched minimatch 3.x or 10.x",
-            "accept minimatch>=11.0.1",
+            "typescript-eslint release accepts minimatch>=11.0.1",
+            "patched minimatch 10.x",
             "SEC-2026-15 (zod) route",
-            "withdraws or narrows GHSA-g3hv-75wg-m249",
+            "When GitHub withdraws GHSA-g3hv-75wg-m249",
             "SEC-2026-10 (braces)",
             "verify a zero audit",
             "retire this accepted known advisory",
             "close Issue #324",
         ):
             self.assertIn(fragment, exit_condition)
+        # The X1 exits that no longer apply: 3.x and its dependents, and a narrowing.
+        for fragment in ("3.x", "narrows", "eslint-plugin-react"):
+            self.assertNotIn(fragment, exit_condition)
 
     def test_fixture_and_both_workflows_bind_issue_branch_and_remediation(self):
         fixture = json.loads(

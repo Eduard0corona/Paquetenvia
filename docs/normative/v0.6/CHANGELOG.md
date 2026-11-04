@@ -16,6 +16,28 @@
 - App del repartidor: el parser exige `public_id` con el patrón de AI-05 y falla cerrado; la tarjeta «Oferta para orden»
   muestra la guía en lugar del UUID. AI-08 no cambia. Sin migración.
 
+## Aviso de minimatch acotado: la aceptación sigue al nuevo alcance (SEC-2026-16-MINIMATCH-NARROWED-2026-11-04) — 2026-11-04
+
+- Respuesta literal del project owner (ronda X continuada, pregunta X3, 2026-11-04), registrada en `decision-log.md` con
+  su contexto, el texto de la opción y la opción no elegida ("Esperar a la corrección"): X3 "Ajustar la aceptación
+  (Recommended)".
+- GitHub modificó `GHSA-g3hv-75wg-m249` el 2026-11-04 a las 17:01 UTC: ahora afecta `minimatch` desde 7.0.0 hasta antes
+  de 11.0.1. El audit de `apps/web` ya no reporta 3.1.5, sólo 10.2.5 con 11 rutas de desarrollo, y REL-000 fallaba
+  cerrado con `KNOWN_ADVISORY_SCOPE_INVALID` en todo PR que lo ejecuta (#354), porque la aceptación de X1 era exacta.
+- REL-000: la aceptación queda exactamente con el nuevo alcance. Cubre sólo `minimatch` 10.2.5, rango `>=7.0.0 <11.0.1`,
+  11 rutas y su único padre `@typescript-eslint/typescript-estree@8.64.0`. El lockfile (`f944eecd…`) no cambia, y la
+  autorización conserva su ID y su rama. La salida es una versión de typescript-eslint que acepte `minimatch>=11.0.1`, o
+  un 10.x corregido, por la ruta de SEC-2026-15; o el retiro del aviso por GitHub, como braces. Entonces se verifica el
+  audit en cero, se retira la aceptación y se cierra el Issue #324, que sigue abierto.
+- `minimatch` 3.1.5 sigue en el lockfile, ahora fuera del aviso. Si un audit vuelve a reportarlo, o reporta el rango o
+  el conteo de X1, cualquier otra versión, padre, rango, conteo o ruta de producción, REL-000 falla cerrado.
+- La aceptación de X1 se conserva exacta sólo para leer la política de una base anterior, que REL-000 usa únicamente
+  para las admisiones de dependencias.
+- Un solo PR a `development` con esta entrada y la fila del decision-log; `main` lo recibe en la próxima promoción.
+  Nota: `docs/development/rel-000-internal-release.md`.
+- Sin cambios en dependencias, lockfiles, `package.json`, workspace, overrides, flujos, código de la aplicación,
+  migraciones, AI-04, AI-05, AI-06, AI-12, AI-18, roles ni permisos.
+
 ## Bandeja: «Verificar identidad», chips de zona por sesión y orden del menú (UI-001-INBOX-MFA-ZONES-2026-11-03, AI-08 UI-001) — 2026-11-03
 
 - Respuestas literales del project owner (ronda Z continuada, preguntas Z19, Z20 y Z22, 2026-11-03), registradas en

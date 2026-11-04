@@ -33,7 +33,7 @@ The PostgreSQL contract suite starts 50 eligible Drivers behind one in-process g
 
 The audience is resolved with one bounded statement (`IDispatchDriverEligibilityReader.ReadExternalCandidatesAsync`, at most 501 rows, more than 500 fails closed) that selects active `EXTERNAL` profiles with active user and `DRIVER` membership together with their service-area flag and latest document per type. The C# policy (`ExternalOfferConstraints.Allows` + `DriverEligibilityPolicy.EvaluateExternal`) is unchanged; the PostgreSQL contract test `External_candidate_batch_read_is_equivalent_to_per_driver_reads` proves the batch snapshots equal the per-driver reads.
 
-SignalR is only an invalidation hint. Operations, Driver initial load, Driver reconnect and `ExternalOfferChanged` all return to REST. Operations adds the existing `publish_external_offer` action with explicit MXN commission, expiration and vehicle constraint. Driver displays the order's guía (`public_id`, never the internal order UUID; EXT-001-OFFER-GUIA-2026-11-04), commission and expiration before acceptance, protects the pending action from double clicks, reuses its idempotency key on retry and explains a lost race. A Driver without the EXTERNAL capability (for example an `OWN` Driver) receives `403` from `GET /driver/me/external-offers`; the Driver PWA treats it as "not applicable": the offers panel stays hidden, no error is shown and later realtime hints or reconnects do not poll again. “No me interesa” only removes the card from the current in-memory controller; it sends no request, persists nothing and can reappear after a reload or reconnect.
+SignalR is only an invalidation hint. Operations, Driver initial load, Driver reconnect and `ExternalOfferChanged` all return to REST. Operations adds the existing `publish_external_offer` action with explicit MXN commission, expiration and vehicle constraint. Its `Idempotency-Key` is reused only to resend the identical offer after a publish without a confirmation; a changed commission, expiration or vehicle gets a new key, and so does the next offer once the server confirmed one (owner decision Z25, "Corregirlo"). Driver displays the order's guía (`public_id`, never the internal order UUID; EXT-001-OFFER-GUIA-2026-11-04), commission and expiration before acceptance, protects the pending action from double clicks, reuses its idempotency key on retry and explains a lost race. A Driver without the EXTERNAL capability (for example an `OWN` Driver) receives `403` from `GET /driver/me/external-offers`; the Driver PWA treats it as "not applicable": the offers panel stays hidden, no error is shown and later realtime hints or reconnects do not poll again. “No me interesa” only removes the card from the current in-memory controller; it sends no request, persists nothing and can reappear after a reload or reconnect.
 
 ## Manual scenario
 
@@ -48,5 +48,14 @@ The scenario creates and advances a fresh synthetic order, publishes a 125.00 MX
 ## Rollback and limitations
 
 Application rollback is the normal deployment rollback plus the Notifications module Down migration, which removes only the new static routing entry and does not drop shared NTF-001 functions or data. Existing accepted assignments and audits are business evidence and are not deleted by application rollback.
+
+Known risk, accepted by the owner (Z26, "Anotarlo y dejarlo (Recommended)"): the driver offer list reads only the first page (50). `ExternalOffersController.refresh()` in `apps/web/src/driver/state/external-offers-controller.ts` calls `list()` once and does not follow `next_cursor`, so a Driver with more than 50 open offers sees only the first 50 the server returns. It is fixed if the pilot approaches that number. The decision, copied from the session record:
+
+> ## Z26 EXT-001 driver offer list first page only
+> Question: "Ofertas externas en la app: la lista solo lee la primera página del servidor (50 ofertas). En el piloto un repartidor difícilmente tendrá más de 50 ofertas abiertas a la vez. ¿Qué hacemos?"
+> Answer: "Anotarlo y dejarlo (Recommended)"
+> Option text: "Se anota como riesgo en la nota de EXT-001; se corrige si el piloto se acerca a ese número."
+> Not chosen:
+> - "Leer todas las páginas" ("Un PR que sigue el cursor hasta el final, con su prueba.")
 
 There is deliberately no scheduler, reject endpoint, durable dismiss, automatic commission calculation, ALLY_CAPACITY support or external provider integration. Expiration visibility is enforced from the database clock predicate; state materialization is lazy as described above. The local manual scenario and Testcontainers PostgreSQL suites require a working Docker runtime.

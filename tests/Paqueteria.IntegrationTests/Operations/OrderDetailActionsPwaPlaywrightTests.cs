@@ -200,10 +200,12 @@ public sealed partial class OrderDetailActionsPwaPlaywrightTests(DriverStopsNext
 
     /// <summary>
     /// AI-07 failed_attempt and next_step from FAILED_ATTEMPT, on a device in Tokyo: a failed read of the newest incident
-    /// says the reason could not be read and still offers the three decisions; once the order changed, the reason, "Lo
-    /// decide despacho" and the attention deadline in Mazatlán are shown, never the description, evidence or ids. The
-    /// dispatcher returns the package ("Regresar") or reschedules it ("Reprogramar") with the exact body; the order is
-    /// read again and the failed attempt goes with its status.
+    /// says the reason could not be read and still offers the three decisions. Z23 ("Releer con Actualizar"): every read
+    /// of the order reads the reason again, so "Actualizar" retries it although the order's version did not change; the
+    /// reason, "Lo decide despacho" and the attention deadline in Mazatlán are shown, never the description, evidence or
+    /// ids, and while it is read again the reason stays until the answer. The dispatcher returns the package
+    /// ("Regresar") or reschedules it ("Reprogramar") with the exact body; the order is read again and the failed attempt
+    /// goes with its status.
     /// </summary>
     [Theory]
     [Trait("Category", "OperationsDashboardPwa")]
@@ -257,20 +259,38 @@ public sealed partial class OrderDetailActionsPwaPlaywrightTests(DriverStopsNext
         await ExpectButtonsAsync(step, "Reprogramar", "Reintentar hoy", "Regresar");
         await ExpectStatusAsync(page, "Intento fallido");
 
-        // The order changed on the server (a newer version): it is read with "Actualizar" and the reason with it.
-        order.Version = 8;
-        await page.Locator("main header").GetByRole(AriaRole.Button, new() { Name = "Actualizar", Exact = true }).ClickAsync();
+        // Z23: "Actualizar" reads the order again, unchanged on the server (same version), and the reason with it.
+        var refresh = page.Locator("main header").GetByRole(AriaRole.Button, new() { Name = "Actualizar", Exact = true });
+        string[] reason = ["Motivo: Dirección incorrecta", "Siguiente paso: Lo decide despacho", "Atender antes de: 2 nov 2026, 23:30"];
+        await refresh.ClickAsync();
         await ExpectListAsync(
             () => failed.Locator("dl[aria-label='Intento fallido']").EvaluateAsync<string[]>(DescriptionListScript),
-            ["Motivo: Dirección incorrecta", "Siguiente paso: Lo decide despacho", "Atender antes de: 2 nov 2026, 23:30"],
+            reason,
             "the failed attempt");
         await ExpectTextAsync(failed.Locator("p.noticeInfo[role=status]"),
             "El repartidor reportó el intento. Despacho decide cómo sigue la orden en «Siguiente paso».");
+        Assert.Equal(7, order.Version);
+        Assert.Equal(2, api.OrderReads(OrganizationA).Length);
         Assert.Equal(
             new[] { $"order_id={order.Id}", $"order_id={order.Id}" },
             api.Calls(OrganizationA, "GET", "/api/v1/incidents").Select(call => call.Query));
         await ExpectButtonsAsync(step, "Reprogramar", "Reintentar hoy", "Regresar");
         await AssertNoIdentifiersAsync(page);
+
+        // Another read of the order reads the reason again; until it answers, the reason stays and nothing says loading.
+        api.HoldIncidents();
+        await refresh.ClickAsync();
+        await WaitForAsync(() => api.Calls(OrganizationA, "GET", "/api/v1/incidents").Length == 3,
+            "the reason was not read again with the order");
+        Assert.Equal(3, api.OrderReads(OrganizationA).Length);
+        Assert.Equal(reason, await failed.Locator("dl[aria-label='Intento fallido']").EvaluateAsync<string[]>(DescriptionListScript));
+        Assert.Equal(0, await failed.GetByText("Cargando el motivo…").CountAsync());
+        api.ReleaseIncidents();
+        await WaitForAsync(() => api.IncidentsAnswered == 3, "the held read of the reason was not answered");
+        await ExpectListAsync(
+            () => failed.Locator("dl[aria-label='Intento fallido']").EvaluateAsync<string[]>(DescriptionListScript),
+            reason,
+            "the failed attempt after it was read again");
 
         // Dispatch decides with a reason and a confirmation that names the order and the decision.
         await step.GetByRole(AriaRole.Button, new() { Name = label, Exact = true }).ClickAsync();
@@ -294,9 +314,15 @@ public sealed partial class OrderDetailActionsPwaPlaywrightTests(DriverStopsNext
         var transition = Assert.Single(api.Transitions(OrganizationA));
         Assert.Matches(TransitionKeyPattern(), transition.IdempotencyKey ?? string.Empty);
         Assert.Equal(
-            JsonSerializer.Serialize(new { target_status = target, reason = "Despacho decidió tras llamar al remitente", expected_version = 8 }, BrowserJson),
+            JsonSerializer.Serialize(new { target_status = target, reason = "Despacho decidió tras llamar al remitente", expected_version = 7 }, BrowserJson),
             transition.Body);
-        Assert.Equal(2, api.Calls(OrganizationA, "GET", "/api/v1/incidents").Length);
+        // One read of the reason with each read of the order while it was FAILED_ATTEMPT, and none after the decision.
+        var readsWhileFailed = api.OrderReads(OrganizationA).Count(call => call.At < transition.At);
+        Assert.True(readsWhileFailed >= 3, $"{readsWhileFailed} reads of the order before the decision");
+        Assert.Equal(
+            Enumerable.Repeat($"order_id={order.Id}", readsWhileFailed),
+            api.Calls(OrganizationA, "GET", "/api/v1/incidents").Select(call => call.Query));
+        Assert.Contains(api.OrderReads(OrganizationA), call => call.At > transition.At);
         AssertOrderReadsAreExact(api, OrganizationA, order.Id);
 
         await AssertNoIdentifiersAsync(page);
@@ -1261,12 +1287,35 @@ public sealed partial class OrderDetailActionsPwaPlaywrightTests(DriverStopsNext
         private readonly List<DetailCall> _calls = [];
         private readonly List<DetailOrder> _orders = [];
         private int _dashboardTooManyRequests;
+        private int _incidentsAnswered;
+        private TaskCompletionSource? _incidentHold;
         private bool _stopped;
 
         internal ConcurrentQueue<Answer> TransitionAnswers { get; } = new();
         internal ConcurrentQueue<Answer> AssignmentAnswers { get; } = new();
         internal ConcurrentQueue<Answer> IncidentAnswers { get; } = new();
         internal ConcurrentQueue<Answer> StopAnswers { get; } = new();
+
+        /// <summary>How many reads of the incidents were answered.</summary>
+        internal int IncidentsAnswered => Volatile.Read(ref _incidentsAnswered);
+
+        /// <summary>From now on, a read of the incidents waits for <see cref="ReleaseIncidents"/> before it answers.</summary>
+        internal void HoldIncidents()
+        {
+            lock (_gate) _incidentHold = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        }
+
+        internal void ReleaseIncidents()
+        {
+            TaskCompletionSource? hold;
+            lock (_gate)
+            {
+                hold = _incidentHold;
+                _incidentHold = null;
+            }
+
+            hold?.TrySetResult();
+        }
 
         /// <summary>The driver list from its second read on, one per read; the last one stays.</summary>
         internal ConcurrentQueue<object[]> DriverListsAfterFirst { get; } = new();
@@ -1490,6 +1539,19 @@ public sealed partial class OrderDetailActionsPwaPlaywrightTests(DriverStopsNext
         }
 
         private async Task IncidentsAsync(IRoute route, DetailCall call, bool operations)
+        {
+            if (Locked(() => _incidentHold) is { } hold) await hold.Task;
+            try
+            {
+                await AnswerIncidentsAsync(route, call, operations);
+            }
+            finally
+            {
+                Interlocked.Increment(ref _incidentsAnswered);
+            }
+        }
+
+        private async Task AnswerIncidentsAsync(IRoute route, DetailCall call, bool operations)
         {
             var query = System.Web.HttpUtility.ParseQueryString(call.Query);
             if (!operations)
