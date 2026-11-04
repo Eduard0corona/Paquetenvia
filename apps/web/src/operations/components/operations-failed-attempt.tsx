@@ -9,6 +9,7 @@ import type { OrderStatus } from "../contracts/operations-dashboard";
 import { failedAttemptPendingNote } from "../contracts/failed-attempt";
 import { readOperationsSession } from "../session/operations-session";
 import {
+  failedAttemptReading,
   failedAttemptUnavailableMessage,
   loadFailedAttempt,
   type FailedAttemptState,
@@ -17,19 +18,21 @@ import {
 /**
  * INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11 (AI-07 /ops/orders/:id failed_attempt): an
  * order in FAILED_ATTEMPT shows why the attempt failed, whether dispatch still has to decide
- * and until when to attend it. It is read again whenever the order changes (status or version);
- * the decision itself is taken in "Siguiente paso".
+ * and until when to attend it. Z23 ("Releer con Actualizar"): it is read again with every read of the order the screen
+ * applies (`revision`), "Actualizar" included, even when the order's version did not change, so a failed read is retried.
+ * While it is read again, what it shows stays until the answer. The decision itself is taken in "Siguiente paso".
  * Z17: it reads the session once, when it mounts. The order detail owns the session and unmounts it as soon as the
  * organization changes, so it never reads this order under another organization.
  */
 export function OperationsFailedAttempt({
   orderId,
   status,
-  version,
+  revision,
 }: {
   readonly orderId: string;
   readonly status: OrderStatus;
-  readonly version: number;
+  /** Grows with every read of the order the screen applies. */
+  readonly revision: number;
 }) {
   const apiBaseUrl = clientApiBaseUrl();
   const [state, setState] = useState<FailedAttemptState>({ kind: "hidden" });
@@ -50,7 +53,7 @@ export function OperationsFailedAttempt({
         setState({ kind: "hidden" });
         return;
       }
-      setState({ kind: "loading" });
+      setState(failedAttemptReading);
       void loadFailedAttempt(createIncidentsApi(apiBaseUrl, session), orderId, signal).then((next) => {
         if (!signal.aborted) setState(next);
       });
@@ -60,7 +63,7 @@ export function OperationsFailedAttempt({
       clearTimeout(timer);
       abort.abort();
     };
-  }, [apiBaseUrl, orderId, status, version]);
+  }, [apiBaseUrl, orderId, status, revision]);
 
   if (state.kind === "hidden") return null;
 

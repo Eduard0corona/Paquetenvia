@@ -57,6 +57,8 @@ export interface OperationsOrderDetailState {
   readonly error: string | null;
   readonly connection: string;
   readonly lastUpdated: Date | null;
+  /** Z23: grows with every read of the order the screen applies; the failed-attempt reason is read again with it. */
+  readonly orderRevision: number;
   /** Grows each time the panel "Avisos al destinatario" should be read again (each read of the order included). */
   readonly noticesRevision: number;
   refresh(): void;
@@ -78,6 +80,7 @@ export function useOperationsOrderDetail(
   const [error, setError] = useState<string | null>(null);
   const [connectionState, setConnectionState] = useState("Sin sesión");
   const [lastUpdated, setLastUpdated] = useState<Date | null>(null);
+  const [orderRevision, setOrderRevision] = useState(0);
   const [noticesRevision, setNoticesRevision] = useState(0);
   const apiRef = useRef<OperationsDashboardApi | null>(null);
   const sessionRef = useRef<OperationsSession | null>(null);
@@ -140,6 +143,8 @@ export function useOperationsOrderDetail(
             setAccessUnavailable(false);
             setError(null);
             setLastUpdated(new Date(result.generatedAt));
+            // Z23: the failed-attempt reason is read again with every read of the order.
+            setOrderRevision((value) => value + 1);
             // T6 choice 9: the panel is read with every read of the order.
             setNoticesRevision((value) => value + 1);
           },
@@ -331,6 +336,7 @@ export function useOperationsOrderDetail(
     error,
     connection: connectionState,
     lastUpdated,
+    orderRevision,
     noticesRevision,
     refresh: () => {
       const api = apiRef.current;

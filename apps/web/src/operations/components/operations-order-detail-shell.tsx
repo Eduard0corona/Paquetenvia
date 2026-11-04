@@ -158,7 +158,7 @@ export function OperationsOrderDetailShell({
         </p>
       )}
 
-      <OperationsFailedAttempt orderId={order.id} status={order.status} version={order.version} />
+      <OperationsFailedAttempt orderId={order.id} status={order.status} revision={state.orderRevision} />
 
       <OperationsNextStep
         orderId={order.id}

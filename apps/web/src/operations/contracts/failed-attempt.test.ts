@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { IncidentsApi } from "../api/incidents-api";
 import { TenantApiError, type TenantApiErrorCategory } from "../api/tenant-request";
-import { loadFailedAttempt } from "../state/failed-attempt-loader";
+import { failedAttemptReading, loadFailedAttempt } from "../state/failed-attempt-loader";
 import { failedAttemptPendingNote, failedAttemptView } from "./failed-attempt";
 import { parseIncident, type IncidentPage } from "./incident";
 import { incidentResponse, orderId, syntheticUuid } from "./ui-001-screens.fixtures";
@@ -82,5 +82,35 @@ describe("failed attempt loader", () => {
 
   it("shows nothing when the order has no incident", async () => {
     expect(await loadFailedAttempt(api({ items: [], next_cursor: null }), orderId)).toEqual({ kind: "hidden" });
+  });
+
+  // Z23: the reason is read again with every read of the order; what the panel shows stays until the answer.
+  it("says it is loading only when the panel shows nothing yet", () => {
+    expect(failedAttemptReading({ kind: "hidden" })).toEqual({ kind: "loading" });
+    expect(failedAttemptReading({ kind: "loading" })).toEqual({ kind: "loading" });
+  });
+
+  it("keeps a failed read or the reason on screen while it is read again", async () => {
+    const unavailable = await loadFailedAttempt(api("network"), orderId);
+    expect(failedAttemptReading(unavailable)).toBe(unavailable);
+    const ready = await loadFailedAttempt(api({ items: [reported], next_cursor: null }), orderId);
+    expect(failedAttemptReading(ready)).toBe(ready);
+  });
+
+  it("retries a failed read when it is read again with the same order", async () => {
+    const calls: unknown[] = [];
+    const answers: Array<IncidentPage | TenantApiErrorCategory> = ["network", { items: [reported], next_cursor: null }];
+    const retried: Pick<IncidentsApi, "list"> = {
+      list: async (filter, cursor) => {
+        calls.push([filter, cursor]);
+        const answer = answers.shift();
+        if (answer === undefined) throw new Error("unexpected read");
+        if (typeof answer === "string") throw new TenantApiError(answer);
+        return answer;
+      },
+    };
+    expect(await loadFailedAttempt(retried, orderId)).toEqual({ kind: "unavailable" });
+    expect(await loadFailedAttempt(retried, orderId)).toEqual({ kind: "ready", view: failedAttemptView([reported]) });
+    expect(calls).toEqual([[{ orderId }, null], [{ orderId }, null]]);
   });
 });
