@@ -75,6 +75,12 @@ public sealed class DispatchImplementationContractTests
             "accepted_at", "accepted_by_driver_id", "commission", "expires_at", "id",
             "order_id", "status", "version");
         AssertJsonProperties<ExternalOfferPageResponse>("items", "next_cursor");
+        AssertJsonProperties<DriverExternalOfferResponse>(
+            "accepted_at", "accepted_by_driver_id", "commission", "expires_at", "id",
+            "order_id", "public_id", "status", "version");
+        Assert.Equal(
+            typeof(IReadOnlyList<DriverExternalOfferResponse>),
+            typeof(ExternalOfferPageResponse).GetProperty(nameof(ExternalOfferPageResponse.Items))!.PropertyType);
         AssertJsonProperties<AssignableDriverResponse>(
             "active_assignment_count", "driver_id", "driver_reference", "eligible", "ineligibility_reasons",
             "vehicle_type");
@@ -411,6 +417,71 @@ public sealed class DispatchImplementationContractTests
             lastPosition.Sequence("type").Children.Cast<YamlScalarNode>().Select(value => value.Value));
         Assert.Equal("date-time", lastPosition.Scalar("format"));
         Assert.Equal(["items", "next_cursor"], RequiredPropertyNames(schemas.Mapping("OrganizationDriverPage")));
+    }
+
+    /// <summary>
+    /// EXT-001-OFFER-GUIA-2026-11-04 (Z24 "La guía (Recommended)"): listMyEligibleExternalOffers answers each offer as
+    /// DriverExternalOffer - ExternalOffer plus the required public_id in the listOrders public_id format - and the
+    /// implemented item carries exactly those members; createExternalOffer still answers ExternalOffer.
+    /// </summary>
+    [Fact]
+    public void AI05_driver_external_offer_carries_the_guia_and_matches_the_implemented_item()
+    {
+        var root = YamlNodes.LoadMapping(RepositoryPaths.Normative("contracts", "AI-05_OPENAPI.yaml"));
+        var schemas = root.Mapping("components").Mapping("schemas");
+        var list = root.Mapping("paths").Mapping("/driver/me/external-offers").Mapping("get");
+        Assert.Equal("listMyEligibleExternalOffers", list.Scalar("operationId"));
+        Assert.Contains(
+            "EXT-001-OFFER-GUIA-2026-11-04",
+            list.Scalar("description"),
+            StringComparison.Ordinal);
+        Assert.Equal(
+            "#/components/schemas/ExternalOfferPage",
+            list.Mapping("responses").Mapping("200").Mapping("content").Mapping("application/json")
+                .Mapping("schema").Scalar("$ref"));
+        var page = schemas.Mapping("ExternalOfferPage");
+        Assert.Equal(["items", "next_cursor"], RequiredPropertyNames(page));
+        Assert.Equal(
+            "#/components/schemas/DriverExternalOffer",
+            page.Mapping("properties").Mapping("items").Mapping("items").Scalar("$ref"));
+        var create = root.Mapping("paths").Mapping("/external-offers").Mapping("post");
+        Assert.Equal(
+            "#/components/schemas/ExternalOffer",
+            create.Mapping("responses").Mapping("201").Mapping("content").Mapping("application/json")
+                .Mapping("schema").Scalar("$ref"));
+
+        var driverOffer = schemas.Mapping("DriverExternalOffer");
+        Assert.Contains("EXT-001-OFFER-GUIA-2026-11-04", driverOffer.Scalar("description"), StringComparison.Ordinal);
+        var parts = driverOffer.Sequence("allOf").Children.Cast<YamlMappingNode>().ToArray();
+        Assert.Equal(2, parts.Length);
+        Assert.Equal("#/components/schemas/ExternalOffer", parts[0].Scalar("$ref"));
+        Assert.Equal(["public_id"], RequiredPropertyNames(parts[1]));
+        var publicId = parts[1].Mapping("properties").Mapping("public_id");
+        Assert.Equal("string", publicId.Scalar("type"));
+        var listOrdersPublicId = root.Mapping("paths").Mapping("/orders").Mapping("get").Sequence("parameters")
+            .Children.OfType<YamlMappingNode>()
+            .Single(parameter => parameter.Children.TryGetValue(new YamlScalarNode("name"), out var name) &&
+                name is YamlScalarNode { Value: "public_id" });
+        Assert.Equal("^ORD_[A-Za-z0-9_-]{22}$", publicId.Scalar("pattern"));
+        Assert.Equal(listOrdersPublicId.Mapping("schema").Scalar("pattern"), publicId.Scalar("pattern"));
+        Assert.Contains(
+            "Order.public_id, ORD_ followed by 22 Base64URL characters, case sensitive",
+            publicId.Scalar("description").ReplaceLineEndings(" "),
+            StringComparison.Ordinal);
+
+        var offer = schemas.Mapping("ExternalOffer");
+        Assert.Equal(
+            ["commission", "expires_at", "id", "order_id", "public_id", "status", "version"],
+            RequiredPropertyNames(offer).Append("public_id").Order(StringComparer.Ordinal));
+        var contracted = offer.Mapping("properties").Children.Keys
+            .Concat(parts[1].Mapping("properties").Children.Keys)
+            .Cast<YamlScalarNode>()
+            .Select(value => value.Value!)
+            .Order(StringComparer.Ordinal)
+            .ToArray();
+        AssertJsonProperties<DriverExternalOfferResponse>(contracted);
+        Assert.DoesNotContain("public_id", offer.Mapping("properties").Children.Keys.Cast<YamlScalarNode>()
+            .Select(value => value.Value), StringComparer.Ordinal);
     }
 
     /// <summary>

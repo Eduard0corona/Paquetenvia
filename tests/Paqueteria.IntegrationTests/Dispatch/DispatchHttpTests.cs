@@ -727,6 +727,8 @@ public sealed class DispatchHttpTests : IClassFixture<DispatchHttpWebApplication
         Assert.Equal(HttpStatusCode.OK, listed.StatusCode);
         var listBody = await listed.Content.ReadAsStringAsync();
         Assert.Contains(offerId.ToString("D"), listBody, StringComparison.Ordinal);
+        Assert.Contains(
+            $"\"public_id\":\"{DispatchHttpWebApplicationFactory.ExternalOfferGuia}\"", listBody, StringComparison.Ordinal);
         Assert.DoesNotContain("driver_id", list.RequestUri!.Query, StringComparison.OrdinalIgnoreCase);
 
         using var accept = ExternalOfferRequest(
@@ -739,6 +741,60 @@ public sealed class DispatchHttpTests : IClassFixture<DispatchHttpWebApplication
         using var acceptedJson = JsonDocument.Parse(await accepted.Content.ReadAsStringAsync());
         Assert.Equal("ACCEPTED", acceptedJson.RootElement.GetProperty("status").GetString());
         Assert.Equal(12_345, acceptedJson.RootElement.GetProperty("cost").GetProperty("amount_cents").GetInt64());
+    }
+
+    /// <summary>
+    /// EXT-001-OFFER-GUIA-2026-11-04 (Z24 "La guía (Recommended)"): each item of listMyEligibleExternalOffers is the
+    /// AI-05 DriverExternalOffer - the offer and the guía of its order (public_id) - with exactly those members, while
+    /// createExternalOffer still answers ExternalOffer. Under an organization the driver does not belong to, the read
+    /// is the same 403, the service is never called and no offer or guía is returned.
+    /// </summary>
+    [Fact]
+    public async Task EXT001_list_returns_the_guia_of_each_offer_and_nothing_under_another_organization()
+    {
+        var orderId = Guid.NewGuid();
+        using var create = ExternalOfferCreateRequest(orderId, Key(), DateTimeOffset.UtcNow.AddHours(1));
+        using var created = await client.SendAsync(create);
+        Assert.Equal(HttpStatusCode.Created, created.StatusCode);
+        using var createdJson = JsonDocument.Parse(await created.Content.ReadAsStringAsync());
+        var offerId = createdJson.RootElement.GetProperty("id").GetGuid();
+        Assert.False(createdJson.RootElement.TryGetProperty("public_id", out _));
+
+        using var list = ExternalOfferRequest(HttpMethod.Get, "/api/v1/driver/me/external-offers", MockIdentityProfiles.ExternalDriver);
+        using var listed = await client.SendAsync(list);
+        Assert.Equal(HttpStatusCode.OK, listed.StatusCode);
+        using var listJson = JsonDocument.Parse(await listed.Content.ReadAsStringAsync());
+        Assert.Equal(
+            ["items", "next_cursor"],
+            listJson.RootElement.EnumerateObject().Select(value => value.Name).Order(StringComparer.Ordinal));
+        var item = Assert.Single(
+            listJson.RootElement.GetProperty("items").EnumerateArray(),
+            value => value.GetProperty("id").GetGuid() == offerId);
+        Assert.Equal(
+            [
+                "accepted_at", "accepted_by_driver_id", "commission", "expires_at", "id", "order_id", "public_id",
+                "status", "version",
+            ],
+            item.EnumerateObject().Select(value => value.Name).Order(StringComparer.Ordinal));
+        var guia = item.GetProperty("public_id").GetString();
+        Assert.Equal(DispatchHttpWebApplicationFactory.ExternalOfferGuia, guia);
+        Assert.Matches("^ORD_[A-Za-z0-9_-]{22}$", guia);
+        Assert.Equal(orderId, item.GetProperty("order_id").GetGuid());
+        Assert.Equal("OPEN", item.GetProperty("status").GetString());
+
+        var reads = factory.ExternalOfferReads;
+        using var foreign = ExternalOfferRequest(
+            HttpMethod.Get,
+            "/api/v1/driver/me/external-offers",
+            MockIdentityProfiles.ExternalDriver,
+            organizationId: MockIdentityProfiles.ForeignOrganizationId);
+        using var foreignResponse = await client.SendAsync(foreign);
+        Assert.Equal(HttpStatusCode.Forbidden, foreignResponse.StatusCode);
+        var foreignBody = await foreignResponse.Content.ReadAsStringAsync();
+        Assert.DoesNotContain("public_id", foreignBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(DispatchHttpWebApplicationFactory.ExternalOfferGuia, foreignBody, StringComparison.Ordinal);
+        Assert.DoesNotContain(offerId.ToString("D"), foreignBody, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(reads, factory.ExternalOfferReads);
     }
 
     [Fact]
@@ -844,13 +900,14 @@ public sealed class DispatchHttpTests : IClassFixture<DispatchHttpWebApplication
         HttpMethod method,
         string path,
         string profile,
-        string? key = null)
+        string? key = null,
+        Guid? organizationId = null)
     {
         var request = new HttpRequestMessage(method, path);
         request.Headers.Authorization = new AuthenticationHeaderValue("Bearer", profile);
         request.Headers.Add(
             "X-Organization-Id",
-            MockIdentityProfiles.ViewerOrganizationId.ToString("D"));
+            (organizationId ?? MockIdentityProfiles.ViewerOrganizationId).ToString("D"));
         if (key is not null) request.Headers.TryAddWithoutValidation("Idempotency-Key", key);
         return request;
     }

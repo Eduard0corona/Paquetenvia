@@ -191,7 +191,7 @@ public sealed class PostgreSqlExternalOfferService(
                     cursorCreatedAt, cursorId, now, token);
                 var rowsToScan = candidates.Take(MaximumScanSize).ToArray();
                 var snapshots = new Dictionary<(Guid CityId, Guid? ServiceAreaId), DriverEligibilitySnapshot?>();
-                var results = new List<ExternalOfferResult>(PageSize);
+                var results = new List<DriverExternalOfferResult>(PageSize);
                 ExternalOfferCandidate? lastScanned = null;
                 foreach (var candidate in rowsToScan)
                 {
@@ -239,7 +239,9 @@ public sealed class PostgreSqlExternalOfferService(
                         continue;
                     }
 
-                    results.Add(candidate.Offer);
+                    // EXT-001-OFFER-GUIA-2026-11-04: the guía comes from the candidate's own RLS-scoped join of
+                    // orders.orders in this tenant transaction; no other read is made and it is never logged.
+                    results.Add(new DriverExternalOfferResult(candidate.Offer, candidate.Order.PublicId));
                     if (results.Count == PageSize)
                     {
                         break;
