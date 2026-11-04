@@ -152,10 +152,13 @@
     },
     {
       "screen": "/avisos/baja/:token",
-      "status": "GAP",
-      "suites": [],
-      "owner_task": "NTF-006",
-      "reason": "The recipient opt-out page has Vitest coverage only (Z2)."
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "public-tracking",
+          "test": "Paqueteria.IntegrationTests.Notifications.RecipientUnsubscribePwaPlaywrightTests"
+        }
+      ]
     },
     {
       "screen": "/finance/settlements",
