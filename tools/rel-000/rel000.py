@@ -181,20 +181,46 @@ MINIMATCH_KNOWN_ADVISORY_ISSUE_TITLE = (
     "SEC-2026-16: track minimatch globparts advisory until a compatible patched release ships"
 )
 MINIMATCH_KNOWN_ADVISORY_EXIT_CONDITION = (
-    "When a patched minimatch 3.x or 10.x is published on npm, or the dependents (eslint, "
-    "@eslint/config-array, @eslint/eslintrc, eslint-plugin-import, eslint-plugin-jsx-a11y, "
-    "eslint-plugin-react and @typescript-eslint/typescript-estree) accept minimatch>=11.0.1: "
-    "remediate it through the SEC-2026-15 (zod) route. When GitHub withdraws or narrows "
-    "GHSA-g3hv-75wg-m249: retire this acceptance as SEC-2026-10 (braces) was retired. Then "
-    "verify a zero audit, retire this accepted known advisory and close Issue #324."
+    "When a typescript-eslint release accepts minimatch>=11.0.1 (@typescript-eslint/typescript-estree "
+    "8.72.1 still requires ^10.2.2) or a patched minimatch 10.x is published on npm: remediate it "
+    "through the SEC-2026-15 (zod) route. When GitHub withdraws GHSA-g3hv-75wg-m249: retire this "
+    "acceptance as SEC-2026-10 (braces) was retired. Then verify a zero audit, retire this accepted "
+    "known advisory and close Issue #324."
 )
-# Exact accepted known advisory (owner decision X1, "Aceptarlo como conocido", 2026-10-31):
-# no minimatch 3.x or 10.x release patches GHSA-g3hv-75wg-m249 and no dependent accepts
-# minimatch 11, so the advisory is tolerated only on this package, severity, the two installed
-# versions, their exact lockfile parents, the 96 development-only paths and the pinned graph.
-# Unlike braces it resolves to two versions with several parents, so it declares the parent set
-# of each version (lock_parents) instead of a single linear lock_path.
+# Exact accepted known advisory (owner decision X3, "Ajustar la aceptación", 2026-11-04). The owner
+# first accepted the advisory on 3.1.5 and 10.2.5 (X1, 2026-10-31); on 2026-11-04 GitHub narrowed
+# GHSA-g3hv-75wg-m249 to >=7.0.0 <11.0.1, so the audit now reports only 10.2.5 and its 11 paths. No
+# minimatch 10.x release patches it and no typescript-eslint release accepts minimatch 11, so the
+# advisory is tolerated only on this package, severity, the single installed version 10.2.5, its exact
+# lockfile parent, its 11 development-only paths and the pinned graph. minimatch 3.1.5 stays in that
+# graph outside the advisory (unaffected_lock_versions): the lockfile must carry exactly both versions,
+# and 3.1.5 reported again by an audit breaks the exact audit identity. It declares the parent set of
+# each affected version (lock_parents) instead of a single linear lock_path, as braces did.
 MINIMATCH_KNOWN_ADVISORY = {
+    "advisory_id": "GHSA-g3hv-75wg-m249",
+    "package": "minimatch",
+    "severity": "moderate",
+    "installed_versions": ["10.2.5"],
+    "affected_range": ">=7.0.0 <11.0.1",
+    "patched_range": ">=11.0.1",
+    "direct_or_transitive": "transitive",
+    "dependency_path_count": 11,
+    "dependency_scope": "dev",
+    "lock_parents": {
+        "10.2.5": ["@typescript-eslint/typescript-estree@8.64.0"],
+    },
+    "unaffected_lock_versions": ["3.1.5"],
+    "lockfile": "apps/web/pnpm-lock.yaml",
+    "expected_lockfile_sha256": "f944eecd2b6dd09f39fbe06677be038e6e38bdbcaca901da330353f02f0b5aa4",
+    "tracked_issue": MINIMATCH_KNOWN_ADVISORY_ISSUE,
+    "tracked_issue_title": MINIMATCH_KNOWN_ADVISORY_ISSUE_TITLE,
+    "exit_condition": MINIMATCH_KNOWN_ADVISORY_EXIT_CONDITION,
+}
+# The acceptance as decided in X1 (2026-10-31), before GitHub narrowed the advisory. A tested base
+# whose policy predates the narrowing (SEC-2026-16-MINIMATCH-NARROWED-2026-11-04) carries exactly
+# this; it is accepted only in such a base policy, which judges nothing but dependency admissions,
+# and never in the tree under test.
+MINIMATCH_KNOWN_ADVISORY_X1 = {
     "advisory_id": "GHSA-g3hv-75wg-m249",
     "package": "minimatch",
     "severity": "moderate",
@@ -219,7 +245,14 @@ MINIMATCH_KNOWN_ADVISORY = {
     "expected_lockfile_sha256": "f944eecd2b6dd09f39fbe06677be038e6e38bdbcaca901da330353f02f0b5aa4",
     "tracked_issue": MINIMATCH_KNOWN_ADVISORY_ISSUE,
     "tracked_issue_title": MINIMATCH_KNOWN_ADVISORY_ISSUE_TITLE,
-    "exit_condition": MINIMATCH_KNOWN_ADVISORY_EXIT_CONDITION,
+    "exit_condition": (
+        "When a patched minimatch 3.x or 10.x is published on npm, or the dependents (eslint, "
+        "@eslint/config-array, @eslint/eslintrc, eslint-plugin-import, eslint-plugin-jsx-a11y, "
+        "eslint-plugin-react and @typescript-eslint/typescript-estree) accept minimatch>=11.0.1: "
+        "remediate it through the SEC-2026-15 (zod) route. When GitHub withdraws or narrows "
+        "GHSA-g3hv-75wg-m249: retire this acceptance as SEC-2026-10 (braces) was retired. Then "
+        "verify a zero audit, retire this accepted known advisory and close Issue #324."
+    ),
 }
 # The acceptance changes no dependency file. Besides its REL-000 files it carries its
 # decision-log row and CHANGELOG entry, the regenerated normative integrity and the
@@ -1219,12 +1252,25 @@ def _retired_braces_accepted_known_advisory_is_exact(accepted: Any) -> bool:
     )
 
 
+def _minimatch_accepted_known_advisory_is_exact(accepted: Any, *, base_policy: bool) -> bool:
+    """The SEC-2026-16 entry declares exactly its accepted known advisory.
+
+    The tree under test must carry the narrowed acceptance (X3). A tested base whose policy
+    predates the narrowing may carry, exactly, the X1 acceptance it replaced; nothing else.
+    """
+
+    return accepted == MINIMATCH_KNOWN_ADVISORY or (
+        base_policy and accepted == MINIMATCH_KNOWN_ADVISORY_X1
+    )
+
+
 def validate_remediation_policy(policy: Any, *, base_policy: bool = False) -> dict[str, Any]:
     """Validate the remediation policy field by field.
 
     ``base_policy`` marks a policy read from a tested base commit, never the tree under
     test. Such a base may predate SEC-2026-11 and still carry, exactly, the braces graph
-    SEC-2026-11 rebound; every other check is identical.
+    SEC-2026-11 rebound, or predate the SEC-2026-16 narrowing and still carry, exactly, the X1
+    minimatch acceptance; every other check is identical.
     """
 
     if not isinstance(policy, dict):
@@ -1613,7 +1659,9 @@ def validate_remediation_policy(policy: Any, *, base_policy: bool = False) -> di
                 or authorization.get("required_dependency_files") != []
                 or authorization.get("allowed_non_dependency_files")
                 != MINIMATCH_KNOWN_ADVISORY_NON_DEPENDENCY_FILES
-                or authorization.get("accepted_known_advisory") != MINIMATCH_KNOWN_ADVISORY
+                or not _minimatch_accepted_known_advisory_is_exact(
+                    authorization.get("accepted_known_advisory"), base_policy=base_policy
+                )
                 or authorization.get("target_sharp_version")
                 != MINIMATCH_KNOWN_ADVISORY_TARGET_SHARP_VERSION
                 or authorization.get("require_sharp_runtime_smoke") is not True
@@ -2025,9 +2073,10 @@ def validate_remediation_policy(policy: Any, *, base_policy: bool = False) -> di
                 "REMEDIATION_POLICY_INVALID",
                 "The retired braces authorization must keep exactly its accepted known advisory.",
             )
-        if (
-            authorization.get("id") == MINIMATCH_KNOWN_ADVISORY_ID
-            and authorization.get("accepted_known_advisory") != MINIMATCH_KNOWN_ADVISORY
+        if authorization.get("id") == MINIMATCH_KNOWN_ADVISORY_ID and not (
+            _minimatch_accepted_known_advisory_is_exact(
+                authorization.get("accepted_known_advisory"), base_policy=base_policy
+            )
         ):
             fail(
                 "REMEDIATION_POLICY_INVALID",
@@ -8028,7 +8077,10 @@ def web_image_dependencies() -> Any:
 
 
 def known_advisory_dev_paths(
-    lockfile: dict[str, Any], package: str, limit: int
+    lockfile: dict[str, Any],
+    package: str,
+    limit: int,
+    versions: set[str] | None = None,
 ) -> tuple[set[tuple[str, str]], list[str]]:
     """The importer roots that reach `package` and the distinct paths to it.
 
@@ -8036,6 +8088,8 @@ def known_advisory_dev_paths(
     production graph follows) to a `package` snapshot, never visiting a snapshot twice, and stops
     at the package. It is written as pnpm audit writes it (`.>root>...>package`). Only snapshots
     that can reach the package are walked, and the walk stops once it has more than `limit`.
+    With `versions`, only the snapshots of those versions are targets, as an audit counts the
+    paths of the versions an advisory affects.
     """
 
     graph = web_image_dependencies()
@@ -8052,7 +8106,12 @@ def known_advisory_dev_paths(
     for key, linked in children.items():
         for _, child in linked:
             parents.setdefault(child, set()).add(key)
-    targets = {key for key in snapshots if graph.package_of(key)[0] == package}
+    targets = {
+        key
+        for key in snapshots
+        if graph.package_of(key)[0] == package
+        and (versions is None or graph.package_of(key)[1] in versions)
+    }
     reaching = set(targets)
     pending = list(targets)
     while pending:
@@ -8105,10 +8164,12 @@ def known_advisory_dev_paths(
 def validate_known_advisory_dev_graph(lock_bytes: bytes, accepted: dict[str, Any]) -> None:
     """Prove a package that resolves to several versions is reachable only in development.
 
-    The package must resolve to exactly its accepted versions, each linked by exactly its
-    accepted parents; it must be outside the lockfile's production graph (the graph the web
-    image smoke enforces); every path to it must start at a development dependency of the
-    single importer; and the number of paths must be the accepted path count.
+    The package must resolve to exactly its accepted versions plus the declared versions the
+    advisory does not affect (``unaffected_lock_versions``), each accepted version linked by
+    exactly its accepted parents; no version may be in the lockfile's production graph (the
+    graph the web image smoke enforces); every path to an accepted version must start at a
+    development dependency of the single importer; and the number of those paths must be the
+    accepted path count.
     """
 
     lock_text = lock_bytes.decode("utf-8")
@@ -8126,20 +8187,23 @@ def validate_known_advisory_dev_graph(lock_bytes: bytes, accepted: dict[str, Any
             package=package,
         )
     versions = set(accepted["installed_versions"])
+    unaffected = set(accepted.get("unaffected_lock_versions", []))
+    lock_versions = versions | unaffected
     dependents = _lock_snapshot_dependents(lock_text)
     linked_versions = {
         key[len(package) + 1 :] for key in dependents if _lock_package_name(key) == package
     }
     if (
-        _lock_key_versions(lock_text, package) != versions
-        or linked_versions != versions
+        versions & unaffected
+        or _lock_key_versions(lock_text, package) != lock_versions
+        or linked_versions != lock_versions
         or set(accepted["lock_parents"]) != versions
     ):
         fail(
             "KNOWN_ADVISORY_LOCK_PATH_INVALID",
             "The accepted known advisory package resolves to a different version set.",
             package=package,
-            expected=sorted(versions),
+            expected=sorted(lock_versions),
             actual=sorted(_lock_key_versions(lock_text, package) | linked_versions),
         )
     for version, expected_parents in sorted(accepted["lock_parents"].items()):
@@ -8168,7 +8232,7 @@ def validate_known_advisory_dev_graph(lock_bytes: bytes, accepted: dict[str, Any
                 package=package,
                 snapshots=in_production,
             )
-        roots, paths = known_advisory_dev_paths(lockfile, package, expected_count)
+        roots, paths = known_advisory_dev_paths(lockfile, package, expected_count, versions)
     except (yaml.YAMLError, AttributeError, KeyError, TypeError, ValueError) as exc:
         fail(
             "KNOWN_ADVISORY_LOCK_PATH_INVALID",
