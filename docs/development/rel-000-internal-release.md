@@ -429,9 +429,10 @@ base `ece1c3e`) acepta `GHSA-g3hv-75wg-m249` (CVE-2026-118764, moderado, publica
 a propósito (`firstPhasePreProcess()` con `optimizationLevel >= 2`). Desde que se publicó, REL-000
 fallaba con `UNTRACKED_DEPENDENCY_ADVISORY` en todo PR a `development` (#323) y también en `main`.
 
-- **Alcance.** `apps/web/pnpm-lock.yaml` (`f944eecd…`) resuelve `minimatch` 3.1.5 por `eslint` 9.39.5,
-  `@eslint/config-array` 0.21.2, `@eslint/eslintrc` 3.3.6, `eslint-plugin-import` 2.32.0,
-  `eslint-plugin-jsx-a11y` 6.10.2 y `eslint-plugin-react` 7.37.5 (85 rutas), y 10.2.5 por
+- **Alcance en X1 (2026-10-31; acotado después, ver «Acotamiento»).** `apps/web/pnpm-lock.yaml`
+  (`f944eecd…`) resuelve `minimatch` 3.1.5 por `eslint` 9.39.5, `@eslint/config-array` 0.21.2,
+  `@eslint/eslintrc` 3.3.6, `eslint-plugin-import` 2.32.0, `eslint-plugin-jsx-a11y` 6.10.2 y
+  `eslint-plugin-react` 7.37.5 (85 rutas), y 10.2.5 por
   `@typescript-eslint/typescript-estree` 8.64.0 (11 rutas). Las 96 rutas empiezan en `eslint` o
   `eslint-config-next`, ambas `devDependencies`; `minimatch` no está en el grafo de producción y
   `pnpm audit --prod` no reporta nada. El código vulnerable no existe en 3.1.5, y en 10.2.5 ninguna
@@ -456,19 +457,21 @@ fallaba con `UNTRACKED_DEPENDENCY_ADVISORY` en todo PR a `development` (#323) y 
   (`validate_known_advisory_lock_graph` lo elige cuando el aviso declara `lock_parents`; braces sigue con
   su validador de ruta lineal) y exige:
   - un solo importer, sin `minimatch` entre sus dependencias directas;
-  - exactamente las versiones 3.1.5 y 10.2.5, en los paquetes y en las instantáneas;
-  - exactamente los padres declarados de cada versión;
-  - `minimatch` fuera del grafo de producción, calculado con `production_graph` de
+  - exactamente las versiones aceptadas más las que el aviso no afecta (`unaffected_lock_versions`), en
+    los paquetes y en las instantáneas: hoy 10.2.5 y 3.1.5;
+  - exactamente los padres declarados de cada versión aceptada;
+  - ninguna versión de `minimatch` en el grafo de producción, calculado con `production_graph` de
     `tools/ci/web_image_dependencies.py`, el mismo módulo que usa el smoke de las imágenes web;
-  - que toda instantánea que llega a `minimatch` cuelgue de una raíz del importer, que esas raíces sean
-    sólo `devDependencies` y que las rutas sean exactamente 96 (el recorrido reproduce las 96 rutas del
-    audit);
+  - que toda instantánea que llega a una versión aceptada cuelgue de una raíz del importer, que esas
+    raíces sean sólo `devDependencies` y que las rutas a las versiones aceptadas sean exactamente las del
+    audit (hoy 11; el recorrido reproduce las rutas del audit);
   - como braces, el SHA-256 fijado del lockfile (`KNOWN_ADVISORY_LOCK_GRAPH_CHANGED`).
 
   Cualquier otra forma falla con `KNOWN_ADVISORY_LOCK_PATH_INVALID`.
 - **Audit e Issue.** Cada audit que reporta el aviso debe reproducir exactamente
-  `KNOWN_ADVISORY_AUDIT_FIELDS`: paquete, severidad, `installed_versions` `["10.2.5", "3.1.5"]`, rangos,
-  transitivo y 96 rutas (si no, `KNOWN_ADVISORY_SCOPE_INVALID`). El Issue #324 se consulta una sola vez,
+  `KNOWN_ADVISORY_AUDIT_FIELDS`: paquete, severidad, `installed_versions` `["10.2.5"]`, rango afectado
+  `>=7.0.0 <11.0.1`, rango corregido `>=11.0.1`, transitivo y 11 rutas (si no,
+  `KNOWN_ADVISORY_SCOPE_INVALID`). El Issue #324 se consulta una sola vez,
   abierto, con su título exacto y sólo este GHSA (`KNOWN_ADVISORY_TRACKING_INVALID` o
   `KNOWN_ADVISORY_ISSUE_STATE_INVALID`). Cualquier otro aviso o paquete sigue fallando cerrado.
 - **Diff.** `validate_minimatch_known_advisory_diff`, como el de braces: no cambia ningún archivo de
@@ -488,11 +491,33 @@ fallaba con `UNTRACKED_DEPENDENCY_ADVISORY` en todo PR a `development` (#323) y 
   braces. Como la política de la base probada también se valida, esa revinculación debe dejar que sólo
   una base anterior conserve el grafo previo, como hicieron SEC-2026-11 y SEC-2026-14 con braces. Una
   revisión del aviso que cambie sus campos de audit falla cerrado hasta revincularla o retirarla.
-- **Salida.** Si sale un 3.x o 10.x corregido, o los dependientes aceptan `minimatch>=11.0.1`, se remedia
-  como SEC-2026-15; si GitHub retira o acota el aviso, se retira como braces. Entonces se verifica el
-  audit en cero, se retira la aceptación y se cierra el Issue #324.
+- **Acotamiento (X3, 2026-11-04).** GitHub modificó el aviso el 2026-11-04 a las 17:01:25Z: ahora afecta
+  `minimatch` desde 7.0.0 hasta antes de 11.0.1. El audit de `apps/web` dejó de reportar 3.1.5 y quedó en
+  10.2.5, rango `>=7.0.0 <11.0.1` y 11 rutas, así que REL-000 falló cerrado con
+  `KNOWN_ADVISORY_SCOPE_INVALID` en todo PR que lo ejecuta (#354, corrida 41924303312). No es un retiro: el
+  aviso sigue afectando a 10.2.5 y el audit no queda en cero. El owner eligió "Ajustar la aceptación" (X3,
+  fila `SEC-2026-16-MINIMATCH-NARROWED-2026-11-04` del decision-log), por la misma ruta que #325: un PR a
+  `development` y luego la promoción a `main`. La aceptación queda exactamente con el nuevo alcance:
+  - sólo 10.2.5, rango `>=7.0.0 <11.0.1`, 11 rutas y su único padre
+    `@typescript-eslint/typescript-estree@8.64.0`;
+  - 3.1.5 sigue en el lockfile, ahora fuera del aviso, declarada en `unaffected_lock_versions`. Si un audit
+    vuelve a reportarla, la identidad exacta del audit falla. Sus padres y rutas ya no forman parte de la
+    aceptación, pero el hash fijado del lockfile sigue rechazando cualquier cambio;
+  - el lockfile y su hash (`f944eecd…`) no cambian, la autorización conserva su ID, su rama y su base, y el
+    Issue #324 sigue abierto con el mismo título;
+  - el PR corre en modo normal, porque su rama no tiene mapeo de remediación y no cambia dependencias.
+
+  Una base cuya política es anterior al acotamiento conserva la aceptación X1 (`MINIMATCH_KNOWN_ADVISORY_X1`).
+  Esa base sólo se lee para las admisiones de dependencias, por eso sólo ahí se acepta X1, exactamente;
+  el árbol probado debe llevar la aceptación acotada. Sin esa excepción, el primer PR fallaría al leer la
+  política de su base.
+- **Salida.** Si una versión de typescript-eslint acepta `minimatch>=11.0.1`, o sale un 10.x corregido, se
+  remedia como SEC-2026-15; si GitHub retira el aviso, se retira como braces. Entonces se verifica el
+  audit en cero, se retira la aceptación y se cierra el Issue #324. Si el aviso vuelve a cambiar sus
+  campos, REL-000 falla cerrado hasta una nueva decisión.
 - **Exposición residual.** El código vulnerable de 10.2.5 queda en las herramientas de lint (máquinas
-  locales y CI), alcanzable sólo con un patrón hostil y `optimizationLevel >= 2`. Las imágenes web de
+  locales y CI), alcanzable sólo con un patrón hostil y `optimizationLevel >= 2`. Desde el acotamiento,
+  3.1.5 ya no está afectado. Las imágenes web de
   `development` sólo llevan dependencias de producción (#311); una imagen construida desde `main` aún
   lleva el `node_modules` de desarrollo hasta la próxima promoción, y `next start` nunca lo carga.
 
