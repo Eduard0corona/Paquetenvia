@@ -278,6 +278,7 @@ describe("work inbox controller (UI-PHASE3-INBOX-2026-10-10)", () => {
     await controller.refresh("manual");
     const state = controller.getSnapshot();
     expect(state.phase).toBe("access_unavailable");
+    expect(state.mfaRequired).toBe(false);
     expect(state.rows).toEqual([]);
     expect(state.counts).toBeNull();
     const requests = api.requests.length;
@@ -285,6 +286,21 @@ describe("work inbox controller (UI-PHASE3-INBOX-2026-10-10)", () => {
     controller.setView({ ...defaultInboxView, queue: "en_route" });
     expect(api.requests.length).toBe(requests);
     await expect(controller.resynchronize()).rejects.toThrow();
+  });
+
+  it("says when only the second factor is missing, and forgets it with the session (Z19)", async () => {
+    const api = new FakeApi({
+      "unassigned=true": () => Promise.reject(new OperationsApiError("forbidden", null, true)),
+    });
+    const controller = controllerFor(api);
+    await controller.start();
+    await flush();
+    expect(controller.getSnapshot()).toMatchObject({ phase: "access_unavailable", mfaRequired: true, rows: [], counts: null });
+    const requests = api.requests.length;
+    await controller.refresh("polling");
+    expect(api.requests.length).toBe(requests);
+    await controller.restart(() => Promise.resolve(), () => false);
+    expect(controller.getSnapshot()).toMatchObject({ phase: "loading", mfaRequired: false });
   });
 
   it("keeps the rows and says so when a read fails", async () => {

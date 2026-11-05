@@ -11,6 +11,7 @@ import {
   inboxQueues,
   inboxQueueTabs,
   inboxReturnHref,
+  orderDetailReturnUrl,
   inboxSearch,
   inboxStatusChoices,
   inboxViewKey,
@@ -186,6 +187,9 @@ describe("work inbox view in the URL (UI-PHASE3-INBOX-2026-10-10)", () => {
     expect(href.startsWith(`/ops/orders/${order}?inbox=`)).toBe(true);
     const back = new URL(href, "https://paquetenvia.test").searchParams.get("inbox");
     expect(inboxReturnHref(back)).toBe(inboxHref(selected));
+    // Z19: "Verificar identidad" on the detail comes back to the same detail, with its view.
+    expect(orderDetailReturnUrl(order, inboxHref(selected))).toBe(href);
+    expect(orderDetailReturnUrl(order, null)).toBe(`/ops/orders/${order}`);
     // Not opened from the inbox, or a repeated parameter: no back link.
     expect(inboxReturnHref(undefined)).toBeNull();
     expect(inboxReturnHref(null)).toBeNull();

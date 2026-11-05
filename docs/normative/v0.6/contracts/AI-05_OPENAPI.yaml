@@ -1141,6 +1141,12 @@ paths:
         operation accepts no driver_id. REST/PostgreSQL are authoritative on
         initial load, refresh and reconnect. ExternalOfferChanged only
         notifies the client to refetch this resource.
+        EXT-001-OFFER-GUIA-2026-11-04 (project owner, 2026-11-04, Z24 "La
+        guía (Recommended)"): each item is a DriverExternalOffer, the offer
+        and the guía (public_id) of its order, read with the offer in the same
+        RLS-scoped tenant transaction; the driver's offer card shows the guía,
+        never the internal order_id. The capability check, the error answers
+        and the cursor are unchanged.
       parameters:
       - $ref: '#/components/parameters/OrganizationContext'
       - name: cursor
@@ -5504,6 +5510,25 @@ components:
         version:
           type: integer
           minimum: 1
+    DriverExternalOffer:
+      description: >-
+        EXT-001-OFFER-GUIA-2026-11-04 (project owner, 2026-11-04, Z24 "La guía (Recommended)") - one item of
+        listMyEligibleExternalOffers: the ExternalOffer plus the guía of its order (public_id), which the driver's
+        offer card shows before "Aceptar oferta" in place of the internal order_id. order_id stays for API clients that
+        relate the offer to its order and to the Assignment that acceptExternalOffer returns; acceptance still names
+        the offer by offerId, and the driver app never shows order_id. createExternalOffer still answers ExternalOffer.
+      allOf:
+      - $ref: '#/components/schemas/ExternalOffer'
+      - type: object
+        required:
+        - public_id
+        properties:
+          public_id:
+            type: string
+            pattern: ^ORD_[A-Za-z0-9_-]{22}$
+            description: >-
+              The guía of the offer's order (Order.public_id, ORD_ followed by 22 Base64URL characters, case
+              sensitive), read with the offer in the same RLS-scoped tenant transaction. An identifier, never logged.
     ExternalOfferPage:
       type: object
       required:
@@ -5513,7 +5538,7 @@ components:
         items:
           type: array
           items:
-            $ref: '#/components/schemas/ExternalOffer'
+            $ref: '#/components/schemas/DriverExternalOffer'
         next_cursor:
           type:
           - string

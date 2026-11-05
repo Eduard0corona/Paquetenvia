@@ -18,6 +18,7 @@ import {
   MissingCredentialError,
   resolveRequestAuthorization,
 } from "../../auth/request-credentials";
+import { isMfaRequiredResponse } from "../../auth/step-up";
 import { rateLimitWaits, type RateLimitedOperation } from "../../lib/rate-limit-wait";
 import { readRetryAfterSeconds } from "../../lib/retry-after";
 
@@ -63,6 +64,11 @@ export class OperationsApiError extends Error {
       | "rate_limited",
     /** The wait a 429 asked for (Retry-After), null when it said nothing usable. */
     public readonly retryAfterSeconds: number | null = null,
+    /**
+     * Z19 (AUTH-001-MFA-STEP-UP): a 403 whose problem code is MFA_REQUIRED - only the second factor is missing, and
+     * the screen offers "Verificar identidad" instead of "Acceso no disponible".
+     */
+    public readonly mfaRequired = false,
   ) {
     super("La consulta de operaciones no está disponible.");
     this.name = "OperationsApiError";
@@ -135,7 +141,11 @@ export function createOperationsApi(
       }
       throwIfAborted(combined);
       if (!response.ok) {
-        const failure = classify(response, rateLimit);
+        const classified = classify(response, rateLimit);
+        const failure =
+          classified.category === "forbidden" && (await isMfaRequiredResponse(response))
+            ? new OperationsApiError("forbidden", null, true)
+            : classified;
         // SEC-004: every screen that reads the operation shows the wait and sends nothing until it ends.
         if (failure.category === "rate_limited" && rateLimit !== undefined)
           rateLimitWaits.record(rateLimit, failure.retryAfterSeconds);

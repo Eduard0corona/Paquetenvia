@@ -692,7 +692,7 @@ function ExternalOffersPanel({
               <div className={styles.cardHeading}>
                 <div>
                   <p className={styles.cardLabel}>Oferta para orden</p>
-                  <h3>{offer.order_id}</h3>
+                  <h3>{offer.public_id}</h3>
                 </div>
                 <span className={styles.badge}>Externa</span>
               </div>

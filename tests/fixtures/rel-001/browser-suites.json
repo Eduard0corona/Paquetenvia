@@ -4,10 +4,13 @@
   "screens": [
     {
       "screen": "/login",
-      "status": "GAP",
-      "suites": [],
-      "owner_task": "AUTH-001",
-      "reason": "The panel sign-in through the BFF has no real-browser round trip yet; AUTH-001 owns its browser test (Z2)."
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "driver-stops-pwa",
+          "test": "Paqueteria.IntegrationTests.Security.AuthCenter.PanelSignInPwaPlaywrightTests"
+        }
+      ]
     },
     {
       "screen": "/onboarding",
@@ -27,15 +30,26 @@
         {
           "job": "operations-dashboard",
           "test": "Paqueteria.IntegrationTests.Operations.OperationsDashboardRateLimitPwaPlaywrightTests"
+        },
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Operations.ExternalOfferPublishPwaPlaywrightTests"
         }
       ]
     },
     {
       "screen": "/ops/inbox",
-      "status": "GAP",
-      "suites": [],
-      "owner_task": "UI-001",
-      "reason": "No Playwright suite yet; UI-001 owns it (Z2)."
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Operations.WorkInboxPwaPlaywrightTests"
+        },
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Operations.WorkInboxBulkPwaPlaywrightTests"
+        }
+      ]
     },
     {
       "screen": "/ops/orders",
@@ -63,15 +77,17 @@
     },
     {
       "screen": "/ops/orders/:id",
-      "status": "GAP",
+      "status": "COVERED",
       "suites": [
         {
           "job": "driver-stops-pwa",
           "test": "Paqueteria.IntegrationTests.PlatformEndToEnd.MainJourneyEndToEndTests"
+        },
+        {
+          "job": "operations-dashboard",
+          "test": "Paqueteria.IntegrationTests.Operations.OrderDetailActionsPwaPlaywrightTests"
         }
-      ],
-      "owner_task": "UI-001",
-      "reason": "The main journey covers release, assignment and the tracking link; the failed-attempt decision, the CASH_PENDING close and the recipient-notice panel have no browser test yet (UI-001, Z2)."
+      ]
     },
     {
       "screen": "/ops/routes",
@@ -139,10 +155,13 @@
     },
     {
       "screen": "/avisos/baja/:token",
-      "status": "GAP",
-      "suites": [],
-      "owner_task": "NTF-006",
-      "reason": "The recipient opt-out page has Vitest coverage only (Z2)."
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "public-tracking",
+          "test": "Paqueteria.IntegrationTests.Notifications.RecipientUnsubscribePwaPlaywrightTests"
+        }
+      ]
     },
     {
       "screen": "/finance/settlements",
@@ -200,10 +219,13 @@
     },
     {
       "screen": "screen:external_driver_offers",
-      "status": "GAP",
-      "suites": [],
-      "owner_task": "EXT-001",
-      "reason": "The driver offer list and the dashboard publish action have Vitest coverage only; EXT-001 owns the browser test (Z2)."
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "driver-stops-pwa",
+          "test": "Paqueteria.IntegrationTests.Driver.ExternalOffersDriverPwaPlaywrightTests"
+        }
+      ]
     }
   ]
 }

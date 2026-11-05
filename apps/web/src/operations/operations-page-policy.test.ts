@@ -116,15 +116,23 @@ describe("operations page privacy policy", () => {
 
   it("shows why a failed attempt failed and who decides it (INC-FAILED-ATTEMPT-DISPATCH-DECIDES-2026-10-11)", () => {
     const detail = readFileSync("src/operations/components/operations-order-detail-shell.tsx", "utf8");
+    // Z23 ("Releer con Actualizar"): the reason is read again with every read of the order, not only a new version.
     expect(detail).toContain(
-      "<OperationsFailedAttempt orderId={order.id} status={order.status} version={order.version} />",
+      "<OperationsFailedAttempt orderId={order.id} status={order.status} revision={state.orderRevision} />",
     );
     // The reason comes before the decision it explains.
     expect(detail.indexOf("<OperationsFailedAttempt")).toBeLessThan(detail.indexOf("<OperationsNextStep"));
 
     const panel = readFileSync("src/operations/components/operations-failed-attempt.tsx", "utf8");
     expect(panel).toContain("loadFailedAttempt(createIncidentsApi(apiBaseUrl, session), orderId, signal)");
-    expect(panel).toContain("[apiBaseUrl, orderId, status, version]");
+    expect(panel).toContain("[apiBaseUrl, orderId, status, revision]");
+    expect(panel).toContain("setState(failedAttemptReading);");
+    expect(panel).not.toContain("readonly version");
+    const hook = readFileSync("src/operations/state/use-operations-order-detail.ts", "utf8");
+    const apply = hook.slice(hook.indexOf("apply: (result) => {"), hook.indexOf("} catch (caught: unknown) {"));
+    expect(apply).toContain("setOrderRevision((value) => value + 1);");
+    // Only a read of the order moves it: the notices' own reloads do not.
+    expect(hook.split("setOrderRevision(").length - 1).toBe(1);
     const sources = [
       panel,
       readFileSync("src/operations/state/failed-attempt-loader.ts", "utf8"),
@@ -165,6 +173,48 @@ describe("operations page privacy policy", () => {
       expect(source, path).toContain("assignmentTypeLabel(");
       expect(source, path).not.toContain("Flota propia");
     }
+  });
+
+  it("offers Verificar identidad on every operations and finance screen when only MFA is missing (Z19)", () => {
+    // The screens that read through createOperationsApi: a 403 MFA_REQUIRED is no longer "Acceso no disponible".
+    const screens: ReadonlyArray<readonly [string, string, string]> = [
+      [
+        "src/operations/components/operations-inbox-shell.tsx",
+        "src/operations/state/inbox-controller.ts",
+        "buildStepUpPromptHref(inboxHref(view))",
+      ],
+      [
+        "src/operations/components/operations-dashboard-shell.tsx",
+        "src/operations/state/use-operations-dashboard.ts",
+        "buildStepUpPromptHref(dashboardViewHref(view))",
+      ],
+      [
+        "src/operations/components/operations-order-detail-shell.tsx",
+        "src/operations/state/use-operations-order-detail.ts",
+        "buildStepUpPromptHref(orderDetailReturnUrl(orderId, inboxHref))",
+      ],
+    ];
+    for (const [shell, state, stepUp] of screens) {
+      const view = readFileSync(shell, "utf8");
+      expect(view, shell).toContain("message={mfaRequiredMessage}");
+      expect(view, shell).toContain(stepUp);
+      expect(readFileSync(state, "utf8"), state).toContain("caught instanceof OperationsApiError && caught.mfaRequired");
+    }
+    // Every other screen already describes a tenant failure with describeFailure, which carries the step-up.
+    for (const shell of [
+      "src/operations/components/operations-drivers-shell.tsx",
+      "src/operations/components/operations-orders-shell.tsx",
+      "src/operations/components/incidents-shell.tsx",
+      "src/operations/components/csv-import-shell.tsx",
+      "src/operations/components/manual-routes-shell.tsx",
+      "src/operations/components/create-order-wizard.tsx",
+      "src/finance/components/cod-shell.tsx",
+      "src/finance/components/settlements-shell.tsx",
+    ])
+      expect(readFileSync(shell, "utf8"), shell).toMatch(/stepUpHref/);
+    expect(readFileSync("src/operations/api/operations-api.ts", "utf8")).toContain(
+      'classified.category === "forbidden" && (await isMfaRequiredResponse(response))',
+    );
   });
 
   it("reaches order creation and the finance screens from the shared app shell navigation", () => {

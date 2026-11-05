@@ -55,7 +55,7 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
 
         var page = await CreateExternalOfferService(fixture.AppDataSource)
             .ListEligibleAsync(actors[0], scenario.OrganizationId, null, default);
-        Assert.Contains(page.Items, item => item.Id == offer.Id && item.Commission.AmountCents == 12_345);
+        Assert.Contains(page.Items, item => item.Offer.Id == offer.Id && item.Offer.Commission.AmountCents == 12_345);
 
         using var gate = new ManualResetEventSlim(false);
         var attempts = actors.Select((actorId, index) => Task.Run(async () =>
@@ -140,7 +140,7 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
 
         var eligible = await CreateExternalOfferService(fixture.AppDataSource)
             .ListEligibleAsync(actor, scenario.OrganizationId, null, default);
-        Assert.Equal(offer.Id, Assert.Single(eligible.Items).Id);
+        Assert.Equal(offer.Id, Assert.Single(eligible.Items).Offer.Id);
 
         await scenario.ExecuteAdminAsync(
             "UPDATE drivers.driver_profiles SET status='SUSPENDED' WHERE user_id=@actor;",
@@ -184,6 +184,61 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
                 null,
                 default));
     }
+
+    /// <summary>
+    /// EXT-001-OFFER-GUIA-2026-11-04 (Z24 "La guía (Recommended)"): each eligible offer carries the guía of its own
+    /// order (AI-05 DriverExternalOffer public_id), read by the runtime role in the driver's own RLS-scoped tenant
+    /// transaction. An offer of another organization, open and eligible for that organization's driver, is never
+    /// listed, so neither it nor its guía reaches this driver; reading under that organization is refused.
+    /// </summary>
+    [PostgreSqlContractFact]
+    public async Task Eligible_read_returns_the_guia_of_the_own_tenant_order_and_nothing_of_another_tenant()
+    {
+        await using var own = await DispatchScenario.CreateAsync(fixture);
+        await using var foreign = await DispatchScenario.CreateAsync(fixture);
+        var actor = Assert.Single(await own.CreateExternalDriversAsync(1));
+        var foreignActor = Assert.Single(await foreign.CreateExternalDriversAsync(1));
+        var ownGuia = await own.SetSyntheticGuiaAsync();
+        var foreignGuia = await foreign.SetSyntheticGuiaAsync();
+        var ownOffer = await CreateGuiaOfferAsync(own, "ext-001-guia-own");
+        var foreignOffer = await CreateGuiaOfferAsync(foreign, "ext-001-guia-foreign");
+
+        var page = await CreateExternalOfferService(fixture.AppDataSource)
+            .ListEligibleAsync(actor, own.OrganizationId, null, default);
+        var item = Assert.Single(page.Items);
+        Assert.Equal(ownOffer, item.Offer);
+        Assert.Equal(own.OrderId, item.Offer.OrderId);
+        Assert.Equal(ownGuia, item.PublicId);
+        Assert.Matches("^ORD_[A-Za-z0-9_-]{22}$", item.PublicId);
+        Assert.DoesNotContain(page.Items, value =>
+            value.Offer.Id == foreignOffer.Id || value.Offer.OrderId == foreign.OrderId || value.PublicId == foreignGuia);
+
+        // The other organization's driver sees its own offer and guía, never this one.
+        var foreignPage = await CreateExternalOfferService(fixture.AppDataSource)
+            .ListEligibleAsync(foreignActor, foreign.OrganizationId, null, default);
+        var foreignItem = Assert.Single(foreignPage.Items);
+        Assert.Equal(foreignOffer.Id, foreignItem.Offer.Id);
+        Assert.Equal(foreignGuia, foreignItem.PublicId);
+
+        // This driver under the other organization: refused before any offer or guía is read.
+        await Assert.ThrowsAsync<ExternalOfferForbiddenException>(() =>
+            CreateExternalOfferService(fixture.AppDataSource)
+                .ListEligibleAsync(actor, foreign.OrganizationId, null, default));
+    }
+
+    private async Task<ExternalOfferResult> CreateGuiaOfferAsync(DispatchScenario scenario, string requestId) =>
+        await CreateExternalOfferService(fixture.AppDataSource).CreateAsync(
+            new CreateExternalOfferCommand(
+                scenario.DispatcherUserId,
+                scenario.OrganizationId,
+                $"{requestId}-{Guid.NewGuid():N}",
+                scenario.OrderId,
+                4_550,
+                OccurredAt.AddMinutes(30),
+                new ExternalOfferConstraints(["MOTORCYCLE"], [], false),
+                false,
+                requestId),
+            default);
 
     [PostgreSqlContractFact]
     public async Task External_candidate_batch_read_is_equivalent_to_per_driver_reads()
@@ -1914,6 +1969,21 @@ public sealed partial class DispatchPostgreSqlContractTests(PostgreSqlContractFi
             }
 
             return actors;
+        }
+
+        /// <summary>
+        /// Gives the scenario's order a synthetic guía in the production format (ORD_ and 22 Base64URL characters of
+        /// 16 random bytes, as Orders.Domain.OrderPublicIdPolicy) and returns it.
+        /// </summary>
+        public async Task<string> SetSyntheticGuiaAsync()
+        {
+            var guia = "ORD_" + Convert.ToBase64String(System.Security.Cryptography.RandomNumberGenerator.GetBytes(16))
+                .TrimEnd('=').Replace('+', '-').Replace('/', '_');
+            await ExecuteAdminAsync(
+                "UPDATE orders.orders SET public_id=@guia WHERE id=@order;",
+                P("guia", guia),
+                P("order", OrderId));
+            return guia;
         }
 
         public async Task<Guid> ReadDriverIdAsync(Guid userId)

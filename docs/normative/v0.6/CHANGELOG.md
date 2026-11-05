@@ -1,5 +1,71 @@
 # Changelog
 
+## Ofertas externas: la tarjeta del repartidor muestra la guía (EXT-001-OFFER-GUIA-2026-11-04, AI-08 EXT-001) — 2026-11-04
+
+- Respuesta literal del project owner (ronda Z continuada, pregunta Z24, 2026-11-04), registrada en `decision-log.md` con
+  su contexto, el texto de la opción y la opción no elegida: Z24 "La guía (Recommended)".
+- AI-05: cada oferta de `listMyEligibleExternalOffers` es ahora `DriverExternalOffer`, la `ExternalOffer` más
+  `public_id`, la guía de su orden (`ORD_` y 22 caracteres Base64URL, el mismo formato del filtro `public_id` de
+  `listOrders`). `order_id` se queda para los clientes de la API que relacionan la oferta con su orden y con la
+  asignación que devuelve `acceptExternalOffer`; aceptar sigue usando `offerId`. `createExternalOffer` sigue respondiendo
+  `ExternalOffer`, y el evento `ExternalOfferChanged` no cambia.
+- AI-07: `external_driver_offers.must_show_before_accept` dice «la guía de la orden» y nunca el `order_id` interno.
+- API: el lector de Dispatch devuelve la guía que ya leía con cada oferta, en la misma lectura con RLS dentro de la
+  transacción del repartidor; no hay consulta nueva, escritura en otro esquema ni flujo atómico nuevo, y la guía nunca
+  se escribe en los logs.
+- App del repartidor: el parser exige `public_id` con el patrón de AI-05 y falla cerrado; la tarjeta «Oferta para orden»
+  muestra la guía en lugar del UUID. AI-08 no cambia. Sin migración.
+
+## Aviso de minimatch acotado: la aceptación sigue al nuevo alcance (SEC-2026-16-MINIMATCH-NARROWED-2026-11-04) — 2026-11-04
+
+- Respuesta literal del project owner (ronda X continuada, pregunta X3, 2026-11-04), registrada en `decision-log.md` con
+  su contexto, el texto de la opción y la opción no elegida ("Esperar a la corrección"): X3 "Ajustar la aceptación
+  (Recommended)".
+- GitHub modificó `GHSA-g3hv-75wg-m249` el 2026-11-04 a las 17:01 UTC: ahora afecta `minimatch` desde 7.0.0 hasta antes
+  de 11.0.1. El audit de `apps/web` ya no reporta 3.1.5, sólo 10.2.5 con 11 rutas de desarrollo, y REL-000 fallaba
+  cerrado con `KNOWN_ADVISORY_SCOPE_INVALID` en todo PR que lo ejecuta (#354), porque la aceptación de X1 era exacta.
+- REL-000: la aceptación queda exactamente con el nuevo alcance. Cubre sólo `minimatch` 10.2.5, rango `>=7.0.0 <11.0.1`,
+  11 rutas y su único padre `@typescript-eslint/typescript-estree@8.64.0`. El lockfile (`f944eecd…`) no cambia, y la
+  autorización conserva su ID y su rama. La salida es una versión de typescript-eslint que acepte `minimatch>=11.0.1`, o
+  un 10.x corregido, por la ruta de SEC-2026-15; o el retiro del aviso por GitHub, como braces. Entonces se verifica el
+  audit en cero, se retira la aceptación y se cierra el Issue #324, que sigue abierto.
+- `minimatch` 3.1.5 sigue en el lockfile, ahora fuera del aviso. Si un audit vuelve a reportarlo, o reporta el rango o
+  el conteo de X1, cualquier otra versión, padre, rango, conteo o ruta de producción, REL-000 falla cerrado.
+- La aceptación de X1 se conserva exacta sólo para leer la política de una base anterior, que REL-000 usa únicamente
+  para las admisiones de dependencias.
+- Un solo PR a `development` con esta entrada y la fila del decision-log; `main` lo recibe en la próxima promoción.
+  Nota: `docs/development/rel-000-internal-release.md`.
+- Sin cambios en dependencias, lockfiles, `package.json`, workspace, overrides, flujos, código de la aplicación,
+  migraciones, AI-04, AI-05, AI-06, AI-12, AI-18, roles ni permisos.
+
+## Bandeja: «Verificar identidad», chips de zona por sesión y orden del menú (UI-001-INBOX-MFA-ZONES-2026-11-03, AI-08 UI-001) — 2026-11-03
+
+- Respuestas literales del project owner (ronda Z continuada, preguntas Z19, Z20 y Z22, 2026-11-03), registradas en
+  `decision-log.md` con sus contextos, los textos de las opciones y las opciones no elegidas: Z19 "Ofrecer Verificar
+  identidad (Recommended)", Z20 "Ajustar el contrato (Recommended)" y Z22 "Como está la app (Recommended)".
+- Z19: con un 403 `MFA_REQUIRED`, la bandeja (`/ops/inbox`), el tablero (`/ops/dashboard`) y el detalle de orden
+  (`/ops/orders/:id`) muestran «Esta acción requiere verificar tu identidad (MFA).» con el botón «Verificar identidad»,
+  que vuelve a la misma vista, como ya hacían las demás pantallas de operación y finanzas (AUTH-001-MFA-STEP-UP). Eran
+  las únicas pantallas de `/ops` y `/finance` sin ese botón. Cualquier otro 401 o 403 sigue mostrando «Acceso no
+  disponible». Ningún contrato cambia.
+- Z20: AI-07 `work_inbox.filters` dice ahora que los chips de zona son las zonas vistas en las filas cargadas durante la
+  sesión, y que un cambio de organización las borra. El código no cambia.
+- Z22: AI-07 dice el orden actual del menú en sus dos frases de navegación (`work_inbox` y `order_list`) y en la nota del
+  tablero: Bandeja · Órdenes · Tablero · + Nueva orden · Rutas · Incidencias · Importar CSV · Repartidores. El código no
+  cambia.
+
+## Aprobaciones del owner al fusionar: Y15 (DRV-DOC-001 PR-3) y Z21 (REL-001 PR-C) — 2026-11-03
+
+- Respuesta literal del project owner (ronda Y continuada, 2026-11-03, sobre el PR-3 #342 de la app del repartidor):
+  Y15 "Aprobarlas todas (Recommended)", que aprueba las 12 decisiones de «Cuenta > Documentos» que no estaban en Y1 a Y14 ni en el
+  ADR. La pregunta, el texto de la opción, las 12 líneas de la vista previa y la opción no elegida se citan en la fila
+  `DRV-DOC-001-IN-PERSON-2026-11-02` de `decision-log.md`.
+- Respuestas literales del project owner sobre el PR-C #344 de REL-001, citadas completas en la fila
+  `REL-001-PILOT-READINESS-2026-11-02`: Z18 "Exacto, en el job (Recommended)" (ronda Z continuada, 2026-11-02: cómo compara
+  conteos el simulacro de restauración del piloto), que aplica ese PR, y Z21 "Aprobarlas todas (Recommended)" (2026-11-03),
+  que aprueba sus 8 decisiones no cubiertas por Z9 ni Z18, con el riesgo anotado.
+- Solo se registran decisiones ya aplicadas: no cambia ningún contrato ni código.
+
 ## Documentos del repartidor: panel aprobado y lista en la app (DRV-DOC-001-IN-PERSON-2026-11-02, AI-08 DRV-DOC-001) — 2026-11-02
 
 - Respuesta literal del project owner (ronda Y continuada, 2026-11-02, sobre el PR-2 #338 del panel de despacho): Y14

@@ -108,6 +108,7 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
             await context.SetOfflineAsync(true);
             try
             {
+                await WaitForOfflineAsync(page, web.BaseAddress);
                 await AssertOfflineOriginsAsync(
                     page,
                     new Uri(apiAddress, "/health/live").AbsoluteUri,
@@ -597,6 +598,29 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
             })
             """);
 
+    /// <summary>
+    /// SetOfflineAsync resolves when Chromium acknowledges Playwright's Network.emulateNetworkConditions; Chromium
+    /// hands the offline state to its network service without waiting for it to apply, so on a loaded runner a
+    /// request issued right away can still go out. On PR #346's first run the first two of the four concurrent
+    /// fetches below (the API and the web origin) were answered and the last two (storage) were blocked. This waits
+    /// until the page reports offline and a fresh probe request fails - the offline state is in effect - and fails
+    /// the test if that never happens. The origin check after it stays exact.
+    /// </summary>
+    private static async Task WaitForOfflineAsync(IPage page, Uri web)
+    {
+        await page.WaitForFunctionAsync("() => navigator.onLine === false");
+        var deadline = DateTimeOffset.UtcNow.AddSeconds(10);
+        for (var attempt = 0; ; attempt++)
+        {
+            var reached = await page.EvaluateAsync<bool>(
+                "url => fetch(url, { cache: 'no-store' }).then(() => true, () => false)",
+                new Uri(web, $"/offline-probe?attempt={attempt}").AbsoluteUri);
+            if (!reached) return;
+            Assert.True(DateTimeOffset.UtcNow < deadline, "The browser context was still online 10 s after SetOfflineAsync(true).");
+            await Task.Delay(50);
+        }
+    }
+
     private static async Task AssertOfflineOriginsAsync(
         IPage page,
         params string[] urls)
@@ -609,7 +633,7 @@ public sealed class DriverOfflineOperationsRealPipelineTests(
                 .catch(() => true)))
             """,
             urls);
-        Assert.All(inaccessible, Assert.True);
+        Assert.All(urls.Zip(inaccessible), check => Assert.True(check.Second, $"{check.First} was reachable while offline."));
     }
 
     private static void ObserveCdpRequest(

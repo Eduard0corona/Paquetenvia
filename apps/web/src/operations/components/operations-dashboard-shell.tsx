@@ -2,7 +2,9 @@
 
 import { useSearchParams } from "next/navigation";
 import { useMemo } from "react";
+import { buildStepUpPromptHref } from "../../auth/step-up";
 import { useConfirmDialog } from "../../components/confirm-dialog";
+import { Feedback } from "../../components/ui/feedback";
 import { OperationsFilters } from "./operations-filters";
 import { OperationsOrderCard } from "./operations-order-card";
 import { OperationsPositions } from "./operations-positions";
@@ -15,6 +17,7 @@ import { PageHeader } from "../../components/ui/page-header";
 import { StatusGroupChip } from "../../components/ui/status-badge";
 import { RateLimitNoticeView, useRateLimitWait } from "../../components/ui/rate-limit-notice";
 import { dashboardRateLimit, useOperationsDashboard } from "../state/use-operations-dashboard";
+import { mfaRequiredMessage } from "../state/tenant-error-messages";
 
 export function OperationsDashboardShell() {
   const state = useOperationsDashboard();
@@ -77,7 +80,11 @@ export function OperationsDashboardShell() {
 
       <p className="pageNote">Horarios mostrados en hora de Mazatlán.</p>
 
-      {state.accessUnavailable && (
+      {state.accessUnavailable && state.mfaRequired && (
+        // Z19 (AUTH-001-MFA-STEP-UP): only the second factor is missing; "Verificar identidad" returns to this view.
+        <Feedback errors={[]} message={mfaRequiredMessage} stepUpHref={buildStepUpPromptHref(dashboardViewHref(view))} />
+      )}
+      {state.accessUnavailable && !state.mfaRequired && (
         <section className="panel" role="alert">
           <h2>Acceso no disponible</h2>
           <p>No es posible mostrar información de operaciones.</p>

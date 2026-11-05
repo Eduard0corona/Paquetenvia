@@ -52,6 +52,9 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
     internal static readonly Guid DispatcherAdminNoMfaId =
         Guid.Parse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaa32");
 
+    /// <summary>EXT-001-OFFER-GUIA-2026-11-04: the synthetic guía (ORD_ and 22 Base64URL characters) of every stub offer.</summary>
+    internal const string ExternalOfferGuia = "ORD_SyntheticGuiaHttp00001";
+
     internal void SetStops(IReadOnlyList<DriverStopResult> stops, int completedToday = 0)
     {
         service.Stops = stops;
@@ -62,6 +65,7 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
     internal int AssignableDriverReads => service.AssignableDriverReads;
     internal ListAssignableDriversQuery? LastAssignableDriversQuery => service.LastAssignableDriversQuery;
     internal int OrganizationDriverReads => service.OrganizationDriverReads;
+    internal int ExternalOfferReads => service.ExternalOfferReads;
     internal ListOrganizationDriversQuery? LastOrganizationDriversQuery => service.LastOrganizationDriversQuery;
     internal int Effects => service.Effects;
     internal int Invocations => service.Invocations;
@@ -338,6 +342,7 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
                 new MoneyResult("MXN", command.CommissionCents), command.ExpiresAt,
                 null, null, 1);
             externalOffers[result.Id] = result;
+            externalOfferOrganizations[result.Id] = command.OrganizationId;
             return Task.FromResult(result);
         }
 
@@ -349,8 +354,16 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
         {
             cancellationToken.ThrowIfCancellationRequested();
             if (actorId != ExternalDriverActorId) throw new ExternalOfferForbiddenException();
+            Interlocked.Increment(ref externalOfferReads);
+            // EXT-001-OFFER-GUIA-2026-11-04: each listed offer carries the guía of its order; only the offers of the
+            // requested organization are listed, as the PostgreSQL read's RLS does.
             return Task.FromResult(new ExternalOfferPageResult(
-                externalOffers.Values.Where(value => value.Status == "OPEN").ToArray(), null));
+                externalOffers.Values
+                    .Where(value => value.Status == "OPEN" &&
+                        externalOfferOrganizations.TryGetValue(value.Id, out var owner) && owner == organizationId)
+                    .Select(value => new DriverExternalOfferResult(value, ExternalOfferGuia))
+                    .ToArray(),
+                null));
         }
 
         public Task<AssignmentResult> AcceptAsync(
@@ -373,6 +386,10 @@ public sealed class DispatchHttpWebApplicationFactory : WebApplicationFactory<Pr
         }
 
         private readonly ConcurrentDictionary<Guid, ExternalOfferResult> externalOffers = new();
+        private readonly ConcurrentDictionary<Guid, Guid> externalOfferOrganizations = new();
+        private int externalOfferReads;
+
+        internal int ExternalOfferReads => Volatile.Read(ref externalOfferReads);
 
         private sealed record Stored(
             string Signature,

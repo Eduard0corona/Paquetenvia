@@ -218,6 +218,23 @@ describe("operations api", () => {
     await expect(createOperationsApi("https://api.synthetic.test", session).queueCounts()).rejects.toThrow();
   });
 
+  it("says when a 403 only lacks the second factor (Z19, AUTH-001-MFA-STEP-UP)", async () => {
+    const problem = (body: unknown) =>
+      new Response(JSON.stringify(body), { status: 403, headers: { "content-type": "application/problem+json" } });
+    const api = createOperationsApi("https://api.synthetic.test", session);
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(problem({ type: "about:blank", status: 403, code: "MFA_REQUIRED" })));
+    await expect(api.list({})).rejects.toMatchObject({ category: "forbidden", mfaRequired: true });
+    await expect(api.getOrder("33333333-3333-4333-8333-333333333333")).rejects.toMatchObject({ category: "forbidden", mfaRequired: true });
+    await expect(api.queueCounts()).rejects.toMatchObject({ category: "forbidden", mfaRequired: true });
+    // Any other 403, or one without a problem body, stays a plain refusal.
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(problem({ type: "about:blank", status: 403, code: "FORBIDDEN" })));
+    await expect(api.list({})).rejects.toMatchObject({ category: "forbidden", mfaRequired: false });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(null, { status: 403 })));
+    await expect(api.list({})).rejects.toMatchObject({ category: "forbidden", mfaRequired: false });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response(JSON.stringify({ code: "MFA_REQUIRED" }), { status: 401, headers: { "content-type": "application/json" } })));
+    await expect(api.list({})).rejects.toMatchObject({ category: "unauthorized", mfaRequired: false });
+  });
+
   it.each([
     [401, "unauthorized"],
     [403, "forbidden"],

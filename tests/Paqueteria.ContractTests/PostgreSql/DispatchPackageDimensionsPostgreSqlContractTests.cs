@@ -168,7 +168,7 @@ public sealed partial class DispatchPostgreSqlContractTests
 
             var page = await CreateExternalOfferService(fixture.AppDataSource, eligibility: eligibility)
                 .ListEligibleAsync(driverUserId, scenario.OrganizationId, null, default);
-            Assert.Contains(page.Items, item => item.Id == offer.Id);
+            Assert.Contains(page.Items, item => item.Offer.Id == offer.Id);
 
             var accepted = await CreateExternalOfferService(fixture.AppDataSource, eligibility: eligibility)
                 .AcceptAsync(

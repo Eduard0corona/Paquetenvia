@@ -111,4 +111,13 @@ describe("driver stops generic shell", () => {
     expect(component).toContain("No me interesa");
     expect(component).not.toContain("REJECTED");
   });
+
+  // EXT-001-OFFER-GUIA-2026-11-04 (Z24 "La guía (Recommended)"): the card names the order by its guía.
+  it("shows the offer's guía before the commission and never the internal order UUID", () => {
+    const guia = component.indexOf("<h3>{offer.public_id}</h3>");
+    expect(guia).toBeGreaterThan(0);
+    expect(component.indexOf("Oferta para orden")).toBeLessThan(guia);
+    expect(component.indexOf("formatCommission(offer.commission.amount_cents)")).toBeGreaterThan(guia);
+    expect(component).not.toContain("offer.order_id");
+  });
 });

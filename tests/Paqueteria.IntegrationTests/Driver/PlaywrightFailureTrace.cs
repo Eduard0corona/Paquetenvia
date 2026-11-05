@@ -44,6 +44,9 @@ internal sealed class PlaywrightFailureTrace : IAsyncDisposable
     /// <summary>The operations dashboard job's results directory.</summary>
     internal const string OperationsDashboardJob = "operations-dashboard";
 
+    /// <summary>The public tracking job's results directory (the public pages, /avisos/baja among them).</summary>
+    internal const string PublicTrackingJob = "public-tracking";
+
     /// <summary><c>TestResults/&lt;job&gt;/playwright-traces</c> under the repository root.</summary>
     internal static string TraceDirectoryFor(string job) => Path.Combine(
         DriverStopsNextServer.FindRepositoryRoot(),
