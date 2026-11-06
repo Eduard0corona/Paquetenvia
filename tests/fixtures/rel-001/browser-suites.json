@@ -14,10 +14,13 @@
     },
     {
       "screen": "/onboarding",
-      "status": "GAP",
-      "suites": [],
-      "owner_task": "REG-001",
-      "reason": "Self-service onboarding is reachable in the pilot (AUTH-OPEN-REGISTRATION) and has Vitest coverage only."
+      "status": "COVERED",
+      "suites": [
+        {
+          "job": "driver-stops-pwa",
+          "test": "Paqueteria.IntegrationTests.Security.AuthCenter.OnboardingPwaPlaywrightTests"
+        }
+      ]
     },
     {
       "screen": "/ops/dashboard",

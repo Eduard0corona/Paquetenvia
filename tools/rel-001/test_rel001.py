@@ -279,7 +279,7 @@ class ManifestTests(unittest.TestCase):
         statuses = {s: sum(1 for e in scenarios if e["status"] == s) for s in ("COVERED", "GAP", "NOT_APPLICABLE")}
         self.assertEqual({"COVERED": 73, "GAP": 3, "NOT_APPLICABLE": 5}, statuses)
         gaps = sorted(e["screen"] for e in screens if e["status"] == "GAP")
-        self.assertEqual(["/onboarding"], gaps)
+        self.assertEqual([], gaps)
 
     def test_critical_screens_are_ai07_routes(self):
         routes = yaml.safe_load((REPO_ROOT / rel001.AI07).read_text(encoding="utf-8"))["routes"]
@@ -330,7 +330,8 @@ class ManifestTests(unittest.TestCase):
             "extra": lambda d: d["screens"].append({"screen": "/business/orders", "status": "COVERED", "suites": [
                 {"job": "operations-dashboard", "test": "X"}]}),
             "duplicate": lambda d: d["screens"].append(copy.deepcopy(d["screens"][0])),
-            "gap_without_reason": lambda d: next(e for e in d["screens"] if e["status"] == "GAP").pop("reason"),
+            "gap_without_reason": lambda d: d["screens"][0].update(status="GAP", suites=[], owner_task="REG-001"),
+            "gap_without_owner_task": lambda d: d["screens"][0].update(status="GAP", suites=[], reason="x"),
             "covered_without_tests": lambda d: next(e for e in d["screens"] if e["status"] == "COVERED").update(suites=[]),
             "unknown_job": lambda d: next(e for e in d["screens"] if e["status"] == "COVERED")["suites"][0].update(job="web"),
             "unknown_status": lambda d: d["screens"][0].update(status="PARTIAL"),
@@ -844,7 +845,7 @@ class EndToEndTests(unittest.TestCase):
         self.assertFalse(report["scope"]["real_pilot_data_read"])
         self.assertEqual("NOT_STARTED", report["closing_phase"]["status"])
         regression = world.output_json("rel001-regression-evidence.json")
-        self.assertEqual({"COVERED": 17, "GAP": 1}, regression["browser_suites"]["manifest_counts"])
+        self.assertEqual({"COVERED": 18}, regression["browser_suites"]["manifest_counts"])
         self.assertEqual({"COVERED": 73, "GAP": 3, "NOT_APPLICABLE": 5}, regression["ai09_scenarios"]["manifest_counts"])
         self.assertEqual(73, regression["ai09_scenarios"]["status_counts"]["PASSED"])
         markdown = (world.output / "rel001-pilot-readiness-report.md").read_text(encoding="utf-8")
