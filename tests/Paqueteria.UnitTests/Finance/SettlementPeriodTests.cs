@@ -148,6 +148,35 @@ public sealed class SettlementPeriodTests
         Assert.False(SettlementPeriod.TryResolve(DateOnly.MaxValue, DateOnly.MaxValue, Mazatlan, out _));
     }
 
+    [Fact]
+    public void The_current_operational_date_is_the_calendar_date_in_the_operational_time_zone()
+    {
+        // 06:59:59Z is still 23:59:59 of the previous day in Culiacán (UTC-07:00); 07:00:00Z is local midnight.
+        Assert.Equal(
+            new DateOnly(2026, 9, 21),
+            SettlementPeriod.OperationalDate(new DateTimeOffset(2026, 9, 22, 6, 59, 59, TimeSpan.Zero), Mazatlan));
+        Assert.Equal(
+            new DateOnly(2026, 9, 22),
+            SettlementPeriod.OperationalDate(new DateTimeOffset(2026, 9, 22, 7, 0, 0, TimeSpan.Zero), Mazatlan));
+        Assert.Equal(
+            new DateOnly(2026, 9, 22),
+            SettlementPeriod.OperationalDate(new DateTimeOffset(2026, 9, 22, 6, 59, 59, TimeSpan.Zero), TimeZoneInfo.Utc));
+        Assert.Throws<ArgumentNullException>(() => SettlementPeriod.OperationalDate(DateTimeOffset.UnixEpoch, null!));
+    }
+
+    /// <summary>D7-SETTLEMENT-CLOSED-PERIOD: period_to strictly before the operational date; today is still open.</summary>
+    [Fact]
+    public void A_period_is_closed_only_when_its_last_day_is_strictly_before_the_operational_date()
+    {
+        Assert.True(SettlementPeriod.TryResolve(new(2026, 9, 14), new(2026, 9, 20), Mazatlan, out var period));
+
+        Assert.True(period.IsClosedOn(new DateOnly(2026, 9, 21)));
+        Assert.True(period.IsClosedOn(new DateOnly(2027, 1, 1)));
+        Assert.False(period.IsClosedOn(new DateOnly(2026, 9, 20)));
+        Assert.False(period.IsClosedOn(new DateOnly(2026, 9, 19)));
+        Assert.False(period.IsClosedOn(new DateOnly(2026, 9, 14)));
+    }
+
     private static TimeZoneInfo CustomZone(
         string id,
         TimeZoneInfo.TransitionTime daylightStart,

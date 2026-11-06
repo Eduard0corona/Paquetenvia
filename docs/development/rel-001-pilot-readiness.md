@@ -96,7 +96,9 @@ What it does, all through the API's own endpoints (the screens have their own su
 | Photos | Each one: `createProofUploadSession` (timed), the signed PUT to storage, the Worker's validation, `finalizeProof` |
 
 The settlement runs on a second API whose clock is two days ahead (an `IClock` replacement through the new optional
-`configureTestServices` of the harness), because D7 settles only closed periods and the deliveries happened today.
+`configureTestServices` of the harness), because D7 settles only closed periods and the deliveries happened today:
+`createSettlement` answers 409 `SETTLEMENT_PERIOD_NOT_CLOSED` for a period that ends today in Culiacán, and every
+export writes its `finance.settlement.exported` audit entry (SET-001-D7-RULES-ENFORCED-2026-11-06).
 
 **Completeness** is read after the run with the administration connection, over the 60 orders that reached DELIVERED:
 `order_events` versions exactly 1 to the order version, one `ORDER_STATUS_CHANGED` audit row per status change, and a
