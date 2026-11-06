@@ -58,7 +58,7 @@ A gate is resolved only by a decision-log row `GATE-NNN-...` of Type `Gate resol
 
 - `tests/fixtures/rel-001/browser-suites.json`: every AI-07 route of MVP-0 and MVP-1, plus the MVP-1 screen without a
   route (`external_driver_offers`). Each is `COVERED` by named Playwright classes or a `GAP` with the task that owns it
-  (Z2: UI-001, AUTH-001, EXT-001, NTF-006 or REG-001). Today: 17 covered, 1 gap.
+  (Z2: UI-001, AUTH-001, EXT-001, NTF-006 or REG-001). Today: all 18 covered.
 - `tests/fixtures/rel-001/ai09-scenario-map.json`: the 81 AI-09 scenarios. Each is `COVERED` by test identities, a
   `GAP` with a reason, or `NOT_APPLICABLE` with a contract reason (V1_SCALE_READINESS, GATE-013, GATE-014, GATE-017,
   MVP-3 allies). Today: 73 covered, 3 gaps, 5 not applicable.
