@@ -16,11 +16,16 @@ public sealed record CreateSettlementCommand(
     bool MfaSatisfied,
     string? RequestId);
 
+/// <summary>
+/// A read of one settlement. getSettlement ignores <c>RequestId</c>; exportSettlementCsv records it on
+/// the audit entry every export writes (D7-SETTLEMENT-EXPORT-AUDIT).
+/// </summary>
 public sealed record GetSettlementQuery(
     Guid ActorId,
     Guid OrganizationId,
     Guid SettlementId,
-    bool MfaSatisfied);
+    bool MfaSatisfied,
+    string? RequestId = null);
 
 /// <summary>
 /// AI05-LIST-SETTLEMENTS: one server-sized page of the selected organization's settlements, newest first.
@@ -128,6 +133,12 @@ public enum SettlementConflictCode
     CashPending,
     IncidentPending,
     ClaimPending,
+
+    /// <summary>D7-SETTLEMENT-CLOSED-PERIOD: period_to is not strictly before the current operational date.</summary>
+    PeriodNotClosed,
+
+    /// <summary>D7-SETTLEMENT-NEGATIVE-TOTAL: the calculated or adjusted total would be below zero.</summary>
+    TotalNegative,
 }
 
 /// <summary>

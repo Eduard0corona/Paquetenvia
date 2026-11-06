@@ -511,8 +511,9 @@ public static class SettlementEndpoints
 
         try
         {
+            // D7-SETTLEMENT-EXPORT-AUDIT: the service writes the export's audit entry, with this request's trace id.
             var document = await service.ExportCsvAsync(
-                new(actorId, tenantContext.OrganizationId, settlement, session.MfaSatisfied),
+                new(actorId, tenantContext.OrganizationId, settlement, session.MfaSatisfied, httpContext.TraceIdentifier),
                 cancellationToken);
 
             // AI05-EXPORT-NO-STORE: the export carries payee and money data; no cache may keep a copy.
@@ -556,10 +557,16 @@ public static class SettlementEndpoints
     private const string InvalidRequest = "INVALID_REQUEST";
     private const string ConflictCode = "CONFLICT";
 
+    /// <summary>D7-SETTLEMENT-CLOSED-PERIOD (AI-05 x-pilot-contract-deltas).</summary>
+    private const string PeriodNotClosedCode = "SETTLEMENT_PERIOD_NOT_CLOSED";
+
+    /// <summary>D7-SETTLEMENT-NEGATIVE-TOTAL (AI-05 x-pilot-contract-deltas).</summary>
+    private const string TotalNegativeCode = "SETTLEMENT_TOTAL_NEGATIVE";
+
     internal static IReadOnlyList<string> PublicCodes { get; } =
     [
         InvalidRequest, ConflictCode, "SETTLEMENT_STATE_CONFLICT", "CASH_PENDING", "INCIDENT_PENDING",
-        "CLAIM_PENDING",
+        "CLAIM_PENDING", PeriodNotClosedCode, TotalNegativeCode,
     ];
 
     internal static string PublicCode(SettlementConflictCode code) => code switch
@@ -569,6 +576,8 @@ public static class SettlementEndpoints
         SettlementConflictCode.CashPending => "CASH_PENDING",
         SettlementConflictCode.IncidentPending => "INCIDENT_PENDING",
         SettlementConflictCode.ClaimPending => "CLAIM_PENDING",
+        SettlementConflictCode.PeriodNotClosed => PeriodNotClosedCode,
+        SettlementConflictCode.TotalNegative => TotalNegativeCode,
         _ => ConflictCode,
     };
 

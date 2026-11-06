@@ -1,5 +1,35 @@
 # Changelog
 
+## Liquidaciones: reglas D7 en el backend (SET-001-D7-RULES-ENFORCED-2026-11-06, AI-08 SET-001) — 2026-11-06
+
+- Respuesta literal del project owner (ronda S, pregunta S1 de opción múltiple, 2026-11-06), registrada en
+  `decision-log.md` con su contexto, la pregunta, las cuatro respuestas elegidas y todos los textos de las opciones: S1
+  "Reglas de liquidación (Recommended)". Las otras tres respuestas ("Huecos de REL-001", "Cerrar #280, #304 y #315" y
+  "Ruta de datos maestros") son tareas aparte.
+- Traduce al backend la decisión `D7-SETTLEMENT-RULES` (2026-09-26): "Solo se liquidan periodos ya cerrados; un total
+  negativo se rechaza; aprobar y pagar requieren MFA; la exportación se audita". El MFA ya estaba implementado
+  (`D7-SETTLEMENT-MFA`, PR 108); faltaban las otras tres reglas.
+- Periodo cerrado (`D7-SETTLEMENT-CLOSED-PERIOD`): `createSettlement` responde 409 `SETTLEMENT_PERIOD_NOT_CLOSED` si
+  `period_to` no es estrictamente anterior a la fecha operativa actual, la fecha de calendario de
+  `Finance:OperationalTimeZone` (America/Mazatlan por omisión), la misma zona de las fechas del periodo. Un periodo que
+  termina hoy sigue abierto. Se decide después de la capacidad y de la repetición idempotente, y antes de leer al
+  repartidor: una repetición devuelve la respuesta guardada, y un rechazo no lee datos del tenant ni guarda nada, así que
+  la misma llave puede reintentarse cuando el periodo cierre.
+- Total negativo (`D7-SETTLEMENT-NEGATIVE-TOTAL`): `createSettlement` y `addSettlementAdjustment` responden 409
+  `SETTLEMENT_TOTAL_NEGATIVE` si el total resultante queda por debajo de cero; un total de exactamente 0 se acepta. El
+  ajuste se revisa después del estado y del rango bigint, sobre el total que deja. Es una regla de la aplicación: AI-06
+  no gana CHECK y no hay migración, porque S1 pidió la decisión "tal como ya está en el contrato AI-05" y el servicio de
+  liquidaciones es el único que escribe el total.
+- Exportación auditada (`D7-SETTLEMENT-EXPORT-AUDIT`): cada CSV servido por `exportSettlementCsv`, en cualquier estado
+  de la liquidación, escribe una entrada append-only `finance.settlement.exported` con el id de la liquidación, su
+  estado, su total y su número de líneas, sin datos personales ni texto libre, y con el trace id de la petición. Se
+  escribe en la misma transacción que la lectura: si la entrada no se puede escribir, no sale el CSV (503); una
+  exportación rechazada no escribe nada.
+- AI-05: `SettlementConflictProblem.code` agrega `SETTLEMENT_PERIOD_NOT_CLOSED` y `SETTLEMENT_TOTAL_NEGATIVE`; las
+  descripciones de `createSettlement`, `addSettlementAdjustment`, `exportSettlementCsv` y `SettlementConflict` dicen las
+  reglas; los tres deltas reciben su línea `implementation`. Sin cambios en AI-06, AI-07, AI-08, AI-18, roles, permisos,
+  dependencias ni la web, que ya tenía los dos textos. Nota: `docs/development/set-001-d7-settlement-rules.md`.
+
 ## Ofertas externas: la tarjeta del repartidor muestra la guía (EXT-001-OFFER-GUIA-2026-11-04, AI-08 EXT-001) — 2026-11-04
 
 - Respuesta literal del project owner (ronda Z continuada, pregunta Z24, 2026-11-04), registrada en `decision-log.md` con

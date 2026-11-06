@@ -181,10 +181,11 @@ public sealed partial class SettlementHttpTests(SettlementHttpFixture fixture) :
             $"{settlement:D},DRIVER,{driver:D},{PeriodFrom},{PeriodTo},PAID,4250,", record, StringComparison.Ordinal));
         Assert.Equal(4_250, records.Skip(1).Sum(record => long.Parse(record.Split(',')[10], CultureInfo.InvariantCulture)));
 
-        // The same persisted settlement always downloads as the same bytes.
+        // The same persisted settlement always downloads as the same bytes. Each download is audited
+        // (D7-SETTLEMENT-EXPORT-AUDIT): calculated, adjusted, approved, paid and the two exports.
         using var again = await client.SendAsync(Get($"/api/v1/settlements/{settlement:D}/export.csv"));
         Assert.Equal(bytes, await again.Content.ReadAsByteArrayAsync());
-        Assert.Equal(new SettlementSnapshot("PAID", 4_250, 2, 4_250m, 4), await fixture.ReadAsync(settlement));
+        Assert.Equal(new SettlementSnapshot("PAID", 4_250, 2, 4_250m, 6), await fixture.ReadAsync(settlement));
     }
 
     [Fact]

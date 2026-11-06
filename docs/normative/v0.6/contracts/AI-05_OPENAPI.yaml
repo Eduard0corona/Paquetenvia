@@ -3604,7 +3604,14 @@ paths:
         idempotency lock, replay evidence or driver visibility, and a missing
         driver and another tenant's driver are the same uniform 404. Replaying
         the same Idempotency-Key with the same request returns the stored
-        response.
+        response. D7-SETTLEMENT-CLOSED-PERIOD: only a closed period is
+        settled; a period whose period_to is not strictly before the current
+        operational date (today's calendar date in the same operational time
+        zone, so a period ending today is still open) is
+        SETTLEMENT_PERIOD_NOT_CLOSED, decided after capability and replay and
+        before the driver is read. D7-SETTLEMENT-NEGATIVE-TOTAL: a calculated
+        total below zero is SETTLEMENT_TOTAL_NEGATIVE and persists nothing;
+        a total of exactly 0 is accepted.
       x-authorization-precedence: shape-validation-then-capability-before-persisted-state
       x-shape-validation: invalid-request-without-productive-transaction
       x-capability-protected-state:
@@ -3818,8 +3825,10 @@ paths:
         entry written in the same transaction, which keeps the reason. Any
         other settlement status is SETTLEMENT_STATE_CONFLICT, and an amount
         whose application would leave the bigint range is INVALID_REQUEST.
-        Replaying the same Idempotency-Key with the same request returns the
-        stored response.
+        D7-SETTLEMENT-NEGATIVE-TOTAL: an adjustment that would leave the total
+        below zero is SETTLEMENT_TOTAL_NEGATIVE and adds no line; a total of
+        exactly 0 is accepted. Replaying the same Idempotency-Key with the same
+        request returns the stored response.
       x-authorization-precedence: shape-validation-then-capability-before-persisted-state
       x-shape-validation: invalid-request-without-productive-transaction
       x-capability-protected-state:
@@ -4002,7 +4011,11 @@ paths:
         with microsecond precision, and an ADJUSTMENT has an empty order_id. No
         column carries personal data or free text. A header whose total does not
         equal the exact sum of its lines is never exported and the export fails
-        closed as 503.
+        closed as 503. D7-SETTLEMENT-EXPORT-AUDIT: every export served, whatever
+        the settlement status, writes one append-only audit entry
+        finance.settlement.exported (settlement id, status, total_cents and line
+        count; no personal data) in the same transaction as the read it renders,
+        so no CSV is served without its entry; a refused export writes none.
       x-authorization-precedence: capability-before-persisted-state
       x-capability-protected-state:
       - settlement
@@ -4260,9 +4273,9 @@ components:
     SettlementConflict:
       description: >-
         SET-001 request-shape, idempotency, replay-evidence, concurrency,
-        settlement-state or pending-source conflict, identified by a stable
-        code. The current settlement status, source evidence and cross-tenant
-        existence are never exposed.
+        settlement-state, pending-source, open-period or negative-total
+        conflict, identified by a stable code. The current settlement status,
+        source evidence and cross-tenant existence are never exposed.
       content:
         application/problem+json:
           schema:
@@ -6933,6 +6946,9 @@ components:
             CONFLICT covers Idempotency-Key reuse with a different payload,
             inconsistent replay evidence and concurrency conflicts, including a
             source claimed by a concurrent settlement.
+            SETTLEMENT_PERIOD_NOT_CLOSED (D7-SETTLEMENT-CLOSED-PERIOD) and
+            SETTLEMENT_TOTAL_NEGATIVE (D7-SETTLEMENT-NEGATIVE-TOTAL) carry the
+            D7-SETTLEMENT-RULES refusals.
           enum:
           - INVALID_REQUEST
           - CONFLICT
@@ -6940,6 +6956,8 @@ components:
           - CASH_PENDING
           - INCIDENT_PENDING
           - CLAIM_PENDING
+          - SETTLEMENT_PERIOD_NOT_CLOSED
+          - SETTLEMENT_TOTAL_NEGATIVE
     AuditLog:
       type: object
       required:
@@ -9304,11 +9322,16 @@ x-pilot-contract-deltas:
   - id: D7-SETTLEMENT-CLOSED-PERIOD
     status: DECIDED
     decision: D7-SETTLEMENT-RULES
+    implementation: shipped by fix/set-001-d7-settlement-rules together with SettlementPeriod.IsClosedOn,
+      SettlementConflictCode.PeriodNotClosed and their tests (SET-001-D7-RULES-ENFORCED-2026-11-06)
     delta: createSettlement rejects a period whose period_to is not strictly before the current operational date with 409
       code SETTLEMENT_PERIOD_NOT_CLOSED
   - id: D7-SETTLEMENT-NEGATIVE-TOTAL
     status: DECIDED
     decision: D7-SETTLEMENT-RULES
+    implementation: shipped by fix/set-001-d7-settlement-rules together with SettlementLedger.AdmitsTotal,
+      SettlementConflictCode.TotalNegative and their tests (SET-001-D7-RULES-ENFORCED-2026-11-06); application rule,
+      no AI-06 CHECK
     delta: createSettlement and addSettlementAdjustment reject any result with total below zero with 409 code
       SETTLEMENT_TOTAL_NEGATIVE
   - id: D7-SETTLEMENT-MFA
@@ -9323,6 +9346,8 @@ x-pilot-contract-deltas:
   - id: D7-SETTLEMENT-EXPORT-AUDIT
     status: DECIDED
     decision: D7-SETTLEMENT-RULES
+    implementation: shipped by fix/set-001-d7-settlement-rules together with the finance.settlement.exported audit
+      entry and its tests (SET-001-D7-RULES-ENFORCED-2026-11-06)
     delta: exportSettlementCsv writes one append-only audit entry per export
   - id: SET-EXPORT-NO-STORE
     status: DECIDED

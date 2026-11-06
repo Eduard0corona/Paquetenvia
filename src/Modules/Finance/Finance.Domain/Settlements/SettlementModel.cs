@@ -161,4 +161,10 @@ public static class SettlementLedger
         var sum = (Int128)totalCents + adjustmentCents;
         return sum >= long.MinValue && sum <= long.MaxValue ? (long)sum : null;
     }
+
+    /// <summary>
+    /// D7-SETTLEMENT-NEGATIVE-TOTAL (D7-SETTLEMENT-RULES, AI-05 x-pilot-contract-deltas): a settlement total may
+    /// not be below zero, whether calculated or moved by an adjustment. A total of exactly zero is admitted.
+    /// </summary>
+    public static bool AdmitsTotal(long totalCents) => totalCents >= 0;
 }

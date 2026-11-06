@@ -124,9 +124,10 @@ public sealed partial class SettlementWorkflowPostgreSqlContractTests(PostgreSql
         var first = await service.CreateAsync(scenario.Create("first"), default);
         Assert.Equal(7_500, first.TotalCents);
 
-        // An overlapping period finds nothing left to pay: DELIVERY and RETURN share one source identity.
+        // An overlapping period finds nothing left to pay: DELIVERY and RETURN share one source identity. It still
+        // ends before the operational date of Now (22 Sep in Culiacán), as D7-SETTLEMENT-CLOSED-PERIOD requires.
         var overlapping = await service.CreateAsync(
-            scenario.Create("overlapping") with { PeriodFrom = PeriodFrom.AddDays(-3), PeriodTo = PeriodTo.AddDays(3) },
+            scenario.Create("overlapping") with { PeriodFrom = PeriodFrom.AddDays(-3), PeriodTo = PeriodTo.AddDays(1) },
             default);
         Assert.Equal(("CALCULATED", 0L), (overlapping.Status, overlapping.TotalCents));
         Assert.Empty(overlapping.Lines);
@@ -708,7 +709,9 @@ public sealed partial class SettlementWorkflowPostgreSqlContractTests(PostgreSql
 
     private static string Json(SettlementResult result) => JsonSerializer.Serialize(result);
 
-    private PostgreSqlSettlementService CreateService(IFinanceFailureInjector? failureInjector = null)
+    private PostgreSqlSettlementService CreateService(
+        IFinanceFailureInjector? failureInjector = null,
+        DateTimeOffset? now = null)
     {
         var state = new TenantDatabaseExecutionState();
         var financeOptions = Options.Create(new FinanceOptions { Provider = FinanceProviderKind.PostgreSql });
@@ -726,7 +729,7 @@ public sealed partial class SettlementWorkflowPostgreSqlContractTests(PostgreSql
             new PostgreSqlAppendOnlyAuditWriter(state),
             new AuditPayloadRedactor(),
             failureInjector ?? new NoOpFinanceFailureInjector(),
-            new FixedClock(Now),
+            new FixedClock(now ?? Now),
             financeOptions);
     }
 
@@ -744,7 +747,7 @@ public sealed partial class SettlementWorkflowPostgreSqlContractTests(PostgreSql
         public string Source => $"dispatch.assignments/{AssignmentId:D}";
     }
 
-    private sealed record AuditRow(string Action, string EntityType, Guid EntityId, string Payload);
+    private sealed record AuditRow(string Action, string EntityType, Guid EntityId, string Payload, string? RequestId);
 
     /// <summary>
     /// One tenant with a FINANCE member, a PLATFORM_ADMIN, a DISPATCHER (the base scenario's user), a
@@ -1134,12 +1137,17 @@ public sealed partial class SettlementWorkflowPostgreSqlContractTests(PostgreSql
         public async Task<AuditRow> AuditAsync(Guid auditId)
         {
             await using var command = fixture.AdminDataSource.CreateCommand(
-                "SELECT action,entity_type,entity_id,payload_redacted::text FROM platform.audit_logs WHERE id=@id AND org_id=@org");
+                "SELECT action,entity_type,entity_id,payload_redacted::text,request_id FROM platform.audit_logs WHERE id=@id AND org_id=@org");
             command.Parameters.AddWithValue("id", auditId);
             command.Parameters.AddWithValue("org", OrganizationId);
             await using var reader = await command.ExecuteReaderAsync();
             Assert.True(await reader.ReadAsync(), $"Audit entry {auditId} does not exist.");
-            return new(reader.GetString(0), reader.GetString(1), reader.GetGuid(2), reader.GetString(3));
+            return new(
+                reader.GetString(0),
+                reader.GetString(1),
+                reader.GetGuid(2),
+                reader.GetString(3),
+                reader.IsDBNull(4) ? null : reader.GetString(4));
         }
 
         private static async Task<List<string>> ReadStringsAsync(NpgsqlCommand command)
