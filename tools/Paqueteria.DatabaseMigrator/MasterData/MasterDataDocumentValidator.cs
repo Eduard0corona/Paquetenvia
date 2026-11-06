@@ -330,8 +330,8 @@ internal static partial class MasterDataDocumentValidator
         /// MDM-001-DRIVER-SUB-2026-11-06 (S7): a driver is named by exactly one of <c>user_id</c> (the internal id,
         /// kept for the synthetic fixtures) or <c>identity_subject</c> (the AuthCenter <c>sub</c>, a lowercase
         /// UUID, the documented way for real data). The loader function resolves the subject to the user and
-        /// refuses an unknown one (<c>MDM001_DRIVER_SUBJECT_UNKNOWN</c>); a user named twice in the file (once
-        /// by each) is a duplicate there.
+        /// refuses an unknown one (<c>MDM001_DRIVER_SUBJECT_UNKNOWN</c>); only the function can tell that an id
+        /// and a subject name the same user, and it refuses that as a duplicate.
         /// </summary>
         private void DriverProfile(JsonElement item, string reference)
         {
