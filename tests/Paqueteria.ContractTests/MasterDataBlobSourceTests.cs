@@ -98,11 +98,11 @@ public sealed class MasterDataBlobSourceTests
     }
 
     [Theory]
-    [InlineData("https://stmdm001synthetic.blob.core.windows.net/?sv=2025-11-05&sig=c2VjcmV0", "--blob-account-url")]
+    [InlineData("https://stmdm001synthetic.blob.core.windows.net/?sv=2025-11-05&sig=not-a-signature", "--blob-account-url")]
     [InlineData("https://stmdm001synthetic.blob.core.windows.net/master-data", "--blob-account-url")]
     [InlineData("http://stmdm001synthetic.blob.core.windows.net/", "--blob-account-url")]
     [InlineData("https://stmdm001synthetic.blob.core.windows.net:8443/", "--blob-account-url")]
-    [InlineData("https://user:secret@stmdm001synthetic.blob.core.windows.net/", "--blob-account-url")]
+    [InlineData("https://user:info@stmdm001synthetic.blob.core.windows.net/", "--blob-account-url")]
     [InlineData("https://STMDM001SYNTHETIC.blob.core.windows.net/", "--blob-account-url")]
     [InlineData("https://stmdm001synthetic.example.test/", "--blob-account-url")]
     public void An_account_url_other_than_the_blob_endpoint_is_refused_without_echoing_it(string url, string expected)
@@ -111,7 +111,7 @@ public sealed class MasterDataBlobSourceTests
 
         Assert.Contains(expected, refused.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(url, refused.Message, StringComparison.Ordinal);
-        Assert.DoesNotContain("secret", refused.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("user:info", refused.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("sig=", refused.Message, StringComparison.Ordinal);
     }
 
