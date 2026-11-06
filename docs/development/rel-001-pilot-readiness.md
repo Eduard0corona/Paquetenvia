@@ -25,7 +25,7 @@ The entry phase lands in three PRs:
 
 | Criterion | Source | Passes when | Today |
 | --- | --- | --- | --- |
-| `full_regression` | AI-08 required test | Foundation CI 13/13 push run on `main` whose head is `tested_git_sha`; REL-000 technical evidence `PASSED` in that run; no failed or skipped test in any execution artifact; every identity of the two closed manifests executed and passed in that run; no `GAP` | Fails: 1 screen and 3 AI-09 scenarios have no test |
+| `full_regression` | AI-08 required test | Foundation CI 13/13 push run on `main` whose head is `tested_git_sha`; REL-000 technical evidence `PASSED` in that run; no failed or skipped test in any execution artifact; every identity of the two closed manifests executed and passed in that run; no `GAP` | Fails: 2 AI-09 scenarios have no test |
 | `data_completeness` | AI-02, Z6 | The rehearsal has at least 50 delivered orders and `complete * 100 >= delivered * 98`, and the four journey steps passed | Measured by the rehearsal of each dispatch; `MISSING` if it fails |
 | `latency` | AI-02, Z7, Z8 | Each critical screen p95 < 2000 ms and order creation p95 < 3000 ms, at least 100 samples each, nearest-rank | Measured by the rehearsal of each dispatch; `MISSING` if it fails |
 | `restore_vigente` | AI-08, Z9 | The pilot drill `Succeeded`, restore point inside the 14-day PITR window, verified 0 to 7 days before `period_start` (before the record exists: before the report time), row counts matched, `assert` ran `tested_git_sha`; the OPS-002 CI drill passed with the same counts | `MISSING` until the owner runs the drill on the pilot; a certified run from before PR-C has no CI counts (`MISSING`) |
@@ -61,7 +61,7 @@ A gate is resolved only by a decision-log row `GATE-NNN-...` of Type `Gate resol
   (Z2: UI-001, AUTH-001, EXT-001, NTF-006 or REG-001). Today: all 18 covered.
 - `tests/fixtures/rel-001/ai09-scenario-map.json`: the 81 AI-09 scenarios. Each is `COVERED` by test identities, a
   `GAP` with a reason, or `NOT_APPLICABLE` with a contract reason (V1_SCALE_READINESS, GATE-013, GATE-014, GATE-017,
-  MVP-3 allies). Today: 73 covered, 3 gaps, 5 not applicable. `Restaurar un backup` stays a `GAP` that lists its tests:
+  MVP-3 allies). Today: 74 covered, 2 gaps, 5 not applicable. `Restaurar un backup` stays a `GAP` that lists its tests:
   since #344 the OPS-002 CI drill runs each of its steps, with the row-count comparison, on a backup it takes itself,
   and no CI test restores a daily backup. The pilot's daily backups (Azure, 14-day PITR) are restored only by
   `restore-drill.sh` on the deployed environment, which this report checks as `restore_vigente`.
@@ -70,6 +70,57 @@ An identity is a full test name or a class name (every test of the class). Each 
 artifact must show it passed. The tool's tests check that every .NET identity is still declared under `tests/`, so a
 renamed or removed test must update the map in the same PR. When a missing suite lands, its task turns the `GAP` into
 `COVERED`.
+
+### Security event of `Un aliado no puede leer la orden de otro aliado` (S4)
+
+The last step of this scenario is "debe existir un evento de seguridad sin exponer datos de O". The owner's answer (round
+S, S4, 2026-11-06) was "Evento en el log", recorded as `REL-001-CROSS-TENANT-SECURITY-EVENT-2026-11-06`. The scenario is
+`COVERED` by four tests:
+
+- the RLS test (`OrdersTransitionPostgreSqlContractTests.RLS_hides_cross_tenant_order_...`, `runtime-contracts`);
+- the uniform 403 (`TenantSelectionPipelineTests.Foreign_organization_is_forbidden_without_disclosure`, `dotnet`);
+- the uniform 404 (`OrderHttpTests.GET_detail_is_uniform_and_timeline_exposes_no_internal_payload`, `dotnet`);
+- the event itself (`CrossTenantSecurityEventHttpTests`, `dotnet`).
+
+The API writes one `Warning` line with the fixed event id 4201 (`CrossTenantAccessRefused`,
+`src/Paqueteria.Api/Tenancy/CrossTenantSecurityEvent.cs`). It is written in two cases:
+
+| Case | `RefusalType` | When |
+| --- | --- | --- |
+| Refused organization | `ORGANIZATION_REFUSED` | The tenant context middleware answers the uniform 403. The actor has no active membership in the requested organization: it belongs to another tenant, is inactive or does not exist, and all three look alike |
+| Order not found | `ORDER_NOT_FOUND` | A GET of an order or of one of its sub-resources answers the uniform 404 inside the selected organization: `getOrder`, `listOrderProofs`, `getOrderFinancials`, `listOrderRecipientNotices`, `listAssignableDrivers`. A missing order and another tenant's order give the same line |
+
+What the line carries:
+
+- `RefusalType` and `RouteTemplate`: the endpoint's template, such as `/api/v1/orders/{orderId:guid}`, never the
+  request path.
+- From the OBS-003 enrichment, the actor's own organization as `OrganizationPseudonym` and the actor's role kind there as
+  `ActorRoleKind`. For a 404 the own organization is the selected one. For a 403 it is the organization of the actor's
+  default active membership, or the only organization the actor is an active member of; with neither, the line carries
+  no pseudonym and no role kind.
+- From the same enrichment, `TraceId`. It is the request's random W3C trace id, which every line of the request carries
+  and the problem body already returns.
+
+What it never carries: an order id, an organization id, a user id, an e-mail, an IP or the `X-Organization-Id` value. It
+reads nothing about the requested organization or order, writes nothing to the database, and goes to the console and so
+to Log Analytics (30 days). Its id is outside the OBS-002 block 4600-4699, so no alert or workbook reads it. The optional
+alert was not chosen.
+
+A Log Analytics query for these lines, in the form the OBS-002 queries use (not an alert):
+
+```kusto
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s == "ca-pv-pilot-api"
+| where Log_s has "4201"
+| extend e = parse_json(Log_s)
+| where toint(e.EventId) == 4201
+| project TimeGenerated, RefusalType = tostring(e.State.RefusalType), RouteTemplate = tostring(e.State.RouteTemplate),
+    ActorRoleKind = tostring(e.State.ActorRoleKind), OrganizationPseudonym = tostring(e.State.OrganizationPseudonym)
+```
+
+A refusal that is not about another tenant writes nothing. That covers a role without the capability in its own
+organization, a malformed `X-Organization-Id`, an inactive identity, and any write that answers 404. An allowed read
+writes nothing either.
 
 ## Synthetic rehearsal (Z4, Z5, Z6, Z7, Z8)
 

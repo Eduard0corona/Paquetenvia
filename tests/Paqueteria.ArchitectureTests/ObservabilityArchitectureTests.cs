@@ -389,6 +389,7 @@ public sealed partial class ObservabilityArchitectureTests
                 "src/BuildingBlocks/Paqueteria.Infrastructure/Observability/TraceCorrelatedLogging.cs",
                 .. WorkerOrganizationContextSites.Keys,
                 "src/Paqueteria.Api/Program.cs",
+                "src/Paqueteria.Api/Tenancy/CrossTenantSecurityEvent.cs",
                 "src/Paqueteria.Api/Tenancy/TelemetryOrganizationContextMiddleware.cs",
                 "src/Paqueteria.Worker/Program.cs",
             ],
@@ -427,7 +428,9 @@ public sealed partial class ObservabilityArchitectureTests
             .Order(StringComparer.Ordinal)
             .ToArray();
         Assert.Equal(
-            WorkerOrganizationContextSites.Keys.Append("src/Paqueteria.Api/Tenancy/TelemetryOrganizationContextMiddleware.cs")
+            WorkerOrganizationContextSites.Keys
+                .Append("src/Paqueteria.Api/Tenancy/CrossTenantSecurityEvent.cs")
+                .Append("src/Paqueteria.Api/Tenancy/TelemetryOrganizationContextMiddleware.cs")
                 .Order(StringComparer.Ordinal),
             enterers);
 
@@ -466,6 +469,51 @@ public sealed partial class ObservabilityArchitectureTests
             "TelemetryOrganizationContext",
             File.ReadAllText(TestRepository.GetPath("src/Modules/Realtime/Realtime.Infrastructure/Dispatching/RealtimeOutboxProcessor.cs")),
             StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// REL-001-CROSS-TENANT-SECURITY-EVENT-2026-11-06 (owner answer S4, "Evento en el log (Recommended)"): the security
+    /// event names only the refusal type and the route template, takes the pseudonym and the role kind from the OBS-003
+    /// enrichment (it enters the context of the actor's own organization, with the API's role kind), has a fixed id outside
+    /// the OBS-002 block (so the enrichment adds them and no alert or workbook reads it) and writes nothing to the
+    /// database. The optional OBS-002 alert was not chosen, so no alert or workbook names it.
+    /// </summary>
+    [Fact]
+    public void The_cross_tenant_security_event_carries_only_its_two_properties_and_reaches_no_alert()
+    {
+        const string path = "src/Paqueteria.Api/Tenancy/CrossTenantSecurityEvent.cs";
+        var code = CodeWithoutComments(File.ReadAllText(TestRepository.GetPath(path)));
+
+        // One source-generated line, and no other log call in the file.
+        var attribute = Assert.Single(Regex.Matches(code, @"\[LoggerMessage\((?<body>[^\]]*)\)\]"));
+        Assert.Equal(["RefusalType", "RouteTemplate"], Placeholders(attribute.Value).Order(StringComparer.Ordinal));
+        Assert.Contains("EventId = Id,", attribute.Value, StringComparison.Ordinal);
+        Assert.Equal(0, Regex.Count(code, @"\.Log\w*\(|BeginScope|LoggerMessage\.Define"));
+        Assert.Contains("public const int Id = 4201;", code, StringComparison.Ordinal);
+        Assert.False(
+            TelemetryEvents.IsObservabilityEvent(new Microsoft.Extensions.Logging.EventId(4201)),
+            "the security event must stay outside the OBS-002 block, so the enrichment adds the pseudonym and role kind");
+
+        // The pseudonym and role kind come only from the enrichment, for one organization the session already names.
+        Assert.Equal(1, Regex.Count(code, Regex.Escape("TelemetryOrganizationContext.Enter(")));
+        Assert.Contains("TelemetryOrganizationContextMiddleware.RoleKind(session, organizationId)", code, StringComparison.Ordinal);
+        Assert.DoesNotContain("SetOrganization", code, StringComparison.Ordinal);
+
+        // No path, query, header, address or database read.
+        foreach (var forbidden in new[]
+                 {
+                     "Request.Path", "Request.Query", "Request.Headers", "X-Organization-Id", "RemoteIpAddress",
+                     "Connection.", "HttpContext.User", "context.User", "Npgsql", "DbContext", "SELECT",
+                 })
+        {
+            Assert.DoesNotContain(forbidden, code, StringComparison.Ordinal);
+        }
+
+        var template = File.ReadAllText(TestRepository.GetPath("deploy/azure/pilot/observability.bicep"));
+        Assert.DoesNotContain("4201", template, StringComparison.Ordinal);
+        Assert.DoesNotContain("CrossTenantAccessRefused", template, StringComparison.Ordinal);
+        Assert.DoesNotContain("RefusalType", template, StringComparison.Ordinal);
+        Assert.DoesNotContain("RouteTemplate", template, StringComparison.Ordinal);
     }
 
     private static string CodeWithoutComments(string text) => string.Join(

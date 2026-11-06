@@ -47,6 +47,9 @@ public sealed class TenantContextMiddleware(RequestDelegate next)
 
         if (!session.HasOrganizationAccess(organizationId))
         {
+            // REL-001-CROSS-TENANT-SECURITY-EVENT-2026-11-06: the API host writes the security event from this mark;
+            // the requested organization itself is never recorded.
+            tenantContext.RefuseOrganization();
             await WriteProblemAsync(httpContext, StatusCodes.Status403Forbidden, "Forbidden.");
             return;
         }

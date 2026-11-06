@@ -143,6 +143,9 @@ app.UseRealtimePrivateAccessTokens();
 app.UseAuthentication();
 app.UseRateLimiter();
 app.UseRealtimeConnectionGate();
+// REL-001-CROSS-TENANT-SECURITY-EVENT-2026-11-06: one log line for a refused organization or an order read that ends in
+// the uniform 404; right before the tenant context middleware, so it sees both.
+app.UseCrossTenantSecurityEvents();
 app.UseMiddleware<TenantContextMiddleware>();
 app.UseTelemetryOrganizationContext();
 app.UseAuthorization();
