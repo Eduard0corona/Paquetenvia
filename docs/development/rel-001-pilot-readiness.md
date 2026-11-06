@@ -25,7 +25,7 @@ The entry phase lands in three PRs:
 
 | Criterion | Source | Passes when | Today |
 | --- | --- | --- | --- |
-| `full_regression` | AI-08 required test | Foundation CI 13/13 push run on `main` whose head is `tested_git_sha`; REL-000 technical evidence `PASSED` in that run; no failed or skipped test in any execution artifact; every identity of the two closed manifests executed and passed in that run; no `GAP` | Fails: 1 screen and 3 AI-09 scenarios have no test |
+| `full_regression` | AI-08 required test | Foundation CI 13/13 push run on `main` whose head is `tested_git_sha`; REL-000 technical evidence `PASSED` in that run; no failed or skipped test in any execution artifact; every identity of the two closed manifests executed and passed in that run; no `GAP` | Fails: 1 AI-09 scenario has no test |
 | `data_completeness` | AI-02, Z6 | The rehearsal has at least 50 delivered orders and `complete * 100 >= delivered * 98`, and the four journey steps passed | Measured by the rehearsal of each dispatch; `MISSING` if it fails |
 | `latency` | AI-02, Z7, Z8 | Each critical screen p95 < 2000 ms and order creation p95 < 3000 ms, at least 100 samples each, nearest-rank | Measured by the rehearsal of each dispatch; `MISSING` if it fails |
 | `restore_vigente` | AI-08, Z9 | The pilot drill `Succeeded`, restore point inside the 14-day PITR window, verified 0 to 7 days before `period_start` (before the record exists: before the report time), row counts matched, `assert` ran `tested_git_sha`; the OPS-002 CI drill passed with the same counts | `MISSING` until the owner runs the drill on the pilot; a certified run from before PR-C has no CI counts (`MISSING`) |
@@ -61,15 +61,45 @@ A gate is resolved only by a decision-log row `GATE-NNN-...` of Type `Gate resol
   (Z2: UI-001, AUTH-001, EXT-001, NTF-006 or REG-001). Today: all 18 covered.
 - `tests/fixtures/rel-001/ai09-scenario-map.json`: the 81 AI-09 scenarios. Each is `COVERED` by test identities, a
   `GAP` with a reason, or `NOT_APPLICABLE` with a contract reason (V1_SCALE_READINESS, GATE-013, GATE-014, GATE-017,
-  MVP-3 allies). Today: 73 covered, 3 gaps, 5 not applicable. `Restaurar un backup` stays a `GAP` that lists its tests:
-  since #344 the OPS-002 CI drill runs each of its steps, with the row-count comparison, on a backup it takes itself,
-  and no CI test restores a daily backup. The pilot's daily backups (Azure, 14-day PITR) are restored only by
-  `restore-drill.sh` on the deployed environment, which this report checks as `restore_vigente`.
+  MVP-3 allies). Today: 75 covered, 1 gap, 5 not applicable. The gap is `Un aliado no puede leer la orden de otro
+  aliado`: the uniform answer and the RLS isolation are tested, but nothing records the security event of its last step
+  yet. The owner chose a fixed log event for it (round S, S4); it is a separate PR.
 
 An identity is a full test name or a class name (every test of the class). Each one names the job whose execution
 artifact must show it passed. The tool's tests check that every .NET identity is still declared under `tests/`, so a
 renamed or removed test must update the map in the same PR. When a missing suite lands, its task turns the `GAP` into
 `COVERED`.
+
+### Scenarios covered by an owner decision (round S, 2026-11-06)
+
+A `COVERED` entry carries only its test identities, with no reason field. The two scenarios below are covered with a
+nuance the map cannot express, so it is written here.
+
+- **`Actor sin capacidad dentro de su organización` (S3).** The owner's answer: "Con el equivalente del piloto". AI-09
+  asks for a `business_operator` who can see an order and receives 403 when trying a financial override. In the pilot
+  no `business_operator` sees orders; that is MVP-2. The pilot's equivalent is already tested, with no code change, in
+  the `dotnet` job:
+  - The pilot's financial override is the low-price authorization of a quote. VIEWER, FINANCE, DRIVER and
+    BUSINESS_ADMIN get the generic 403 before the service is called
+    (`QuoteLowPriceAuthorizationHttpTests.Every_other_role_receives_a_generic_403_before_the_service_is_called`), and
+    PLATFORM_ADMIN without MFA gets `MFA_REQUIRED`
+    (`QuoteLowPriceAuthorizationHttpTests.Platform_admin_without_mfa_receives_MFA_REQUIRED_before_the_service_is_called`).
+  - VIEWER does see the order (`OrderCapabilityMatrixHttpTests.ListOrders_and_GetOrder_are_open_to`). So does
+    DISPATCHER, and it gets 403 on every settlement operation
+    (`SettlementHttpTests.An_actor_without_the_settlement_capability_is_403_for_every_operation`).
+
+  The literal `business_operator` case is tested in MVP-2, when that role can see orders.
+- **`Restaurar un backup` (S5).** The owner's answer: "Cubierto + restore vigente". It is covered by the OPS-002 CI drill
+  (`backup-restore` job, `tools/test-backup-restore.ps1`) and by `RestoreDrillRowCountPostgreSqlContractTests`
+  (`runtime-contracts` job). Since #344 the CI drill runs every step on a backup it takes itself: the restore runbook
+  into an empty environment, then organizations, orders, events and file references recovered. Nothing is missing: the
+  four row counts match and no object is missing or extra. The contract test runs the pilot drill's comparison on real
+  PostgreSQL.
+
+  The nuance: no CI test restores the pilot's daily backup (Azure automated backups, 14-day PITR). Only
+  `deploy/azure/pilot/restore-drill.sh` restores it, on the deployed pilot. The entry report still requires that drill
+  as `restore_vigente`: a drill 7 days or less old, with matched counts. That criterion keeps blocking the pilot start
+  until the owner runs the drill. The scenario being covered does not change that criterion or the tool.
 
 ## Synthetic rehearsal (Z4, Z5, Z6, Z7, Z8)
 
