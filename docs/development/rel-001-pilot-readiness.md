@@ -61,7 +61,10 @@ A gate is resolved only by a decision-log row `GATE-NNN-...` of Type `Gate resol
   (Z2: UI-001, AUTH-001, EXT-001, NTF-006 or REG-001). Today: all 18 covered.
 - `tests/fixtures/rel-001/ai09-scenario-map.json`: the 81 AI-09 scenarios. Each is `COVERED` by test identities, a
   `GAP` with a reason, or `NOT_APPLICABLE` with a contract reason (V1_SCALE_READINESS, GATE-013, GATE-014, GATE-017,
-  MVP-3 allies). Today: 73 covered, 3 gaps, 5 not applicable.
+  MVP-3 allies). Today: 73 covered, 3 gaps, 5 not applicable. `Restaurar un backup` stays a `GAP` that lists its tests:
+  since #344 the OPS-002 CI drill runs each of its steps, with the row-count comparison, on a backup it takes itself,
+  and no CI test restores a daily backup. The pilot's daily backups (Azure, 14-day PITR) are restored only by
+  `restore-drill.sh` on the deployed environment, which this report checks as `restore_vigente`.
 
 An identity is a full test name or a class name (every test of the class). Each one names the job whose execution
 artifact must show it passed. The tool's tests check that every .NET identity is still declared under `tests/`, so a
