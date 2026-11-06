@@ -762,13 +762,15 @@ public sealed class DatabaseBaselineDeploymentContractTests(PostgreSqlContractFi
             REVOKE SELECT (policy_version), INSERT (policy_version) ON pricing.tariff_rules FROM paqueteria_master_data_executor;
             REVOKE SELECT (operator_login,operator_ref), INSERT (operator_login,operator_ref)
               ON platform.master_data_operator_refs FROM paqueteria_master_data_executor;
+            REVOKE SELECT (identity_subject) ON identity.users FROM paqueteria_master_data_executor;
             DELETE FROM platform."__ef_migrations_history_pricing"
               WHERE "MigrationId" IN ('{E002MasterDataStateReader.MigrationId}',
                 '{VersionPricingPolicyPerOrganization.MigrationId}',
                 '{StoreTariffPolicyVersionInMasterDataLoader.MigrationId}',
                 '{HardenMasterDataLoaderOperatorBoundary.MigrationId}',
                 '{RequireVatIncludedTariffsInMasterDataLoader.MigrationId}',
-                '{RequireMazatlanTimeZoneInMasterDataLoader.MigrationId}');
+                '{RequireMazatlanTimeZoneInMasterDataLoader.MigrationId}',
+                '{ResolveDriverIdentitySubjectInMasterDataLoader.MigrationId}');
             """);
         Assert.Equal("PENDING", await PricingLaneAsync());
         const string SecurityAclSql = "SELECT nspacl::text FROM pg_namespace WHERE nspname='security'";

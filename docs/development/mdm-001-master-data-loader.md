@@ -123,10 +123,22 @@ Estructura (todas las propiedades son obligatorias; una propiedad desconocida o 
                         "pricing_tier", "service_type", "amount_cents": <entero>, "tax_mode",
                         "policy_version": "<[A-Za-z0-9._-]{1,64}>",
                         "active_from": "YYYY-MM-DDTHH:MM:SSZ", "active_to": "...|null", "status" }],
-  "driver_profiles": [{ "user_id", "home_city": {...}, "driver_type", "vehicle_type", "status",
+  "driver_profiles": [{ "user_id" | "identity_subject", "home_city": {...}, "driver_type", "vehicle_type", "status",
                         "service_areas": [{ "city": {...}, "name", "status" }] }]
 }
 ```
+
+**Repartidores por su sub de AuthCenter** (`MDM-001-DRIVER-SUB-2026-11-06`, respuesta S7 "Por su sub de AuthCenter
+(Recommended)"). Cada perfil lleva **exactamente uno** de `user_id` (el id interno, que ninguna pantalla ni API
+muestra; se queda para los ejemplos sintéticos) o `identity_subject`, el `sub` que el owner ve en el panel de
+administración de AuthCenter, como en el alta del primer administrador: un UUID en minúsculas distinto del nulo. Es la
+forma documentada para datos reales. El job rechaza los dos juntos o ninguno (`MDM001_DRIVER_IDENTIFIER`) y un sub mal
+formado (`MDM001_IDENTITY_SUBJECT`) antes de conectarse; la función repite ambas reglas (`MDM001_ENTRY_SHAPE`), traduce
+el sub al usuario y rechaza uno desconocido con `MDM001_DRIVER_SUBJECT_UNKNOWN`, sin decir nada más de él. Al usuario
+resuelto se le aplican las mismas reglas que a un `user_id`: usuario `ACTIVE` con membresía `DRIVER` activa en esta
+organización (`MDM001_DRIVER_MEMBERSHIP_REQUIRED`) y un perfil por usuario (el mismo usuario por id y por sub en un
+archivo es `MDM001_DUPLICATE_NATURAL_KEY`). El formato sigue siendo `v1`: la propiedad es una alternativa aditiva, todo
+archivo anterior conserva su sentido y un cargador anterior la rechaza en vez de malinterpretarla.
 
 Los valores de enumeraciones son exactamente los `CHECK` de AI-06. Coordenadas en WGS84
 `[longitud, latitud]`; cada anillo cerrado y con al menos cuatro posiciones.
@@ -161,7 +173,7 @@ regla que seleccionó.
 | Área de servicio | `(owner_org_id, city, name)` | `polygon`, `status` |
 | Zona operativa | `(owner_org_id, service_area, name)` | `zone_type`, `polygon`, `status` |
 | Tarifa | `(owner_org_id, city, service_area, operating_zone, pricing_tier, service_type, active_from)` | `active_to`, `status`; un `amount_cents` o `tax_mode` distinto falla (`MDM001_TARIFF_AMOUNT_IMMUTABLE`) |
-| Perfil de repartidor | `user_id` | `home_city`, `driver_type`, `vehicle_type`, `status` |
+| Perfil de repartidor | el usuario: `user_id`, o el de `identity_subject` | `home_city`, `driver_type`, `vehicle_type`, `status` |
 | Área del repartidor | `(driver, service_area)` | `status` |
 
 **Vigencias de tarifa sin traslape.** Dos reglas `ACTIVE` del mismo `(organización, ciudad, área, zona,
@@ -259,6 +271,18 @@ escribir nada). Ninguna fila guardada se reescribe: una ciudad cargada antes en 
 cargas de tenants la siguen referenciando por su llave natural (las referencias no llevan zona). El validador del
 job repite la regla con el mismo código. No agrega permisos, tablas ni roles (el ejecutor conserva 122 permisos).
 Su `Down` restaura la función del paso `VAT_INCLUDED`; las ciudades cargadas se quedan.
+
+La lane `20261106000100_ResolveDriverIdentitySubjectInMasterDataLoader` (`MDM-001-DRIVER-SUB-2026-11-06`: "Por su sub de
+AuthCenter (Recommended)") reemplaza la función con el cuerpo del paso America/Mazatlan más dos ediciones revisadas de
+coincidencia única (la forma de la entrada admite `user_id` o `identity_subject`, y el sub se traduce al usuario) y
+concede al ejecutor `SELECT (identity_subject)` sobre `identity.users`: el total exacto pasa de 122 a 123. Como los
+permisos de `policy_version` y del endurecimiento, es de la lane y AI-18 lo registra en comentarios y en la aserción 27;
+`DatabaseBaselineAssertions` lo exige sólo cuando el paso está en el historial (`MasterDataDriverSubjectStateReader`).
+Nada para el rol de carga ni para los roles de runtime. Su `Down` revoca el permiso y restaura la función del paso
+America/Mazatlan; los perfiles cargados se quedan. Pruebas en `MasterDataLoaderPostgreSqlContractTests`: el sub se
+resuelve, uno desconocido se rechaza, los dos o ninguno se rechazan en el job y en la función, un usuario inactivo, sin
+rol `DRIVER` o de otra organización se sigue rechazando, el catálogo de permisos (123 exactos) y la lane baja y sube en
+una base aislada; `MasterDataDriverIdentifierValidatorTests` cubre el validador.
 
 Mantienen el contrato: `DatabaseBaselineAssertions` (límite exacto del ejecutor, del beneficiario, de la
 marca y de la tabla de seudónimos), el mapa E-002 (`_PLUS_MDM001`, por historial del carril Pricing), la ACL de `security`, el puente
