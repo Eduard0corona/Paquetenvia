@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 using Npgsql;
 using NpgsqlTypes;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
+using Paqueteria.ContractTests.Support;
 using Paqueteria.Infrastructure.Database;
 using Paqueteria.Infrastructure.Database.Baseline;
 using Paqueteria.Infrastructure.Tenancy;
@@ -828,6 +829,169 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
         }
 
         Assert.Equal("0|0|0", await VisibleCountsAsync(organization));
+    }
+
+    /// <summary>
+    /// MDM-001 route S2: a Blob source is loaded only after its SHA-256 matches, and the blob is deleted only when the
+    /// operator asked for it and the load committed: never on a dry run or a database rejection. A refused deletion
+    /// after a commit exits 11 with the data loaded. The console carries references, sizes and hashes only.
+    /// </summary>
+    [PostgreSqlContractFact]
+    public async Task A_blob_source_loads_after_its_sha256_check_and_is_deleted_only_after_a_committed_load()
+    {
+        var organization = await NewOrganizationAsync();
+        var suffix = Suffix();
+        await EnsureCityAsync(suffix);
+        await EnsureOperatorLoginAsync();
+        var content = Encoding.UTF8.GetBytes(Document(organization, suffix).ToJsonString());
+        var sha = SHA256.HashData(content);
+        var service = new StandInBlobService(content);
+        MasterDataLoadOptions Options(bool dryRun, bool delete) => new(
+            null, organization, dryRun, false, StandInBlobService.Reference, sha, delete);
+
+        // A dry run reads and diffs, and never deletes.
+        await SetGateAsync(Synthetic, false);
+        var dryRun = new StringWriter();
+        using (await MasterDataLoader.RunAsync(OperatorConnectionString(), Options(dryRun: true, delete: false), Testing,
+                   dryRun, CancellationToken.None, service.Source()))
+        {
+        }
+
+        Assert.Contains("MDM001_DRY_RUN", dryRun.ToString());
+        Assert.Contains($"MDM001_SOURCE source=blob {StandInBlobService.Reference.Describe()} bytes={content.Length} " +
+            $"sha256={Convert.ToHexStringLower(sha)}", dryRun.ToString());
+        Assert.Equal("0|0|0", await VisibleCountsAsync(organization));
+
+        // A database rejection (a SYNTHETIC file on a REAL database) writes nothing and keeps the blob.
+        await SetGateAsync(Real, false);
+        try
+        {
+            var rejected = await Assert.ThrowsAsync<MasterDataLoadException>(() => MasterDataLoader.RunAsync(
+                OperatorConnectionString(), Options(dryRun: false, delete: true), Testing, TextWriter.Null,
+                CancellationToken.None, service.Source()));
+            Assert.Equal(MasterDataLoader.DatabaseExitCode, rejected.ExitCode);
+            Assert.Contains("MDM001_CLASSIFICATION_NOT_ALLOWED", rejected.Message);
+        }
+        finally
+        {
+            await SetGateAsync(Synthetic, false);
+        }
+
+        Assert.DoesNotContain("DELETE", service.Requests.Select(request => request.Method));
+        Assert.Equal("0|0|0", await VisibleCountsAsync(organization));
+
+        // The committed load deletes exactly the version it read, once, and says so.
+        var loaded = new StringWriter();
+        using (await MasterDataLoader.RunAsync(OperatorConnectionString(), Options(dryRun: false, delete: true), Testing,
+                   loaded, CancellationToken.None, service.Source()))
+        {
+        }
+
+        Assert.Contains("MDM001_LOAD_OK", loaded.ToString());
+        Assert.EndsWith($"MDM001_BLOB_DELETED {StandInBlobService.Reference.Describe()}{Environment.NewLine}", loaded.ToString());
+        Assert.Equal("1|2|2", await VisibleCountsAsync(organization));
+        var delete = Assert.Single(service.Requests, request => request.Method == "DELETE");
+        Assert.Equal(StandInBlobService.ETag, delete.IfMatch);
+        Assert.True(service.Deleted);
+        Assert.Equal(Convert.ToHexStringLower(sha), await ScalarAsync<string>(
+            "SELECT payload_redacted->>'file_sha256_reported' FROM platform.audit_logs WHERE org_id=@org AND action='MASTER_DATA_LOADED'",
+            ("org", organization)));
+
+        // Without the flag the blob stays; a refused deletion after a commit exits 11 and the load stands.
+        var kept = new StandInBlobService(content) { DeleteFailure = (System.Net.HttpStatusCode.Forbidden, "AuthorizationPermissionMismatch") };
+        using (await MasterDataLoader.RunAsync(OperatorConnectionString(), Options(dryRun: false, delete: false), Testing,
+                   TextWriter.Null, CancellationToken.None, kept.Source()))
+        {
+        }
+
+        Assert.DoesNotContain("DELETE", kept.Requests.Select(request => request.Method));
+        var refused = await Assert.ThrowsAsync<MasterDataLoadException>(() => MasterDataLoader.RunAsync(
+            OperatorConnectionString(), Options(dryRun: false, delete: true), Testing, TextWriter.Null,
+            CancellationToken.None, kept.Source()));
+        Assert.Equal(MasterDataBlobSource.DeleteFailedExitCode, refused.ExitCode);
+        Assert.Equal(
+            $"MDM001_BLOB_DELETE_FAILED status=403 code=AuthorizationPermissionMismatch {StandInBlobService.Reference.Describe()}; " +
+            "the load was committed and the blob is still there",
+            refused.Message);
+        Assert.False(kept.Deleted);
+        Assert.Equal(3L, await ScalarAsync<long>(
+            "SELECT count(*) FROM platform.audit_logs WHERE org_id=@org AND action='MASTER_DATA_LOADED'", ("org", organization)));
+
+        // References, sizes and hashes only: no name, identifier or coordinate of the document.
+        foreach (var text in new[] { dryRun.ToString(), loaded.ToString(), refused.Message })
+        {
+            Assert.DoesNotContain(suffix, text);
+            Assert.DoesNotContain(organization.ToString("D"), text);
+            Assert.DoesNotContain("-107.", text);
+        }
+    }
+
+    /// <summary>
+    /// MDM-001 route S2 (S6): the login <c>runtime-logins</c> provisions from its verifier is accepted by the loader's
+    /// operator check and by the function, loads, and is named in the audit row only by its random pseudonym; once its
+    /// input is absent it is dropped and can no longer connect.
+    /// </summary>
+    [PostgreSqlContractFact]
+    public async Task The_provisioned_master_data_login_passes_the_operator_check_and_loads()
+    {
+        var password = PilotRuntimeLoginContractTests.RandomPassword();
+        var settings = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            [RuntimeLoginProvisioner.ApiVerifierVariable] = PilotRuntimeLoginContractTests.ScramVerifier(PilotRuntimeLoginContractTests.RandomPassword()),
+            [RuntimeLoginProvisioner.WorkerVerifierVariable] = PilotRuntimeLoginContractTests.ScramVerifier(PilotRuntimeLoginContractTests.RandomPassword()),
+            [RuntimeLoginProvisioner.RealtimeVerifierVariable] = PilotRuntimeLoginContractTests.ScramVerifier(PilotRuntimeLoginContractTests.RandomPassword()),
+            [RuntimeLoginProvisioner.MasterDataVerifierVariable] = PilotRuntimeLoginContractTests.ScramVerifier(password),
+        };
+        var connectionString = new NpgsqlConnectionStringBuilder(fixture.DeploymentConnectionString)
+        {
+            Username = RuntimeLoginProvisioner.MasterDataLogin,
+            Password = password,
+            Pooling = false,
+        }.ConnectionString;
+        try
+        {
+            Assert.Equal(RuntimeLoginProvisioner.MasterDataLogin, await RuntimeLoginProvisioner.RunAsync(
+                fixture.DeploymentConnectionString, name => settings.GetValueOrDefault(name), CancellationToken.None));
+
+            var organization = await NewOrganizationAsync();
+            var suffix = Suffix();
+            await EnsureCityAsync(suffix);
+            await SetGateAsync(Synthetic, false);
+            var file = await WriteTempAsync(Document(organization, suffix));
+            var output = new StringWriter();
+            try
+            {
+                using var result = await MasterDataLoader.RunAsync(
+                    connectionString, new MasterDataLoadOptions(file, organization, false, false), Testing, output,
+                    CancellationToken.None);
+            }
+            finally
+            {
+                File.Delete(file);
+            }
+
+            Assert.Contains("MDM001_LOAD_OK", output.ToString());
+            Assert.Equal("1|2|2", await VisibleCountsAsync(organization));
+            var reference = await OperatorReferenceAsync(RuntimeLoginProvisioner.MasterDataLogin);
+            Assert.True(Guid.TryParseExact(reference, "D", out _));
+            Assert.Equal(reference, await ScalarAsync<string>(
+                "SELECT payload_redacted->>'operator_ref' FROM platform.audit_logs WHERE org_id=@org AND action='MASTER_DATA_LOADED'",
+                ("org", organization)));
+
+            // Absent input: dropped, so it can no longer connect, let alone load.
+            settings[RuntimeLoginProvisioner.MasterDataVerifierVariable] = null;
+            Assert.Equal(RuntimeLoginProvisioner.MasterDataLoginAbsent, await RuntimeLoginProvisioner.RunAsync(
+                fixture.DeploymentConnectionString, name => settings.GetValueOrDefault(name), CancellationToken.None));
+            await using var dropped = new NpgsqlConnection(connectionString);
+            await Assert.ThrowsAsync<PostgresException>(() => dropped.OpenAsync());
+        }
+        finally
+        {
+            NpgsqlConnection.ClearAllPools();
+            await ExecuteAdminAsync(
+                $"DROP ROLE IF EXISTS {RuntimeLoginProvisioner.ApiLogin}; DROP ROLE IF EXISTS {RuntimeLoginProvisioner.WorkerLogin}; " +
+                $"DROP ROLE IF EXISTS {RuntimeLoginProvisioner.RealtimeLogin}; DROP ROLE IF EXISTS {RuntimeLoginProvisioner.MasterDataLogin};");
+        }
     }
 
     [PostgreSqlContractFact]

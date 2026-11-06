@@ -72,6 +72,127 @@ public sealed class PilotRuntimeLoginContractTests(PostgreSqlContractFixture fix
         }
     }
 
+    /// <summary>
+    /// MDM-001 route S2 (S6): the optional master-data login exists only while its verifier is present, has the runtime
+    /// logins' attributes, is a member of <c>paqueteria_master_data_loader</c> only (so it can SET ROLE to it and reaches
+    /// no runtime or migrator role) and is dropped when the input is absent. That the loader accepts it is proved by
+    /// <c>MasterDataLoaderPostgreSqlContractTests.The_provisioned_master_data_login_passes_the_operator_check_and_loads</c>.
+    /// </summary>
+    [PostgreSqlContractFact]
+    public async Task The_master_data_login_exists_only_while_its_verifier_is_present()
+    {
+        const string variable = "PAQUETERIA_ENV001_CONTRACT_CONNECTION";
+        const string login = RuntimeLoginProvisioner.MasterDataLogin;
+        var saved = SaveEnvironment(variable);
+        try
+        {
+            var apiPassword = RandomPassword();
+            var password = RandomPassword();
+            Environment.SetEnvironmentVariable(variable, fixture.DeploymentConnectionString);
+            Environment.SetEnvironmentVariable(RuntimeLoginProvisioner.ApiVerifierVariable, ScramVerifier(apiPassword));
+            Environment.SetEnvironmentVariable(RuntimeLoginProvisioner.WorkerVerifierVariable, ScramVerifier(RandomPassword()));
+            Environment.SetEnvironmentVariable(RuntimeLoginProvisioner.RealtimeVerifierVariable, ScramVerifier(RandomPassword()));
+
+            // Absent from the start: nothing is created and the three runtime logins are provisioned as before.
+            Environment.SetEnvironmentVariable(RuntimeLoginProvisioner.MasterDataVerifierVariable, null);
+            Assert.Equal(0, await DatabaseMigratorProgram.RunAsync(["runtime-logins", "--connection-env", variable]));
+            Assert.False(await RoleExistsAsync(login));
+
+            Environment.SetEnvironmentVariable(RuntimeLoginProvisioner.MasterDataVerifierVariable, ScramVerifier(password));
+            Assert.Equal(0, await DatabaseMigratorProgram.RunAsync(["runtime-logins", "--connection-env", variable]));
+            await AssertMasterDataShapeAsync(password);
+
+            // A runtime membership granted by hand is removed on the next run. (A migrator membership is refused even
+            // earlier: the baseline assertions that runtime-logins runs first reject a loader member of the migrator.)
+            await ExecuteAdminAsync($"GRANT paqueteria_app TO {login}; GRANT paqueteria_worker TO {login};");
+            Assert.Equal(0, await DatabaseMigratorProgram.RunAsync(["runtime-logins", "--connection-env", variable]));
+            await AssertMasterDataShapeAsync(password);
+            await ExecuteAdminAsync($"GRANT paqueteria_migrator TO {login};");
+            Assert.Equal(5, await DatabaseMigratorProgram.RunAsync(["runtime-logins", "--connection-env", variable]));
+            await ExecuteAdminAsync($"REVOKE paqueteria_migrator FROM {login};");
+
+            // A new verifier re-keys it; the old password stops working.
+            var rotated = RandomPassword();
+            Environment.SetEnvironmentVariable(RuntimeLoginProvisioner.MasterDataVerifierVariable, ScramVerifier(rotated));
+            Assert.Equal(0, await DatabaseMigratorProgram.RunAsync(["runtime-logins", "--connection-env", variable]));
+            await AssertMasterDataShapeAsync(rotated);
+            await Assert.ThrowsAsync<PostgresException>(() => OpenAsAsync(login, password));
+
+            // A plaintext password is refused before any statement runs: nothing changes, the runtime logins included.
+            Environment.SetEnvironmentVariable(RuntimeLoginProvisioner.MasterDataVerifierVariable, RandomPassword());
+            Environment.SetEnvironmentVariable(RuntimeLoginProvisioner.ApiVerifierVariable, ScramVerifier(RandomPassword()));
+            Assert.Equal(7, await DatabaseMigratorProgram.RunAsync(["runtime-logins", "--connection-env", variable]));
+            await AssertMasterDataShapeAsync(rotated);
+            await using (await OpenAsAsync(RuntimeLoginProvisioner.ApiLogin, apiPassword))
+            {
+            }
+
+            // Absent again (unset or empty): the login is dropped with its membership; the runtime logins stay.
+            Environment.SetEnvironmentVariable(RuntimeLoginProvisioner.ApiVerifierVariable, ScramVerifier(apiPassword));
+            Environment.SetEnvironmentVariable(RuntimeLoginProvisioner.MasterDataVerifierVariable, string.Empty);
+            Assert.Equal(RuntimeLoginProvisioner.MasterDataLoginAbsent,
+                await RuntimeLoginProvisioner.RunAsync(fixture.DeploymentConnectionString, Environment.GetEnvironmentVariable,
+                    CancellationToken.None));
+            Assert.False(await RoleExistsAsync(login));
+            await AssertRuntimeShapeAsync(RuntimeLoginProvisioner.ApiLogin, apiPassword, "paqueteria_app", "paqueteria_worker");
+
+            // Running again while absent is a no-op.
+            Environment.SetEnvironmentVariable(RuntimeLoginProvisioner.MasterDataVerifierVariable, null);
+            Assert.Equal(0, await DatabaseMigratorProgram.RunAsync(["runtime-logins", "--connection-env", variable]));
+            Assert.False(await RoleExistsAsync(login));
+        }
+        finally
+        {
+            RestoreEnvironment(saved);
+            NpgsqlConnection.ClearAllPools();
+            await ExecuteAdminAsync(
+                $"DROP ROLE IF EXISTS {RuntimeLoginProvisioner.ApiLogin}; DROP ROLE IF EXISTS {RuntimeLoginProvisioner.WorkerLogin}; " +
+                $"DROP ROLE IF EXISTS {RuntimeLoginProvisioner.RealtimeLogin}; DROP ROLE IF EXISTS {login};");
+        }
+    }
+
+    /// <summary>The loader's own operator check, run as the login, plus the exact attributes and membership.</summary>
+    private async Task AssertMasterDataShapeAsync(string password)
+    {
+        await using var connection = await OpenAsAsync(RuntimeLoginProvisioner.MasterDataLogin, password);
+        await using var transaction = await connection.BeginTransactionAsync();
+        await using (var command = new NpgsqlCommand("""
+            SELECT r.rolcanlogin AND NOT r.rolinherit AND NOT r.rolsuper AND NOT r.rolcreatedb AND NOT r.rolcreaterole
+                   AND NOT r.rolreplication AND NOT r.rolbypassrls
+                   AND (SELECT array_agg(g.rolname ORDER BY g.rolname) FROM pg_auth_members m
+                        JOIN pg_roles g ON g.oid = m.roleid WHERE m.member = r.oid) = ARRAY['paqueteria_master_data_loader']::name[]
+                   AND pg_catalog.pg_has_role(session_user, 'paqueteria_master_data_loader', 'SET')
+                   AND NOT pg_catalog.pg_has_role(session_user, 'paqueteria_master_data_loader', 'USAGE')
+                   AND NOT pg_catalog.pg_has_role(session_user, 'paqueteria_app', 'MEMBER')
+                   AND NOT pg_catalog.pg_has_role(session_user, 'paqueteria_worker', 'MEMBER')
+                   AND NOT pg_catalog.pg_has_role(session_user, 'paqueteria_realtime', 'MEMBER')
+                   AND NOT pg_catalog.pg_has_role(session_user, 'paqueteria_migrator', 'MEMBER')
+            FROM pg_catalog.pg_roles r WHERE r.rolname = session_user
+            """, connection, transaction))
+        {
+            Assert.True((bool)(await command.ExecuteScalarAsync())!);
+        }
+
+        await using (var setRole = new NpgsqlCommand(
+            "SET LOCAL ROLE paqueteria_master_data_loader; SELECT current_user::text", connection, transaction))
+        {
+            Assert.Equal("paqueteria_master_data_loader", await setRole.ExecuteScalarAsync());
+        }
+
+        await transaction.RollbackAsync();
+    }
+
+    private async Task<bool> RoleExistsAsync(string role) =>
+        await ScalarAdminAsync<bool>($"SELECT EXISTS (SELECT 1 FROM pg_roles WHERE rolname='{role}')");
+
+    private async Task<T> ScalarAdminAsync<T>(string sql)
+    {
+        await using var connection = new NpgsqlConnection(fixture.DeploymentConnectionString);
+        await connection.OpenAsync();
+        await using var command = new NpgsqlCommand(sql, connection);
+        return (T)(await command.ExecuteScalarAsync())!;
+    }
+
     private async Task AssertRuntimeShapeAsync(string login, string password, string runtimeRole, string foreignRole)
     {
         await using var connection = await OpenAsAsync(login, password);
@@ -143,6 +264,7 @@ public sealed class PilotRuntimeLoginContractTests(PostgreSqlContractFixture fix
                 RuntimeLoginProvisioner.ApiVerifierVariable,
                 RuntimeLoginProvisioner.WorkerVerifierVariable,
                 RuntimeLoginProvisioner.RealtimeVerifierVariable,
+                RuntimeLoginProvisioner.MasterDataVerifierVariable,
             }
             .ToDictionary(name => name, Environment.GetEnvironmentVariable, StringComparer.Ordinal);
 

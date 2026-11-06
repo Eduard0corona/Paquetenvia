@@ -22,8 +22,9 @@ repite en el archivo (`owner_org_id`) y la fija como contexto de tenant; la func
 contexto (`MDM001_TENANT_CONTEXT_MISMATCH`). Eso evita que un error de captura cargue en otra organización,
 pero **no** es una frontera de seguridad entre tenants: la frontera es quién recibe el rol. Por eso:
 
-- sus únicos miembros son logins de operador **con nombre**, creados y retirados por el owner (por
-  ejemplo `pv_pilot_mdm_<iniciales>`), nunca `paqueteria_app`, `paqueteria_worker` ni `paqueteria_bootstrap`;
+- sus únicos miembros son logins de operador **con nombre**, nunca `paqueteria_app`, `paqueteria_worker` ni
+  `paqueteria_bootstrap`. En el piloto es `pv_pilot_master_data`, que `runtime-logins` crea sólo mientras
+  recibe su verificador (ver "Login del job de carga" abajo); localmente, uno creado a mano;
   ningún miembro que pueda usarlo (`INHERIT` o `SET`) puede ser a la vez miembro de `paqueteria_migrator`
   (lo verifican la lane y `DatabaseBaselineAssertions`): quien carga no es quien despliega;
 - además, la función rechaza **en cada llamada** a cualquier sesión cuyo login sea miembro de
@@ -276,14 +277,25 @@ se reportan como `ACCIÓN sección[n] fields=...`.
 
 ## Ejecución
 
-El job es un modo del migrador canónico (misma imagen `paquetenvia-db-ops`, sin lockfile nuevo):
+El job es un modo del migrador canónico (misma imagen `paquetenvia-db-ops`, sin lockfile nuevo). Lee el
+documento de **exactamente un** origen: un archivo local o un blob de un contenedor privado (ruta S2):
 
 ```bash
+# archivo local
 Paqueteria.DatabaseMigrator master-data-load \
   --connection-env PAQUETERIA_MASTER_DATA_CONNECTION \
   --file ./reviewed-master-data.json \
   --organization-id <uuid> \
-  [--dry-run] [--allow-real-driver-profiles]
+  [--expected-sha256 <64 hex>] [--dry-run] [--allow-real-driver-profiles]
+
+# blob en un contenedor privado (ruta S2, "Contenedor privado + job")
+Paqueteria.DatabaseMigrator master-data-load \
+  --connection-env PAQUETERIA_MASTER_DATA_CONNECTION \
+  --blob-account-url https://<cuenta>.blob.core.windows.net/ \
+  --blob-container <contenedor> --blob-name <nombre> \
+  --expected-sha256 <64 hex> \
+  --organization-id <uuid> \
+  [--dry-run | --delete-after-load] [--allow-real-driver-profiles]
 ```
 
 - La conexión debe ser un login de operador `LOGIN NOINHERIT NOBYPASSRLS` miembro sólo de
@@ -298,8 +310,60 @@ Paqueteria.DatabaseMigrator master-data-load \
   `DevSynthetic` con `PAQUETERIA_DEPLOYMENT_CLASS=DEV_SYNTHETIC` (`PILOT_REAL_PEOPLE` nunca cuenta como
   sintético); en cualquier otro entorno exige `--allow-real-driver-profiles`, que sólo puede usarse con
   GATE-007 cerrado. Aun con el flag, la base rechaza los perfiles si la marca no lo permite.
-- Códigos de salida: 0 correcto, 8 archivo rechazado, 9 rechazo de la base (nada escrito), 10 compuerta
-  (GATE-007 o login indebido).
+- Códigos de salida: 0 correcto, 8 archivo rechazado (también un blob ilegible, fuera de tamaño o con otro
+  SHA-256), 9 rechazo de la base (nada escrito), 10 compuerta (GATE-007 o login indebido), 11 la carga se
+  confirmó pero el blob pedido con `--delete-after-load` no se pudo borrar.
+
+### Origen Blob (ruta S2) y `--expected-sha256`
+
+Decisiones del owner S2 ("Contenedor privado + job"), S6 ("Nadie la ve ni la teclea") y S8 ("Código ya,
+infra después"). Este PR sólo trae el código del job; el contenedor, el job de Container Apps, sus permisos y
+el runbook (cuándo usar cada opción) son infraestructura y esperan a que NTF-008 (#323) se fusione.
+
+- `--blob-account-url`, `--blob-container` y `--blob-name` van juntos y excluyen `--file`. La cuenta se nombra
+  sólo por su endpoint Blob `https://<cuenta>.blob.core.windows.net/` (minúsculas): se rechaza cualquier SAS,
+  consulta, ruta, puerto o credencial en la URL, sin repetir el valor. El contenedor sigue las reglas de Azure
+  (3 a 63 minúsculas, dígitos y guiones simples) y el nombre del blob admite hasta 9 segmentos separados por
+  `/` con letras, dígitos, `.`, `_` y `-`, cada uno empezando por letra o dígito, para poder imprimirlos como
+  referencia.
+- El job lee con **su identidad administrada** (`AzureWorkloadCredential`, asignada por usuario con
+  `AZURE_CLIENT_ID` como los demás jobs): ninguna clave de cuenta, SAS ni contraseña. Cada petición (y la del
+  token) pasa por el transporte OBS-003 (`AzureClientTracing`), sin `traceparent`, y el registro de contenido
+  del SDK está apagado. `TraceCorrelationArchitectureTests` revisa ahora también `tools/**`.
+- Descarga **a memoria**: primero lee las propiedades y rechaza un tamaño de 0 o de más de 16 MiB sin leer el
+  cuerpo (`MDM001_BLOB_SIZE`); luego lee esa misma versión (`If-Match` con su ETag; si cambió en medio, 412) y
+  deja de leer un byte después del límite, diga lo que diga el servicio. Un error del servicio se informa sólo
+  con su estado HTTP y su código Azure (`MDM001_BLOB_UNREADABLE status=403 code=...`), nunca con la respuesta.
+- `--expected-sha256` (64 hexadecimales en minúsculas) es **obligatorio** con un blob y opcional con
+  `--file`. El SHA-256 de los bytes leídos se compara antes de validar el documento y antes de cualquier
+  conexión: si no coincide, `MDM001_FILE_SHA256_MISMATCH` con ambos valores y salida 8.
+- La consola sólo lleva referencias, tamaños y hashes: `MDM001_SOURCE source=blob account=... container=...
+  blob=... bytes=N sha256=...` (o `source=file`), nunca contenido del documento.
+- `--delete-after-load` es opcional y está apagado por defecto. Sólo vale con un blob y sin `--dry-run`, y el
+  blob se borra (con sus snapshots y sólo si sigue siendo la versión leída) **después** de confirmar la carga:
+  nunca en un dry run, ni ante un archivo rechazado, un rechazo de la base o cualquier falla. Si el borrado
+  falla, la carga ya quedó confirmada: `MDM001_BLOB_DELETE_FAILED` y salida 11. Si la cuenta tiene versiones
+  o borrado temporal, el contenido sobrevive al borrado según esa política; eso lo fija la infraestructura.
+
+### Login del job de carga (`runtime-logins`)
+
+`runtime-logins` provisiona, además de los tres logins de runtime, un cuarto login **opcional**,
+`pv_pilot_master_data`, sólo cuando recibe `PAQUETERIA_MASTER_DATA_LOGIN_VERIFIER` (por variable de entorno
+o secreto mapeado de Key Vault, como los otros verificadores):
+
+- igual que los demás (S6): el flujo de despliegue genera la contraseña, la guarda en Key Vault y nadie la ve;
+  a PostgreSQL sólo llega el verificador SCRAM-SHA-256 (4096 iteraciones); un texto plano se rechaza antes de
+  ejecutar nada (salida 7) y no cambia ningún login;
+- `LOGIN NOINHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS`, miembro **sólo** de
+  `paqueteria_master_data_loader` (con `SET`, sin herencia); cualquier otra membresía se revoca en cada
+  ejecución. Así pasa la verificación del propio cargador (`MDM001_OPERATOR_LOGIN_REQUIRED`): no es
+  superusuario, ni `BYPASSRLS`, ni miembro de un rol de runtime o del migrador;
+- sin el verificador (variable ausente o vacía) se **elimina** (`DROP ROLE`), con su membresía; su seudónimo en
+  `platform.master_data_operator_refs` se queda, porque resuelve filas de auditoría append-only;
+- la salida es `RUNTIME_LOGINS_OK api=... worker=... realtime=... master_data=pv_pilot_master_data|absent`.
+
+Conectarlo al flujo de despliegue y a Bicep (secreto en Key Vault, cadena de conexión del job) es
+infraestructura y espera a NTF-008.
 
 Localmente (después de `DevSeed bootstrap` y `apply`), marca la base como sintética y crea el login:
 
@@ -335,4 +399,12 @@ Primero se cargan las ciudades con una organización `PLATFORM` (`synthetic-plat
   rol de carga; dos primeras ejecuciones concurrentes de `master-data-gate` (retenidas en la llave y luego
   en carrera libre) terminan siempre en `REAL` y sólo una ve la marca vacía; y el paso baja y sube en una
   base aislada conservando la tabla, sus filas y una fila de auditoría en el formato anterior.
+- Ruta S2: `MasterDataBlobSourceTests` (sin base, con un transporte Azure sustituto como en
+  `Obs003AzureClientTracingTests`): reglas de opciones, descarga a memoria, sin contexto de traza (con su
+  control), límite de 16 MiB antes y durante la lectura, SHA-256 que coincide y que no, ningún borrado ante
+  rechazo o falla y ningún contenido en la salida. `MasterDataLoaderPostgreSqlContractTests` agrega la carga
+  desde el blob (dry run sin borrar, rechazo de la base sin borrar, carga confirmada que borra exactamente la
+  versión leída, borrado rechazado con salida 11) y el login `pv_pilot_master_data` provisionado que pasa la
+  verificación del cargador y carga; `PilotRuntimeLoginContractTests` su forma, membresía, re-clave, rechazo
+  de un texto plano y su eliminación sin verificador.
 - `tools/ci/test_validate_contracts_grants.py`: permisos exactos del ejecutor y del beneficiario.
