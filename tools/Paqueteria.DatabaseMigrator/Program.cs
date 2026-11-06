@@ -36,9 +36,11 @@ internal static partial class DatabaseMigratorProgram
             if (options.Command == "master-data-load")
             {
                 // MDM-001-OPERATOR-LOADER: an operator login with EXECUTE only; never the migration connection.
+                // MDM-001 route S2: a Blob source is read with the job's managed identity, never a key or SAS.
+                var blobSource = options.MasterData!.Blob is { } blob ? MasterDataBlobSource.Create(blob) : null;
                 using var result = await MasterDataLoader.RunAsync(
                     connectionString, options.MasterData!, MasterDataEnvironment.Current(), Console.Out,
-                    cancellation.Token).ConfigureAwait(false);
+                    cancellation.Token, blobSource).ConfigureAwait(false);
                 return 0;
             }
 
@@ -71,10 +73,10 @@ internal static partial class DatabaseMigratorProgram
                     // ENV-001: least-privilege runtime LOGIN roles for the pilot API, Worker and API realtime dispatchers
                     // (RTM-API-REALTIME-DISPATCHER-ROLE-2026-10-12); SCRAM verifiers only.
                     await deployer.AssertAsync(baseline, connectionString, cancellation.Token).ConfigureAwait(false);
-                    await RuntimeLoginProvisioner.RunAsync(connectionString, ReadSetting, cancellation.Token)
+                    var masterDataLogin = await RuntimeLoginProvisioner.RunAsync(connectionString, ReadSetting, cancellation.Token)
                         .ConfigureAwait(false);
                     Console.WriteLine(
-                        $"RUNTIME_LOGINS_OK api={RuntimeLoginProvisioner.ApiLogin} worker={RuntimeLoginProvisioner.WorkerLogin} realtime={RuntimeLoginProvisioner.RealtimeLogin}");
+                        $"RUNTIME_LOGINS_OK api={RuntimeLoginProvisioner.ApiLogin} worker={RuntimeLoginProvisioner.WorkerLogin} realtime={RuntimeLoginProvisioner.RealtimeLogin} master_data={masterDataLogin}");
                     return 0;
 
                 case "ownership-diagnostic":
@@ -249,7 +251,7 @@ internal static partial class DatabaseMigratorProgram
     /// <summary>
     /// The single lookup for named settings (the <c>--connection-env</c> connection and the runtime-login
     /// verifiers <c>PAQUETERIA_API_LOGIN_VERIFIER</c> / <c>PAQUETERIA_WORKER_LOGIN_VERIFIER</c> /
-    /// <c>PAQUETERIA_REALTIME_LOGIN_VERIFIER</c>).
+    /// <c>PAQUETERIA_REALTIME_LOGIN_VERIFIER</c> and the optional <c>PAQUETERIA_MASTER_DATA_LOGIN_VERIFIER</c>).
     /// PILOT-KEYVAULT-PRIVATE-APP-READ: a name mapped to a Key Vault secret returns the secret; any other
     /// name reads the environment <b>at call time</b> (never a snapshot). Key Vault is read on first use
     /// only when <c>KeyVaultSecrets__VaultUri</c> is set, so <c>verify</c> never reaches it.
@@ -388,7 +390,9 @@ internal static partial class DatabaseMigratorProgram
     private static void PrintUsage() => Console.Error.WriteLine(
         "Usage: Paqueteria.DatabaseMigrator <verify|preflight|ownership-diagnostic|plan|apply|assert|runtime-logins> [--connection-env NAME] [--confirm-initial-baseline] [--azure-ownership-bridge]" +
         Environment.NewLine +
-        "       Paqueteria.DatabaseMigrator master-data-load --connection-env NAME --file PATH --organization-id UUID [--dry-run] [--allow-real-driver-profiles]" +
+        "       Paqueteria.DatabaseMigrator master-data-load --connection-env NAME --file PATH --organization-id UUID [--expected-sha256 HEX] [--dry-run] [--allow-real-driver-profiles]" +
+        Environment.NewLine +
+        "       Paqueteria.DatabaseMigrator master-data-load --connection-env NAME --blob-account-url URL --blob-container NAME --blob-name NAME --expected-sha256 HEX --organization-id UUID [--dry-run | --delete-after-load] [--allow-real-driver-profiles]" +
         Environment.NewLine +
         "       Paqueteria.DatabaseMigrator master-data-gate --connection-env NAME --deployment-class SYNTHETIC|REAL --platform-organization-id UUID [--gate-007-closed]" +
         Environment.NewLine +
@@ -435,6 +439,11 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
         string? legalName = null;
         string? displayName = null;
         string? compareRowCountsEnvironment = null;
+        string? blobAccountUrl = null;
+        string? blobContainer = null;
+        string? blobName = null;
+        string? expectedSha256 = null;
+        var deleteAfterLoad = false;
         for (var index = 1; index < arguments.Count; index++)
         {
             switch (arguments[index])
@@ -459,6 +468,22 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
                     break;
                 case "--allow-real-driver-profiles" when command == "master-data-load":
                     allowRealDriverProfiles = true;
+                    break;
+                // MDM-001 route S2: the reviewed document in a private Blob container, read with the job's identity.
+                case "--blob-account-url" when command == "master-data-load" && blobAccountUrl is null && index + 1 < arguments.Count:
+                    blobAccountUrl = arguments[++index];
+                    break;
+                case "--blob-container" when command == "master-data-load" && blobContainer is null && index + 1 < arguments.Count:
+                    blobContainer = arguments[++index];
+                    break;
+                case "--blob-name" when command == "master-data-load" && blobName is null && index + 1 < arguments.Count:
+                    blobName = arguments[++index];
+                    break;
+                case "--expected-sha256" when command == "master-data-load" && expectedSha256 is null && index + 1 < arguments.Count:
+                    expectedSha256 = arguments[++index];
+                    break;
+                case "--delete-after-load" when command == "master-data-load" && !deleteAfterLoad:
+                    deleteAfterLoad = true;
                     break;
                 case "--deployment-class" when command == "master-data-gate" && index + 1 < arguments.Count:
                     deploymentClass = arguments[++index];
@@ -554,9 +579,47 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
             return new CommandOptions(command, connectionEnvironment, confirm, azureOwnershipBridge);
         }
 
-        if (string.IsNullOrWhiteSpace(file))
+        // MDM-001 route S2: exactly one source, a local file or a Blob named by all three options.
+        var blobOptions = new[] { blobAccountUrl, blobContainer, blobName }.Count(value => value is not null);
+        if (blobOptions is not (0 or 3))
+        {
+            throw new CommandLineException(
+                "A Blob source needs --blob-account-url, --blob-container and --blob-name together.");
+        }
+
+        if ((file is not null) == (blobOptions == 3))
+        {
+            throw new CommandLineException(
+                "master-data-load requires exactly one source: --file PATH or the three --blob-* options.");
+        }
+
+        if (file is not null && string.IsNullOrWhiteSpace(file))
         {
             throw new CommandLineException("master-data-load requires --file PATH.");
+        }
+
+        var blob = blobOptions == 3 ? MasterDataBlobReference.Parse(blobAccountUrl!, blobContainer!, blobName!) : null;
+        byte[]? expected = null;
+        if (expectedSha256 is not null)
+        {
+            if (!Sha256HexPattern.IsMatch(expectedSha256))
+            {
+                throw new CommandLineException(
+                    "--expected-sha256 must be the SHA-256 of the reviewed file as 64 lowercase hexadecimal characters.");
+            }
+
+            expected = Convert.FromHexString(expectedSha256);
+        }
+        else if (blob is not null)
+        {
+            throw new CommandLineException(
+                "A Blob source requires --expected-sha256: the SHA-256 of the reviewed file, checked before any connection.");
+        }
+
+        if (deleteAfterLoad && (blob is null || dryRun))
+        {
+            throw new CommandLineException(
+                "--delete-after-load is valid only with a Blob source on a real load, never with --file or --dry-run.");
         }
 
         // The organization is named on the command line and again inside the reviewed document; both must match.
@@ -568,8 +631,10 @@ internal sealed record CommandOptions(string Command, string? ConnectionEnvironm
         }
 
         return new CommandOptions(command, connectionEnvironment, confirm, azureOwnershipBridge,
-            new MasterDataLoadOptions(file, organizationId, dryRun, allowRealDriverProfiles));
+            new MasterDataLoadOptions(file, organizationId, dryRun, allowRealDriverProfiles, blob, expected, deleteAfterLoad));
     }
+
+    private static readonly Regex Sha256HexPattern = new("^[0-9a-f]{64}$", RegexOptions.CultureInvariant);
 
     /// <summary>
     /// TEN-003-PLATFORM-BOOTSTRAP-2026-10-19: the subject is the AuthCenter <c>sub</c>, the lowercase UUID of the
