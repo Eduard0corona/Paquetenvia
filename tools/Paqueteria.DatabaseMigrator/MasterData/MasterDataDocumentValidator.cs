@@ -36,6 +36,9 @@ internal static partial class MasterDataDocumentValidator
 
     private const int MaximumErrors = 50;
 
+    /// <summary>Never an AuthCenter <c>sub</c> (TEN-003-PLATFORM-BOOTSTRAP-2026-10-19 refuses it too).</summary>
+    private const string NilUuid = "00000000-0000-0000-0000-000000000000";
+
     internal static readonly string[] Sections =
         ["cities", "service_areas", "operating_zones", "tariff_rules", "driver_profiles"];
 
@@ -323,18 +326,35 @@ internal static partial class MasterDataDocumentValidator
             }
         }
 
+        /// <summary>
+        /// MDM-001-DRIVER-SUB-2026-11-06 (S7): a driver is named by exactly one of <c>user_id</c> (the internal id,
+        /// kept for the synthetic fixtures) or <c>identity_subject</c> (the AuthCenter <c>sub</c>, a lowercase
+        /// UUID, the documented way for real data). The loader function resolves the subject to the user and
+        /// refuses an unknown one (<c>MDM001_DRIVER_SUBJECT_UNKNOWN</c>); a user named twice in the file (once
+        /// by each) is a duplicate there.
+        /// </summary>
         private void DriverProfile(JsonElement item, string reference)
         {
-            if (!Shape(item, reference, ["user_id", "home_city", "driver_type", "vehicle_type", "status", "service_areas"]))
+            if (item.ValueKind == JsonValueKind.Object &&
+                item.TryGetProperty("user_id", out _) == item.TryGetProperty("identity_subject", out _))
+            {
+                Error(reference, "MDM001_DRIVER_IDENTIFIER");
+                return;
+            }
+
+            var bySubject = item.ValueKind == JsonValueKind.Object && item.TryGetProperty("identity_subject", out _);
+            var identifier = bySubject ? "identity_subject" : "user_id";
+            if (!Shape(item, reference, [identifier, "home_city", "driver_type", "vehicle_type", "status", "service_areas"]))
             {
                 return;
             }
 
-            if (!IsString(item, "user_id", out var userId) || !CanonicalUuid().IsMatch(userId))
+            if (!IsString(item, identifier, out var driver) || !CanonicalUuid().IsMatch(driver) ||
+                (bySubject && driver == NilUuid))
             {
-                Error($"{reference}.user_id", "MDM001_USER_ID");
+                Error($"{reference}.{identifier}", bySubject ? "MDM001_IDENTITY_SUBJECT" : "MDM001_USER_ID");
             }
-            else if (!_drivers.Add(userId))
+            else if (!_drivers.Add($"{identifier}:{driver}"))
             {
                 Error(reference, "MDM001_DUPLICATE_NATURAL_KEY");
             }

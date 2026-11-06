@@ -1,5 +1,32 @@
 # Changelog
 
+## Datos maestros: repartidores por su sub de AuthCenter (MDM-001-DRIVER-SUB-2026-11-06, AI-08 MDM-001) — 2026-11-06
+
+- Respuestas literales del project owner (ronda S continuada, 2026-11-06), registradas en `decision-log.md` con sus dos
+  contextos, las preguntas, los textos de las opciones y las opciones no elegidas: S7 "Por su sub de AuthCenter
+  (Recommended)". Como es el primer registro normativo de la ruta de MDM-001 en el piloto, la fila cita igual S2
+  "Contenedor privado + job (Recommended)", S6 "Nadie la ve ni la teclea (Recommended)" y S8 "Código ya, infra después
+  (Recommended)"; esas tres no cambian ningún contrato (S2 y S6 los aplica el PR de código #364; por S8, la
+  infraestructura y la documentación de operación esperan a NTF-008).
+- Cada perfil de repartidor del archivo de datos maestros lleva exactamente uno de `user_id` (se queda, así los ejemplos
+  sintéticos siguen valiendo) o `identity_subject` (el sub de AuthCenter, un UUID en minúsculas distinto del nulo; la
+  forma documentada para datos reales). El job lo valida antes de conectarse (`MDM001_DRIVER_IDENTIFIER` si vienen los
+  dos o ninguno, `MDM001_IDENTITY_SUBJECT` si el formato no es válido) y la función lo repite (`MDM001_ENTRY_SHAPE`).
+- `security.load_master_data` traduce el sub a `identity.users.id`; un sub que no corresponde a ningún usuario (o, por
+  defensa, a más de uno) se rechaza con `MDM001_DRIVER_SUBJECT_UNKNOWN` y sólo la referencia de la entrada, sin escribir
+  nada. Al usuario resuelto se le aplican todas las reglas de antes: usuario `ACTIVE` con membresía `DRIVER` activa en la
+  organización cargada (`MDM001_DRIVER_MEMBERSHIP_REQUIRED`, también para el sub de un usuario de otra organización), un
+  perfil por usuario (nombrarlo por id y por sub es `MDM001_DUPLICATE_NATURAL_KEY`), GATE-007 y la clasificación.
+- El formato sigue siendo `paquetenvia.master-data.v1`: el cambio es aditivo (todo documento v1 conserva su sentido) y un
+  cargador anterior rechaza la propiedad nueva en vez de malinterpretarla.
+- AI-18: el ejecutor gana `SELECT (identity_subject)` sobre `identity.users`, que pertenece al paso del carril Pricing
+  `20261106000100_ResolveDriverIdentitySubjectInMasterDataLoader` como los permisos de `policy_version` y del
+  endurecimiento (los pasos publicados verifican conteos exactos antes) y queda registrado en los comentarios y en la
+  aserción 27; los permisos de columna pasan de 122 a 123. Nada para el rol de carga ni para los roles de runtime. El
+  paso reemplaza la función con el cuerpo del paso America/Mazatlan más dos ediciones revisadas de coincidencia única; su
+  `Down` revoca el permiso y restaura la función anterior (los perfiles cargados se quedan), probado en PostgreSQL real.
+  AI-06 no cambia. Nota: `docs/development/mdm-001-master-data-loader.md`.
+
 ## Liquidaciones: reglas D7 en el backend (SET-001-D7-RULES-ENFORCED-2026-11-06, AI-08 SET-001) — 2026-11-06
 
 - Respuesta literal del project owner (ronda S, pregunta S1 de opción múltiple, 2026-11-06), registrada en

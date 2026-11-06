@@ -464,6 +464,16 @@ public sealed class DatabaseBaselineAssertions
         "platform.master_data_operator_refs.operator_ref:SELECT",
     });
 
+    /// <summary>
+    /// MDM-001-DRIVER-SUB-2026-11-06: the column grant the Pricing lane adds once the loader resolves a driver's
+    /// AuthCenter sub (<see cref="MasterDataDriverSubjectStateReader"/>). Owned by that lane step, not by AI-18, for the
+    /// same reason as the policy_version and operator reference grants.
+    /// </summary>
+    public static IReadOnlyList<string> MasterDataExecutorIdentitySubjectGrants { get; } = Array.AsReadOnly(new[]
+    {
+        "identity.users.identity_subject:SELECT",
+    });
+
     private static readonly string[] SensitiveFunctions =
     [
         "security.resolve_identity_context(text)",
@@ -1805,6 +1815,12 @@ public sealed class DatabaseBaselineAssertions
         if (hardened)
         {
             expectedGrants = expectedGrants.Concat(MasterDataExecutorOperatorRefGrants);
+        }
+
+        if (await MasterDataDriverSubjectStateReader.IsAppliedAsync(connection, transaction, cancellationToken)
+            .ConfigureAwait(false))
+        {
+            expectedGrants = expectedGrants.Concat(MasterDataExecutorIdentitySubjectGrants);
         }
 
         var grants = expectedGrants.ToArray();
