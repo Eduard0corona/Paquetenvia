@@ -277,11 +277,11 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(18, len(screens))
         self.assertEqual(81, len(scenarios))
         statuses = {s: sum(1 for e in scenarios if e["status"] == s) for s in ("COVERED", "GAP", "NOT_APPLICABLE")}
-        self.assertEqual({"COVERED": 74, "GAP": 2, "NOT_APPLICABLE": 5}, statuses)
+        self.assertEqual({"COVERED": 76, "GAP": 0, "NOT_APPLICABLE": 5}, statuses)
         gaps = sorted(e["screen"] for e in screens if e["status"] == "GAP")
         self.assertEqual([], gaps)
         gaps = sorted(e["scenario"] for e in scenarios if e["status"] == "GAP")
-        self.assertEqual(["Actor sin capacidad dentro de su organización", "Restaurar un backup"], gaps)
+        self.assertEqual([], gaps)
 
     def test_critical_screens_are_ai07_routes(self):
         routes = yaml.safe_load((REPO_ROOT / rel001.AI07).read_text(encoding="utf-8"))["routes"]
@@ -839,7 +839,9 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual(sorted(rel001.OUTPUT_FILES), sorted(p.name for p in world.output.iterdir()))
         report = world.output_json("rel001-pilot-readiness-report.json")
         criteria = {name: value["status"] for name, value in report["criteria"].items()}
-        self.assertEqual({"full_regression": "FAILED", "data_completeness": "MISSING", "latency": "MISSING",
+        # No AI-09 GAP is left (round S: S3, S4, S5), so with every identity passing in this synthetic run the regression
+        # criterion passes; the entry stays NOT_READY on the other criteria.
+        self.assertEqual({"full_regression": "PASSED", "data_completeness": "MISSING", "latency": "MISSING",
                           "restore_vigente": "MISSING", "recipient_notices_line": "PASSED", "release_gates": "FAILED",
                           "delivery_plan": "PENDING_OWNER_INPUT", "owner_approval": "PENDING_OWNER_INPUT"}, criteria)
         self.assertEqual(["GATE-003", "GATE-004", "GATE-007", "GATE-008", "GATE-009", "GATE-010"], report["open_gates"])
@@ -848,8 +850,8 @@ class EndToEndTests(unittest.TestCase):
         self.assertEqual("NOT_STARTED", report["closing_phase"]["status"])
         regression = world.output_json("rel001-regression-evidence.json")
         self.assertEqual({"COVERED": 18}, regression["browser_suites"]["manifest_counts"])
-        self.assertEqual({"COVERED": 74, "GAP": 2, "NOT_APPLICABLE": 5}, regression["ai09_scenarios"]["manifest_counts"])
-        self.assertEqual(74, regression["ai09_scenarios"]["status_counts"]["PASSED"])
+        self.assertEqual({"COVERED": 76, "NOT_APPLICABLE": 5}, regression["ai09_scenarios"]["manifest_counts"])
+        self.assertEqual(76, regression["ai09_scenarios"]["status_counts"]["PASSED"])
         markdown = (world.output / "rel001-pilot-readiness-report.md").read_text(encoding="utf-8")
         self.assertIn("No listo para arrancar", markdown)
         self.assertIn("burstable", markdown)

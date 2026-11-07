@@ -49,8 +49,8 @@ internal sealed class ModuleMigrationCoordinator
             "src/Modules/Locations/Locations.Infrastructure/Persistence/Migrations/20261020000100_AddRecipientNoticeContact.cs"),
         ("Drivers", "__ef_migrations_history_drivers", AddInPersonDriverDocuments.MigrationId,
             "src/Modules/Drivers/Drivers.Infrastructure/Persistence/Migrations/20261102000100_AddInPersonDriverDocuments.cs"),
-        ("Pricing", "__ef_migrations_history_pricing", RequireMazatlanTimeZoneInMasterDataLoader.MigrationId,
-            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20261002000100_RequireMazatlanTimeZoneInMasterDataLoader.cs"),
+        ("Pricing", "__ef_migrations_history_pricing", ResolveDriverIdentitySubjectInMasterDataLoader.MigrationId,
+            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20261106000100_ResolveDriverIdentitySubjectInMasterDataLoader.cs"),
         ("Orders", "__ef_migrations_history_orders", AddRecipientNoticeConsents.MigrationId,
             "src/Modules/Orders/Orders.Infrastructure/Persistence/Migrations/20261023000200_AddRecipientNoticeConsents.cs"),
         ("Dispatch", "__ef_migrations_history_dispatch", AddAssignmentReadIndexes.MigrationId,
@@ -99,11 +99,12 @@ internal sealed class ModuleMigrationCoordinator
                     !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
                     !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal),
-                // MDM-001-TZ-MAZATLAN-ONLY-2026-10-02: the lane's latest migration only replaces the loader
-                // function with one derived from the VAT_INCLUDED one by a reviewed edit (a city entry is
-                // America/Mazatlan only); its rollback restores the previous function. No grant, table, role or
-                // row is added, dropped, deleted or rewritten.
-                "Pricing" => IsMazatlanTimeZoneLoaderSource(source),
+                // MDM-001-DRIVER-SUB-2026-11-06: the lane's latest migration replaces the loader function with one
+                // derived from the America/Mazatlan one by reviewed edits (a driver is named by user_id or by the
+                // AuthCenter sub) and grants the executor exactly SELECT (identity_subject) on identity.users; its
+                // rollback revokes that grant and restores the previous function. No table, role or row is added,
+                // dropped, deleted or rewritten. The America/Mazatlan step is verified below with its own rule.
+                "Pricing" => IsDriverSubjectLoaderSource(source),
                 // NTF-RECIPIENT-NOTICE-RECEIPTS-2026-10-25 (AI-08 NTF-006): the lane's latest step creates the receipt
                 // executor (idempotently, never dropped), the automatic-reply store and the five executor functions with
                 // their exact column grants; its rollback refuses while any automatic-reply request exists and otherwise
@@ -287,6 +288,11 @@ internal sealed class ModuleMigrationCoordinator
             RequireVatIncludedTariffsInMasterDataLoader.MigrationId,
             "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20260929000200_RequireVatIncludedTariffsInMasterDataLoader.cs",
             IsVatIncludedLoaderSource);
+        VerifyPricingSource(
+            root,
+            RequireMazatlanTimeZoneInMasterDataLoader.MigrationId,
+            "src/Modules/Pricing/Pricing.Infrastructure/Persistence/Migrations/20261002000100_RequireMazatlanTimeZoneInMasterDataLoader.cs",
+            IsMazatlanTimeZoneLoaderSource);
         VerifyAdoptionSource(
             root,
             "Dispatch",
@@ -587,6 +593,7 @@ internal sealed class ModuleMigrationCoordinator
                     HardenMasterDataLoaderOperatorBoundary.MigrationId,
                     RequireVatIncludedTariffsInMasterDataLoader.MigrationId,
                     RequireMazatlanTimeZoneInMasterDataLoader.MigrationId,
+                    ResolveDriverIdentitySubjectInMasterDataLoader.MigrationId,
                 ],
             "Orders" =>
                 [
@@ -1170,6 +1177,45 @@ internal sealed class ModuleMigrationCoordinator
         !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
         !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    /// <summary>MDM-001-DRIVER-SUB-2026-11-06: the loader function derived from the America/Mazatlan one by the
+    /// reviewed driver-subject edits, plus exactly one grant (and its revocation in the rollback): SELECT
+    /// (identity_subject) on identity.users to the executor. No other grant or revocation, and no table, role, policy
+    /// or row is dropped, deleted, truncated or rewritten, and no function is dropped.</summary>
+    private static bool IsDriverSubjectLoaderSource(string source) =>
+        source.Contains(ResolveDriverIdentitySubjectInMasterDataLoader.DriverSubjectUnknown, StringComparison.Ordinal) &&
+        source.Contains("RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql", StringComparison.Ordinal) &&
+        CountOf(source, "GRANT ") == 1 &&
+        source.Contains("GRANT SELECT (identity_subject) ON identity.users TO paqueteria_master_data_executor;", StringComparison.Ordinal) &&
+        CountOf(source, "REVOKE ") == 1 &&
+        source.Contains("REVOKE SELECT (identity_subject) ON identity.users FROM paqueteria_master_data_executor;", StringComparison.Ordinal) &&
+        !source.Contains("DROP TABLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP ROLE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP COLUMN", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP FUNCTION", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DROP POLICY", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("TRUNCATE", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("DELETE FROM", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE platform", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE pricing", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE locations", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE identity", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("UPDATE drivers", StringComparison.OrdinalIgnoreCase) &&
+        !source.Contains("migrationBuilder.CreateTable", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.Alter", StringComparison.Ordinal) &&
+        !source.Contains("migrationBuilder.DropTable", StringComparison.Ordinal);
+
+    private static int CountOf(string source, string value)
+    {
+        var count = 0;
+        for (var at = source.IndexOf(value, StringComparison.Ordinal); at >= 0;
+             at = source.IndexOf(value, at + value.Length, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
+    }
 
     /// <summary>MDM-001-TZ-MAZATLAN-ONLY-2026-10-02: the loader function derived from the VAT_INCLUDED one by the
     /// reviewed America/Mazatlan edit, and nothing else: no grant, table, role, policy or row is dropped, deleted,

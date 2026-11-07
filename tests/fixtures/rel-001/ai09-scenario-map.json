@@ -192,8 +192,7 @@
     {
       "feature": "Recuperación",
       "scenario": "Restaurar un backup",
-      "status": "GAP",
-      "reason": "Since #344 the OPS-002 CI drill (backup-restore job, tools/test-backup-restore.ps1) runs every step on a backup it takes itself: the restore runbook into an empty environment, organizations, orders, events and file references recovered, and no missing data (the four row counts match, no missing or extra object); RestoreDrillRowCountPostgreSqlContractTests runs the pilot drill's comparison on real PostgreSQL. No CI test restores a daily backup: the pilot's (Azure automated backups, 14-day PITR) are restored only by deploy/azure/pilot/restore-drill.sh on the deployed environment, which the entry report checks as restore_vigente.",
+      "status": "COVERED",
       "tests": [
         {
           "job": "backup-restore",
@@ -673,16 +672,23 @@
     {
       "feature": "Política 401 403 404",
       "scenario": "Actor sin capacidad dentro de su organización",
-      "status": "GAP",
-      "reason": "business_operator and the financial override endpoint belong to MVP-2 businesses; the 403 for an actor without the capability is tested on the pilot capability matrices, not on this exact case.",
+      "status": "COVERED",
       "tests": [
         {
           "job": "dotnet",
-          "test": "Paqueteria.IntegrationTests.Security.OrderCapabilityMatrixHttpTests"
+          "test": "Paqueteria.IntegrationTests.Pricing.QuoteLowPriceAuthorizationHttpTests.Every_other_role_receives_a_generic_403_before_the_service_is_called"
         },
         {
           "job": "dotnet",
-          "test": "Paqueteria.ContractTests.CapabilityMatrixContractTests"
+          "test": "Paqueteria.IntegrationTests.Pricing.QuoteLowPriceAuthorizationHttpTests.Platform_admin_without_mfa_receives_MFA_REQUIRED_before_the_service_is_called"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Finance.SettlementHttpTests.An_actor_without_the_settlement_capability_is_403_for_every_operation"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Security.OrderCapabilityMatrixHttpTests.ListOrders_and_GetOrder_are_open_to"
         }
       ]
     },
