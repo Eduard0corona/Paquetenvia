@@ -253,6 +253,8 @@ public sealed class SettlementImplementationContractTests
     [InlineData(SettlementConflictCode.CashPending, "CASH_PENDING")]
     [InlineData(SettlementConflictCode.IncidentPending, "INCIDENT_PENDING")]
     [InlineData(SettlementConflictCode.ClaimPending, "CLAIM_PENDING")]
+    [InlineData(SettlementConflictCode.PeriodNotClosed, "SETTLEMENT_PERIOD_NOT_CLOSED")]
+    [InlineData(SettlementConflictCode.TotalNegative, "SETTLEMENT_TOTAL_NEGATIVE")]
     public void Settlement_conflicts_map_to_stable_public_codes(SettlementConflictCode code, string expected)
     {
         Assert.Equal(expected, SettlementEndpoints.PublicCode(code));
@@ -360,7 +362,7 @@ public sealed class SettlementImplementationContractTests
         Assert.DoesNotContain("DELETE", service, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(
             ["finance.settlement.adjusted", "finance.settlement.approved", "finance.settlement.calculated",
-                "finance.settlement.paid", "finance.settlement.voided"],
+                "finance.settlement.exported", "finance.settlement.paid", "finance.settlement.voided"],
             System.Text.RegularExpressions.Regex.Matches(service, "\"(finance\\.settlement\\.[a-z]+)\"")
                 .Select(match => match.Groups[1].Value)
                 .Distinct(StringComparer.Ordinal)
@@ -473,6 +475,76 @@ public sealed class SettlementImplementationContractTests
             pair => pair.Key,
             pair => new Microsoft.Extensions.Primitives.StringValues(pair.Value),
             StringComparer.Ordinal));
+
+    /// <summary>
+    /// SET-001-D7-RULES-ENFORCED-2026-11-06: every D7-SETTLEMENT-RULES delta is published with its implementation,
+    /// and the service decides each rule where AI-05 places it: the closed period after capability and replay and
+    /// before the driver is read, the negative total before the ledger changes, and the export audit inside the
+    /// transaction that reads what the CSV renders.
+    /// </summary>
+    [Fact]
+    public void D7_settlement_rules_are_published_and_decided_where_AI05_says()
+    {
+        var root = OpenApi();
+        var deltas = root.Mapping("x-pilot-contract-deltas").Sequence("entries").Children
+            .Cast<YamlMappingNode>()
+            .Where(entry => entry.Scalar("id").StartsWith("D7-SETTLEMENT-", StringComparison.Ordinal))
+            .ToDictionary(entry => entry.Scalar("id"), StringComparer.Ordinal);
+        Assert.Equal(
+            ["D7-SETTLEMENT-CLOSED-PERIOD", "D7-SETTLEMENT-EXPORT-AUDIT", "D7-SETTLEMENT-MFA", "D7-SETTLEMENT-NEGATIVE-TOTAL"],
+            deltas.Keys.Order(StringComparer.Ordinal));
+        Assert.All(deltas.Values, entry =>
+        {
+            Assert.Equal(("DECIDED", "D7-SETTLEMENT-RULES"), (entry.Scalar("status"), entry.Scalar("decision")));
+            Assert.StartsWith("shipped by ", entry.Scalar("implementation"), StringComparison.Ordinal);
+        });
+        Assert.Contains("SETTLEMENT_PERIOD_NOT_CLOSED", deltas["D7-SETTLEMENT-CLOSED-PERIOD"].Scalar("delta"), StringComparison.Ordinal);
+        Assert.Contains("SETTLEMENT_TOTAL_NEGATIVE", deltas["D7-SETTLEMENT-NEGATIVE-TOTAL"].Scalar("delta"), StringComparison.Ordinal);
+
+        var paths = root.Mapping("paths");
+        var create = paths.Mapping("/settlements").Mapping("post").Scalar("description");
+        Assert.Contains("SETTLEMENT_PERIOD_NOT_CLOSED", create, StringComparison.Ordinal);
+        Assert.Contains("SETTLEMENT_TOTAL_NEGATIVE", create, StringComparison.Ordinal);
+        Assert.Contains(
+            "SETTLEMENT_TOTAL_NEGATIVE",
+            paths.Mapping("/settlements/{settlementId}/adjustments").Mapping("post").Scalar("description"),
+            StringComparison.Ordinal);
+        Assert.Contains(
+            PostgreSqlSettlementService.ExportAuditAction,
+            paths.Mapping("/settlements/{settlementId}/export.csv").Mapping("get").Scalar("description"),
+            StringComparison.Ordinal);
+        Assert.Equal("finance.settlement.exported", PostgreSqlSettlementService.ExportAuditAction);
+
+        var service = Read(
+            "src", "Modules", "Finance", "Finance.Infrastructure", "Settlements", "PostgreSqlSettlementService.cs");
+        var createAsync = Between(service, "public async Task<SettlementResult> CreateAsync(", "public async Task<SettlementResult> GetAsync(");
+        AssertOrdered(createAsync, "await AuthorizeAsync(", "BeginIdempotencyAsync(", "SettlementConflictCode.PeriodNotClosed", "DriverIsVisibleAsync(");
+        AssertOrdered(createAsync, "SettlementLedger.TryTotal(", "SettlementConflictCode.TotalNegative", "await UpdateHeaderAsync(");
+        var adjustAsync = Between(service, "public async Task<SettlementResult> AddAdjustmentAsync(", "public async Task<SettlementResult> ApproveAsync(");
+        AssertOrdered(adjustAsync, "SettlementConflictCode.SettlementStateConflict", "SettlementLedger.TryApply(", "SettlementConflictCode.TotalNegative", "await InsertLineAsync(");
+        var exportAsync = Between(service, "public async Task<SettlementCsvDocument> ExportCsvAsync(", "public async Task<SettlementResult> AddAdjustmentAsync(");
+        AssertOrdered(exportAsync, "gateway.ExecuteAsync(", "await AuthorizeAsync(", "await ReadAsync(", "SettlementCsvWriter.Write(", "ExportAuditAction", "FinanceTransactionStage.BeforeCommit");
+    }
+
+    private static string Between(string source, string start, string end)
+    {
+        var from = source.IndexOf(start, StringComparison.Ordinal);
+        Assert.True(from >= 0, start);
+        var to = source.IndexOf(end, from, StringComparison.Ordinal);
+        Assert.True(to > from, end);
+        return source[from..to];
+    }
+
+    private static void AssertOrdered(string source, params string[] markers)
+    {
+        var positions = markers.Select(marker =>
+        {
+            var position = source.IndexOf(marker, StringComparison.Ordinal);
+            Assert.True(position >= 0, marker);
+            return position;
+        }).ToArray();
+        Assert.Equal(positions.Order(), positions);
+    }
 
     /// <summary>AI05-EXPORT-NO-STORE: declared on the 200 response and emitted by the endpoint.</summary>
     [Fact]

@@ -1,5 +1,89 @@
 # Changelog
 
+## Seguridad: evento de seguridad para lecturas entre organizaciones rechazadas (REL-001-CROSS-TENANT-SECURITY-EVENT-2026-11-06, AI-08 REL-001) — 2026-11-06
+
+- Respuesta literal del project owner (ronda S continuación, pregunta S4, 2026-11-06), registrada en `decision-log.md`
+  con su contexto, la pregunta, la respuesta, el texto de la opción y las dos opciones no elegidas: S4 "Evento en el log
+  (Recommended)". Cierra el último paso del escenario AI-09 "Un aliado no puede leer la orden de otro aliado": "debe
+  existir un evento de seguridad sin exponer datos de O".
+- La API escribe una línea de log estructurada `Warning` con el EventId fijo 4201 (`CrossTenantAccessRefused`) en dos
+  casos: `ORGANIZATION_REFUSED`, cuando el middleware de contexto de organización rechaza con el 403 uniforme una
+  organización en la que el actor no tiene membresía activa (ajena, inactiva o inexistente, todas igual), y
+  `ORDER_NOT_FOUND`, cuando una lectura de orden (un GET bajo `/api/v1/orders/{orderId`) termina en el 404 uniforme
+  dentro de la organización seleccionada (orden inexistente y orden de otro tenant, igual).
+- La línea solo lleva el tipo de rechazo y la ruta como plantilla y, por el enriquecimiento de OBS-003, el seudónimo
+  HMAC de la organización propia del actor y su tipo de rol en ella (para el 403: la de su membresía predeterminada, o la
+  única; si no hay, ninguno de los dos), además del trace id de la petición, como toda línea de una petición. Nunca lleva
+  ids de orden, de organización ni de usuario, correo, IP ni el valor de `X-Organization-Id`. No escribe en la base; va a
+  Log Analytics con los demás logs. Su id queda fuera del bloque OBS-002 (4600–4699), así que ninguna alerta ni libro de
+  trabajo lo lee; la alerta opcional no se eligió.
+- Respuesta literal S9 (2026-11-06), registrada en la misma fila: "Dejar el TraceId (Recommended)". El "nunca ids" de S4
+  se refiere a ids de entidades; el TraceId de la petición se queda, como en toda línea de log de OBS-003. Sin cambio de
+  código.
+- Sin cambios en contratos normativos: AI-24 no tiene sección de logs de tenancy, la lista permitida de dimensiones de
+  OBS-002 vive en código y solo rige los eventos OBS-002, y AI-03 §18 y AI-13 §10 ya permiten el seudónimo y el tipo de
+  rol en logs con contexto de organización. Se registra la fila porque el cierre del escenario depende de la decisión
+  del owner. Sin cambios en AI-05, AI-06, AI-09, AI-18, roles, permisos, migraciones ni flujos entre módulos.
+- El mapa AI-09 de REL-001 marca el escenario como cubierto con la prueba nueva `CrossTenantSecurityEventHttpTests` y las
+  pruebas existentes de respuesta uniforme y de RLS.
+
+## Datos maestros: repartidores por su sub de AuthCenter (MDM-001-DRIVER-SUB-2026-11-06, AI-08 MDM-001) — 2026-11-06
+
+- Respuestas literales del project owner (ronda S continuada, 2026-11-06), registradas en `decision-log.md` con sus dos
+  contextos, las preguntas, los textos de las opciones y las opciones no elegidas: S7 "Por su sub de AuthCenter
+  (Recommended)". Como es el primer registro normativo de la ruta de MDM-001 en el piloto, la fila cita igual S2
+  "Contenedor privado + job (Recommended)", S6 "Nadie la ve ni la teclea (Recommended)" y S8 "Código ya, infra después
+  (Recommended)"; esas tres no cambian ningún contrato (S2 y S6 los aplica el PR de código #364; por S8, la
+  infraestructura y la documentación de operación esperan a NTF-008).
+- Cada perfil de repartidor del archivo de datos maestros lleva exactamente uno de `user_id` (se queda, así los ejemplos
+  sintéticos siguen valiendo) o `identity_subject` (el sub de AuthCenter, un UUID en minúsculas distinto del nulo; la
+  forma documentada para datos reales). El job lo valida antes de conectarse (`MDM001_DRIVER_IDENTIFIER` si vienen los
+  dos o ninguno, `MDM001_IDENTITY_SUBJECT` si el formato no es válido) y la función lo repite (`MDM001_ENTRY_SHAPE`).
+- `security.load_master_data` traduce el sub a `identity.users.id`; un sub que no corresponde a ningún usuario (o, por
+  defensa, a más de uno) se rechaza con `MDM001_DRIVER_SUBJECT_UNKNOWN` y sólo la referencia de la entrada, sin escribir
+  nada. Al usuario resuelto se le aplican todas las reglas de antes: usuario `ACTIVE` con membresía `DRIVER` activa en la
+  organización cargada (`MDM001_DRIVER_MEMBERSHIP_REQUIRED`, también para el sub de un usuario de otra organización), un
+  perfil por usuario (nombrarlo por id y por sub es `MDM001_DUPLICATE_NATURAL_KEY`), GATE-007 y la clasificación.
+- El formato sigue siendo `paquetenvia.master-data.v1`: el cambio es aditivo (todo documento v1 conserva su sentido) y un
+  cargador anterior rechaza la propiedad nueva en vez de malinterpretarla.
+- AI-18: el ejecutor gana `SELECT (identity_subject)` sobre `identity.users`, que pertenece al paso del carril Pricing
+  `20261106000100_ResolveDriverIdentitySubjectInMasterDataLoader` como los permisos de `policy_version` y del
+  endurecimiento (los pasos publicados verifican conteos exactos antes) y queda registrado en los comentarios y en la
+  aserción 27; los permisos de columna pasan de 122 a 123. Nada para el rol de carga ni para los roles de runtime. El
+  paso reemplaza la función con el cuerpo del paso America/Mazatlan más dos ediciones revisadas de coincidencia única; su
+  `Down` revoca el permiso y restaura la función anterior (los perfiles cargados se quedan), probado en PostgreSQL real.
+  AI-06 no cambia. Nota: `docs/development/mdm-001-master-data-loader.md`.
+
+## Liquidaciones: reglas D7 en el backend (SET-001-D7-RULES-ENFORCED-2026-11-06, AI-08 SET-001) — 2026-11-06
+
+- Respuesta literal del project owner (ronda S, pregunta S1 de opción múltiple, 2026-11-06), registrada en
+  `decision-log.md` con su contexto, la pregunta, las cuatro respuestas elegidas y todos los textos de las opciones: S1
+  "Reglas de liquidación (Recommended)". Las otras tres respuestas ("Huecos de REL-001", "Cerrar #280, #304 y #315" y
+  "Ruta de datos maestros") son tareas aparte.
+- Traduce al backend la decisión `D7-SETTLEMENT-RULES` (2026-09-26): "Solo se liquidan periodos ya cerrados; un total
+  negativo se rechaza; aprobar y pagar requieren MFA; la exportación se audita". El MFA ya estaba implementado
+  (`D7-SETTLEMENT-MFA`, PR 108); faltaban las otras tres reglas.
+- Periodo cerrado (`D7-SETTLEMENT-CLOSED-PERIOD`): `createSettlement` responde 409 `SETTLEMENT_PERIOD_NOT_CLOSED` si
+  `period_to` no es estrictamente anterior a la fecha operativa actual, la fecha de calendario de
+  `Finance:OperationalTimeZone` (America/Mazatlan por omisión), la misma zona de las fechas del periodo. Un periodo que
+  termina hoy sigue abierto. Se decide después de la capacidad y de la repetición idempotente, y antes de leer al
+  repartidor: una repetición devuelve la respuesta guardada, y un rechazo no lee datos del tenant ni guarda nada, así que
+  la misma llave puede reintentarse cuando el periodo cierre.
+- Total negativo (`D7-SETTLEMENT-NEGATIVE-TOTAL`): `createSettlement` y `addSettlementAdjustment` responden 409
+  `SETTLEMENT_TOTAL_NEGATIVE` si el total resultante queda por debajo de cero; un total de exactamente 0 se acepta. El
+  ajuste se revisa después del estado y del rango bigint, sobre el total que deja. Es una regla de la aplicación: AI-06
+  no gana CHECK y no hay migración, porque S1 pidió la decisión "tal como ya está en el contrato AI-05" y el servicio de
+  liquidaciones es el único que escribe el total.
+- Exportación auditada (`D7-SETTLEMENT-EXPORT-AUDIT`): cada CSV servido por `exportSettlementCsv`, en cualquier estado
+  de la liquidación, escribe una entrada append-only `finance.settlement.exported` con el id de la liquidación, su
+  estado, su total y su número de líneas, sin datos personales ni texto libre, y con el trace id de la petición. Se
+  escribe en la misma transacción que la lectura: si la entrada no se puede escribir, no sale el CSV (503); una
+  exportación rechazada no escribe nada.
+- AI-05: `SettlementConflictProblem.code` agrega `SETTLEMENT_PERIOD_NOT_CLOSED` y `SETTLEMENT_TOTAL_NEGATIVE`; las
+  descripciones de `createSettlement`, `addSettlementAdjustment`, `exportSettlementCsv` y `SettlementConflict` dicen las
+  reglas; los tres deltas reciben su línea `implementation`. Sin cambios en AI-06, AI-07, AI-08, AI-18, roles, permisos,
+  dependencias ni la web, que ya tenía los dos textos. Nota: `docs/development/set-001-d7-settlement-rules.md`.
+
 ## Ofertas externas: la tarjeta del repartidor muestra la guía (EXT-001-OFFER-GUIA-2026-11-04, AI-08 EXT-001) — 2026-11-04
 
 - Respuesta literal del project owner (ronda Z continuada, pregunta Z24, 2026-11-04), registrada en `decision-log.md` con

@@ -39,6 +39,9 @@ public sealed partial class PostgreSqlSettlementService(
 
     public const string AuditEntityType = "Settlement";
 
+    /// <summary>D7-SETTLEMENT-EXPORT-AUDIT: the audit action of every served CSV export.</summary>
+    public const string ExportAuditAction = "finance.settlement.exported";
+
     public async Task<SettlementResult> CreateAsync(
         CreateSettlementCommand command,
         CancellationToken cancellationToken)
@@ -56,6 +59,7 @@ public sealed partial class PostgreSqlSettlementService(
         }
 
         var now = UtcMicrosecondPrecision.Normalize(clock.UtcNow);
+        var operationalDate = SettlementPeriod.OperationalDate(now, zone);
         var requestHash = SettlementCanonicalizer.Create(command);
         return await gateway.ExecuteAsync(
             command.ActorId,
@@ -70,6 +74,13 @@ public sealed partial class PostgreSqlSettlementService(
                 if (replay is not null)
                 {
                     return replay;
+                }
+
+                // D7-SETTLEMENT-CLOSED-PERIOD: decided by the request and the clock alone, after capability and
+                // replay, before any persisted state of the tenant is read. A replay keeps its stored response.
+                if (!period.IsClosedOn(operationalDate))
+                {
+                    throw Conflict(SettlementConflictCode.PeriodNotClosed);
                 }
 
                 // A missing driver and another tenant's driver are the same uniform 404.
@@ -99,6 +110,13 @@ public sealed partial class PostgreSqlSettlementService(
 
                 var total = SettlementLedger.TryTotal(sources.Select(source => source.AmountCents))
                     ?? throw new FinanceUnavailableException("The settlement total cannot be represented.");
+
+                // D7-SETTLEMENT-NEGATIVE-TOTAL: the refusal rolls back the DRAFT header and its lines.
+                if (!SettlementLedger.AdmitsTotal(total))
+                {
+                    throw Conflict(SettlementConflictCode.TotalNegative);
+                }
+
                 await UpdateHeaderAsync(
                     connection, transaction, command.OrganizationId, settlementId,
                     SettlementStatus.Draft, 0, SettlementStatus.Calculated, total, token);
@@ -188,10 +206,50 @@ public sealed partial class PostgreSqlSettlementService(
     /// The export is rendered from exactly what <see cref="GetAsync"/> reads — the persisted header and its
     /// persisted lines, reconciled — and never recomputed from assignments or orders.
     /// </summary>
+    /// <remarks>
+    /// D7-SETTLEMENT-EXPORT-AUDIT: every export served writes one append-only audit entry, whatever the settlement
+    /// status, in the same transaction as the read it renders. The CSV is only returned once that transaction
+    /// commits, so no export leaves without its entry; a refused export (403, 404, 503) writes none.
+    /// </remarks>
     public async Task<SettlementCsvDocument> ExportCsvAsync(
         GetSettlementQuery query,
-        CancellationToken cancellationToken) =>
-        SettlementCsvWriter.Write(await GetAsync(query, cancellationToken));
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(query);
+        if (!SettlementInputPolicy.IsValid(query))
+        {
+            throw Conflict(SettlementConflictCode.InvalidRequest);
+        }
+
+        var now = UtcMicrosecondPrecision.Normalize(clock.UtcNow);
+        return await gateway.ExecuteAsync(
+            query.ActorId,
+            query.OrganizationId,
+            async (connection, transaction, token) =>
+            {
+                await AuthorizeAsync(
+                    connection, transaction, query.ActorId, query.OrganizationId, query.MfaSatisfied, token);
+                var snapshot = await ReadAsync(
+                    connection, transaction, query.OrganizationId, query.SettlementId, false, token)
+                    ?? throw new FinanceNotFoundException();
+                var document = SettlementCsvWriter.Write(snapshot.Result);
+                await WriteAuditAsync(
+                    connection, transaction, Guid.NewGuid(), query.ActorId, query.OrganizationId,
+                    ExportAuditAction, query.SettlementId, query.RequestId,
+                    new
+                    {
+                        settlement_id = query.SettlementId,
+                        status = snapshot.Result.Status,
+                        total_cents = snapshot.Result.TotalCents,
+                        line_count = snapshot.Result.Lines.Count,
+                    },
+                    now,
+                    token);
+                await failureInjector.OnStageAsync(FinanceTransactionStage.BeforeCommit, token);
+                return document;
+            },
+            cancellationToken);
+    }
 
     public async Task<SettlementResult> AddAdjustmentAsync(
         AddSettlementAdjustmentCommand command,
@@ -230,6 +288,12 @@ public sealed partial class PostgreSqlSettlementService(
 
                 var total = SettlementLedger.TryApply(current.Result.TotalCents, command.AmountCents)
                     ?? throw Conflict(SettlementConflictCode.InvalidRequest);
+
+                // D7-SETTLEMENT-NEGATIVE-TOTAL: every adjustment, not only the last one before approval.
+                if (!SettlementLedger.AdmitsTotal(total))
+                {
+                    throw Conflict(SettlementConflictCode.TotalNegative);
+                }
 
                 // The adjustment's source is the audit entry that records it, so its id is chosen first.
                 var auditId = Guid.NewGuid();

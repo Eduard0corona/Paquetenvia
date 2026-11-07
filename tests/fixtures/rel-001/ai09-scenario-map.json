@@ -5,8 +5,7 @@
     {
       "feature": "Aislamiento multiempresa",
       "scenario": "Un aliado no puede leer la orden de otro aliado",
-      "status": "GAP",
-      "reason": "The uniform answer and the RLS isolation are tested; no test (and no implementation) records the security event of the last step.",
+      "status": "COVERED",
       "tests": [
         {
           "job": "runtime-contracts",
@@ -15,6 +14,14 @@
         {
           "job": "dotnet",
           "test": "Paqueteria.IntegrationTests.Security.TenantSelectionPipelineTests.Foreign_organization_is_forbidden_without_disclosure"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Orders.OrderHttpTests.GET_detail_is_uniform_and_timeline_exposes_no_internal_payload"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Security.CrossTenantSecurityEventHttpTests"
         }
       ]
     },
@@ -185,12 +192,15 @@
     {
       "feature": "Recuperación",
       "scenario": "Restaurar un backup",
-      "status": "GAP",
-      "reason": "The OPS-002 CI drill restores organizations, orders, events and file references into an empty environment; the row-count comparison that proves nothing is missing (Z9) is the ENV-001 follow-up that extends the pilot and CI drills.",
+      "status": "COVERED",
       "tests": [
         {
           "job": "backup-restore",
           "test": "tools.test-backup-restore.Backup_restore_drill"
+        },
+        {
+          "job": "runtime-contracts",
+          "test": "Paqueteria.ContractTests.PostgreSql.RestoreDrillRowCountPostgreSqlContractTests"
         }
       ]
     },
@@ -662,16 +672,23 @@
     {
       "feature": "Política 401 403 404",
       "scenario": "Actor sin capacidad dentro de su organización",
-      "status": "GAP",
-      "reason": "business_operator and the financial override endpoint belong to MVP-2 businesses; the 403 for an actor without the capability is tested on the pilot capability matrices, not on this exact case.",
+      "status": "COVERED",
       "tests": [
         {
           "job": "dotnet",
-          "test": "Paqueteria.IntegrationTests.Security.OrderCapabilityMatrixHttpTests"
+          "test": "Paqueteria.IntegrationTests.Pricing.QuoteLowPriceAuthorizationHttpTests.Every_other_role_receives_a_generic_403_before_the_service_is_called"
         },
         {
           "job": "dotnet",
-          "test": "Paqueteria.ContractTests.CapabilityMatrixContractTests"
+          "test": "Paqueteria.IntegrationTests.Pricing.QuoteLowPriceAuthorizationHttpTests.Platform_admin_without_mfa_receives_MFA_REQUIRED_before_the_service_is_called"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Finance.SettlementHttpTests.An_actor_without_the_settlement_capability_is_403_for_every_operation"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Security.OrderCapabilityMatrixHttpTests.ListOrders_and_GetOrder_are_open_to"
         }
       ]
     },

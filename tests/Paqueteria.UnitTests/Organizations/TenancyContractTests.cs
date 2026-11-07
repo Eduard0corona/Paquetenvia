@@ -62,6 +62,29 @@ public sealed class TenancyContractTests
         Assert.Throws<InvalidOperationException>(() => context.Select(Guid.NewGuid()));
     }
 
+    /// <summary>
+    /// REL-001-CROSS-TENANT-SECURITY-EVENT-2026-11-06: a refused organization is a final outcome of the request, like a
+    /// selected one, and the mark keeps no organization id.
+    /// </summary>
+    [Fact]
+    public void Request_tenant_context_refusal_is_final_and_names_no_organization()
+    {
+        var refused = new RequestTenantContext();
+        Assert.False(refused.OrganizationRefused);
+
+        refused.RefuseOrganization();
+
+        Assert.True(refused.OrganizationRefused);
+        Assert.False(refused.IsSelected);
+        Assert.Equal(Guid.Empty, refused.OrganizationId);
+        Assert.Throws<InvalidOperationException>(() => refused.Select(Guid.NewGuid()));
+
+        var selected = new RequestTenantContext();
+        selected.Select(Guid.NewGuid());
+        Assert.Throws<InvalidOperationException>(selected.RefuseOrganization);
+        Assert.False(selected.OrganizationRefused);
+    }
+
     [Theory]
     [InlineData("")]
     [InlineData("not-a-uuid")]

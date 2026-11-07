@@ -286,6 +286,21 @@ public sealed class SettlementPolicyTests
         Assert.Null(SettlementLedger.TryApply(long.MinValue, -1));
     }
 
+    /// <summary>D7-SETTLEMENT-NEGATIVE-TOTAL: zero and above are admitted; anything below zero is not.</summary>
+    [Fact]
+    public void A_settlement_total_below_zero_is_never_admitted()
+    {
+        Assert.True(SettlementLedger.AdmitsTotal(0));
+        Assert.True(SettlementLedger.AdmitsTotal(1));
+        Assert.True(SettlementLedger.AdmitsTotal(long.MaxValue));
+        Assert.False(SettlementLedger.AdmitsTotal(-1));
+        Assert.False(SettlementLedger.AdmitsTotal(long.MinValue));
+
+        // An adjustment is checked on the total it leaves, not on its own sign.
+        Assert.True(SettlementLedger.AdmitsTotal(SettlementLedger.TryApply(4_500, -4_500)!.Value));
+        Assert.False(SettlementLedger.AdmitsTotal(SettlementLedger.TryApply(4_500, -4_501)!.Value));
+    }
+
     [Fact]
     public void The_ledger_reconciles_only_on_the_exact_line_sum()
     {

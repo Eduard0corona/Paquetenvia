@@ -1,14 +1,23 @@
 using System.Globalization;
+using System.Security.Cryptography;
 using System.Text.Json;
 using Npgsql;
 using NpgsqlTypes;
 using Paqueteria.Application.Security;
 
+/// <summary>
+/// Exactly one source: <paramref name="FilePath"/>, or <paramref name="Blob"/> (MDM-001 route S2), which also requires
+/// <paramref name="ExpectedSha256"/>. <paramref name="DeleteAfterLoad"/> applies only to a Blob source on a real
+/// (non-dry-run) load; <see cref="CommandOptions"/> refuses every other combination.
+/// </summary>
 internal sealed record MasterDataLoadOptions(
-    string FilePath,
+    string? FilePath,
     Guid OrganizationId,
     bool DryRun,
-    bool AllowRealDriverProfiles);
+    bool AllowRealDriverProfiles,
+    MasterDataBlobReference? Blob = null,
+    byte[]? ExpectedSha256 = null,
+    bool DeleteAfterLoad = false);
 
 /// <summary>The environment classification that decides whether driver profiles may be loaded without the GATE-007 flag.</summary>
 internal sealed record MasterDataEnvironment(string? EnvironmentName, string? DeploymentClass)
@@ -38,6 +47,9 @@ internal sealed class MasterDataLoadException(string message, int exitCode) : Ex
 /// <c>security.load_master_data</c> as <c>paqueteria_master_data_loader</c> inside one explicit transaction
 /// that carries exactly the target organization as tenant context. A dry run uses a READ ONLY transaction
 /// and rolls back. Output is counts and reference-only diffs; no value from the document is printed.
+/// The document comes from a local file or (MDM-001 route S2) from a private Blob container; either way its
+/// SHA-256 is checked against <c>--expected-sha256</c> when given (always for a Blob) before any validation or
+/// database connection, and a Blob is deleted only after a committed, non-dry-run load when asked to.
 /// </summary>
 internal static class MasterDataLoader
 {
@@ -46,23 +58,81 @@ internal static class MasterDataLoader
     internal const int DatabaseExitCode = 9;
     internal const int GateExitCode = 10;
 
+    /// <param name="blobSource">
+    /// The Blob source for <see cref="MasterDataLoadOptions.Blob"/>; the migrator builds it with the job's managed
+    /// identity (<see cref="MasterDataBlobSource.Create"/>), tests with a stand-in transport.
+    /// </param>
     internal static async Task<JsonDocument> RunAsync(
         string connectionString,
         MasterDataLoadOptions options,
         MasterDataEnvironment environment,
         TextWriter output,
-        CancellationToken cancellationToken)
+        CancellationToken cancellationToken,
+        MasterDataBlobSource? blobSource = null)
     {
+        if ((options.FilePath is null) == (options.Blob is null) ||
+            (options.Blob is not null && (blobSource is null || options.ExpectedSha256 is null)) ||
+            (options.DeleteAfterLoad && (options.Blob is null || options.DryRun)))
+        {
+            throw new InvalidOperationException("master-data-load needs exactly one source; see CommandOptions.");
+        }
+
+        MasterDataBlobDownload? download = null;
         byte[] content;
+        if (blobSource is not null)
+        {
+            download = await blobSource.DownloadAsync(cancellationToken).ConfigureAwait(false);
+            content = download.Content;
+        }
+        else
+        {
+            content = await ReadFileAsync(options.FilePath!, cancellationToken).ConfigureAwait(false);
+        }
+
+        // MDM-001 route S2: the bytes must be the reviewed bytes before anything else looks at them.
+        var actual = SHA256.HashData(content);
+        var reference = blobSource is null ? "source=file" : $"source=blob {blobSource.Reference.Describe()}";
+        output.WriteLine($"MDM001_SOURCE {reference} bytes={content.Length} sha256={Convert.ToHexStringLower(actual)}");
+        if (options.ExpectedSha256 is { } expected && !CryptographicOperations.FixedTimeEquals(actual, expected))
+        {
+            throw new MasterDataLoadException(
+                $"MDM001_FILE_SHA256_MISMATCH sha256={Convert.ToHexStringLower(actual)} " +
+                $"expected={Convert.ToHexStringLower(expected)}; the document was neither validated nor loaded",
+                ValidationExitCode);
+        }
+
+        var result = await LoadAsync(connectionString, options, environment, content, output, cancellationToken)
+            .ConfigureAwait(false);
+        if (options.DeleteAfterLoad && !options.DryRun)
+        {
+            // Only after the commit above: a dry run, a rejection or any failure returns or throws before this.
+            try
+            {
+                await blobSource!.DeleteAsync(download!.ETag, cancellationToken).ConfigureAwait(false);
+            }
+            catch
+            {
+                result.Dispose();
+                throw;
+            }
+
+            output.WriteLine($"MDM001_BLOB_DELETED {blobSource.Reference.Describe()}");
+        }
+
+        return result;
+    }
+
+    private static async Task<byte[]> ReadFileAsync(string path, CancellationToken cancellationToken)
+    {
         try
         {
-            var info = new FileInfo(options.FilePath);
+            var info = new FileInfo(path);
             if (!info.Exists || info.Length > MasterDataDocumentValidator.MaximumFileBytes)
             {
                 throw new MasterDataLoadException("MDM001_FILE_UNREADABLE", ValidationExitCode);
             }
 
-            content = await File.ReadAllBytesAsync(options.FilePath, cancellationToken).ConfigureAwait(false);
+            return await File.ReadAllBytesAsync(path, cancellationToken).ConfigureAwait(false);
         }
         catch (IOException)
         {
@@ -72,7 +142,16 @@ internal static class MasterDataLoader
         {
             throw new MasterDataLoadException("MDM001_FILE_UNREADABLE", ValidationExitCode);
         }
+    }
 
+    private static async Task<JsonDocument> LoadAsync(
+        string connectionString,
+        MasterDataLoadOptions options,
+        MasterDataEnvironment environment,
+        byte[] content,
+        TextWriter output,
+        CancellationToken cancellationToken)
+    {
         var validation = MasterDataDocumentValidator.Validate(content, options.OrganizationId);
         var sha = Convert.ToHexStringLower(validation.Sha256);
         if (!validation.IsValid)

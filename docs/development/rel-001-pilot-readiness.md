@@ -25,7 +25,7 @@ The entry phase lands in three PRs:
 
 | Criterion | Source | Passes when | Today |
 | --- | --- | --- | --- |
-| `full_regression` | AI-08 required test | Foundation CI 13/13 push run on `main` whose head is `tested_git_sha`; REL-000 technical evidence `PASSED` in that run; no failed or skipped test in any execution artifact; every identity of the two closed manifests executed and passed in that run; no `GAP` | Fails: 1 screen and 3 AI-09 scenarios have no test |
+| `full_regression` | AI-08 required test | Foundation CI 13/13 push run on `main` whose head is `tested_git_sha`; REL-000 technical evidence `PASSED` in that run; no failed or skipped test in any execution artifact; every identity of the two closed manifests executed and passed in that run; no `GAP` | No `GAP` is left; it passes on a certified run in which every identity ran and passed |
 | `data_completeness` | AI-02, Z6 | The rehearsal has at least 50 delivered orders and `complete * 100 >= delivered * 98`, and the four journey steps passed | Measured by the rehearsal of each dispatch; `MISSING` if it fails |
 | `latency` | AI-02, Z7, Z8 | Each critical screen p95 < 2000 ms and order creation p95 < 3000 ms, at least 100 samples each, nearest-rank | Measured by the rehearsal of each dispatch; `MISSING` if it fails |
 | `restore_vigente` | AI-08, Z9 | The pilot drill `Succeeded`, restore point inside the 14-day PITR window, verified 0 to 7 days before `period_start` (before the record exists: before the report time), row counts matched, `assert` ran `tested_git_sha`; the OPS-002 CI drill passed with the same counts | `MISSING` until the owner runs the drill on the pilot; a certified run from before PR-C has no CI counts (`MISSING`) |
@@ -58,15 +58,100 @@ A gate is resolved only by a decision-log row `GATE-NNN-...` of Type `Gate resol
 
 - `tests/fixtures/rel-001/browser-suites.json`: every AI-07 route of MVP-0 and MVP-1, plus the MVP-1 screen without a
   route (`external_driver_offers`). Each is `COVERED` by named Playwright classes or a `GAP` with the task that owns it
-  (Z2: UI-001, AUTH-001, EXT-001, NTF-006 or REG-001). Today: 17 covered, 1 gap.
+  (Z2: UI-001, AUTH-001, EXT-001, NTF-006 or REG-001). Today: all 18 covered.
 - `tests/fixtures/rel-001/ai09-scenario-map.json`: the 81 AI-09 scenarios. Each is `COVERED` by test identities, a
   `GAP` with a reason, or `NOT_APPLICABLE` with a contract reason (V1_SCALE_READINESS, GATE-013, GATE-014, GATE-017,
-  MVP-3 allies). Today: 73 covered, 3 gaps, 5 not applicable.
+  MVP-3 allies). Today: 76 covered, no gap, 5 not applicable. `Actor sin capacidad dentro de su organización` and
+  `Restaurar un backup` are covered by an owner decision, and `Un aliado no puede leer la orden de otro aliado` by its
+  security event; both are described below.
 
 An identity is a full test name or a class name (every test of the class). Each one names the job whose execution
 artifact must show it passed. The tool's tests check that every .NET identity is still declared under `tests/`, so a
 renamed or removed test must update the map in the same PR. When a missing suite lands, its task turns the `GAP` into
 `COVERED`.
+
+### Scenarios covered by an owner decision (round S, 2026-11-06)
+
+A `COVERED` entry carries only its test identities, with no reason field. The two scenarios below are covered with a
+nuance the map cannot express, so it is written here.
+
+- **`Actor sin capacidad dentro de su organización` (S3).** The owner's answer: "Con el equivalente del piloto". AI-09
+  asks for a `business_operator` who can see an order and receives 403 when trying a financial override. In the pilot
+  no `business_operator` sees orders; that is MVP-2. The pilot's equivalent is already tested, with no code change, in
+  the `dotnet` job:
+  - The pilot's financial override is the low-price authorization of a quote. VIEWER, FINANCE, DRIVER and
+    BUSINESS_ADMIN get the generic 403 before the service is called
+    (`QuoteLowPriceAuthorizationHttpTests.Every_other_role_receives_a_generic_403_before_the_service_is_called`), and
+    PLATFORM_ADMIN without MFA gets `MFA_REQUIRED`
+    (`QuoteLowPriceAuthorizationHttpTests.Platform_admin_without_mfa_receives_MFA_REQUIRED_before_the_service_is_called`).
+  - VIEWER does see the order (`OrderCapabilityMatrixHttpTests.ListOrders_and_GetOrder_are_open_to`). So does
+    DISPATCHER, and it gets 403 on every settlement operation
+    (`SettlementHttpTests.An_actor_without_the_settlement_capability_is_403_for_every_operation`).
+
+  The literal `business_operator` case is tested in MVP-2, when that role can see orders.
+- **`Restaurar un backup` (S5).** The owner's answer: "Cubierto + restore vigente". It is covered by the OPS-002 CI drill
+  (`backup-restore` job, `tools/test-backup-restore.ps1`) and by `RestoreDrillRowCountPostgreSqlContractTests`
+  (`runtime-contracts` job). Since #344 the CI drill runs every step on a backup it takes itself: the restore runbook
+  into an empty environment, then organizations, orders, events and file references recovered. Nothing is missing: the
+  four row counts match and no object is missing or extra. The contract test runs the pilot drill's comparison on real
+  PostgreSQL.
+
+  The nuance: no CI test restores the pilot's daily backup (Azure automated backups, 14-day PITR). Only
+  `deploy/azure/pilot/restore-drill.sh` restores it, on the deployed pilot. The entry report still requires that drill
+  as `restore_vigente`: a drill 7 days or less old, with matched counts. That criterion keeps blocking the pilot start
+  until the owner runs the drill. The scenario being covered does not change that criterion or the tool.
+
+### Security event of `Un aliado no puede leer la orden de otro aliado` (S4)
+
+The last step of this scenario is "debe existir un evento de seguridad sin exponer datos de O". The owner's answer (round
+S, S4, 2026-11-06) was "Evento en el log", recorded as `REL-001-CROSS-TENANT-SECURITY-EVENT-2026-11-06`. The scenario is
+`COVERED` by four tests:
+
+- the RLS test (`OrdersTransitionPostgreSqlContractTests.RLS_hides_cross_tenant_order_...`, `runtime-contracts`);
+- the uniform 403 (`TenantSelectionPipelineTests.Foreign_organization_is_forbidden_without_disclosure`, `dotnet`);
+- the uniform 404 (`OrderHttpTests.GET_detail_is_uniform_and_timeline_exposes_no_internal_payload`, `dotnet`);
+- the event itself (`CrossTenantSecurityEventHttpTests`, `dotnet`).
+
+The API writes one `Warning` line with the fixed event id 4201 (`CrossTenantAccessRefused`,
+`src/Paqueteria.Api/Tenancy/CrossTenantSecurityEvent.cs`). It is written in two cases:
+
+| Case | `RefusalType` | When |
+| --- | --- | --- |
+| Refused organization | `ORGANIZATION_REFUSED` | The tenant context middleware answers the uniform 403. The actor has no active membership in the requested organization: it belongs to another tenant, is inactive or does not exist, and all three look alike |
+| Order not found | `ORDER_NOT_FOUND` | A GET of an order or of one of its sub-resources answers the uniform 404 inside the selected organization: `getOrder`, `listOrderProofs`, `getOrderFinancials`, `listOrderRecipientNotices`, `listAssignableDrivers`. A missing order and another tenant's order give the same line |
+
+What the line carries:
+
+- `RefusalType` and `RouteTemplate`: the endpoint's template, such as `/api/v1/orders/{orderId:guid}`, never the
+  request path.
+- From the OBS-003 enrichment, the actor's own organization as `OrganizationPseudonym` and the actor's role kind there as
+  `ActorRoleKind`. For a 404 the own organization is the selected one. For a 403 it is the organization of the actor's
+  default active membership, or the only organization the actor is an active member of; with neither, the line carries
+  no pseudonym and no role kind.
+- From the same enrichment, `TraceId`. It is the request's random W3C trace id, which every line of the request carries
+  and the problem body already returns. The owner kept it (round S, S9, "Dejar el TraceId"): the "nunca ids" of S4 refers
+  to entity ids.
+
+What it never carries: an order id, an organization id, a user id, an e-mail, an IP or the `X-Organization-Id` value. It
+reads nothing about the requested organization or order, writes nothing to the database, and goes to the console and so
+to Log Analytics (30 days). Its id is outside the OBS-002 block 4600-4699, so no alert or workbook reads it. The optional
+alert was not chosen.
+
+A Log Analytics query for these lines, in the form the OBS-002 queries use (not an alert):
+
+```kusto
+ContainerAppConsoleLogs_CL
+| where ContainerAppName_s == "ca-pv-pilot-api"
+| where Log_s has "4201"
+| extend e = parse_json(Log_s)
+| where toint(e.EventId) == 4201
+| project TimeGenerated, RefusalType = tostring(e.State.RefusalType), RouteTemplate = tostring(e.State.RouteTemplate),
+    ActorRoleKind = tostring(e.State.ActorRoleKind), OrganizationPseudonym = tostring(e.State.OrganizationPseudonym)
+```
+
+A refusal that is not about another tenant writes nothing. That covers a role without the capability in its own
+organization, a malformed `X-Organization-Id`, an inactive identity, and any write that answers 404. An allowed read
+writes nothing either.
 
 ## Synthetic rehearsal (Z4, Z5, Z6, Z7, Z8)
 
@@ -96,7 +181,9 @@ What it does, all through the API's own endpoints (the screens have their own su
 | Photos | Each one: `createProofUploadSession` (timed), the signed PUT to storage, the Worker's validation, `finalizeProof` |
 
 The settlement runs on a second API whose clock is two days ahead (an `IClock` replacement through the new optional
-`configureTestServices` of the harness), because D7 settles only closed periods and the deliveries happened today.
+`configureTestServices` of the harness), because D7 settles only closed periods and the deliveries happened today:
+`createSettlement` answers 409 `SETTLEMENT_PERIOD_NOT_CLOSED` for a period that ends today in Culiacán, and every
+export writes its `finance.settlement.exported` audit entry (SET-001-D7-RULES-ENFORCED-2026-11-06).
 
 **Completeness** is read after the run with the administration connection, over the 60 orders that reached DELIVERED:
 `order_events` versions exactly 1 to the order version, one `ORDER_STATUS_CHANGED` audit row per status change, and a

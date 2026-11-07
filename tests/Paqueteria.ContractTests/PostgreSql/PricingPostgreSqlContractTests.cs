@@ -55,6 +55,7 @@ public sealed partial class PricingPostgreSqlContractTests(PostgreSqlContractFix
                      HardenMasterDataLoaderOperatorBoundary.MigrationId,
                      RequireVatIncludedTariffsInMasterDataLoader.MigrationId,
                      RequireMazatlanTimeZoneInMasterDataLoader.MigrationId,
+                     ResolveDriverIdentitySubjectInMasterDataLoader.MigrationId,
                  })
         {
             Assert.True(await reader.ReadAsync());

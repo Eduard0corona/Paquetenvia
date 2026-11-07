@@ -45,7 +45,7 @@ jobs:
         shell: bash
         run: |
           actual="$(sha256sum ./docs/normative/v0.6/database/AI-18_DATABASE_ROLE_MODEL.sql | cut -d ' ' -f 1)"
-          test "$actual" = "9c9fd48b8c95457b9b9b26600c0db6fa75976060e904206414a721070fd281e4"
+          test "$actual" = "3f9d0c0efc6a84037424c5cd9e0b7ec5d5d96f090cc5dff9a0a2cda5837ccfcf"
 
       # AZR-001 v0.8 §28 static CI guards and §29 secret scan. Foundation keeps exactly 13 jobs;
       # these guards run as steps of the normative job and never contact Azure.

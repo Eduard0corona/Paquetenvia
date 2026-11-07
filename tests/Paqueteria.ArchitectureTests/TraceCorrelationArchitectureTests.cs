@@ -13,9 +13,9 @@ namespace Paqueteria.ArchitectureTests;
 public sealed partial class TraceCorrelationArchitectureTests
 {
     /// <summary>
-    /// Every file that uses an Azure SDK namespace (any <c>Azure.*</c> but <c>Azure.Core</c>, or
-    /// <c>Microsoft.Extensions.Azure</c>) or an extension that builds Azure clients, each reviewed to strip trace
-    /// context. <see cref="AzureClientTracingGuard"/> checks every construction in them.
+    /// Every file under <c>src</c> or <c>tools</c> that uses an Azure SDK namespace (any <c>Azure.*</c> but
+    /// <c>Azure.Core</c>, or <c>Microsoft.Extensions.Azure</c>) or an extension that builds Azure clients, each reviewed
+    /// to strip trace context. <see cref="AzureClientTracingGuard"/> checks every construction in them.
     /// </summary>
     private static readonly IReadOnlyDictionary<string, string> ReviewedAzureClientFiles =
         new Dictionary<string, string>(StringComparer.Ordinal)
@@ -40,6 +40,9 @@ public sealed partial class TraceCorrelationArchitectureTests
                 "SAS builders and Blob models only; every Blob request goes through IProofBlobGateway",
             ["src/Paqueteria.Api/Observability/AzureMonitorTelemetryExport.cs"] =
                 "the Azure Monitor trace and metric exporters (OBS-003 PR 6), built with CreateExporterOptions, which ends in WithoutDistributedTracing",
+            // MDM-001 route S2: the migrator's master-data job reads the reviewed file from a private Blob container.
+            ["tools/Paqueteria.DatabaseMigrator/MasterData/MasterDataBlobSource.cs"] =
+                "the master-data Blob service client, built with CreateClientOptions, which ends in WithoutDistributedTracing; the credential is AzureWorkloadCredential.Create",
         };
 
     private const string Scheduler = "src/BuildingBlocks/Paqueteria.Infrastructure/Scheduling/PeriodicJobScheduler.cs";
@@ -109,7 +112,8 @@ public sealed partial class TraceCorrelationArchitectureTests
     [Fact]
     public void Every_azure_sdk_client_is_reviewed_to_strip_trace_context()
     {
-        var sources = SourceFiles().Select(Guarded).ToArray();
+        // The tools (the DatabaseMigrator jobs, MDM-001 route S2) send Azure requests too, so they are in scope.
+        var sources = SourceFiles().Concat(ToolSourceFiles()).Select(Guarded).ToArray();
 
         // Every file that uses an Azure SDK namespace or a guarded extension is reviewed, and no entry is stale.
         Assert.Equal(ReviewedAzureClientFiles.Keys.Order(StringComparer.Ordinal), AzureClientTracingGuard.InScope(sources));
@@ -208,6 +212,11 @@ public sealed partial class TraceCorrelationArchitectureTests
             .Where(file => !file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
                            !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
 
+    private static IEnumerable<string> ToolSourceFiles() =>
+        Directory.EnumerateFiles(TestRepository.GetPath("tools"), "*.cs", SearchOption.AllDirectories)
+            .Where(file => !file.Contains($"{Path.DirectorySeparatorChar}bin{Path.DirectorySeparatorChar}", StringComparison.Ordinal) &&
+                           !file.Contains($"{Path.DirectorySeparatorChar}obj{Path.DirectorySeparatorChar}", StringComparison.Ordinal));
+
     private static string CodeWithoutComments(string file) => string.Join(
         '\n',
         File.ReadLines(file).Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal)));
@@ -222,7 +231,8 @@ public sealed partial class TraceCorrelationArchitectureTests
     /// <summary>Project and MSBuild files that could add a global using to every file of a project.</summary>
     private static IEnumerable<string> ProjectFiles() =>
         new[] { "*.csproj", "*.props", "*.targets" }
-            .SelectMany(pattern => Directory.EnumerateFiles(TestRepository.GetPath("src"), pattern, SearchOption.AllDirectories))
+            .SelectMany(pattern => new[] { "src", "tools" }
+                .SelectMany(root => Directory.EnumerateFiles(TestRepository.GetPath(root), pattern, SearchOption.AllDirectories)))
             .Concat(new[] { "Directory.Build.props", "Directory.Build.targets", "Directory.Packages.props" }
                 .Select(TestRepository.GetPath)
                 .Where(File.Exists))

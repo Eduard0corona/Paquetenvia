@@ -8,6 +8,7 @@ using Microsoft.EntityFrameworkCore.Migrations;
 using Npgsql;
 using NpgsqlTypes;
 using Paqueteria.ContractTests.PostgreSql.Fixtures;
+using Paqueteria.ContractTests.Support;
 using Paqueteria.Infrastructure.Database;
 using Paqueteria.Infrastructure.Database.Baseline;
 using Paqueteria.Infrastructure.Tenancy;
@@ -75,11 +76,13 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
                 ("function", AddMasterDataLoader.FunctionSignature)));
 
         // Exactly the AI-18 column grants plus the two policy_version grants of the Pricing lane
-        // (PRC-POLICY-VERSION-PER-ORG) and the four operator reference grants of the MDM-001 hardening step,
-        // from pg_attribute.attacl; no table-level ACL entry for either role.
+        // (PRC-POLICY-VERSION-PER-ORG), the four operator reference grants of the MDM-001 hardening step and the
+        // identity_subject read of the driver-subject step (MDM-001-DRIVER-SUB-2026-11-06), from
+        // pg_attribute.attacl; no table-level ACL entry for either role.
         var expectedGrants = AddMasterDataLoader.ExecutorColumnGrants
             .Concat(StoreTariffPolicyVersionInMasterDataLoader.AddedExecutorColumnGrants)
             .Concat(HardenMasterDataLoaderOperatorBoundary.AddedExecutorColumnGrants)
+            .Concat(ResolveDriverIdentitySubjectInMasterDataLoader.AddedExecutorColumnGrants)
             .Order(StringComparer.Ordinal)
             .ToArray();
         Assert.Equal(
@@ -98,7 +101,9 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             string.Join(',', DatabaseBaselineAssertions.MasterDataExecutorGrants.Order(StringComparer.Ordinal)));
         Assert.Equal(116, AddMasterDataLoader.ExecutorColumnGrants.Count);
         Assert.Equal(118, StoreTariffPolicyVersionInMasterDataLoader.ExecutorColumnGrantCount);
-        Assert.Equal(HardenMasterDataLoaderOperatorBoundary.ExecutorColumnGrantCount, expectedGrants.Length);
+        Assert.Equal(122, HardenMasterDataLoaderOperatorBoundary.ExecutorColumnGrantCount);
+        Assert.Equal(123, ResolveDriverIdentitySubjectInMasterDataLoader.ExecutorColumnGrantCount);
+        Assert.Equal(ResolveDriverIdentitySubjectInMasterDataLoader.ExecutorColumnGrantCount, expectedGrants.Length);
         Assert.Equal(
             StoreTariffPolicyVersionInMasterDataLoader.AddedExecutorColumnGrants.Order(StringComparer.Ordinal),
             DatabaseBaselineAssertions.MasterDataExecutorPolicyVersionGrants.Order(StringComparer.Ordinal));
@@ -111,6 +116,12 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
         Assert.Equal(
             HardenMasterDataLoaderOperatorBoundary.MigrationId,
             MasterDataLoaderHardeningStateReader.MigrationId);
+        Assert.Equal(
+            ResolveDriverIdentitySubjectInMasterDataLoader.AddedExecutorColumnGrants.Order(StringComparer.Ordinal),
+            DatabaseBaselineAssertions.MasterDataExecutorIdentitySubjectGrants.Order(StringComparer.Ordinal));
+        Assert.Equal(
+            ResolveDriverIdentitySubjectInMasterDataLoader.MigrationId,
+            MasterDataDriverSubjectStateReader.MigrationId);
         Assert.Equal(0, await ScalarAsync<long>(
             """
             SELECT (SELECT count(*) FROM pg_class c CROSS JOIN LATERAL aclexplode(c.relacl) a
@@ -830,6 +841,169 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
         Assert.Equal("0|0|0", await VisibleCountsAsync(organization));
     }
 
+    /// <summary>
+    /// MDM-001 route S2: a Blob source is loaded only after its SHA-256 matches, and the blob is deleted only when the
+    /// operator asked for it and the load committed: never on a dry run or a database rejection. A refused deletion
+    /// after a commit exits 11 with the data loaded. The console carries references, sizes and hashes only.
+    /// </summary>
+    [PostgreSqlContractFact]
+    public async Task A_blob_source_loads_after_its_sha256_check_and_is_deleted_only_after_a_committed_load()
+    {
+        var organization = await NewOrganizationAsync();
+        var suffix = Suffix();
+        await EnsureCityAsync(suffix);
+        await EnsureOperatorLoginAsync();
+        var content = Encoding.UTF8.GetBytes(Document(organization, suffix).ToJsonString());
+        var sha = SHA256.HashData(content);
+        var service = new StandInBlobService(content);
+        MasterDataLoadOptions Options(bool dryRun, bool delete) => new(
+            null, organization, dryRun, false, StandInBlobService.Reference, sha, delete);
+
+        // A dry run reads and diffs, and never deletes.
+        await SetGateAsync(Synthetic, false);
+        var dryRun = new StringWriter();
+        using (await MasterDataLoader.RunAsync(OperatorConnectionString(), Options(dryRun: true, delete: false), Testing,
+                   dryRun, CancellationToken.None, service.Source()))
+        {
+        }
+
+        Assert.Contains("MDM001_DRY_RUN", dryRun.ToString());
+        Assert.Contains($"MDM001_SOURCE source=blob {StandInBlobService.Reference.Describe()} bytes={content.Length} " +
+            $"sha256={Convert.ToHexStringLower(sha)}", dryRun.ToString());
+        Assert.Equal("0|0|0", await VisibleCountsAsync(organization));
+
+        // A database rejection (a SYNTHETIC file on a REAL database) writes nothing and keeps the blob.
+        await SetGateAsync(Real, false);
+        try
+        {
+            var rejected = await Assert.ThrowsAsync<MasterDataLoadException>(() => MasterDataLoader.RunAsync(
+                OperatorConnectionString(), Options(dryRun: false, delete: true), Testing, TextWriter.Null,
+                CancellationToken.None, service.Source()));
+            Assert.Equal(MasterDataLoader.DatabaseExitCode, rejected.ExitCode);
+            Assert.Contains("MDM001_CLASSIFICATION_NOT_ALLOWED", rejected.Message);
+        }
+        finally
+        {
+            await SetGateAsync(Synthetic, false);
+        }
+
+        Assert.DoesNotContain("DELETE", service.Requests.Select(request => request.Method));
+        Assert.Equal("0|0|0", await VisibleCountsAsync(organization));
+
+        // The committed load deletes exactly the version it read, once, and says so.
+        var loaded = new StringWriter();
+        using (await MasterDataLoader.RunAsync(OperatorConnectionString(), Options(dryRun: false, delete: true), Testing,
+                   loaded, CancellationToken.None, service.Source()))
+        {
+        }
+
+        Assert.Contains("MDM001_LOAD_OK", loaded.ToString());
+        Assert.EndsWith($"MDM001_BLOB_DELETED {StandInBlobService.Reference.Describe()}{Environment.NewLine}", loaded.ToString());
+        Assert.Equal("1|2|2", await VisibleCountsAsync(organization));
+        var delete = Assert.Single(service.Requests, request => request.Method == "DELETE");
+        Assert.Equal(StandInBlobService.ETag, delete.IfMatch);
+        Assert.True(service.Deleted);
+        Assert.Equal(Convert.ToHexStringLower(sha), await ScalarAsync<string>(
+            "SELECT payload_redacted->>'file_sha256_reported' FROM platform.audit_logs WHERE org_id=@org AND action='MASTER_DATA_LOADED'",
+            ("org", organization)));
+
+        // Without the flag the blob stays; a refused deletion after a commit exits 11 and the load stands.
+        var kept = new StandInBlobService(content) { DeleteFailure = (System.Net.HttpStatusCode.Forbidden, "AuthorizationPermissionMismatch") };
+        using (await MasterDataLoader.RunAsync(OperatorConnectionString(), Options(dryRun: false, delete: false), Testing,
+                   TextWriter.Null, CancellationToken.None, kept.Source()))
+        {
+        }
+
+        Assert.DoesNotContain("DELETE", kept.Requests.Select(request => request.Method));
+        var refused = await Assert.ThrowsAsync<MasterDataLoadException>(() => MasterDataLoader.RunAsync(
+            OperatorConnectionString(), Options(dryRun: false, delete: true), Testing, TextWriter.Null,
+            CancellationToken.None, kept.Source()));
+        Assert.Equal(MasterDataBlobSource.DeleteFailedExitCode, refused.ExitCode);
+        Assert.Equal(
+            $"MDM001_BLOB_DELETE_FAILED status=403 code=AuthorizationPermissionMismatch {StandInBlobService.Reference.Describe()}; " +
+            "the load was committed and the blob is still there",
+            refused.Message);
+        Assert.False(kept.Deleted);
+        Assert.Equal(3L, await ScalarAsync<long>(
+            "SELECT count(*) FROM platform.audit_logs WHERE org_id=@org AND action='MASTER_DATA_LOADED'", ("org", organization)));
+
+        // References, sizes and hashes only: no name, identifier or coordinate of the document.
+        foreach (var text in new[] { dryRun.ToString(), loaded.ToString(), refused.Message })
+        {
+            Assert.DoesNotContain(suffix, text);
+            Assert.DoesNotContain(organization.ToString("D"), text);
+            Assert.DoesNotContain("-107.", text);
+        }
+    }
+
+    /// <summary>
+    /// MDM-001 route S2 (S6): the login <c>runtime-logins</c> provisions from its verifier is accepted by the loader's
+    /// operator check and by the function, loads, and is named in the audit row only by its random pseudonym; once its
+    /// input is absent it is dropped and can no longer connect.
+    /// </summary>
+    [PostgreSqlContractFact]
+    public async Task The_provisioned_master_data_login_passes_the_operator_check_and_loads()
+    {
+        var password = PilotRuntimeLoginContractTests.RandomPassword();
+        var settings = new Dictionary<string, string?>(StringComparer.Ordinal)
+        {
+            [RuntimeLoginProvisioner.ApiVerifierVariable] = PilotRuntimeLoginContractTests.ScramVerifier(PilotRuntimeLoginContractTests.RandomPassword()),
+            [RuntimeLoginProvisioner.WorkerVerifierVariable] = PilotRuntimeLoginContractTests.ScramVerifier(PilotRuntimeLoginContractTests.RandomPassword()),
+            [RuntimeLoginProvisioner.RealtimeVerifierVariable] = PilotRuntimeLoginContractTests.ScramVerifier(PilotRuntimeLoginContractTests.RandomPassword()),
+            [RuntimeLoginProvisioner.MasterDataVerifierVariable] = PilotRuntimeLoginContractTests.ScramVerifier(password),
+        };
+        var connectionString = new NpgsqlConnectionStringBuilder(fixture.DeploymentConnectionString)
+        {
+            Username = RuntimeLoginProvisioner.MasterDataLogin,
+            Password = password,
+            Pooling = false,
+        }.ConnectionString;
+        try
+        {
+            Assert.Equal(RuntimeLoginProvisioner.MasterDataLogin, await RuntimeLoginProvisioner.RunAsync(
+                fixture.DeploymentConnectionString, name => settings.GetValueOrDefault(name), CancellationToken.None));
+
+            var organization = await NewOrganizationAsync();
+            var suffix = Suffix();
+            await EnsureCityAsync(suffix);
+            await SetGateAsync(Synthetic, false);
+            var file = await WriteTempAsync(Document(organization, suffix));
+            var output = new StringWriter();
+            try
+            {
+                using var result = await MasterDataLoader.RunAsync(
+                    connectionString, new MasterDataLoadOptions(file, organization, false, false), Testing, output,
+                    CancellationToken.None);
+            }
+            finally
+            {
+                File.Delete(file);
+            }
+
+            Assert.Contains("MDM001_LOAD_OK", output.ToString());
+            Assert.Equal("1|2|2", await VisibleCountsAsync(organization));
+            var reference = await OperatorReferenceAsync(RuntimeLoginProvisioner.MasterDataLogin);
+            Assert.True(Guid.TryParseExact(reference, "D", out _));
+            Assert.Equal(reference, await ScalarAsync<string>(
+                "SELECT payload_redacted->>'operator_ref' FROM platform.audit_logs WHERE org_id=@org AND action='MASTER_DATA_LOADED'",
+                ("org", organization)));
+
+            // Absent input: dropped, so it can no longer connect, let alone load.
+            settings[RuntimeLoginProvisioner.MasterDataVerifierVariable] = null;
+            Assert.Equal(RuntimeLoginProvisioner.MasterDataLoginAbsent, await RuntimeLoginProvisioner.RunAsync(
+                fixture.DeploymentConnectionString, name => settings.GetValueOrDefault(name), CancellationToken.None));
+            await using var dropped = new NpgsqlConnection(connectionString);
+            await Assert.ThrowsAsync<PostgresException>(() => dropped.OpenAsync());
+        }
+        finally
+        {
+            NpgsqlConnection.ClearAllPools();
+            await ExecuteAdminAsync(
+                $"DROP ROLE IF EXISTS {RuntimeLoginProvisioner.ApiLogin}; DROP ROLE IF EXISTS {RuntimeLoginProvisioner.WorkerLogin}; " +
+                $"DROP ROLE IF EXISTS {RuntimeLoginProvisioner.RealtimeLogin}; DROP ROLE IF EXISTS {RuntimeLoginProvisioner.MasterDataLogin};");
+        }
+    }
+
     [PostgreSqlContractFact]
     public async Task Loaded_tariff_rules_store_their_policy_version_and_a_stored_version_is_immutable()
     {
@@ -924,10 +1098,10 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             "SELECT prosrc FROM pg_proc WHERE oid=@function::regprocedure",
             ("function", AddMasterDataLoader.FunctionSignature));
         var expected = HardenMasterDataLoaderOperatorBoundary.FunctionSql;
-        // The installed function is the MDM-001 America/Mazatlan step's, built on the GATE-011 VAT_INCLUDED step,
-        // which keeps every hardening edit (see
+        // The installed function is the MDM-001 driver-subject step's, built on the America/Mazatlan and GATE-011
+        // VAT_INCLUDED steps, which keep every hardening edit (see
         // New_tariff_rules_must_be_VAT_INCLUDED_and_a_stored_rule_in_another_tax_mode_can_still_be_closed).
-        Assert.Equal(FunctionBody(RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql), installed);
+        Assert.Equal(FunctionBody(ResolveDriverIdentitySubjectInMasterDataLoader.FunctionSql), installed);
         Assert.All(HardenMasterDataLoaderOperatorBoundary.FunctionEdits, edit =>
             Assert.Contains(edit.Replacement, installed, StringComparison.Ordinal));
         Assert.Contains(HardenMasterDataLoaderOperatorBoundary.DeploymentPrincipalRefused, installed, StringComparison.Ordinal);
@@ -1257,8 +1431,9 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             "SELECT prosrc FROM pg_proc WHERE oid=@function::regprocedure",
             ("function", AddMasterDataLoader.FunctionSignature));
         var expected = RequireVatIncludedTariffsInMasterDataLoader.FunctionSql;
-        // The installed function is the MDM-001 America/Mazatlan step's, which keeps the VAT_INCLUDED edit.
-        Assert.Equal(FunctionBody(RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql), installed);
+        // The installed function is the MDM-001 driver-subject step's, built on the America/Mazatlan step, which
+        // keeps the VAT_INCLUDED edit.
+        Assert.Equal(FunctionBody(ResolveDriverIdentitySubjectInMasterDataLoader.FunctionSql), installed);
         Assert.Contains(Assert.Single(RequireVatIncludedTariffsInMasterDataLoader.FunctionEdits).Replacement, installed, StringComparison.Ordinal);
         Assert.Contains(RequireVatIncludedTariffsInMasterDataLoader.TaxModeNotAllowed, installed, StringComparison.Ordinal);
         Assert.Contains(RequireVatIncludedTariffsInMasterDataLoader.DecisionId, installed, StringComparison.Ordinal);
@@ -1294,8 +1469,8 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
             await new DatabaseBaselineDeployer().ApplyAsync(baseline, connectionString);
             await new ModuleMigrationCoordinator().ApplyAsync(connectionString, CancellationToken.None);
-            Assert.Equal(FunctionBody(RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
-            Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
+            Assert.Equal(FunctionBody(ResolveDriverIdentitySubjectInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(123L, await ExecutorGrantCountAsync(connectionString));
             var rule = Guid.NewGuid();
             await ExecuteAsync(connectionString, $"""
                 INSERT INTO organizations.organizations(id,legal_name,display_name,organization_type)
@@ -1324,12 +1499,12 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
                 await transaction.RollbackAsync();
             }
 
-            // Up again reinstalls the VAT_INCLUDED function (and the America/Mazatlan step on top of it).
+            // Up again reinstalls the VAT_INCLUDED function (and the America/Mazatlan and driver-subject steps on top).
             await MigratePricingAsync(connectionString, RequireVatIncludedTariffsInMasterDataLoader.MigrationId);
             Assert.Equal(FunctionBody(RequireVatIncludedTariffsInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
             await MigratePricingAsync(connectionString, null);
-            Assert.Equal(FunctionBody(RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
-            Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
+            Assert.Equal(FunctionBody(ResolveDriverIdentitySubjectInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(123L, await ExecutorGrantCountAsync(connectionString));
             Assert.Equal("5200|VAT_INCLUDED", await ScalarAsync<string>(connectionString,
                 $"SELECT amount_cents || '|' || tax_mode FROM pricing.tariff_rules WHERE id='{rule}'"));
             Assert.Equal("APPLIED", (await new ModuleMigrationCoordinator().AssertAsync(connectionString, CancellationToken.None))
@@ -1425,7 +1600,9 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             "SELECT prosrc FROM pg_proc WHERE oid=@function::regprocedure",
             ("function", AddMasterDataLoader.FunctionSignature));
         var expected = RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql;
-        Assert.Equal(FunctionBody(expected), installed);
+        // The installed function is the MDM-001 driver-subject step's, which keeps the America/Mazatlan edit.
+        Assert.Equal(FunctionBody(ResolveDriverIdentitySubjectInMasterDataLoader.FunctionSql), installed);
+        Assert.Contains(Assert.Single(RequireMazatlanTimeZoneInMasterDataLoader.FunctionEdits).Replacement, installed, StringComparison.Ordinal);
         Assert.Contains(RequireMazatlanTimeZoneInMasterDataLoader.TimeZoneNotInPilot, installed, StringComparison.Ordinal);
         Assert.Contains(RequireMazatlanTimeZoneInMasterDataLoader.DecisionId, installed, StringComparison.Ordinal);
         Assert.Contains($"IS DISTINCT FROM '{RequireMazatlanTimeZoneInMasterDataLoader.PilotTimeZone}'", installed, StringComparison.Ordinal);
@@ -1462,8 +1639,8 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
             await new DatabaseBaselineDeployer().ApplyAsync(baseline, connectionString);
             await new ModuleMigrationCoordinator().ApplyAsync(connectionString, CancellationToken.None);
-            Assert.Equal(FunctionBody(RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
-            Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
+            Assert.Equal(FunctionBody(ResolveDriverIdentitySubjectInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(123L, await ExecutorGrantCountAsync(connectionString));
             var mazatlan = Guid.NewGuid();
             var chihuahua = Guid.NewGuid();
             await ExecuteAsync(connectionString, $"""
@@ -1490,10 +1667,10 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
                 await transaction.RollbackAsync();
             }
 
-            // Up again reinstalls the America/Mazatlan function.
+            // Up again reinstalls the America/Mazatlan function (and the driver-subject step on top of it).
             await MigratePricingAsync(connectionString, null);
-            Assert.Equal(FunctionBody(RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
-            Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
+            Assert.Equal(FunctionBody(ResolveDriverIdentitySubjectInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(123L, await ExecutorGrantCountAsync(connectionString));
             Assert.Equal("America/Chihuahua|ACTIVE,America/Mazatlan|ACTIVE", await ScalarAsync<string>(connectionString, CitiesSql));
             Assert.Equal("APPLIED", (await new ModuleMigrationCoordinator().AssertAsync(connectionString, CancellationToken.None))
                 .Single(state => state.Module == "Pricing").Status);
@@ -1512,6 +1689,241 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
         }
     }
 
+    /// <summary>
+    /// MDM-001-DRIVER-SUB-2026-11-06 (S7): a driver-profile entry names its driver by the AuthCenter sub, which the
+    /// function resolves to the user. An unknown subject is refused with one code; the resolved user still needs to be
+    /// ACTIVE with an ACTIVE DRIVER membership of the loaded organization, so an inactive, non-DRIVER or other
+    /// organization's user is refused as before; exactly one of the two identifiers is accepted, by the job and by the
+    /// function; a user named twice is a duplicate. Nothing is written by a refused load, and no subject or user id is
+    /// printed.
+    /// </summary>
+    [PostgreSqlContractFact]
+    public async Task A_driver_named_by_the_AuthCenter_sub_resolves_to_the_user_and_every_rule_still_applies()
+    {
+        var organization = await NewOrganizationAsync();
+        var suffix = Suffix();
+        await EnsureCityAsync(suffix);
+        await LoadAsync(Document(organization, suffix), organization);
+        var (driver, subject) = await NewUserWithSubjectAsync(organization, "DRIVER");
+
+        var bySubject = Document(organization, suffix);
+        bySubject["driver_profiles"] = new JsonArray(DriverProfileBySubject(subject, suffix));
+        var loaded = await LoadAsync(bySubject, organization);
+        Assert.Contains("driver_profiles: created=1 updated=0 unchanged=0", loaded.Output);
+        Assert.Contains("driver_service_areas: created=1 updated=0 unchanged=0", loaded.Output);
+        Assert.DoesNotContain(subject, loaded.Output);
+        Assert.DoesNotContain(driver.ToString("D"), loaded.Output);
+        Assert.Equal(organization, await ScalarAsync<Guid>(
+            "SELECT org_id FROM drivers.driver_profiles WHERE user_id=@user", ("user", driver)));
+
+        // The same driver by user_id is the same profile (the natural key is the resolved user).
+        var byUserId = Document(organization, suffix);
+        byUserId["driver_profiles"] = new JsonArray(DriverProfile(driver, suffix));
+        Assert.Contains("driver_profiles: created=0 updated=0 unchanged=1", (await LoadAsync(byUserId, organization)).Output);
+        Assert.Contains("driver_profiles: created=0 updated=0 unchanged=1", (await LoadAsync(bySubject, organization)).Output);
+
+        // A subject that names nobody: one stable code with the reference, nothing else.
+        var unknownSubject = Guid.NewGuid().ToString("D");
+        var unknown = Document(organization, suffix);
+        unknown["driver_profiles"] = new JsonArray(DriverProfileBySubject(unknownSubject, suffix));
+        var refused = await Assert.ThrowsAsync<MasterDataLoadException>(() => LoadAsync(unknown, organization));
+        Assert.Equal(MasterDataLoader.DatabaseExitCode, refused.ExitCode);
+        Assert.StartsWith($"{ResolveDriverIdentitySubjectInMasterDataLoader.DriverSubjectUnknown} at driver_profiles[1]; nothing was written", refused.Message);
+        Assert.DoesNotContain(unknownSubject, refused.Message + refused.CapturedOutput());
+
+        // An inactive user, a user without the DRIVER role, and a DRIVER of another organization only.
+        var (suspended, suspendedSubject) = await NewUserWithSubjectAsync(organization, "DRIVER");
+        await ExecuteAdminAsync("UPDATE identity.users SET status='SUSPENDED' WHERE id=@user", ("user", suspended));
+        var (_, viewerSubject) = await NewUserWithSubjectAsync(organization, "VIEWER");
+        var other = await NewOrganizationAsync();
+        var (foreign, foreignSubject) = await NewUserWithSubjectAsync(other, "DRIVER");
+        foreach (var refusedSubject in new[] { suspendedSubject, viewerSubject, foreignSubject })
+        {
+            var document = Document(organization, suffix);
+            document["driver_profiles"] = new JsonArray(DriverProfileBySubject(refusedSubject, suffix));
+            var membership = await Assert.ThrowsAsync<MasterDataLoadException>(() => LoadAsync(document, organization));
+            Assert.StartsWith("MDM001_DRIVER_MEMBERSHIP_REQUIRED at driver_profiles[1]; nothing was written", membership.Message);
+        }
+
+        Assert.Equal(0L, await ScalarAsync<long>(
+            "SELECT count(*) FROM drivers.driver_profiles WHERE user_id = ANY(@users)", ("users", new[] { suspended, foreign })));
+
+        // The same user named twice, once by id and once by subject, is a duplicate (only the function can tell).
+        var twice = Document(organization, suffix);
+        twice["driver_profiles"] = new JsonArray(DriverProfile(driver, suffix), DriverProfileBySubject(subject, suffix));
+        var duplicate = await Assert.ThrowsAsync<MasterDataLoadException>(() => LoadAsync(twice, organization));
+        Assert.StartsWith("MDM001_DUPLICATE_NATURAL_KEY at driver_profiles[2]; nothing was written", duplicate.Message);
+
+        // Both identifiers, or neither: the job refuses before the database, and so does the function.
+        var both = DriverProfileBySubject(subject, suffix);
+        both["user_id"] = driver.ToString("D");
+        var neither = DriverProfileBySubject(subject, suffix);
+        neither.Remove("identity_subject");
+        foreach (var profile in new[] { both, neither })
+        {
+            var document = Document(organization, suffix);
+            document["driver_profiles"] = new JsonArray(profile);
+            var shape = await Assert.ThrowsAsync<MasterDataLoadException>(() => LoadAsync(document, organization));
+            Assert.Equal(MasterDataLoader.ValidationExitCode, shape.ExitCode);
+            Assert.Contains("MDM001_VALIDATION_ERROR driver_profiles[1]: MDM001_DRIVER_IDENTIFIER", shape.CapturedOutput());
+
+            await SetGateAsync(Synthetic, false);
+            var direct = await Assert.ThrowsAsync<PostgresException>(() => CallFunctionAsync(organization, document.ToJsonString()));
+            Assert.Equal("MDM001_ENTRY_SHAPE", direct.MessageText);
+            Assert.Equal("driver_profiles[1]", direct.Hint);
+        }
+
+        // The function repeats the subject format check: a lowercase UUID other than the nil UUID.
+        foreach (var malformed in new JsonNode?[] { subject.ToUpperInvariant(), "00000000-0000-0000-0000-000000000000", $"{subject} ", "auth0|synthetic", 7, null })
+        {
+            var document = Document(organization, suffix);
+            var profile = DriverProfileBySubject(subject, suffix);
+            profile["identity_subject"] = malformed?.DeepClone();
+            document["driver_profiles"] = new JsonArray(profile);
+            var direct = await Assert.ThrowsAsync<PostgresException>(() => CallFunctionAsync(organization, document.ToJsonString()));
+            Assert.Equal("MDM001_ENTRY_SHAPE", direct.MessageText);
+        }
+
+        Assert.Equal(1L, await ScalarAsync<long>(
+            "SELECT count(*) FROM drivers.driver_profiles WHERE org_id=@org", ("org", organization)));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task The_loader_function_differs_from_the_America_Mazatlan_one_only_by_the_reviewed_driver_subject_edits()
+    {
+        var installed = await ScalarAsync<string>(
+            "SELECT prosrc FROM pg_proc WHERE oid=@function::regprocedure",
+            ("function", AddMasterDataLoader.FunctionSignature));
+        var expected = ResolveDriverIdentitySubjectInMasterDataLoader.FunctionSql;
+        Assert.Equal(FunctionBody(expected), installed);
+        Assert.Contains(ResolveDriverIdentitySubjectInMasterDataLoader.DriverSubjectUnknown, installed, StringComparison.Ordinal);
+        Assert.Contains(ResolveDriverIdentitySubjectInMasterDataLoader.DecisionId, installed, StringComparison.Ordinal);
+        Assert.Contains(RequireMazatlanTimeZoneInMasterDataLoader.TimeZoneNotInPilot, installed, StringComparison.Ordinal);
+        Assert.Contains(RequireVatIncludedTariffsInMasterDataLoader.TaxModeNotAllowed, installed, StringComparison.Ordinal);
+        Assert.Contains(HardenMasterDataLoaderOperatorBoundary.DeploymentPrincipalRefused, installed, StringComparison.Ordinal);
+        // The membership rule is unchanged and runs on the resolved user.
+        Assert.Contains("MDM001_DRIVER_MEMBERSHIP_REQUIRED", installed, StringComparison.Ordinal);
+
+        // Undoing the two edits gives back the America/Mazatlan step's function byte for byte.
+        Assert.Equal(2, ResolveDriverIdentitySubjectInMasterDataLoader.FunctionEdits.Count);
+        var undone = expected;
+        foreach (var edit in ResolveDriverIdentitySubjectInMasterDataLoader.FunctionEdits)
+        {
+            Assert.Equal(1, Occurrences(expected, edit.Replacement));
+            Assert.Equal(1, Occurrences(RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql, edit.Published));
+            Assert.DoesNotContain("INSERT ", edit.Replacement, StringComparison.Ordinal);
+            Assert.DoesNotContain("UPDATE ", edit.Replacement, StringComparison.Ordinal);
+            Assert.DoesNotContain("DELETE ", edit.Replacement, StringComparison.Ordinal);
+            undone = undone.Replace(edit.Replacement, edit.Published, StringComparison.Ordinal);
+        }
+
+        Assert.Equal(RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql, undone);
+
+        // Its only privilege change, in each direction, is the identity_subject read of the executor.
+        var up = ResolveDriverIdentitySubjectInMasterDataLoader.UpSql.Replace(StoreTariffPolicyVersionInMasterDataLoader.FunctionAclSql, string.Empty, StringComparison.Ordinal);
+        var down = ResolveDriverIdentitySubjectInMasterDataLoader.DownSql.Replace(StoreTariffPolicyVersionInMasterDataLoader.FunctionAclSql, string.Empty, StringComparison.Ordinal);
+        Assert.Equal(1, Occurrences(up, "GRANT "));
+        Assert.Contains("GRANT SELECT (identity_subject) ON identity.users TO paqueteria_master_data_executor;", up, StringComparison.Ordinal);
+        Assert.DoesNotContain("REVOKE ", up, StringComparison.Ordinal);
+        Assert.Equal(1, Occurrences(down, "REVOKE "));
+        Assert.Contains("REVOKE SELECT (identity_subject) ON identity.users FROM paqueteria_master_data_executor;", down, StringComparison.Ordinal);
+        Assert.DoesNotContain("GRANT ", down, StringComparison.Ordinal);
+
+        // In the shared database: the executor reads exactly id, identity_subject and status of identity.users, and
+        // neither the loader nor any runtime role can read identity_subject through the executor or the loader.
+        Assert.Equal("id:SELECT,identity_subject:SELECT,status:SELECT", await ScalarAsync<string>(
+            """
+            SELECT string_agg(att.attname || ':' || a.privilege_type, ',' ORDER BY att.attname, a.privilege_type)
+            FROM pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) a
+            WHERE att.attrelid='identity.users'::regclass AND a.grantee=@executor::regrole
+            """,
+            ("executor", Executor)));
+        Assert.False(await ScalarAsync<bool>(
+            "SELECT has_column_privilege(@loader,'identity.users','identity_subject','SELECT')", ("loader", Loader)));
+    }
+
+    [PostgreSqlContractFact]
+    public async Task Driver_subject_loader_step_rolls_back_and_reapplies_on_real_postgresql()
+    {
+        var connectionString = await fixture.CreateIsolatedDatabaseAsync("mdm001sub");
+        try
+        {
+            var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
+            await new DatabaseBaselineDeployer().ApplyAsync(baseline, connectionString);
+            await new ModuleMigrationCoordinator().ApplyAsync(connectionString, CancellationToken.None);
+            Assert.Equal(FunctionBody(ResolveDriverIdentitySubjectInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(123L, await ExecutorGrantCountAsync(connectionString));
+            const string OthersAclSql = """
+                SELECT COALESCE(string_agg(att.attname || ':' || pg_get_userbyid(a.grantee) || ':' || a.privilege_type, ','
+                  ORDER BY att.attname, pg_get_userbyid(a.grantee), a.privilege_type), '')
+                FROM pg_attribute att CROSS JOIN LATERAL aclexplode(att.attacl) a
+                WHERE att.attrelid='identity.users'::regclass AND a.grantee<>'paqueteria_master_data_executor'::regrole
+                """;
+            var othersBefore = await ScalarAsync<string>(connectionString, OthersAclSql);
+            var profile = Guid.NewGuid();
+            await ExecuteAsync(connectionString, $"""
+                INSERT INTO organizations.organizations(id,legal_name,display_name,organization_type)
+                  VALUES ('{profile}','MDM Sintética','MDM Sintética','ALLY');
+                INSERT INTO identity.users(id,identity_subject) VALUES ('{profile}','{Guid.NewGuid():D}');
+                INSERT INTO locations.cities(id,country_code,state_code,name,timezone,status)
+                  VALUES ('{profile}','MX','SIN','MDM-001 Sub Synthetic City','America/Mazatlan','ACTIVE');
+                INSERT INTO drivers.driver_profiles(id,user_id,org_id,home_city_id,driver_type,vehicle_type,status)
+                  VALUES ('{profile}','{profile}','{profile}','{profile}','OWN','MOTORCYCLE','PENDING');
+                """);
+
+            // Down to the America/Mazatlan step: its function, ACL and 122 grants, no identity_subject read for the
+            // executor, every other grantee's privileges on identity.users unchanged; the profile stays.
+            await MigratePricingAsync(connectionString, RequireMazatlanTimeZoneInMasterDataLoader.MigrationId);
+            Assert.Equal(FunctionBody(RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
+            Assert.False(await ScalarAsync<bool>(connectionString,
+                $"SELECT has_column_privilege('{Executor}','identity.users','identity_subject','SELECT')"));
+            Assert.Equal(othersBefore, await ScalarAsync<string>(connectionString, OthersAclSql));
+            Assert.Equal(1L, await ScalarAsync<long>(connectionString,
+                $"SELECT count(*) FROM drivers.driver_profiles WHERE id='{profile}'"));
+            Assert.Equal("PENDING", (await new ModuleMigrationCoordinator().PlanAsync(connectionString, CancellationToken.None))
+                .Single(state => state.Module == "Pricing").Status);
+            await using (var connection = new NpgsqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                await using var transaction = await connection.BeginTransactionAsync();
+                await DatabaseBaselineAssertions.AssertMasterDataLoaderInstalledAsync(connection, transaction);
+                await new DatabaseBaselineAssertions().AssertAsync(connection, transaction);
+                await transaction.RollbackAsync();
+            }
+
+            // Up again: the driver-subject function and the 123 grants.
+            await MigratePricingAsync(connectionString, null);
+            Assert.Equal(FunctionBody(ResolveDriverIdentitySubjectInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(123L, await ExecutorGrantCountAsync(connectionString));
+            Assert.Equal(othersBefore, await ScalarAsync<string>(connectionString, OthersAclSql));
+            Assert.Equal("APPLIED", (await new ModuleMigrationCoordinator().AssertAsync(connectionString, CancellationToken.None))
+                .Single(state => state.Module == "Pricing").Status);
+            await using (var connection = new NpgsqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                await using var transaction = await connection.BeginTransactionAsync();
+                await DatabaseBaselineAssertions.AssertMasterDataLoaderInstalledAsync(connection, transaction);
+                await new DatabaseBaselineAssertions().AssertAsync(connection, transaction);
+                await transaction.RollbackAsync();
+            }
+
+            // A recorded step without its grant (or the grant without the step) is reported, never absorbed.
+            await ExecuteAsync(connectionString, $"REVOKE SELECT (identity_subject) ON identity.users FROM {Executor};");
+            await using (var connection = new NpgsqlConnection(connectionString))
+            {
+                await connection.OpenAsync();
+                await using var transaction = await connection.BeginTransactionAsync();
+                await Assert.ThrowsAnyAsync<Exception>(() => new DatabaseBaselineAssertions().AssertAsync(connection, transaction));
+                await transaction.RollbackAsync();
+            }
+        }
+        finally
+        {
+            await fixture.DropIsolatedDatabaseAsync(connectionString);
+        }
+    }
+
     [PostgreSqlContractFact]
     public async Task Hardening_step_rolls_back_and_reapplies_on_real_postgresql_keeping_references_and_audit()
     {
@@ -1521,8 +1933,8 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             var baseline = await new DatabaseBaselineVerifier().VerifyAsync();
             await new DatabaseBaselineDeployer().ApplyAsync(baseline, connectionString);
             await new ModuleMigrationCoordinator().ApplyAsync(connectionString, CancellationToken.None);
-            Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
-            Assert.Equal(FunctionBody(RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(123L, await ExecutorGrantCountAsync(connectionString));
+            Assert.Equal(FunctionBody(ResolveDriverIdentitySubjectInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
 
             // A reference and an audit row in the former hash format (append-only): neither is touched by the lane.
             var organization = Guid.NewGuid();
@@ -1556,13 +1968,13 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             }
 
             // Up again adopts the existing table and reinstalls the hardened function and the four grants (then
-            // the GATE-011 VAT_INCLUDED and MDM-001 America/Mazatlan steps on top of it).
+            // the GATE-011 VAT_INCLUDED, MDM-001 America/Mazatlan and driver-subject steps on top of it).
             await MigratePricingAsync(connectionString, HardenMasterDataLoaderOperatorBoundary.MigrationId);
             Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
             Assert.Equal(FunctionBody(HardenMasterDataLoaderOperatorBoundary.FunctionSql), await LoaderSourceAsync(connectionString));
             await MigratePricingAsync(connectionString, null);
-            Assert.Equal(122L, await ExecutorGrantCountAsync(connectionString));
-            Assert.Equal(FunctionBody(RequireMazatlanTimeZoneInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
+            Assert.Equal(123L, await ExecutorGrantCountAsync(connectionString));
+            Assert.Equal(FunctionBody(ResolveDriverIdentitySubjectInMasterDataLoader.FunctionSql), await LoaderSourceAsync(connectionString));
             Assert.Equal(reference, await ScalarAsync<Guid>(connectionString,
                 "SELECT operator_ref FROM platform.master_data_operator_refs WHERE operator_login='paqueteria_mdm_x2_login'"));
             Assert.Equal(legacy, await ScalarAsync<string>(connectionString,
@@ -1830,6 +2242,15 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
         return string.Concat(text.AsSpan(0, index), $"\"amount_cents\":{spelling}", text.AsSpan(index + Original.Length));
     }
 
+    /// <summary>MDM-001-DRIVER-SUB-2026-11-06: the same entry naming the driver by the AuthCenter sub.</summary>
+    private static JsonObject DriverProfileBySubject(string subject, string suffix)
+    {
+        var profile = DriverProfile(Guid.Empty, suffix);
+        profile.Remove("user_id");
+        profile["identity_subject"] = subject;
+        return profile;
+    }
+
     private static JsonObject DriverProfile(Guid user, string suffix) => new()
     {
         ["user_id"] = user.ToString("D"),
@@ -2022,6 +2443,20 @@ public sealed class MasterDataLoaderPostgreSqlContractTests(PostgreSqlContractFi
             """,
             ("user", user), ("subject", $"mdm001-{user:N}"), ("org", organization), ("role", role));
         return user;
+    }
+
+    /// <summary>A user whose AuthCenter sub is a lowercase UUID, as in the pilot, with a membership in the given role.</summary>
+    private async Task<(Guid User, string Subject)> NewUserWithSubjectAsync(Guid organization, string role)
+    {
+        var user = Guid.NewGuid();
+        var subject = Guid.NewGuid().ToString("D");
+        await ExecuteAdminAsync(
+            """
+            INSERT INTO identity.users(id,identity_subject) VALUES (@user,@subject);
+            INSERT INTO organizations.organization_memberships(user_id,organization_id,role) VALUES (@user,@org,@role);
+            """,
+            ("user", user), ("subject", subject), ("org", organization), ("role", role));
+        return (user, subject);
     }
 
     /// <summary>Service areas, zones and tariff rules the API role sees under the tenant context of <paramref name="organization"/>.</summary>

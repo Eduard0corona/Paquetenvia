@@ -33,6 +33,23 @@ public sealed record SettlementPeriod(
     }
 
     /// <summary>
+    /// The current operational date: the calendar date of <paramref name="instant"/> in the operational time zone,
+    /// the same zone the period dates are expressed in.
+    /// </summary>
+    public static DateOnly OperationalDate(DateTimeOffset instant, TimeZoneInfo zone)
+    {
+        ArgumentNullException.ThrowIfNull(zone);
+        return DateOnly.FromDateTime(TimeZoneInfo.ConvertTime(instant, zone).DateTime);
+    }
+
+    /// <summary>
+    /// D7-SETTLEMENT-CLOSED-PERIOD (D7-SETTLEMENT-RULES, AI-05 x-pilot-contract-deltas): only a closed period may be
+    /// settled, one whose last day <see cref="To"/> is strictly before <paramref name="operationalDate"/>. A period
+    /// that ends today is still open.
+    /// </summary>
+    public bool IsClosedOn(DateOnly operationalDate) => To < operationalDate;
+
+    /// <summary>
     /// The first UTC instant whose local date in <paramref name="zone"/> is <paramref name="date"/>. A daylight
     /// saving gap at midnight moves the start to the first local time that exists, and an ambiguous midnight
     /// resolves to its earlier occurrence, so consecutive days never overlap and never leave a gap.
