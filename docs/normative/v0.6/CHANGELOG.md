@@ -1,5 +1,32 @@
 # Changelog
 
+## Seguridad: evento de seguridad para lecturas entre organizaciones rechazadas (REL-001-CROSS-TENANT-SECURITY-EVENT-2026-11-06, AI-08 REL-001) — 2026-11-06
+
+- Respuesta literal del project owner (ronda S continuación, pregunta S4, 2026-11-06), registrada en `decision-log.md`
+  con su contexto, la pregunta, la respuesta, el texto de la opción y las dos opciones no elegidas: S4 "Evento en el log
+  (Recommended)". Cierra el último paso del escenario AI-09 "Un aliado no puede leer la orden de otro aliado": "debe
+  existir un evento de seguridad sin exponer datos de O".
+- La API escribe una línea de log estructurada `Warning` con el EventId fijo 4201 (`CrossTenantAccessRefused`) en dos
+  casos: `ORGANIZATION_REFUSED`, cuando el middleware de contexto de organización rechaza con el 403 uniforme una
+  organización en la que el actor no tiene membresía activa (ajena, inactiva o inexistente, todas igual), y
+  `ORDER_NOT_FOUND`, cuando una lectura de orden (un GET bajo `/api/v1/orders/{orderId`) termina en el 404 uniforme
+  dentro de la organización seleccionada (orden inexistente y orden de otro tenant, igual).
+- La línea solo lleva el tipo de rechazo y la ruta como plantilla y, por el enriquecimiento de OBS-003, el seudónimo
+  HMAC de la organización propia del actor y su tipo de rol en ella (para el 403: la de su membresía predeterminada, o la
+  única; si no hay, ninguno de los dos), además del trace id de la petición, como toda línea de una petición. Nunca lleva
+  ids de orden, de organización ni de usuario, correo, IP ni el valor de `X-Organization-Id`. No escribe en la base; va a
+  Log Analytics con los demás logs. Su id queda fuera del bloque OBS-002 (4600–4699), así que ninguna alerta ni libro de
+  trabajo lo lee; la alerta opcional no se eligió.
+- Respuesta literal S9 (2026-11-06), registrada en la misma fila: "Dejar el TraceId (Recommended)". El "nunca ids" de S4
+  se refiere a ids de entidades; el TraceId de la petición se queda, como en toda línea de log de OBS-003. Sin cambio de
+  código.
+- Sin cambios en contratos normativos: AI-24 no tiene sección de logs de tenancy, la lista permitida de dimensiones de
+  OBS-002 vive en código y solo rige los eventos OBS-002, y AI-03 §18 y AI-13 §10 ya permiten el seudónimo y el tipo de
+  rol en logs con contexto de organización. Se registra la fila porque el cierre del escenario depende de la decisión
+  del owner. Sin cambios en AI-05, AI-06, AI-09, AI-18, roles, permisos, migraciones ni flujos entre módulos.
+- El mapa AI-09 de REL-001 marca el escenario como cubierto con la prueba nueva `CrossTenantSecurityEventHttpTests` y las
+  pruebas existentes de respuesta uniforme y de RLS.
+
 ## Datos maestros: repartidores por su sub de AuthCenter (MDM-001-DRIVER-SUB-2026-11-06, AI-08 MDM-001) — 2026-11-06
 
 - Respuestas literales del project owner (ronda S continuada, 2026-11-06), registradas en `decision-log.md` con sus dos

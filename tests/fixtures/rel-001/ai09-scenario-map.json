@@ -5,8 +5,7 @@
     {
       "feature": "Aislamiento multiempresa",
       "scenario": "Un aliado no puede leer la orden de otro aliado",
-      "status": "GAP",
-      "reason": "The uniform answer and the RLS isolation are tested; no test (and no implementation) records the security event of the last step.",
+      "status": "COVERED",
       "tests": [
         {
           "job": "runtime-contracts",
@@ -15,6 +14,14 @@
         {
           "job": "dotnet",
           "test": "Paqueteria.IntegrationTests.Security.TenantSelectionPipelineTests.Foreign_organization_is_forbidden_without_disclosure"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Orders.OrderHttpTests.GET_detail_is_uniform_and_timeline_exposes_no_internal_payload"
+        },
+        {
+          "job": "dotnet",
+          "test": "Paqueteria.IntegrationTests.Security.CrossTenantSecurityEventHttpTests"
         }
       ]
     },

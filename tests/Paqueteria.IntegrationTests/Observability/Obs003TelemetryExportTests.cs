@@ -508,8 +508,17 @@ public sealed class Obs003TelemetryExportTests
             Assert.Equal(pseudonym, line.GetProperty("State").GetProperty(TelemetryOrganizationContext.PseudonymLogProperty).GetString());
             Assert.Equal("VIEWER", line.GetProperty("State").GetProperty(TelemetryOrganizationContext.RoleKindLogProperty).GetString());
         });
+        // A refused organization never becomes the context. The only line of that request with a pseudonym is the
+        // REL-001-CROSS-TENANT-SECURITY-EVENT-2026-11-06 security event (owner answer S4), which carries the actor's own
+        // organization, never the requested one.
+        var foreignLines = logs.LinesOf(Single(foreign, TraceHeader)).Select(Parse).ToArray();
+        var securityEvent = Assert.Single(foreignLines, line => line.GetProperty("EventId").GetInt32() == Paqueteria.Api.Tenancy.CrossTenantSecurityEvent.Id);
+        Assert.Equal(pseudonym, securityEvent.GetProperty("State").GetProperty(TelemetryOrganizationContext.PseudonymLogProperty).GetString());
+        Assert.NotEqual(
+            api.Services.GetRequiredService<IOrganizationPseudonymizer>().Pseudonymize(MockIdentityProfiles.ForeignOrganizationId),
+            pseudonym);
         Assert.All(
-            logs.LinesOf(Single(foreign, TraceHeader)).Select(Parse),
+            foreignLines.Where(line => line.GetProperty("EventId").GetInt32() != Paqueteria.Api.Tenancy.CrossTenantSecurityEvent.Id),
             line => Assert.False(line.GetProperty("State").TryGetProperty(TelemetryOrganizationContext.PseudonymLogProperty, out _)));
         Assert.All(logs.Lines, line =>
         {
