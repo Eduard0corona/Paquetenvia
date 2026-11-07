@@ -17,6 +17,9 @@
   ids de orden, de organización ni de usuario, correo, IP ni el valor de `X-Organization-Id`. No escribe en la base; va a
   Log Analytics con los demás logs. Su id queda fuera del bloque OBS-002 (4600–4699), así que ninguna alerta ni libro de
   trabajo lo lee; la alerta opcional no se eligió.
+- Respuesta literal S9 (2026-11-06), registrada en la misma fila: "Dejar el TraceId (Recommended)". El "nunca ids" de S4
+  se refiere a ids de entidades; el TraceId de la petición se queda, como en toda línea de log de OBS-003. Sin cambio de
+  código.
 - Sin cambios en contratos normativos: AI-24 no tiene sección de logs de tenancy, la lista permitida de dimensiones de
   OBS-002 vive en código y solo rige los eventos OBS-002, y AI-03 §18 y AI-13 §10 ya permiten el seudónimo y el tipo de
   rol en logs con contexto de organización. Se registra la fila porque el cierre del escenario depende de la decisión
